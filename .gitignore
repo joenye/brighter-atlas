@@ -1,0 +1,12 @@
+# build output (esbuild: webapp/src -> webapp/js + webapp/sw.js)
+webapp/js/
+webapp/sw.js
+
+node_modules/
+
+# user-generated / local-only
+webapp/data/
+webapp/screenshots/
+webapp/changelog.json
+
+*.log

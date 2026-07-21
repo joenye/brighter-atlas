@@ -1,0 +1,30 @@
+{
+  "name": "brighter-atlas",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Brighter Atlas — fully client-side asset viewer for Brighter Shores",
+  "license": "MIT",
+  "author": "Joe Nye",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "node tools/build.ts",
+    "watch": "node tools/build.ts --watch",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tools.json",
+    "serve": "node tools/serve.ts",
+    "smoke": "node tools/smoke.ts",
+    "e2e": "node tools/e2e.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.5.0",
+    "esbuild": "^0.24.0",
+    "three": "0.160.1",
+    "@types/three": "0.160.0",
+    "fflate": "^0.8.2",
+    "fzstd": "^0.1.1",
+    "puppeteer-core": "^24.10.0"
+  }
+}

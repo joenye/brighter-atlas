@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "_comment": "Manual room-name overrides for rooms whose name is name-hash-gated in the cache (no inline name record; see docs/notes/metadata.md). Key = ab2 room-object content hash (sha256 of the object bytes, first 16 hex chars = asset_hashes.py obj_digest) so overrides survive bundle re-ordering. A room has one entry per known content version because authored room bytes can change between builds (entries for builds no longer validated locally are kept — they are harmless and still key that version's bytes). A room may be inline-named in one build and gated in another (Lord's Road East, Briar Patch); only the gated version needs an entry. Merged by parse_room.derive_room_names(). ab2_hint is that content version's bundle index (informational only).",
+  "overrides": {
+    "4d67b7b31bd8aa87": {
+      "name": "Bladrick's Armory",
+      "ab2_hint": 464
+    },
+    "170d3932111827c1": {
+      "name": "Bladrick's Armory",
+      "ab2_hint": 464
+    },
+    "e7bbccf3c444de9e": {
+      "name": "Bladrick's Armory",
+      "ab2_hint": 4309
+    },
+    "fefec63ad9a27e7c": {
+      "name": "Reality Fracture",
+      "ab2_hint": 1485
+    },
+    "59d8f11c68466c78": {
+      "name": "Reality Fracture",
+      "ab2_hint": 1485
+    },
+    "c423027491ec1eac": {
+      "name": "Reality Fracture",
+      "ab2_hint": 11197
+    },
+    "2b65627fe7b4ad21": {
+      "name": "Greengrocers",
+      "ab2_hint": 2095
+    },
+    "0d921728c819bce2": {
+      "name": "Greengrocers",
+      "ab2_hint": 2095
+    },
+    "e65cb4dbe4772c52": {
+      "name": "Greenhouse",
+      "ab2_hint": 5065
+    },
+    "a64663c869575ba5": {
+      "name": "Greenhouse",
+      "ab2_hint": 5066
+    },
+    "af3393d2976d65e6": {
+      "name": "Greenhouse",
+      "ab2_hint": 4605
+    },
+    "b78ccc6ce6623d93": {
+      "name": "Bogg's Antiques",
+      "ab2_hint": 5143
+    },
+    "2f645ff57a3c0a3c": {
+      "name": "Bogg's Antiques",
+      "ab2_hint": 5144
+    },
+    "3e4a84ec74c5389f": {
+      "name": "Bogg's Antiques",
+      "ab2_hint": 8937
+    },
+    "eb03268bbda19a0e": {
+      "name": "Gnome Forge",
+      "ab2_hint": 6585
+    },
+    "2117bbf43f1025ff": {
+      "name": "Gnome Forge",
+      "ab2_hint": 6585
+    },
+    "22e094159173bdd7": {
+      "name": "Gnome Forge",
+      "ab2_hint": 6589
+    },
+    "aedc86c346444897": {
+      "name": "Gwen's Lumber",
+      "ab2_hint": 8311
+    },
+    "129d6d35887b7fe2": {
+      "name": "Gwen's Lumber",
+      "ab2_hint": 8311
+    },
+    "e7cca2524ad808f3": {
+      "name": "Gwen's Lumber",
+      "ab2_hint": 4784
+    },
+    "3646d5dabea74aa0": {
+      "name": "Quartermaster",
+      "ab2_hint": 11643
+    },
+    "e96e688cfa82065d": {
+      "name": "Quartermaster",
+      "ab2_hint": 11638
+    },
+    "f37fd567d83859ec": {
+      "name": "Quartermaster",
+      "ab2_hint": 7652
+    },
+    "55ec3a81926405f7": {
+      "name": "Hairdresser",
+      "ab2_hint": 12301
+    },
+    "4cf629a5cf6b5362": {
+      "name": "Hairdresser",
+      "ab2_hint": 12296
+    },
+    "cf59b29df83e6f23": {
+      "name": "Hairdresser",
+      "ab2_hint": 4207
+    },
+    "177af0e0e8bdf7e1": {
+      "name": "Fortunehold Farm",
+      "ab2_hint": 14727
+    },
+    "a6c9676bd4c1f14d": {
+      "name": "Fortunehold Farm",
+      "ab2_hint": 14720
+    },
+    "fd084ba2f01b9c0e": {
+      "name": "Fortunehold Farm",
+      "ab2_hint": 3654
+    },
+    "10b644689f238fc5": {
+      "name": "T & T's Explosives",
+      "ab2_hint": 15056
+    },
+    "9805edf4c968d145": {
+      "name": "T & T's Explosives",
+      "ab2_hint": 15049
+    },
+    "836c29504f2ae09e": {
+      "name": "T & T's Explosives",
+      "ab2_hint": 2190
+    },
+    "54fd19c4601b5527": {
+      "name": "Bert's Gallery",
+      "ab2_hint": 15612
+    },
+    "cb7a0e98c3d59d35": {
+      "name": "Bert's Gallery",
+      "ab2_hint": 15606
+    },
+    "daba744246915a33": {
+      "name": "Bert's Gallery",
+      "ab2_hint": 12587
+    },
+    "4cc827867f3731ed": {
+      "name": "Goblin Well",
+      "ab2_hint": 9852
+    },
+    "387e7ccd8860fe8e": {
+      "name": "Goblin Well",
+      "ab2_hint": 8717
+    },
+    "9d55a10f33b9b1de": {
+      "name": "Goblin Workshop",
+      "ab2_hint": 9310
+    },
+    "77d46fe1db08e3ab": {
+      "name": "Goblin Workshop",
+      "ab2_hint": 8475
+    },
+    "809ae9c010b03ed6": {
+      "name": "Lord's Road East",
+      "ab2_hint": 30
+    },
+    "7427944543b65c52": {
+      "name": "Briar Patch",
+      "ab2_hint": 98
+    }
+  }
+}

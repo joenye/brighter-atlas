@@ -1,0 +1,1 @@
+[{"i":0,"n":2,"cat":"sprite","entries":[{"fmt":"BC3","w":64,"h":64},{"fmt":"BC1","w":32,"h":32}],"f":["images/00000_e0.png","images/00000_e1.png"],"h":"f1c0ded000000000"},{"i":1,"n":0,"cat":"font","entries":[],"f":null,"h":"f1c0ded100000000"},{"i":2,"n":1,"cat":"material","entries":[{"fmt":"BC1","w":64,"h":64}],"f":["images/00002_e0.png"],"h":"f1c0ded200000000"}]

@@ -1,0 +1,20 @@
+{
+  "//": "Typecheck project for the Node tooling in webapp/tools. No emit — Node 24 runs the .ts files directly via type stripping (erasable syntax only: no enums, no namespaces, no parameter properties), which is also why tools import each other with explicit .ts specifiers.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "strict": false,
+    "useUnknownInCatchVariables": false,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "tools/**/*.ts"
+  ]
+}
