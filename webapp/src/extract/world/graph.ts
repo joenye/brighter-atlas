@@ -1,10 +1,10 @@
-// Native registry asset graph — resolves replayed AB0 rows (replay.js) and
+// Native registry asset graph: resolves replayed AB0 rows (replay.js) and
 // the decoded value pool (value-pool.js) into exact terrain / block-face /
 // model mesh+material parts, occurrence anchors, and recolours.
 //
 // Occurrences come from room.js roomOccupancy (camelCase keys: entrySlot,
 // rotationQuarters, packedFlags, parentLink, childLinks). Part records keep
-// snake_case keys — they flow directly into shard rows.
+// snake_case keys: they flow directly into shard rows.
 
 // One replayed registry fill row. g: [op, depth, tag, value] events,
 // r: [op, ref] direct refs, v: constructor values.
@@ -74,7 +74,7 @@ export const FACE_NAMES = [
 // The current build lays a block/terrain owner's eight-face table at
 // linkOp-13 relative to its ground-registry link (see _ensureBlockFaceOffset).
 // A build detected at a different offset packs the appearance block more
-// tightly, which changes two downstream heuristics — the default is the guard
+// tightly, which changes two downstream heuristics. The default is the guard
 // that keeps every supported build byte-identical.
 const BLOCK_FACE_DEFAULT_OFFSET = -13;
 
@@ -124,7 +124,7 @@ const matKey = (m: readonly number[]) => `${m[0]},${m[1]}`; // material = [slot,
 
 // Owner-series typed components store a FULL-range third colour (white = x1
 // neutral); the stored/viewer convention is half-range (0.5 neutral, shader
-// x2). Exact conversion at emission — see models.js nativeThirdToHalfRange.
+// x2). Exact conversion at emission (see models.js nativeThirdToHalfRange).
 function nativeThirdToHalfRange(color: number[]): number[] {
   return [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5, ...color.slice(3)];
 }
@@ -168,7 +168,7 @@ export class AssetGraph {
     // Another AssetGraph's constructor-scan maps over the SAME rows. The scan
     // is pure and the maps are frozen at construction (never written again by
     // any consumer), so a second graph sharing them behaves exactly like one
-    // that re-ran the scan — while every LAZY cache (fields, block layouts,
+    // that re-ran the scan, while every LAZY cache (fields, block layouts,
     // face-base learning) stays per-graph, preserving the fresh-graph
     // requirement of the structural-binding stage.
     shared?: { meshBySlot: Map<number, number>; texturesByMaterial: Map<number, number[]> },
@@ -424,10 +424,10 @@ export class AssetGraph {
   // the owner data itself: a generated visual owner carries three consecutive
   // ops that are each a single positive tag-0x0A int (the cell dims),
   // IMMEDIATELY followed by a single tag-0x0B op, then a single tag-0x25
-  // six-float box — a header no other class reproduces. Vote the run start and
+  // six-float box, a header no other class reproduces. Vote the run start and
   // the box op over a sample of owners matching that exact header and take the
   // modes. If too few match or the mode is not dominant, fall back to the
-  // current-build positions (4/5/6, 8) — so a supported build stays
+  // current-build positions (4/5/6, 8), so a supported build stays
   // byte-identical and no build can silently mis-anchor.
   private _ensureStructuralOps(): { dimsOps: number[]; boundsOp: number } {
     if (this._structuralOps) return this._structuralOps;
@@ -508,7 +508,7 @@ export class AssetGraph {
   // op is NOT fixed across builds. The current build lays face 0 at linkOp-13
   // (the direct-material fallback sits at linkOp-3, the eight-face run 10 ops
   // below it); the older a14d7c633469a266 build packs the shape-owner
-  // appearance block one field tighter — face 0 at linkOp-12, fallback still at
+  // appearance block one field tighter: face 0 at linkOp-12, fallback still at
   // linkOp-3, the run only 9 ops below. Reading the current -13 there lands the
   // base one op too low: every face mesh is tagged one face_index too high, the
   // eighth face (at faceBase+8) falls outside the 0..7 window and is dropped,
@@ -749,8 +749,8 @@ export class AssetGraph {
       }
       if (colors[0] !== null && colors[1] !== null && colors[2] === null) {
         // Two tints with the output-modulation colour absent. An absent
-        // modulation is the native neutral half-range (0.5) — the same default
-        // recolor.ts materialState falls back to — so make it explicit and let
+        // modulation is the native neutral half-range (0.5), the same default
+        // recolor.ts materialState falls back to, so make it explicit and let
         // the standard 3-value two_tints_modulation schema handle it unchanged.
         // Without this the whole triple (incl. the two authored tints) was
         // dropped, losing real colours on block-face objects.
@@ -774,7 +774,7 @@ export class AssetGraph {
   // one pooled element. Older builds pack the same meshmat one field shorter:
   // arity 5 (mesh, material, 3 colours) with NO trailing matrix, vs the current
   // build's arity 6 (…, 0x30 matrix). The colour triple sits at [2,3,4] on every
-  // build — detect the arity and only expect/emit the matrix when it's there, so
+  // build: detect the arity and only expect/emit the matrix when it's there, so
   // the recolour is recovered on old builds while the current build stays
   // byte-identical (it has no arity-5 meshmat nodes with a colour triple here).
   private _typedPartMetadata(element: any): Record<string, any> {
@@ -1134,7 +1134,7 @@ export class AssetGraph {
     // block is packed tighter than the current one (detected offset != the
     // default), a NORMAL eight-face block's repeated face-table copy leaves its
     // trailing face mesh immediately before the shape's fallback material,
-    // forging exactly one such pair — so the block collapses to a single wall
+    // forging exactly one such pair, so the block collapses to a single wall
     // slab (85% of the older build's terrain, vs a real custom mesh being a
     // rare exact subtype). If the owner still resolves a genuine multi-face
     // block, it is a block, not a custom mesh; prefer the faces. Guarded on the
@@ -1197,7 +1197,7 @@ export class AssetGraph {
   // Deduplicated exact face/material bindings for the editor catalog. Shape
   // owners carry meshes, the linked ground object the materials; records are
   // qualified by owner, ground, kind and face, and repeated room occurrences
-  // only increment provenance counts. Texture bindings only — never promoted
+  // only increment provenance counts. Texture bindings only, never promoted
   // to Models. roomOccurrenceGroups: iterable of [roomId, occurrences].
   structuralBindingRecords(
     roomOccurrenceGroups: Iterable<[number, OccurrenceHit[]]> = [],
@@ -1214,7 +1214,7 @@ export class AssetGraph {
 
     // The same immutable cached part template is added once per occurrence
     // (hundreds of times across rooms); resolve its grouped entry once per
-    // (part, rule|owner) and reuse it — the contextKey/freeze computation is
+    // (part, rule|owner) and reuse it: the contextKey/freeze computation is
     // unchanged, so identical parts from different caches still merge.
     const entryMemo = new WeakMap<PartRecord, Map<string, { record: any; rooms: Set<number> }>>();
 

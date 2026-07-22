@@ -37,7 +37,7 @@ const ref = (n: string, x: number, y: number, over: Partial<Ref> = {}): Ref =>
   ({ n, p: 0, x, y, w: 10, h: 10, ...over });
 const reference = (rooms: Ref[]) => ({ v: 1, rooms });
 
-// Four uniquely-named anchor rooms at identical positions in both sets — a
+// Four uniquely-named anchor rooms at identical positions in both sets: a
 // clean, agreeing plane-0 alignment (delta 0,0) for the cases below to extend.
 const anchors: Room[] = [
   room(1, 'Fish Market', 0, 0),
@@ -93,7 +93,7 @@ console.log('== room-graph fillRoomNames ==');
     ref('Fish Market', 0, 0), ref('Town Square', 20, 0), ref('Beach', 40, 0),
   ];
   const { names, stats } = fillRoomNames(rooms, reference(refs));
-  ok(names.size === 0, 'two anchors are not enough — nothing filled');
+  ok(names.size === 0, 'two anchors are not enough: nothing filled');
   ok(stats[0]?.skipped === true && stats[0]?.anchors === 2, 'plane reported skipped with 2 anchors');
 }
 

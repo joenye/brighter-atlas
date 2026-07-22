@@ -1,4 +1,4 @@
-// ab2 ROOM object decoder — container grammar, occupancy stack, class-351
+// ab2 ROOM object decoder: container grammar, occupancy stack, class-351
 // items, individuals + anchors, door records, room-name derivation.
 //
 // Inputs: decoded ab2 object bytes (bundles.js decodeObject(2, raw)); class
@@ -241,7 +241,7 @@ export function isPlacementGroup(n: RoomNode, table: RoomNode[]): boolean {
 }
 
 // Indexed class-189 individual row: UUID16 then four arrays (regions instead
-// own a string/polygon/vec2/array — the structural distinction matters).
+// own a string/polygon/vec2/array: the structural distinction matters).
 export function isIndividualGroup(n: RoomNode, table: RoomNode[]): boolean {
   const fields = groupFields(n, table);
   return !!(fields && fields.length === 5
@@ -367,9 +367,9 @@ function stackDimensionScore(top: RoomNode[], table: RoomNode[], width: number, 
 // equal to the cell `width` positions later (their vertical neighbour). The
 // true width keeps authored spatial coherence; a sheared one turns vertical
 // neighbours into noise (Vacant Pier: 12x15 vs 10x18 with only same-row
-// links and no anchors). Returned as agreements/pairs — a narrower width
+// links and no anchors). Returned as agreements/pairs: a narrower width
 // yields more pairs per plane, so raw counts would bias toward it. Refs key
-// by their table index — no deref, so distinct rows never alias (group rows
+// by their table index: no deref, so distinct rows never alias (group rows
 // all carry value=null and would falsely compare equal after dereferencing).
 function verticalCoherence(top: RoomNode[], width: number, cellCount: number): number {
   const cellKey = (entry: RoomNode) => {
@@ -396,7 +396,7 @@ function verticalCoherence(top: RoomNode[], width: number, cellCount: number): n
 }
 
 // Resolve occupancy dimensions against the authoritative minimap dimensions.
-// Axis order is not evidence — ambiguous factorings are scored structurally.
+// Axis order is not evidence: ambiguous factorings are scored structurally.
 export function stackDimensions(top: RoomNode[], gridWidth: number, gridHeight: number): number[] | null {
   const arrays = top.filter((n) => n.kind === 'array' && n.elems!.length >= 8);
   const byLength = new Map<number, number>(); // insertion order = first-occurrence order
@@ -582,7 +582,7 @@ export interface RoomOccurrence {
   node: RoomNode;
 }
 
-// Every class-351 cell occurrence, identity preserved — the lossless placement
+// Every class-351 cell occurrence, identity preserved: the lossless placement
 // primitive. -> { layers: K, ground, occurrences, individuals }.
 export function roomOccupancy(room: RoomLike): {
   layers: number; ground: number[]; occurrences: RoomOccurrence[]; individuals: RoomIndividual[];
@@ -745,7 +745,7 @@ export function roomExits(source: Uint8Array | ParsedRoom): RoomExit[] {
   for (const n of top) {
     visit(n, (g) => {
       if (g.kind !== 'group' || seen.has(g)) return false;
-      // cheap tag scan first — the per-group field array only materializes
+      // cheap tag scan first: the per-group field array only materializes
       // for the rare groups that actually carry both marker tags
       let has2f = false, has2e = false;
       for (const e of g.elems!) {
@@ -816,7 +816,7 @@ function findBytes(data: Uint8Array, needle: number[], from: number): number {
 }
 
 // True if the 0x13 tag at `p` is a room self-instance reference:
-// `{0f <class> | 00 <owner>} [0c|0d]* 0x13 <idx>` — an owner varint (a 0x0f
+// `{0f <class> | 00 <owner>} [0c|0d]* 0x13 <idx>`: an owner varint (a 0x0f
 // class field or a 0x00 back-ref) ending exactly at the marker/tag boundary,
 // which rejects the 0x13 bytes that occur inside floats. Build-agnostic: the
 // current build writes `0f <class> 0d 13 <idx>`, older builds the marker-less
@@ -837,7 +837,7 @@ function ownerAnchored(data: Uint8Array, p: number): boolean {
 
 // Every room's self-instance anchor in the ab0 heap definition stream:
 // `0x0f 513 [0c|0d]* 0x13 <ab2-room-index>` (interior rooms: a UNIQUE
-// `0x0d 0x13 <idx>`; older builds: a UNIQUE owner-anchored `0x13 <idx>` — see
+// `0x0d 0x13 <idx>`; older builds: a UNIQUE owner-anchored `0x13 <idx>`, see
 // ownerAnchored). -> { anchors: Map(room -> 0x13 offset), allPos: sorted [] }.
 export function roomSelfAnchors(data: Uint8Array, rooms: Set<number>): {
   anchors: Map<number, number>; allPos: number[];
@@ -867,7 +867,7 @@ export function roomSelfAnchors(data: Uint8Array, rooms: Set<number>): {
     // (value, byte length) pair identifies its bytes, so bucketing every
     // `0x0d 0x13 <varint>` site equals a per-needle scan exactly.
     const hitsBy = new Map<string, number[]>(); // `${value}:${len}` -> [offset of the 0x13]
-    // indexOf jump scan — same ascending hit order as the byte loop it replaces
+    // indexOf jump scan: same ascending hit order as the byte loop it replaces
     for (let i = data.indexOf(0x0d, 0); i >= 0 && i + 1 < n; i = data.indexOf(0x0d, i + 1)) {
       if (data[i + 1] !== 0x13) continue;
       const r = rdvSafe(data, i + 2);
@@ -885,11 +885,11 @@ export function roomSelfAnchors(data: Uint8Array, rooms: Set<number>): {
   // 513 class nor the marker before 0x13, so both strategies above miss every
   // room. For each still-unmatched room take a UNIQUE owner-anchored 0x13 <idx>.
   // Additive by construction: a build the strategies above fully cover reaches
-  // here with nothing to do, so its anchors — and derived names — are identical.
+  // here with nothing to do, so its anchors (and derived names) are identical.
   missing = [...rooms].filter((idx) => !anchors.has(idx)).sort((a, b) => a - b);
   if (missing.length) {
     const hitsBy = new Map<string, number[]>(); // `${value}:${len}` -> [offset of the 0x13]
-    // indexOf jump scan — same ascending hit order as the byte loop it replaces
+    // indexOf jump scan: same ascending hit order as the byte loop it replaces
     for (let i = data.indexOf(0x13, 0); i >= 0; i = data.indexOf(0x13, i + 1)) {
       const r = rdvSafe(data, i + 1);
       if (r === null || !ownerAnchored(data, i)) continue;
@@ -942,7 +942,7 @@ export function deriveRoomNames(data: Uint8Array, charset: string[], roomIds: It
       if (dec === null) continue;
       const [txt, end] = dec;
       // A name record is a plain-text 0x0e string immediately followed by a
-      // 0x0d/0x0c marker — separates room names from UI/spawn-label strings.
+      // 0x0d/0x0c marker, which separates room names from UI/spawn-label strings.
       const chars = [...txt];
       if (chars.length < 2 || chars.length > 48 || end > anc + 2) continue;
       if (end >= data.length || (data[end] !== 0x0c && data[end] !== 0x0d)) continue;
@@ -968,7 +968,7 @@ export function deriveRoomNames(data: Uint8Array, charset: string[], roomIds: It
 
 // Merge content-hash room-name overrides (defaults/room_name_overrides.json
 // `overrides` object) into `names`. contentHashes: Map(ab2 index -> sha256
-// hex[:16] of the DECODED object bytes) for every room — the caller computes
+// hex[:16] of the DECODED object bytes) for every room: the caller computes
 // them, so both the hint fast path and the rescan are pure lookups.
 export function applyRoomNameOverrides(
   names: Map<number, string>,

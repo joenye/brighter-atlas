@@ -1,6 +1,6 @@
 // Shared capture plumbing for the video wizard and the screenshot modal: draw
 // the (shared) renderer canvas into a 2D composite with an optional caption bar,
-// and temporarily override the scene's grid / background — capturing the
+// and temporarily override the scene's grid / background, capturing the
 // originals so the underlying 3D view is untouched once the modal closes.
 
 import { THREE, getRenderer } from './three-common.js';
@@ -19,7 +19,7 @@ export interface RenderSource { renderer: any; scene: any; camera: any }
 
 // Grid + background overrides on a live Scene3D, with capture/restore. The
 // "grid lines" toggle covers BOTH the ground GridHelper and the RGB AxesHelper
-// (addGround adds both) — hiding the grid must hide the axis lines too.
+// (addGround adds both): hiding the grid must hide the axis lines too.
 export function sceneOverrides(scene: any) {
   const helpers: any[] = [];
   scene.scene.traverse((o: any) => { if (o.type === 'GridHelper' || o.type === 'AxesHelper') helpers.push(o); });
@@ -31,7 +31,7 @@ export function sceneOverrides(scene: any) {
     hasGrid: helpers.length > 0,
     gridVisible: helpers.length ? helpers.every((h) => h.visible) : false,
     // true when the background is a plain colour (always, since the skybox
-    // presets were removed — kept so a future texture backdrop stays safe)
+    // presets were removed, kept so a future texture backdrop stays safe)
     bgIsColor: !bg || !!bg.isColor,
     bgHex: defaultBg,
     defaultBg,   // the viewer's original background, for a "reset to default" button
@@ -52,7 +52,7 @@ let _stage: HTMLCanvasElement | null = null, _stageCtx: CanvasRenderingContext2D
 
 // One render target (+ readback buffer) per requested size, tiny LRU. During a
 // transparent recording the live preview (≤720 long edge) and the capture (full
-// resolution) alternate every frame — resizing a single shared target would
+// resolution) alternate every frame: resizing a single shared target would
 // destroy + reallocate its MSAA framebuffer dozens of times a second, which is
 // exactly what made transparent GIF capture crawl.
 const _rts = new Map<string, { rt: any; buf: Uint8Array }>();
@@ -82,9 +82,9 @@ function _rtFor(w: number, h: number): { rt: any; buf: Uint8Array } {
 // synchronous so the live view is untouched. Opaque materials give a==255
 // (straight==premultiplied); only MSAA silhouette edges are coverage-
 // premultiplied, so we un-premultiply those. transparent=false keeps the scene
-// background (used by the offline video renderer for opaque frames — the live
+// background (used by the offline video renderer for opaque frames: the live
 // canvas can't be sampled deterministically). NOTE: readRenderTargetPixels is a
-// synchronous GPU readback (~tens of ms at full res) — callers must not assume
+// synchronous GPU readback (~tens of ms at full res): callers must not assume
 // real-time.
 export function renderCaptureFrame(scene3d: RenderSource, w: number, h: number,
   { transparent = true }: { transparent?: boolean } = {}): { data: Uint8ClampedArray<ArrayBuffer>; width: number; height: number } {
@@ -283,7 +283,7 @@ export function attachCaptionDrag(comp: HTMLCanvasElement, getText: () => string
 // behind the modal. A second OrbitControls bound to the preview shares the
 // scene's camera + orbit target; the scene's own controls don't fight it because
 // OrbitControls.update() recomputes from the LIVE camera each frame. Returns a
-// dispose fn — call it on close. Coexists with attachCaptionDrag (which claims
+// dispose fn. Call it on close. Coexists with attachCaptionDrag (which claims
 // its caption box via stopImmediatePropagation) and the crop lines (separate DOM).
 export function attachPreviewOrbit(comp: HTMLCanvasElement, scene: any): { dispose(): void; setEnabled(on: boolean): void } {
   const controls = new OrbitControls(scene.camera, comp);
@@ -292,7 +292,7 @@ export function attachPreviewOrbit(comp: HTMLCanvasElement, scene: any): { dispo
   controls.target = scene.controls.target;   // share the orbit centre
   let enabled = true;
   // While a turntable recording drives the camera itself, this second controls
-  // must NOT also update() the shared camera each frame — its damping would drag
+  // must NOT also update() the shared camera each frame: its damping would drag
   // the framing off-centre and fight the spin. setEnabled(false) parks it.
   const stopTick = scene.addTick(() => { if (enabled) controls.update(); });
   comp.style.cursor = 'grab';
@@ -370,7 +370,7 @@ export function settingsStore(key: string): { load(): any; save(obj: any): void 
 // ---- high-res tiled screenshot (shared: world + mesh/rig/model viewers) -----
 // Long-edge targets. The capture re-renders the CURRENT camera framing at the
 // target resolution by tiling camera.setViewOffset, streaming tiles one row at
-// a time through fflate as PNG scanlines — no full-frame canvas ever exists, so
+// a time through fflate as PNG scanlines: no full-frame canvas ever exists, so
 // 16K/32K/… stay under the browser's canvas dimension caps.
 export const SHOT_RES: Record<string, { label: string; edge: number }> = {
   '2k': { label: '2K', edge: 1920 },
@@ -443,7 +443,7 @@ export async function captureTiledPng(
         await new Promise((resolve) => setTimeout(resolve, 0));   // keep the tab breathing
         if (!isAlive()) return null;
       }
-      zlib.push(scanlines.slice(), row === scale - 1);   // fflate keeps chunks — hand it a fresh copy
+      zlib.push(scanlines.slice(), row === scale - 1);   // fflate keeps chunks: hand it a fresh copy
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (!isAlive()) return null;
     }

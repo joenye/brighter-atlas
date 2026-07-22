@@ -5,7 +5,7 @@
 // survive version switches and wipeAll), and bundled into asset_overrides.json
 // by the topbar "overrides" manager. Mirror of names.ts.
 //
-// record: { id, name, skel: <skeletonHash | null — null = static, no rig
+// record: { id, name, skel: <skeletonHash | null: null = static, no rig
 //           (a Model saved from a single static mesh)>, meshes: [{ h: <meshHash>,
 //           img: <imageHash|null> }], created: <ISO> }
 
@@ -66,7 +66,7 @@ export async function hydrateModels(): Promise<void> {
     } else if (Object.keys(cur.models).length) {
       await userdataPut('models', cur);   // one-time migration from localStorage
     }
-  } catch { /* IDB unavailable — localStorage mirror still works */ }
+  } catch { /* IDB unavailable: localStorage mirror still works */ }
 }
 
 function save(): void {

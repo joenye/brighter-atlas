@@ -7,7 +7,7 @@ import { zlibSync } from '../../vendor/fflate.module.js';
 // channels -> PNG color type: 1 gray, 2 gray+alpha, 3 RGB, 4 RGBA
 const COLOR_TYPE: Record<number, number | undefined> = { 1: 0, 2: 4, 3: 2, 4: 6 };
 
-// Compression level for PNGs served/cached at runtime — sw.js servePng and
+// Compression level for PNGs served/cached at runtime: sw.js servePng and
 // the ingest's world-texture cache pre-warm (jobs.ts). The two MUST stay in
 // lockstep so the warm writes byte-identical responses to what sw.js would
 // encode on a cache miss. These PNGs never leave the machine (Cache API /
@@ -33,7 +33,7 @@ function crc32(bytes: Uint8Array, start: number, end: number): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-// One standalone PNG chunk as bytes — for callers assembling PNGs from
+// One standalone PNG chunk as bytes, for callers assembling PNGs from
 // streamed parts (e.g. the viewer's tiled high-res screenshot).
 export function pngChunk(type: string, data: Uint8Array): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(12 + data.length);
@@ -101,8 +101,8 @@ export function encodePng(
   return out;
 }
 
-// The decoded-payload Cache API name + size cap, shared by BOTH writers —
-// sw.ts (on-demand decodes) and jobs.ts (the worldtex pre-warm) — so they can
+// The decoded-payload Cache API name + size cap, shared by BOTH writers
+// (sw.ts on-demand decodes and jobs.ts the worldtex pre-warm) so they can
 // never drift apart again. Bump the version whenever any decoder's OUTPUT
 // changes OR a caching bug ships: the service worker's activate handler
 // deletes every other cache name, so a bump is a clean purge.

@@ -1,4 +1,4 @@
-/* Brighter Shores asset viewer — dark theme */
+/* Brighter Shores asset viewer: dark theme */
 :root {
   --bg0: #0d0f13;        /* page */
   --bg1: #14171d;        /* panels */
@@ -105,7 +105,7 @@ button { font: inherit; color: inherit; }
 .search-item:hover, .search-item.active { background: var(--sel); }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 /* community/source links (Discord, GitHub): neutral .btn-mini that lines its
-   icon up with the label and lights up on hover — no loud solid fill */
+   icon up with the label and lights up on hover, no loud solid fill */
 .top-social { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
 .top-social svg { display: block; }
 .top-social:hover { background: var(--bg3); border-color: var(--accent); }
@@ -226,7 +226,7 @@ button { font: inherit; color: inherit; }
   display: flex; align-items: center; justify-content: center; overflow: hidden;
 }
 .vrow .r-thumb img { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
-/* the World list's pinned "All" entry (merged whole-world) — accent tint so it
+/* the World list's pinned "All" entry (merged whole-world): accent tint so it
    reads as navigation, not another room */
 .vrow.vrow-all { background: rgba(120, 183, 255, .08); border-bottom: 1px solid var(--line); }
 .vrow.vrow-all:hover { background: rgba(120, 183, 255, .15); }
@@ -339,7 +339,7 @@ input[type="range"] { accent-color: var(--accent); }
   display: flex; align-items: center; gap: 12px; padding: 5px 10px;
   background: rgba(10,12,16,.82); border: 1px solid var(--line); border-radius: 6px;
   color: var(--fg2); white-space: nowrap;
-  /* the all-rooms fly-cam hint carries five rows — wrap instead of overflowing */
+  /* the all-rooms fly-cam hint carries five rows: wrap instead of overflowing */
   flex-wrap: wrap; max-width: min(92vw, 620px);
 }
 .cam-hint-card b { color: var(--fg1); font-weight: 600; }
@@ -546,7 +546,7 @@ kbd {
 .modal-actions .spacer { flex: 1; }
 
 /* ---------- help / FAQ modal ---------- */
-/* width follows the base .modal.card (capped at .card's 620px — comfortable for prose) */
+/* width follows the base .modal.card (capped at .card's 620px, comfortable for prose) */
 .help-body { flex: 1; min-height: 0; overflow-y: auto; padding-right: 8px; }
 .help-intro { margin: 2px 0 4px; color: var(--fg1); }
 .help-section {
@@ -737,7 +737,7 @@ kbd {
 .diff-cat > summary::before { content: '▸ '; color: var(--fg2); }
 .diff-cat[open] > summary::before { content: '▾ '; }
 .diff-cat h4 { margin: 10px 0 4px; }
-/* dense multi-column rows — use the full width */
+/* dense multi-column rows: use the full width */
 .diff-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1px 14px; }
 .diff-list.with-thumbs { grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
 .diff-row { display: flex; align-items: center; gap: 8px; padding: 2px 4px; color: var(--fg1); text-decoration: none; border-radius: 4px; min-width: 0; }
@@ -806,7 +806,7 @@ kbd {
 .world-panel .wp-readout dl { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 2px 7px; margin: 0; }
 .world-panel .wp-readout dt { color: var(--fg2); }
 .world-panel .wp-readout dd { margin: 0; color: var(--fg0); font-variant-numeric: tabular-nums; }
-/* Inspect is a MODE toggle, not a view layer — a distinct button at the top */
+/* Inspect is a MODE toggle, not a view layer: a distinct button at the top */
 .world-panel .wp-inspect {
   display: block; width: 100%; margin-bottom: 6px; padding: 5px 8px;
   background: var(--bg3); border: 1px solid var(--line); border-radius: 6px;
@@ -817,7 +817,7 @@ kbd {
   background: #3d3413; border-color: #e4c45b; color: #ffe9a0;
 }
 .world-panel .wp-inspect:disabled { opacity: .45; cursor: default; }
-/* Session-edit reset — surfaces under the Inspect toggle once an edit exists */
+/* Session-edit reset: surfaces under the Inspect toggle once an edit exists */
 .world-panel .wp-reset-edits {
   display: block; width: 100%; margin: -2px 0 6px; padding: 3px 8px;
   background: transparent; border: 1px dashed var(--line); border-radius: 6px;
@@ -889,7 +889,7 @@ kbd {
   .world-panel { width: min(246px, 44vw); }
 }
 
-/* all-rooms loading overlay (js/viewers/world.js) — one weighted progress bar
+/* all-rooms loading overlay (js/viewers/world.js): one weighted progress bar
    over the dimmed canvas; fades out when the pipeline reaches ready */
 .world-loading {
   position: absolute; inset: 0; z-index: 8;
@@ -933,7 +933,7 @@ kbd {
 .world-loading .wlo-warn-software { border-color: #6b3a34; background: rgba(84, 30, 24, 0.22); }
 .world-loading .wlo-warn-software b { color: #e79a8e; }
 
-/* loading/perf HUD (js/viewers/world/hud.js) — world-panel styling, top-left */
+/* loading/perf HUD (js/viewers/world/hud.js): world-panel styling, top-left */
 .world-hud {
   position: absolute; top: 12px; left: 12px; z-index: 6; max-width: 300px;
   background: rgba(14, 16, 22, 0.9); border: 1px solid var(--line); border-radius: var(--radius);
@@ -966,3 +966,92 @@ kbd {
 
 /* clip picker text filter (PlaybackBar) */
 .clip-filter { width: 110px; min-width: 0; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg3); color: var(--fg0); font-size: 11.5px; }
+
+/* ------------------------------------------------------------------ mobile
+   desktop-only gate (src/mobile-gate.ts)
+   Anti-flash: on coarse-pointer (touch-first) devices the static app chrome
+   stays hidden until boot decides: mobile-gate.ts stamps .mgate-on (gate
+   mounted) or .mgate-off (normal boot) on <html>. A fine-pointer desktop
+   never matches the media query, so it can never blank. */
+@media (pointer: coarse) {
+  html:not(.mgate-off) #app { display: none; }
+}
+html.mgate-on #app { display: none; }
+
+.mgate {
+  position: fixed; inset: 0; z-index: 60; overflow-y: auto;
+  background: var(--bg0); color: var(--fg0);
+  font-size: 15px; line-height: 1.55;
+  outline: none; -webkit-tap-highlight-color: transparent;
+  /* notched phones: keep content out of the sensor housing / home bar */
+  padding: calc(18px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
+           calc(18px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+}
+.mgate-inner { max-width: 560px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; }
+/* brand: the cloned topbar lockup, scaled up for the greeting */
+.mgate-brand { display: flex; justify-content: center; padding: 4vh 0 12px; }
+.mgate-brand .brand-mark { font-size: 30px; }
+.mgate-brand .brand-name { font-size: 24px; }
+.mgate-brand .brand-sub { font-size: 14px; }
+.mgate-title { margin: 2px 0 10px; font-size: 22px; font-weight: 650; text-align: center; }
+.mgate-lede { margin: 0; color: var(--fg1); text-align: center; }
+.mgate-actions { display: flex; flex-direction: column; gap: 10px; margin: 26px 0 8px; }
+.mgate .mgate-action {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 56px; padding: 12px 16px;
+  background: var(--bg1); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--fg0); font-size: 16px; font-weight: 600;
+  text-decoration: none; cursor: pointer; text-align: left;
+}
+.mgate .mgate-action:hover { background: var(--bg2); border-color: var(--accent-dim); text-decoration: none; }
+.mgate .mgate-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mgate .mgate-action svg { width: 20px; height: 20px; flex: none; }
+.mgate-action-ico { flex: none; width: 20px; text-align: center; color: var(--accent); font-size: 18px; font-weight: 700; }
+/* short landscape phones: the three cards fit side by side */
+@media (orientation: landscape) and (max-height: 480px) {
+  .mgate-actions { flex-direction: row; }
+  .mgate .mgate-action { flex: 1; flex-direction: column; justify-content: center; gap: 6px; text-align: center; }
+}
+/* desktop previews: quiet showcase cards under the actions. Each figure is
+   one enclosed card (image + caption inside the same border) so a caption
+   can never read as belonging to a neighbouring image. */
+.mgate-previews { margin-top: 26px; display: flex; flex-direction: column; gap: 14px; }
+.mgate-previews-label { color: var(--fg1); font-size: 15px; font-weight: 600; margin: 0; }
+.mgate-preview {
+  margin: 0; overflow: hidden;
+  background: var(--bg1); border: 1px solid var(--line); border-radius: 10px;
+}
+.mgate-preview img { display: block; width: 100%; height: auto; }
+.mgate-preview figcaption {
+  color: var(--fg2); font-size: 12px;
+  padding: 8px 12px; border-top: 1px solid var(--line);
+}
+@media (orientation: landscape) and (min-width: 640px) {
+  .mgate-previews { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
+  .mgate-previews-label { flex-basis: 100%; }
+  .mgate-preview { flex: 1; min-width: 0; }
+}
+/* the escape hatch: real (44px) tap target, quiet look */
+.mgate-foot { margin-top: auto; padding-top: 24px; text-align: center; }
+.mgate-bypass {
+  min-height: 44px; padding: 8px 12px;
+  background: none; border: none; cursor: pointer;
+  color: var(--fg2); font-size: 12px; text-decoration: underline;
+}
+.mgate-bypass:hover { color: var(--fg1); }
+/* inline help view: back control + the shared modal content, full-page */
+.mgate-help-head { display: flex; align-items: center; gap: 12px; margin: 2px 0 8px; }
+.mgate-help-head .mgate-title { margin: 0; text-align: left; }
+.mgate-back {
+  flex: none; min-height: 44px; min-width: 44px; padding: 8px 14px;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--fg1); font-size: 14px; cursor: pointer;
+}
+.mgate-back:hover { background: var(--bg3); color: var(--fg0); }
+.mgate-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* the help content was sized for a modal column: give it document flow and
+   phone-readable type */
+.mgate .help-body { flex: none; min-height: auto; overflow: visible; padding-right: 0; font-size: 15px; }
+.mgate .help-body .small { font-size: 13px; }
+.mgate .help-a code, .mgate .help-intro code { font-size: 14px; }
+.mgate .help-section { font-size: 11px; }

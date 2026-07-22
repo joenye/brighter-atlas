@@ -35,7 +35,7 @@ export interface AppStore extends EventTarget {
   worldIndex(): Promise<any>;
   worldRoom(id: number | string): Promise<any>;
   /** Bulk shard fetch keyed by room id (client mode: one IDB transaction per
-   *  call). Callers must pass BOUNDED id batches — fetching every shard at
+   *  call). Callers must pass BOUNDED id batches: fetching every shard at
    *  once spikes the heap by hundreds of MB on a full world. */
   worldRooms?(ids: (number | string)[]): Promise<Map<number, any>>;
   json(rel: string): Promise<any>;
@@ -123,7 +123,7 @@ export class Store extends EventTarget implements AppStore {
     return res.text();
   }
 
-  // manifest.json — null means "no data exported yet" (drives onboarding screen)
+  // manifest.json: null means "no data exported yet" (drives onboarding screen)
   async loadManifest(): Promise<Manifest | null> {
     this.manifest = await this.fetchJSON('manifest.json', { silent: true });
     return this.manifest;
@@ -154,7 +154,7 @@ export class Store extends EventTarget implements AppStore {
     return this.json(`world/rooms/${String(id).padStart(5, '0')}.json`);
   }
 
-  // HTTP mode keeps per-room fetches — this is just their parallel form, so
+  // HTTP mode keeps per-room fetches. This is just their parallel form, so
   // callers get one Map regardless of the backing store. Failed rooms are
   // simply absent (callers fall back to worldRoom for its error surface).
   async worldRooms(ids: (number | string)[]): Promise<Map<number, any>> {
@@ -165,7 +165,7 @@ export class Store extends EventTarget implements AppStore {
       try {
         const shard = await this.worldRoom(id);
         if (shard) map.set(Number(id), shard);
-      } catch { /* absent from the map — caller retries per room */ }
+      } catch { /* absent from the map: caller retries per room */ }
     }));
     return map;
   }
@@ -178,7 +178,7 @@ export class Store extends EventTarget implements AppStore {
     return this._json.get(rel)!;
   }
 
-  // large payloads (meshes, anims) — bounded LRU cache
+  // large payloads (meshes, anims): bounded LRU cache
   async payload(rel: string): Promise<any> {
     if (this._payloadCache.has(rel)) {
       const v = this._payloadCache.get(rel);

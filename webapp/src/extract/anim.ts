@@ -83,7 +83,7 @@ function rotChannel(u8: Uint8Array, off: number, n: number): [AnimChannel, numbe
 
 // decodeAnim(u8, {i, skel, dur, frameMs}) -> anims/NNNNN.json object.
 //   skel    = ab6 skeleton index from ab0's anim_dir (passed through).
-//   dur     = ab0's duration; unused — the clip's own duration is parsed from
+//   dur     = ab0's duration; unused: the clip's own duration is parsed from
 //             the stream (and validated identical across bones).
 //   frameMs = sample interval (always 20; the per-bone header byte is 0x14).
 export function decodeAnim(

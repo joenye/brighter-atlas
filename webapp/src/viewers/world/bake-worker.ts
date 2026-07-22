@@ -1,7 +1,7 @@
 // Merged-bake worker: bakes one merged-world bucket (see merged.ts) off the
 // main thread. The loop in bakeBucket() is a VERBATIM port of
-// MergedWorld._bakeBucketArrays — same operations in the same order with the
-// same float64 intermediates and float32/int8 stores — so a bucket's output
+// MergedWorld._bakeBucketArrays (same operations in the same order with the
+// same float64 intermediates and float32/int8 stores), so a bucket's output
 // is BYTE-IDENTICAL to the main-thread path (tools/smoke.ts byte-compares
 // the two paths as a permanent regression gate). THREE is deliberately NOT
 // imported: the two helpers the loop relies on (Matrix4.fromArray element
@@ -20,7 +20,7 @@
 //
 // Source mesh attribute arrays arrive ONCE per worker and are cached here by
 // mesh id. ALL cache policy (LRU recency, the byte cap, evictions) lives on
-// the main thread (bake-pool.ts), which drives this side via `evict` — the
+// the main thread (bake-pool.ts), which drives this side via `evict`: the
 // worker never decides evictions itself, so the two bookkeeping maps can
 // never disagree about what is resident.
 

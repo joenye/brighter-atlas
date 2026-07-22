@@ -71,7 +71,7 @@ export function decodeMesh(
   const nIdx = t * 3;
   let maxIdx = 0;
   if (((u8.byteOffset + idxOff) & 1) === 0) {
-    // aligned u16 view over the LE index buffer (LE host asserted above) —
+    // aligned u16 view over the LE index buffer (LE host asserted above):
     // same values as the byte-pair reads, one load per index
     const idx16 = new Uint16Array(u8.buffer, u8.byteOffset + idxOff, nIdx);
     for (let k = 0; k < nIdx; k++) {
@@ -96,7 +96,7 @@ export function decodeMesh(
 
   const posBytes = new Uint8Array(12 * v); // f32le passthrough, byte-exact
   // copy positions as three u32 lanes per vertex from the existing words view
-  // (posBytes is freshly allocated: offset 0, length divisible by 4) — a pure
+  // (posBytes is freshly allocated: offset 0, length divisible by 4), a pure
   // word memcpy of the same bytes, replacing per-vertex subarray().set()
   const posWords = new Uint32Array(posBytes.buffer);
   const normals = new Float32Array(3 * v);
@@ -137,7 +137,7 @@ export function decodeMesh(
     boneIdx = new Uint8Array(4 * v);
     boneWt = new Uint8Array(4 * v); // rows sum to 255
     for (let k = 0; k < v; k++) {
-      // direct byte indexing — same bytes as the subarray().set() pairs
+      // direct byte indexing: same bytes as the subarray().set() pairs
       const src = k * 36 + 28, dst = k * 4;
       boneIdx[dst] = u8[src];
       boneIdx[dst + 1] = u8[src + 1];

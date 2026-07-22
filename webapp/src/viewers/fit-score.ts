@@ -1,13 +1,13 @@
-// Texture "fit" scoring — how well a texture WRAPS a given mesh's UV layout.
+// Texture "fit" scoring: how well a texture WRAPS a given mesh's UV layout.
 // Pure and worker-safe (no DOM, no THREE); shared by the main thread (feature
 // extraction from the loaded geometry) and fit-worker.js (per-texture scoring).
 //
 // Two geometry-intrinsic signals (no semantic prior needed):
-//   1. SEAM COHERENCE — where the mesh is cut in UV space (two triangles that
+//   1. SEAM COHERENCE: where the mesh is cut in UV space (two triangles that
 //      touch in 3D but are separated in the atlas), a correctly-authored
 //      texture has matching colour on both sides of the cut. Wrong texture ->
 //      colour breaks at the seam. This is the decisive signal.
-//   2. ISLAND / CONTENT ALIGNMENT — authored content (opaque, detailed) should
+//   2. ISLAND / CONTENT ALIGNMENT: authored content (opaque, detailed) should
 //      fall UNDER the mesh's UV footprint; padding/transparency should fall
 //      between islands. Weaker, but free, and strong for cutout/atlas art.
 //
@@ -59,7 +59,7 @@ function rasterTri(mask: Uint8Array, N: number, x0: number, y0: number, x1: numb
 
 // Find UV seams: mesh edges shared by two triangles whose UVs diverge across the
 // shared 3D edge. Returns Float32Array of sample pairs [ax,ay,bx,by, ...] in
-// stored (DirectX v-down) UV space — colours at (ax,ay) and (bx,by) should match.
+// stored (DirectX v-down) UV space: colours at (ax,ay) and (bx,by) should match.
 function buildSeams(positions: ArrayLike<number>, uvs: ArrayLike<number>, index: ArrayLike<number>, cap = 300): Float32Array {
   const nV = positions.length / 3;
   let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
@@ -132,7 +132,7 @@ export function buildFitFeatures({ positions, uvs, index }: FitGeometry,
   }
   let covered = 0;
   for (let i = 0; i < mask.length; i++) covered += mask[i];
-  // world surface area (sum of triangle areas) — for the texel-density prior:
+  // world surface area (sum of triangle areas), for the texel-density prior:
   // a bigger mesh generally carries a more detailed (higher-res) texture, at
   // roughly constant texels-per-world-area. Combined with each texture's native
   // resolution downstream.
@@ -197,7 +197,7 @@ export function scoreTexture(features: FitFeatures, rgba: ArrayLike<number>, W: 
   const edgeGap = (nIn ? eIn / nIn : 0) / 255 - (nOut ? eOut / nOut : 0) / 255;
   const alignTerm = 0.5 + 0.5 * clamp(alphaGap + 0.5 * edgeGap, -1, 1);
 
-  // Silhouette IoU — for CUTOUT textures (meaningful transparency), the opaque
+  // Silhouette IoU: for CUTOUT textures (meaningful transparency), the opaque
   // region should coincide with the mesh's UV footprint. Very discriminative and
   // works even when the mesh has few seams (equipment). Skipped (neutral) for
   // fully-opaque textures where alpha carries no shape information.
@@ -209,7 +209,7 @@ export function scoreTexture(features: FitFeatures, rgba: ArrayLike<number>, W: 
   const std = Math.sqrt(Math.max(0, sumL2 / Math.max(1, nAll) / (255 * 255) - mean * mean));
   // Confidence in the seam signal = the texture's LOCAL high-frequency detail, not
   // its global spread. A soft gradient has high std yet is locally smooth, so its
-  // seams match trivially on any mesh (a false-positive) — gating on local edge
+  // seams match trivially on any mesh (a false-positive): gating on local edge
   // energy neutralises it, while a busy authored skin/armour keeps full confidence.
   const meanEdge = (eIn + eOut) / Math.max(1, nAll) / 255;
   const cohConf = clamp(meanEdge / 0.035, 0, 1);
@@ -224,7 +224,7 @@ export function scoreTexture(features: FitFeatures, rgba: ArrayLike<number>, W: 
     }
     // TRIMMED mean of the best 70% of seams: drop the worst 30% as hard-edged
     // atlas cuts that even the CORRECT texture legitimately breaks at (high-island
-    // meshes — helmets, capes), then judge the continuity seams' break magnitude
+    // meshes: helmets, capes), then judge the continuity seams' break magnitude
     // relative to the texture's own detail scale. Robust yet still graded, so a
     // merely smooth fill can't win (cohConf also neutralises flat textures).
     diffs.sort((p, q) => p - q);
@@ -235,7 +235,7 @@ export function scoreTexture(features: FitFeatures, rgba: ArrayLike<number>, W: 
     const rawCoh = 1 - clamp(trimmed / Math.max(0.06, std), 0, 1);
     coherence = 0.5 + (rawCoh - 0.5) * cohConf;
   }
-  // Texel-density prior — bigger mesh -> higher-res texture, at roughly constant
+  // Texel-density prior: bigger mesh -> higher-res texture, at roughly constant
   // texels-per-world-area. Penalises gross resolution mismatch (e.g. a 256² skin
   // on a tiny helmet) on a generous log scale. DELIBERATELY gentle + wide: the
   // target density varies by asset class (creatures ~0.01, equipment ~0.05), so

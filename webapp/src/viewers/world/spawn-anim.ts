@@ -1,4 +1,4 @@
-// Wave C — in-world skinned playback for the World inspector.
+// Wave C: in-world skinned playback for the World inspector.
 //
 // When the inspector pins a spawn/NPC placement whose part(s) resolve to a
 // skinned rig, world.js offers a clip picker (the Models viewer's PlaybackBar)
@@ -6,12 +6,12 @@
 // place of the static instanced/baked representation. This module owns the two
 // pieces that don't belong in world.js:
 //
-//   resolveSpawnAnim() — spawn parts -> skinned mesh(es) -> shared skeleton ->
+//   resolveSpawnAnim(): spawn parts -> skinned mesh(es) -> shared skeleton ->
 //     valid clips, gracefully reporting when Animations/Skeletons weren't
 //     extracted for this version (world extraction pulls meshes/images/
 //     skeletons but NOT anims, so "no anims" is the common case).
 //
-//   SpawnAnimComposite — a Rig-driven group of SkinnedMesh (+ any static parts)
+//   SpawnAnimComposite: a Rig-driven group of SkinnedMesh (+ any static parts)
 //     built from the SHARED WorldScene geometry/material caches (never cloned,
 //     so nothing new to dispose beyond the rig's own skeleton bone texture),
 //     placed at the spawn's world transform and posed from the caller's tick.
@@ -23,8 +23,8 @@ import { entryByOrdinal } from '../../store.js';
 import type { AppStore, IndexEntry } from '../../store.js';
 import type { WorldScene } from './scene.js';
 
-const ANIMS_HINT = 'Extract the Animations category to play clips — version chip → extract more';
-const SKELETONS_HINT = 'Extract the Rigs category to play clips — version chip → extract more';
+const ANIMS_HINT = 'Extract the Animations category to play clips: version chip → extract more';
+const SKELETONS_HINT = 'Extract the Rigs category to play clips: version chip → extract more';
 
 export type SpawnAnimResolution =
   | { kind: 'norig' }
@@ -39,7 +39,7 @@ export type SpawnAnimResolution =
   };
 
 /** Tolerant recolor-tuple lookup (mirrors scene.js placementRecolors, but never
- *  throws — a bad tuple just means "no recolor" for the transient composite). */
+ *  throws: a bad tuple just means "no recolor" for the transient composite). */
 export function resolveShardRecolors(shard: any, recolorIndex: any): number[][] | null {
   const value = Number(recolorIndex);
   if (!Number.isInteger(value) || value < 0) return null;
@@ -53,8 +53,8 @@ export function resolveShardRecolors(shard: any, recolorIndex: any): number[][] 
 /**
  * Resolve a pinned spawn's animation availability. `store` is the app store
  * (index()/manifest); `parts` the spawn's exact parts (each carrying a `mesh`
- * AB5 ordinal — from describeShardPlacement). Returns one of:
- *   {kind:'norig'}                          not a skinned entity — show nothing
+ * AB5 ordinal, from describeShardPlacement). Returns one of:
+ *   {kind:'norig'}                          not a skinned entity: show nothing
  *   {kind:'hint', message}                  Animations/Skeletons not extracted
  *   {kind:'noclips'}                        rig has no clips for this version
  *   {kind:'ready', skelEntry, skelOrdinal, clips, skinnedSet}
@@ -89,7 +89,7 @@ export async function resolveSpawnAnim({ store, parts }: {
   const skelEntry = Array.isArray(skels) ? skels.find((s) => s.i === skelOrdinal) : null;
   if (!skelEntry || !skelEntry.f) return { kind: 'hint', message: SKELETONS_HINT };
 
-  // Animations: the common no-op — World extraction does not pull anims.
+  // Animations: the common no-op. World extraction does not pull anims.
   if (store.manifest?.categories?.anims?.exported === false) {
     return { kind: 'hint', message: ANIMS_HINT };
   }
@@ -106,7 +106,7 @@ export async function resolveSpawnAnim({ store, parts }: {
  * A Rig-posed composite for one spawn: the skinned part(s) bound to `rig`, plus
  * any static parts, all under a single manually-transformed group. Geometry and
  * materials come from the SHARED WorldScene caches (`world._meshGeometry` /
- * `world._material`) — identical resolution to the static spawn — so this owns
+ * `world._material`), identical resolution to the static spawn, so this owns
  * NO cache-backed GL objects; dispose() only frees the group's own membership
  * and the rig's skeleton bone texture.
  */
@@ -158,7 +158,7 @@ export class SpawnAnimComposite {
       const skinned = !!skinnedSet?.has(Number(part.mesh)) && !!geometry.attributes.skinIndex;
       const mesh = skinned ? new THREE.SkinnedMesh(geometry, material) : new THREE.Mesh(geometry, material);
       if (skinned) {
-        // Explicit identity bind matrix — the bones live under this group; a
+        // Explicit identity bind matrix: the bones live under this group; a
         // parameterless bind() would recompute boneInverses from the current
         // (posed) bone world matrices and clobber the Rig's stored inverses.
         (mesh as THREE.SkinnedMesh).bind(this.rig.skeleton, new THREE.Matrix4());

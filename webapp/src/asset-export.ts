@@ -1,7 +1,7 @@
 // Per-asset export: download ONE selected asset, any category. 3D assets
-// (mesh / skeleton / anim) export as GLB — the glTF 2.0 binary that Blender,
+// (mesh / skeleton / anim) export as GLB, the glTF 2.0 binary that Blender,
 // Unity, Unreal and Godot import directly (conversion in gltf-export.js, loaded
-// lazily) — with the raw decoded JSON still available via the format picker.
+// lazily), with the raw decoded JSON still available via the format picker.
 // audio = WAV, image = PNG (zip when an object has several sub-images),
 // string = .txt. Complements the topbar "bulk export" (whole tree).
 
@@ -97,7 +97,7 @@ const exportFormat = (): string => (getPref('exportfmt') === 'json' ? 'json' : '
 function formatSelect({ mini = false }: { mini?: boolean } = {}): HTMLSelectElement {
   const sel = el('select', {
     class: `btn${mini ? ' btn-mini' : ''} asset-export-fmt`,
-    title: 'Export format: GLB (glTF binary — opens in Blender, Unity, Unreal, Godot) or the raw decoded JSON',
+    title: 'Export format: GLB (glTF binary: opens in Blender, Unity, Unreal, Godot) or the raw decoded JSON',
   });
   sel.append(
     el('option', { value: 'glb', text: '.glb' }),
@@ -114,7 +114,7 @@ export interface ExportButtonOpts {
 }
 
 // the standard per-asset Export button (same look + behaviour everywhere it
-// appears — one per viewer toolbar). getFmt: () => 'glb'|'json', for callers
+// appears: one per viewer toolbar). getFmt: () => 'glb'|'json', for callers
 // that render a formatSelect alongside.
 export function exportButton(app: any, cat: string, e: any, { mini = false, getFmt }: ExportButtonOpts = {}): HTMLButtonElement {
   const btn = el('button', {

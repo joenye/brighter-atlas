@@ -2,7 +2,7 @@
 // 3D viewport stays fully visible while trying textures. Lists ab3 MATERIAL
 // images only (the texture class world props actually use); thumbnails are the
 // smallest albedo mip (f[0]) and lazy-load as they scroll into view (the grid
-// can hold ~9.5k cells — decoding all of them up front serialized behind the
+// can hold ~9.5k cells: decoding all of them up front serialized behind the
 // service worker). Fast try-before-commit:
 //   click / ↑↓←→  = select + live-preview on the mesh (debounced)
 //   Enter / double-click / "use" = commit the override (persisted) and close
@@ -25,8 +25,8 @@ const _fitFeat = new Map<string, FitFeatures | null>();      // mesh key -> UV f
 
 // ---- colour analysis (session-cached) --------------------------------------
 // Per-material colour SIGNATURE = the set of distinct colours PRESENT in the
-// thumbnail (4-bit/channel bins over a 12x12 downsample), not just the average
-// — so "contains colour X" is answerable. ~3,800 images take a couple of
+// thumbnail (4-bit/channel bins over a 12x12 downsample), not just the average,
+// so "contains colour X" is answerable. ~3,800 images take a couple of
 // seconds on first use, then it's free for the rest of the session.
 const _palette = new Map<number, Float32Array>();    // image index -> [r,g,b, r,g,b, ...] present colours
 
@@ -119,7 +119,7 @@ export interface TexturePickerOpts {
   onPickMulti?: (imgEntries: IndexEntry[]) => void;
   onReset?: () => void;            // back to mapped
   onClear?: () => void;            // persist "no texture"
-  onCancel?: () => void;           // closed without committing — revert any preview
+  onCancel?: () => void;           // closed without committing: revert any preview
   onBanner?: (msg: string) => void;
 }
 
@@ -176,7 +176,7 @@ export function openTexturePicker({ host, store, imagesIdx, current, baked, fitM
   // ---- header: filter + close
   const input = el('input', {
     class: 'tp-filter', type: 'search',
-    placeholder: `${fmtInt(items.length)} textures — ↑↓←→ preview · Enter use · Esc cancel`,
+    placeholder: `${fmtInt(items.length)} textures: ↑↓←→ preview · Enter use · Esc cancel`,
     title: 'Filter by image index, content hash or name; pick a colour (or paste an image) to sort by similarity. Arrows move + live-preview on the mesh, Enter commits, Esc cancels.',
   });
   input.addEventListener('input', recomputeMatch);
@@ -207,17 +207,17 @@ export function openTexturePicker({ host, store, imagesIdx, current, baked, fitM
   // as you go), plus optional pinned colours (+ / paste) for a strict "contains
   // ALL" filter. Colours re-sort WITHIN the fit-scored list when Fit is on. No
   // target colour is set by default; clear the picker target with its ✕.
-  const colorInput = el('input', { type: 'color', class: 'tp-color', value: '#999999', title: 'Target colour — changing it sorts textures by how well they contain it (live). Clear with ✕.' });
+  const colorInput = el('input', { type: 'color', class: 'tp-color', value: '#999999', title: 'Target colour: changing it sorts textures by how well they contain it (live). Clear with ✕.' });
   const pickClearBtn = el('button', { class: 'btn tp-pickclear', text: '✕', hidden: true, title: 'Clear the target colour' });
-  const addColorBtn = el('button', { class: 'btn tp-addcolor', text: '+', title: 'Pin this colour too — results must contain ALL pinned colours' });
-  const swatches = el('span', { class: 'tp-swatches', title: 'Pinned colours (click a swatch to remove) — results contain ALL of them' });
+  const addColorBtn = el('button', { class: 'btn tp-addcolor', text: '+', title: 'Pin this colour too: results must contain ALL pinned colours' });
+  const swatches = el('span', { class: 'tp-swatches', title: 'Pinned colours (click a swatch to remove). Results contain ALL of them' });
   const colorOffBtn = el('button', { class: 'btn', text: '✕ colours', hidden: true, title: 'Clear all pinned colours' });
   const hexToRgb = (v: string) => [1, 3, 5].map((k) => parseInt(v.slice(k, k + 2), 16));
 
   const colorLabel = () => {
     const withFit = fitOn && fitScores, n = activeColors().length;
-    return n ? `${n} colour(s)${withFit ? ' · within fit' : ''} — textures containing all`
-      : (withFit ? `${fmtInt(fitScores!.size)} textures ranked by fit — best first` : '');
+    return n ? `${n} colour(s)${withFit ? ' · within fit' : ''}: textures containing all`
+      : (withFit ? `${fmtInt(fitScores!.size)} textures ranked by fit, best first` : '');
   };
   async function ensureColorSigs(): Promise<boolean> {
     if (!activeColors().length) return true;
@@ -349,7 +349,7 @@ export function openTexturePicker({ host, store, imagesIdx, current, baked, fitM
   if (fitMesh) {
     fitBtn = el('button', {
       class: 'btn tp-fitbtn', text: '✦ fit',
-      title: 'Rank textures by how well they fit this mesh\'s shape, best first. A smart guess to help you find the right one faster — not a guaranteed match.',
+      title: 'Rank textures by how well they fit this mesh\'s shape, best first. A smart guess to help you find the right one faster, not a guaranteed match.',
     });
     fitBtn.addEventListener('click', runFit);
     fitProg = el('progress', { class: 'tp-fitprog', max: 1, value: 0, hidden: true });
@@ -390,7 +390,7 @@ export function openTexturePicker({ host, store, imagesIdx, current, baked, fitM
 
   // One CACHED cell per image, reused across every re-render (filter/sort):
   // a reused <img> keeps its decoded pixels, so re-filtering never re-fetches
-  // thumbnails — and lazy loading means only cells scrolled into view decode
+  // thumbnails, and lazy loading means only cells scrolled into view decode
   // at all (the grid can hold ~9.5k; decoding everything up front serialized
   // behind the service worker and starved the preview fetch).
   const cellCache = new Map<number, { cell: HTMLElement }>();   // image i -> { cell }
@@ -398,7 +398,7 @@ export function openTexturePicker({ host, store, imagesIdx, current, baked, fitM
     let c = cellCache.get(e.i);
     if (!c) {
       const cell = el('div', {},
-        // f[0] = the smallest albedo mip — plenty for a 78px cell
+        // f[0] = the smallest albedo mip: plenty for a 78px cell
         el('img', { src: store.url(e.f[0]), alt: `#${e.i}`, loading: 'lazy', decoding: 'async' }),
         el('div', { class: 'tp-label', text: `#${e.i}` }));
       cell.addEventListener('click', (ev) => {
@@ -462,14 +462,14 @@ export function openTexturePicker({ host, store, imagesIdx, current, baked, fitM
     actions,
     grid,
     el('div', { class: 'tp-foot' },
-      el('span', { class: 'dim small', text: `${fmtInt(localOverrideCount())} unsaved texture change(s) — save them with the “overrides” button up top` })),
+      el('span', { class: 'dim small', text: `${fmtInt(localOverrideCount())} unsaved texture change(s). Save them with the “overrides” button up top` })),
   );
   // one picker per host: tear down any stray previous instance first, so
   // re-opening never stacks another ~3,800-thumbnail grid (piles of <img>
   // layers crash Firefox). Each element's own remove() runs full cleanup.
   host.querySelectorAll('.texpicker').forEach((n) => n.remove());
   host.appendChild(root);
-  // the pre-selected (currently applied) texture jumps into view — this must
+  // the pre-selected (currently applied) texture jumps into view: this must
   // happen after the grid is actually in the DOM, or scrollIntoView is a no-op
   if (sel >= 0) cells[sel]?.scrollIntoView({ block: 'center' });
 

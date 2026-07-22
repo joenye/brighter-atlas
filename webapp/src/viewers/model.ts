@@ -1,5 +1,5 @@
-// Model viewer: renders a saved Model — a fixed subset of a skeleton's meshes,
-// each with its pinned texture variant (by image content hash) — on the rig,
+// Model viewer: renders a saved Model, a fixed subset of a skeleton's meshes,
+// each with its pinned texture variant (by image content hash), on the rig,
 // with the SAME shading toolbar + animation transport + screenshot/video as the
 // skeleton composite, but NO mesh picker (the selection is fixed). Rename +
 // delete live in the details panel (main.js setModelDetails).
@@ -82,7 +82,7 @@ async function applyPartAppearance(mat: any, row: any, imagesIdx: IndexEntry[] |
   if (map) { mat.map = map; mat.color.set(0xffffff); }
   if (packed && !map) packed.dispose();
   // fullTint = the extraction-baked uniform-luminance verdict (grayscale
-  // albedo × equal tints — the room renderer's exact rule); without it those
+  // albedo × equal tints, the room renderer's exact rule); without it those
   // surfaces render as their raw white/gray albedo.
   if (recolor) {
     applyPackedRecolor(mat, map ? packed : null, recolor, {
@@ -92,10 +92,10 @@ async function applyPartAppearance(mat: any, row: any, imagesIdx: IndexEntry[] |
   return mat;
 }
 
-// ⭳ Export — the whole Model as one GLB (glTF binary): rig + meshes + pinned
+// ⭳ Export: the whole Model as one GLB (glTF binary): rig + meshes + pinned
 // textures, optionally with every clip of its skeleton embedded (clips can be
 // numerous/large, so they're opt-in via the picker). Rebuilds a clean scene
-// from the payloads — never serializes the live viewer scene (wireframes,
+// from the payloads. It never serializes the live viewer scene (wireframes,
 // joint spheres, ground plane and the current pose don't belong in the file).
 function exportGroup(app: any, model: ModelRecord, clips: IndexEntry[]): HTMLElement[] {
   const withAnims = clips.filter((c) => c.f);
@@ -112,7 +112,7 @@ function exportGroup(app: any, model: ModelRecord, clips: IndexEntry[]): HTMLEle
   const btn = el('button', {
     class: 'btn asset-export-btn',
     text: '⭳ Export',
-    title: 'Download this model as GLB (glTF binary — opens in Blender, Unity, Unreal, Godot)',
+    title: 'Download this model as GLB (glTF binary: opens in Blender, Unity, Unreal, Godot)',
   });
   btn.addEventListener('click', async () => {
     btn.disabled = true;
@@ -143,10 +143,10 @@ function exportGroup(app: any, model: ModelRecord, clips: IndexEntry[]): HTMLEle
 
 // ---- variant strip: offscreen 3D thumbnails + keyboard focus ----------------
 // Thumbnails render one at a time through a queue (shared renderer, offscreen
-// target — never touches the live view) and cache per model+variant for the
+// target, never touches the live view) and cache per model+variant for the
 // session. The camera pose is computed once per model (from the first variant
 // rendered) so every variant's thumbnail shares the exact same framing.
-// Finished thumbnails cache for the SESSION only (in-memory data URLs — lost
+// Finished thumbnails cache for the SESSION only (in-memory data URLs, lost
 // on reload by design). Pending renders go through a priority queue: when the
 // user moves to a new model, that model's jobs jump the queue and every
 // still-pending job from other models is dropped (their cells are gone; the
@@ -342,7 +342,7 @@ export function createModelView(app: any, model: ModelRecord) {
   toolbar.append(
     el('span', { class: 'viewer-title', text: `Model ${model.name}` }),
     badge(`${parts.length} mesh${parts.length === 1 ? '' : 'es'}`, 'b-ghost'),
-    // native append: a null here becomes a "null" text node — preserved as-is
+    // native append: a null here becomes a "null" text node, preserved as-is
     model.source === 'system' ? badge('system', 'b-good b-ghost', 'Read-only model recovered from owner-qualified asset data') : (null as any),
   );
   // variant strip along the bottom (image-viewer style): one 3D-preview
@@ -393,7 +393,7 @@ export function createModelView(app: any, model: ModelRecord) {
     let skelEntry: IndexEntry | null | undefined = null;
     let skelJson: any, clips: IndexEntry[] = [], meshRows: any[] = [], imagesIdx: IndexEntry[] | null = null;
     try {
-      if (model.skel || Number.isInteger(model.skel_i)) {   // null = static/mixed model — no single rig
+      if (model.skel || Number.isInteger(model.skel_i)) {   // null = static/mixed model: no single rig
         const skels = await app.store.index('rigs');
         skelEntry = model.skel ? skels.find((s: IndexEntry) => s.h === model.skel) : null;
         if (!skelEntry && Number.isInteger(model.skel_i)) skelEntry = skels.find((s: IndexEntry) => s.i === model.skel_i);
@@ -424,7 +424,7 @@ export function createModelView(app: any, model: ModelRecord) {
     try { imagesIdx = await app.store.index('images'); } catch { /* untextured */ }
     if (destroyed) return;
 
-    // ---- static model: meshes on a plain scene — no rig, transport or video --
+    // ---- static model: meshes on a plain scene (no rig, transport or video) --
     if (!skelEntry) {
       scene = new Scene3D(host);
       const texLoader = new THREE.TextureLoader();

@@ -8,7 +8,7 @@
 //   off 6  u8     codec param (bslpc: bits/sample 4..8; opus: kbps 96/192; qoa: 0)
 //   off 7  u8     always 0
 // The sample rate is not stored. QOA (type 02) + Opus (type 01) are 48000 Hz.
-// bslpc (type 00) SFX are sourced at 24000 Hz — the game mixer runs at 48 kHz and
+// bslpc (type 00) SFX are sourced at 24000 Hz: the game mixer runs at 48 kHz and
 // upsamples them on playback, so decoding + playing at 48 kHz made them an octave
 // too high. Decode/play them at 24 kHz for correct pitch.
 
@@ -48,7 +48,7 @@ export function audioIndexEntry(u8: Uint8Array, i: number) {
 // value of the double; toFixed(2) rounds that same exact value but half-UP.
 // They differ only when the double is exactly halfway, which for a dyadic
 // x = samples/rate happens iff x = odd/8 (samples = rate/8·odd; any other .xx5
-// decimal is not a dyadic rational, far above the ~1e-14 division error — so
+// decimal is not a dyadic rational, far above the ~1e-14 division error, so
 // no other double can land halfway). rate is a multiple of 8.
 function durFromSamples(samples: number, rate: number): number {
   const x = samples / rate;
@@ -72,7 +72,7 @@ export function correctAudioRate(e: any) {
 }
 
 // ---------------------------------------------------------------------------
-// Type 0x02 — QOA (qoa.h) with file/frame headers stripped and u64s LITTLE-endian.
+// Type 0x02: QOA (qoa.h) with file/frame headers stripped and u64s LITTLE-endian.
 // Frames are implicitly 5120 samples; each frame stores per-channel LMS history+weights
 // (4 x s16 packed MSB-first in a u64le), then ceil(flen/20) slice rows of one u64le per
 // channel. Decode is bit-exact qoa.h once the u64s are byteswapped.
@@ -108,7 +108,7 @@ export function decodeQoa(u8: Uint8Array): Int16Array {
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   const out = new Int16Array(samples * ch);
   // per-channel LMS state; weights drift up to +-896/sample within a 5120-sample frame, so
-  // they exceed int16 but stay far below 2^53 — plain Number arithmetic is exact
+  // they exceed int16 but stay far below 2^53, so plain Number arithmetic is exact
   // (state is reloaded from the stream every frame).
   const hist = new Int32Array(ch * 4);
   const wts = new Float64Array(ch * 4);
@@ -165,7 +165,7 @@ export function decodeQoa(u8: Uint8Array): Int16Array {
 }
 
 // ---------------------------------------------------------------------------
-// Type 0x00 — "bslpc": backward-adaptive ADPCM (IMA/G.726-style). Each
+// Type 0x00, "bslpc": backward-adaptive ADPCM (IMA/G.726-style). Each
 // 2048-sample superframe re-seeds a predictor from the s16 anchor and a step
 // index from the magnitude byte; each 128-sample frame's header byte selects a
 // step-adaptation profile. Per code: pred += code*step +/- step/2 (clamped
@@ -178,7 +178,7 @@ const T00_SUPERFRAME = 2048; // samples per superframe (= 16 frames)
 
 // ADPCM tables: STEP (5 per-B step tables x 89 entries), OFF9/OFF17 (256-row
 // signed step-index deltas, width 9 for B4/B5, width 17 for B6/B7/B8).
-// Stored base64 to stay compact and byte-exact — never regenerate these.
+// Stored base64 to stay compact and byte-exact. Never regenerate these.
 const _B64_STEP = 'AQACAAMABAAFAAYACAAJAAsADQAPABEAEwAWABgAGwAeACIAJQApAC0AMgA2ADwAQQBHAE4AVQBcAGUAbQB3AIEAjACYAKUAsgDBANEA4gD1AAkBHgE2AU8BagGHAaYByAHtARQCPgJsAp0C0gILA0kDiwPSAx8EcwTMBC0FlQUFBn0GAAeMByMIxgh2CTMK/wrbC8gMyA3bDgQQRBGdEhAUoRVQFyEZFxszHXof7SGSJAEAAgADAAQABQAGAAgACQALAAwADgAQABIAFAAXABkAHAAeACEAJQAoACwAMAA0ADgAPQBCAEcATQBTAFkAYABoAHAAeACBAIsAlQCgAKsAuADFANMA4gDyAAMBFQEpAT0BVAFrAYQBnwG8AdoB+wEeAkMCagKVAsIC8QIlA1sDlQPUAxYEXASoBPgETgWpBQsGcwbiBlgH1wddCO0IhgkqCtgKkgtZDCwNDg7/Dv8PEREBAAIAAwAEAAUABgAHAAkACgAMAA0ADwARABMAFQAXABkAHAAeACEAJAAnACoALQAxADQAOAA8AEEARQBKAE8AVABaAGAAZgBtAHQAfACEAIwAlQCeAKgAsgC9AMgA1QDhAO8A/QAMARwBLQE/AVIBZgF6AZEBqAHBAdsB9gETAjICUgJ0ApgCvgLmAhEDPQNtA58D0wMLBEYEhATFBAoFUwWgBfEFRwaiBgIHZwfRB0IIAQACAAMABAAFAAYABwAJAAoACwANAA4AEAASABMAFQAXABkAGwAeACAAIgAlACcAKgAtADAAMwA2ADoAPQBBAEUASQBNAFIAVgBbAGAAZgBrAHEAdwB9AIQAiwCSAJoAogCqALIAuwDFAM8A2QDkAO8A+gAHARMBIQEvAT0BTAFcAW0BfgGQAaMBtwHMAeIB+AEQAigCQgJdAnkClwK1AtYC9wIaAz8DZQONA7cD4gMQBAEAAgADAAQABQAGAAcACAAKAAsADAAOAA8AEAASABQAFQAXABkAGwAcAB4AIAAiACUAJwApACsALgAwADMANgA4ADsAPgBBAEUASABLAE8AUgBWAFoAXgBiAGYAawBvAHQAeQB+AIMAiQCOAJQAmgCgAKcArQC0ALsAwgDKANEA2QDiAOoA8wD8AAYBEAEaASQBLwE6AUYBUgFeAWsBeAGFAZMBogGxAcEB0QHhAfIBBAI=';
 const _B64_OFF9 = '////////AAIC////////AAMD////////AAQE////////AAUF////////AAYG////////AAcH////////AQEB////////AQIC////////AQMD////////AQQE////////AQUF////////AQYG////////AQcH////////AQgI////////AgMD////////AgQE////////AgUF////////AgYG////////AgcH////////AggI////////AgkJ////////AwUF////////AwYG////////AwcH////////AwgI////////AwkJ////////AwoK////////BAcH////////BAgI////////BAkJ////////BAoK////////BAsL////////BQkJ////////BQoK////////BQsL////////BQwM//////8AAAAA//////8AAAIC//////8AAAQE//////8AAAYG//////8AAQIC//////8AAQQE//////8AAQYG//////8AAQgI//////8AAgQE//////8AAgYG//////8AAggI//////8AAwYG//////8AAwgI//////8AAwoK//////8ABAgI//////8ABAoK//////8ABQoK//////8ABQwM//////8ABgwM//////8BAQEB//////8BAQQE//////8BAQcH//////8BAgMD//////8BAgYG//////8BAgkJ//////8BAwUF//////8BAwgI//////8BBAcH//////8BBAoK//////8BBQkJ//////8BBQwM//////8BBgsL//////8BBw0N//////8CAwQE//////8CAwgI//////8CBAYG//////8CBAoK//////8CBQgI//////8CBQwM//////8CBgoK//////8CBwwM//////8CCA4O//////8DBQcH//////8DBQwM//////8DBgkJ//////8DBwsL//////8DCA0N//////8DCQ8P//////8EBwoK//////8ECAwM//////8ECQ4O//////8EChAQ/////wAAAAAA/////wAAAAIC/////wAAAAQE/////wAAAAYG/////wAAAgIC/////wAAAgQE/////wAAAgYG/////wAAAggI/////wAABAYG/////wAABAgI/////wAABAoK/////wAABgoK/////wAABgwM/////wABAgMD/////wABAgUF/////wABAgcH/////wABAgkJ/////wABBAcH/////wABBAkJ/////wABBAsL/////wABBgsL/////wABBg0N/////wACBAYG/////wACBAkJ/////wACBgoK/////wACBg0N/////wACCA4O/////wADBgkJ/////wADBg0N/////wADCA0N/////wAECAwM/////wAEChAQ/////wAFCg8P/////wEBAQEB/////wEBAQQE/////wEBAQcH/////wEBBAUF/////wEBBAgI/////wEBBAsL/////wEBBwsL/////wEBBw4O/////wECAwQE/////wECAwcH/////wECAwoK/////wECBgoK/////wECBg0N/////wEDBQcH/////wEDBQoK/////wEDCA0N/////wEEBwoK/////wEEBw4O/////wEEChAQ/////wEFCQ0N/////wEGCxAQ/////wIDBAUF/////wIDBAkJ/////wIDCA0N/////wIEBggI/////wIEBgwM/////wIEChAQ/////wIFCAsL/////wIFCA8P/////wIGCg4O/////wIHDBER////AAAAAAAA////AAAAAAEB////AAAAAAIC////AAAAAAMD////AAAAAAQE////AAAAAAUF////AAAAAAYG////AAAAAAcH////AAAAAgIC////AAAAAgMD////AAAAAgQE////AAAAAgUF////AAAAAgYG////AAAAAgcH////AAAAAggI////AAAAAgkJ////AAAABAYG////AAAABAcH////AAAABAgI////AAAABAkJ////AAAABAoK////AAAABAsL////AAAABgoK////AAAABgsL////AAAABgwM////AAAABg0N////AAACAgIC////AAACAgUF////AAACAggI////AAACBAYG////AAACBAkJ////AAACBgoK////AAACBg0N////AAACCA4O////AAAEBggI////AAAEBg0N////AAAECAwM////AAAEChAQ////AAECAwQE////AAECAwYG////AAECAwgI////AAECAwoK////AAECBQgI////AAECBQoK////AAECBQwM////AAECBwwM////AAECBw4O////AAEEBwoK////AAEEBw4O////AAEECQ4O////AAEGCxAQ////AAIEBggI////AAIEBgsL////AAIECQ4O////AAIGCg4O////AAMGCQwM////AAMGCRAQ////AAMIDRIS////AQEBAQEB////AQEBAQIC////AQEBAQMD////AQEBAQQE////AQEBAQUF////AQEBAQYG////AQEBAQcH////AQEBAQgI////AQEBBAUF////AQEBBAYG////AQEBBAcH////AQEBBAgI////AQEBBAkJ////AQEBBAoK////AQEBBAsL////AQEBBwsL////AQEBBwwM////AQEBBw0N////AQEBBw4O////AQEEBQYG////AQEEBQoK////AQEECAwM////AQIDBAUF////AQIDBAcH////AQIDBAkJ////AQIDBAsL////AQIDBwsL////AQIDBw0N////AQIGCg4O////AQMFBwkJ////AQMFBwwM////AQMFCg8P////AQMIDRIS////AQQHCg0N////AQQHChER////AgMEBQYG////AgMEBQgI////AgMEBQoK////AgMEBQwM////AgMECQ4O////AgMECRAQ////AgMIDRIS////AgQGCAoK////AgQGCA0N////AgQGDBIS////AgUICw4O';
 const _B64_OFF17 = '////////////////AAECAgL///////////////8AAQMDA////////////////wACBAQE////////////////AAIFBQX///////////////8AAwYGBv///////////////wADBwcH//////////////8AAQEBAQH//////////////wABAQICAv//////////////AAECAwMD//////////////8AAQIEBAT//////////////wABAwUFBf//////////////AAEDBgYG//////////////8AAQQHBwf//////////////wABBAgICP//////////////AAICAwMD//////////////8AAgMEBAT//////////////wACAwUFBf//////////////AAIEBgYG//////////////8AAgQHBwf//////////////wACBQgICP//////////////AAIFCQkJ//////////////8BAwQFBQX//////////////wEDBAYGBv//////////////AQMFBwcH//////////////8BAwUICAj//////////////wEDBgkJCf//////////////AQMGCgoK//////////////8BBAUHBwf//////////////wEEBggICP//////////////AQQGCQkJ//////////////8BBAcKCgr//////////////wEEBwsLC///////////////AgUHCQkJ//////////////8CBQcKCgr//////////////wIFCAsLC///////////////AgUIDAwM/////////////wAAAAAAAAD/////////////AAAAAQICAv////////////8AAAACBAQE/////////////wAAAAMGBgb/////////////AAABAQICAv////////////8AAAECBAQE/////////////wAAAQMGBgb/////////////AAABBAgICP////////////8AAQIDBAQE/////////////wABAgQGBgb/////////////AAECBQgICP////////////8AAQMEBgYG/////////////wABAwUICAj/////////////AAEDBgoKCv////////////8AAgQGCAgI/////////////wACBAcKCgr/////////////AAIFBwoKCv////////////8AAgUIDAwM/////////////wADBgkMDAz///////////8AAQEBAQEBAf///////////wABAQECBAQE////////////AAEBAQQHBwf///////////8AAQECAgMDA////////////wABAQIEBgYG////////////AAEBAgUJCQn///////////8AAQIDBAUFBf///////////wABAgMFCAgI////////////AAECBAUHBwf///////////8AAQIEBwoKCv///////////wABAwUHCQkJ////////////AAEDBQgMDAz///////////8AAQMGCAsLC////////////wABBAcKDQ0N////////////AAICAwMEBAT///////////8AAgIDBQgICP///////////wACAwQFBgYG////////////AAIDBAcKCgr///////////8AAgMFBggICP///////////wACAwUIDAwM////////////AAIEBggKCgr///////////8AAgQHCQwMDP///////////wACBQgLDg4O////////////AQMEBQYHBwf///////////8BAwQFCAwMDP///////////wEDBAYHCQkJ////////////AQMFBwkLCwv///////////8BAwUICg0NDf///////////wEDBgkMDw8P////////////AQQFBwgKCgr///////////8BBAYICgwMDP///////////wEEBgkLDg4O////////////AQQHCg0QEBD//////////wAAAAAAAAAAAP//////////AAAAAAABAgIC//////////8AAAAAAAIEBAT//////////wAAAAAAAwYGBv//////////AAAAAQICAgIC//////////8AAAABAgMEBAT//////////wAAAAECBAYGBv//////////AAAAAQIFCAgI//////////8AAAACBAUGBgb//////////wAAAAIEBggICP//////////AAAAAgQHCgoK//////////8AAAADBggKCgr//////////wAAAAMGCQwMDP//////////AAABAQICAwMD//////////8AAAEBAgMFBQX//////////wAAAQECBAcHB///////////AAABAQIFCQkJ//////////8AAAECBAUHBwf//////////wAAAQIEBgkJCf//////////AAABAgQHCwsL//////////8AAAEDBggLCwv//////////wAAAQMGCQ0NDf//////////AAECAwQFBgYG//////////8AAQIDBAYJCQn//////////wABAgQGCAoKCv//////////AAECBAYJDQ0N//////////8AAQIFCAsODg7//////////wABAwQGBwkJCf//////////AAEDBAYJDQ0N//////////8AAQMFCAoNDQ3//////////wACBAYICgwMDP//////////AAIEBwoNEBAQ//////////8AAgUHCgwPDw//////////AAEBAQEBAQEBAf////////8AAQEBAQECBAQE/////////wABAQEBAQQHBwf/////////AAEBAQIEBAUFBf////////8AAQEBAgQGCAgI/////////wABAQECBAcLCwv/////////AAEBAQQHCQsLC/////////8AAQEBBAcKDg4O/////////wABAQICAwMEBAT/////////AAEBAgIDBQcHB/////////8AAQECAgMGCgoK/////////wABAQIEBggKCgr/////////AAEBAgQGCQ0NDf////////8AAQIDBAUGBwcH/////////wABAgMEBQcKCgr/////////AAECAwUICg0NDf////////8AAQIEBQcICgoK/////////wABAgQFBwoODg7/////////AAECBAcKDRAQEP////////8AAQMFBwkLDQ0N/////////wABAwYICw0QEBD/////////AAICAwMEBAUFBf////////8AAgIDAwQGCQkJ/////////wACAgMFCAoNDQ3/////////AAIDBAUGBwgICP////////8AAgMEBQYJDAwM/////////wACAwQHCg0QEBD/////////AAIDBQYICQsLC/////////8AAgMFBggLDw8P/////////wACBAYICgwODg7/////////AAIEBwkMDhEREf///////wAAAAAAAAAAAAAA////////AAAAAAAAAAABAQH///////8AAAAAAAAAAQICAv///////wAAAAAAAAABAwMD////////AAAAAAAAAAIEBAT///////8AAAAAAAAAAgUFBf///////wAAAAAAAAADBgYG////////AAAAAAAAAAMHBwf///////8AAAAAAAECAgICAv///////wAAAAAAAQICAwMD////////AAAAAAABAgMEBAT///////8AAAAAAAECAwUFBf///////wAAAAAAAQIEBgYG////////AAAAAAABAgQHBwf///////8AAAAAAAECBQgICP///////wAAAAAAAQIFCQkJ////////AAAAAAACBAUGBgb///////8AAAAAAAIEBQcHB////////wAAAAAAAgQGCAgI////////AAAAAAACBAYJCQn///////8AAAAAAAIEBwoKCv///////wAAAAAAAgQHCwsL////////AAAAAAADBggKCgr///////8AAAAAAAMGCAsLC////////wAAAAAAAwYJDAwM////////AAAAAAADBgkNDQ3///////8AAAABAgICAgICAv///////wAAAAECAgIDBQUF////////AAAAAQICAgUICAj///////8AAAABAgMEBQYGBv///////wAAAAECAwQGCQkJ////////AAAAAQIEBggKCgr///////8AAAABAgQGCQ0NDf///////wAAAAECBQgLDg4O////////AAAAAgQFBgcICAj///////8AAAACBAUGCQ0NDf///////wAAAAIEBggKDAwM////////AAAAAgQHCg0QEBD///////8AAAEBAgIDAwQEBP///////wAAAQECAgMEBgYG////////AAABAQICAwUICAj///////8AAAEBAgIDBgoKCv///////wAAAQECAwUGCAgI////////AAABAQIDBQcKCgr///////8AAAEBAgMFCAwMDP///////wAAAQECBAcJDAwM////////AAABAQIEBwoODg7///////8AAAECBAUHCAoKCv///////wAAAQIEBQcKDg4O////////AAABAgQGCQsODg7///////8AAAEDBggLDRAQEP///////wABAgMEBQYHCAgI////////AAECAwQFBggLCwv///////8AAQIDBAYJCw4ODv///////wABAgQGCAoMDg4O////////AAEDBAYHCQoMDAz///////8AAQMEBgcJDBAQEP///////wABAwUICg0PEhIS//////8AAQEBAQEBAQEBAQH//////wABAQEBAQEBAQICAv//////AAEBAQEBAQECAwMD//////8AAQEBAQEBAQIEBAT//////wABAQEBAQEBAwUFBf//////AAEBAQEBAQEDBgYG//////8AAQEBAQEBAQQHBwf//////wABAQEBAQEBBAgICP//////AAEBAQEBAgQEBQUF//////8AAQEBAQECBAUGBgb//////wABAQEBAQIEBQcHB///////AAEBAQEBAgQGCAgI//////8AAQEBAQECBAYJCQn//////wABAQEBAQIEBwoKCv//////AAEBAQEBAgQHCwsL//////8AAQEBAQEEBwkLCwv//////wABAQEBAQQHCQwMDP//////AAEBAQEBBAcKDQ0N//////8AAQEBAQEEBwoODg7//////wABAQECBAQFBQYGBv//////AAEBAQIEBAUHCgoK//////8AAQEBAgQGCAoMDAz//////wABAQICAwMEBAUFBf//////AAEBAgIDAwQFBwcH//////8AAQECAgMDBAYJCQn//////wABAQICAwMEBwsLC///////AAEBAgIDBQcJCwsL//////8AAQECAgMFBwoNDQ3//////wABAQIEBggKDA4ODv//////AAECAwQFBgcICQkJ//////8AAQIDBAUGBwkMDAz//////wABAgMEBQcKDA8PD///////AAECAwUICg0PEhIS//////8AAQIEBQcICgsNDQ3//////wABAgQFBwgKDREREf//////AAICAwMEBAUFBgYG//////8AAgIDAwQEBQYICAj//////wACAgMDBAQFBwoKCv//////AAICAwMEBAUIDAwM//////8AAgIDAwQGCQsODg7//////wACAgMDBAYJDBAQEP//////AAICAwUICg0PEhIS//////8AAgMEBQYHCAkKCgr//////wACAwQFBgcICg0NDf//////AAIDBAUGCQwPEhIS//////8AAgMFBggJCwwODg4=';
@@ -230,7 +230,7 @@ export function decodeType00(u8: Uint8Array): Int16Array {
   const half = 1 << (B - 1), full = 1 << B;
   const frames = Math.ceil(samples / T00_FRAME);
   const superframes = Math.ceil(frames / 16);
-  let p = 0; // bit position; ONE stream — channels follow each other inside a superframe
+  let p = 0; // bit position; ONE stream: channels follow each other inside a superframe
   for (let j = 0; j < superframes; j++) {
     const nf = Math.min(16, frames - j * 16);
     for (let c = 0; c < ch; c++) {
@@ -276,12 +276,12 @@ export function decodeType00(u8: Uint8Array): Int16Array {
 }
 
 // ---------------------------------------------------------------------------
-// Type 0x01 — raw Opus packets (libopus 1.3.1 in-game; 20 ms CELT fullband stereo, 960
+// Type 0x01: raw Opus packets (libopus 1.3.1 in-game; 20 ms CELT fullband stereo, 960
 // samples @48 kHz, shorter final packet) behind a compact seek directory. Layout (BE):
 //   off 8  u32  payload_start (= 12 + directory size, always ≡ 8 mod 36)
 //   off 12      seek units, one per chunk of up to 16 packets:
 //               u16[15] intra-chunk offsets of packets 1..15, u16 size of packet 15,
-//               u32 absolute offset of the next chunk — omitted on the LAST unit (32 bytes).
+//               u32 absolute offset of the next chunk, omitted on the LAST unit (32 bytes).
 //   payload_start.. Opus packets back to back, exactly tiling to EOF.
 
 // -> { payloadStart, packets: [{ offset, length }] }   (full strict validation)
@@ -331,7 +331,7 @@ export function parseOpusDirectory(
 }
 
 // Port of libopus opus_pcm_soft_clip (src/opus.c, v1.6.1) for ONE deinterleaved channel.
-// The int16 opus_decode() applies this before conversion (float API does not) — without it,
+// The int16 opus_decode() applies this before conversion (float API does not). Without it,
 // clipped passages differ from libopus's int16 output by thousands of LSB. `x` is modified
 // in place; returns the new declip memory `a` for the channel (carried across packets, like
 // st->softclip_mem). Float32Array stores reproduce C's per-op float rounding closely enough
@@ -382,7 +382,7 @@ function softClipChannel(x: Float32Array, a: number): number {
   return a;
 }
 
-// celt FLOAT2INT16: scale by 32768, clamp, then lrintf (round half to EVEN — ties are real
+// celt FLOAT2INT16: scale by 32768, clamp, then lrintf (round half to EVEN; ties are real
 // here: any float32 that is an odd multiple of 2^-16 scales to an exact .5).
 function float2int16(v: number): number {
   v *= 32768;
@@ -438,7 +438,7 @@ export async function decodeOpus(u8: Uint8Array): Promise<Int16Array> {
 }
 
 // ---------------------------------------------------------------------------
-// WAV writer — 44-byte canonical RIFF/PCM header (fmt 16, tag 1, 16-bit) +
+// WAV writer: 44-byte canonical RIFF/PCM header (fmt 16, tag 1, 16-bit) +
 // interleaved s16le data. Deterministic: byte-identical output for equal input.
 
 export function encodeWav(pcm: Int16Array, ch: number, sampleRate: number): Uint8Array<ArrayBuffer> {

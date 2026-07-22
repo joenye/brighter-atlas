@@ -1,5 +1,5 @@
 // String viewer: the full decoded text, selectable, with copy + a quick
-// "related" text search (an honest substring search over the corpus — string
+// "related" text search (an honest substring search over the corpus: string
 // ownership/linkage is unknown, so we never pretend a join).
 
 import { el, append } from '../ui.js';
@@ -31,7 +31,7 @@ export function createStringView(app: any, entry: IndexEntry) {
       el('span', { class: 'spacer' }), copyBtn, exportButton(app, 'strings', entry, { mini: true })),
     el('pre', { class: 'string-text', text: entry.text }));
 
-  // Nearby table rows: the text table's row ORDER is semantic — conversations,
+  // Nearby table rows: the text table's row ORDER is semantic. Conversations,
   // item families and UI groups are contiguous runs (insertions preserve the
   // run structure across versions). Showing the neighbours reconstructs the
   // dialogue/topic flow.
@@ -42,7 +42,7 @@ export function createStringView(app: any, entry: IndexEntry) {
 
   // related strings: same leading token (identifiers) or shared rare word (prose)
   const related = el('div', { class: 'card string-related' }, el('h3', { text: 'Similar text' }),
-    el('p', { class: 'dim small', text: 'Other lines of text that contain the same word. This is a plain word search — the game files don\'t say which asset a piece of text belongs to.' }));
+    el('p', { class: 'dim small', text: 'Other lines of text that contain the same word. This is a plain word search. The game files don\'t say which asset a piece of text belongs to.' }));
   (async () => {
     try {
       const all: IndexEntry[] = await app.store.index('strings');

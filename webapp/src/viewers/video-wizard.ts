@@ -1,7 +1,7 @@
 // Video wizard for the skeleton composite: exports MP4 / WEBM / animated GIF.
 // Native MP4 + WEBM record the live composite in real time via MediaRecorder;
 // GIF and the software-MP4 fallback (vendored h264-mp4-encoder, for Firefox)
-// are rendered OFFLINE — the animation clock steps exactly 1/fps per frame and
+// are rendered OFFLINE: the animation clock steps exactly 1/fps per frame and
 // each frame is rendered + read back deterministically, so the output is
 // perfectly paced regardless of scene cost (recording just isn't real-time).
 // The composite (source canvas + optional caption bar) is drawn every frame
@@ -67,7 +67,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
     const off = !canRecord(f);
     const hint = f === 'gif' ? ' (short loops, larger file)'
       : (f === 'mp4' && !nativeMp4) ? ' (slower)'
-      : off ? ' — not supported by this browser' : '';
+      : off ? ' (not supported by this browser)' : '';
     fmtSel.appendChild(el('option', { value: f, disabled: off, text: f.toUpperCase() + hint }));
   }
   // default: the saved format if this browser can record it, else the first
@@ -76,14 +76,14 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   const fmtHint = el('span', { class: 'dim small' });   // explains why WebM/MP4 are disabled while transparent
 
   // GIF frame rate. GIF delays are whole centiseconds, so only these rates play
-  // back exactly (50fps = 2cs is the format's ceiling — 1cs delays get clamped
+  // back exactly (50fps = 2cs is the format's ceiling: 1cs delays get clamped
   // to 100ms by most decoders). Frames are rendered OFFLINE (the clock steps
-  // exactly 1/fps per frame), so every frame is captured at any resolution —
-  // recording just takes longer than real time on heavy scenes.
+  // exactly 1/fps per frame), so every frame is captured at any resolution.
+  // Recording just takes longer than real time on heavy scenes.
   const GIF_RATES: [string, string][] = [['10', '10'], ['20', '20'], ['25', '25 (default)'], ['33.333', '33'], ['50', '50 (max)']];
   const gifFpsSel = el('select', {
     class: 'btn',
-    title: 'GIF frames per second (50 is the GIF format\'s hard maximum). Frames are rendered one by one, so every frame is captured even on heavy scenes — higher fps is smoother but records slower and makes a larger file.',
+    title: 'GIF frames per second (50 is the GIF format\'s hard maximum). Frames are rendered one by one, so every frame is captured even on heavy scenes. Higher fps is smoother but records slower and makes a larger file.',
   });
   for (const [v, label] of GIF_RATES) gifFpsSel.appendChild(el('option', { value: v, text: `${label} fps` }));
   gifFpsSel.value = GIF_RATES.some(([v]) => v === String(saved.gifFps)) ? String(saved.gifFps) : String(GIF_FPS);
@@ -94,7 +94,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   fmtSel.addEventListener('change', syncGifFpsVis);
   syncGifFpsVis();
 
-  const clipSel = el('select', { class: 'btn video-clips', multiple: true, size: '6', title: 'Which animations to record (multi-select: Ctrl/Shift-click) — they play back to back' });
+  const clipSel = el('select', { class: 'btn video-clips', multiple: true, size: '6', title: 'Which animations to record (multi-select: Ctrl/Shift-click). They play back to back' });
   for (const c of clips) {
     if (!c.f) continue;
     const nm = effectiveName(c, 'anims');
@@ -121,7 +121,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   const rotCb = el('input', { type: 'checkbox' });
   rotCb.checked = saved.rot !== false;
   // two ways to drive the turntable: a raw angular speed, or "N rotations, S
-  // seconds each" — the latter also sets the recording length (see buildSegs),
+  // seconds each": the latter also sets the recording length (see buildSegs),
   // so you get an exact whole number of clean orbits.
   const rotModeSel = el('select', { class: 'btn', title: 'Turntable timing: a fixed angular speed, or a number of full rotations at a set seconds-per-rotation (which also sets the recording length)' });
   for (const [v, label] of [['speed', 'speed'], ['rotations', 'rotations']]) rotModeSel.appendChild(el('option', { value: v, text: label }));
@@ -194,7 +194,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   capCb.checked = saved.caption !== false;
   const capIn = el('input', { type: 'text', class: 'video-cap', placeholder: 'caption text…' });
   // default caption = the model name; the field is the FULL caption (edits fully
-  // replace it — the clip name is never force-appended).
+  // replace it: the clip name is never force-appended).
   capIn.value = saved.captionText ?? (effectiveName(entry, 'rigs') || `Rig #${entry.i}`);
   capIn.addEventListener('input', saveSettings);
   const capStyle = makeCaptionControls(saved.captionStyle, () => saveSettings());   // font/size/bg/reset (drag attached below)
@@ -205,7 +205,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   gridCb.checked = ov.hasGrid && (saved.grid ?? ov.gridVisible);
   const bgIn = el('input', { type: 'color', value: saved.bg || ov.bgHex });
   const bgDefBtn = el('button', { class: 'btn btn-mini', text: 'default', title: 'Reset the background to the viewer default' });
-  const transpCb = el('input', { type: 'checkbox', title: 'Transparent background — GIF only (video files can’t be transparent)' });
+  const transpCb = el('input', { type: 'checkbox', title: 'Transparent background: GIF only (video files can’t be transparent)' });
   transpCb.checked = !!saved.transparent;
 
   // Only GIF can carry alpha here; force it + disable the video formats while
@@ -234,7 +234,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   bgDefBtn.addEventListener('click', () => { bgIn.value = ov.defaultBg; applyView(); });
 
   // hoisted (function declaration) so the many listeners above that reference it
-  // resolve regardless of definition order — it only runs on user interaction.
+  // resolve regardless of definition order. It only runs on user interaction.
   function saveSettings(): void {
     store.save({
       fmt: fmtSel.value, loops: loopsIn.value, speed: previewSpeed, rot: rotCb.checked, rotSpeed: rotSpeed.value,
@@ -275,7 +275,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
 
   // interactive framing: drag the preview to orbit, wheel to zoom (shared with
   // the screenshot modal). Whatever the user frames here is what the recording
-  // captures — the zoom is preserved, and with turntable on it becomes the
+  // captures: the zoom is preserved, and with turntable on it becomes the
   // starting angle. Disposed on close.
   const previewOrbit = attachPreviewOrbit(comp, scene);
 
@@ -420,7 +420,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
       if (bar.select && editorRestore.value != null) bar.select.value = editorRestore.value;
       const orig = editorRestore.value != null ? clips.find((c) => String(c.i) === editorRestore.value) : null;
       if (orig && bar.loadClip) {
-        // loadClip resets t and may auto-play (autoplay pref) — force back to the
+        // loadClip resets t and may auto-play (autoplay pref): force back to the
         // editor's exact prior playhead + play state.
         bar.loadClip(orig).then(() => {
           bar.t = editorRestore.t;
@@ -479,7 +479,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
       const totalMs = segs.reduce((a, s) => a + s.ms, 0);
 
       // Deterministic turntable: rotate a FIXED start offset about the world-up
-      // axis by an ABSOLUTE angle each frame — so the model spins on the spot
+      // axis by an ABSOLUTE angle each frame, so the model spins on the spot
       // (never drifts off-centre) and the spin lands on an exact whole number of
       // turns, independent of frame rate or rounding. Replaces OrbitControls
       // autoRotate (which assumed 60fps and, with the preview controls, dragged
@@ -504,7 +504,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
       // GIF and the software-MP4 fallback are rendered OFFLINE: the animation
       // clock steps exactly 1/fps per frame and each frame is rendered to an
       // offscreen target and read back, however long that takes (the sync GPU
-      // readback costs tens of ms at full res — recording runs slower than
+      // readback costs tens of ms at full res: recording runs slower than
       // real time, but EVERY frame is captured, so playback is always smooth
       // at exactly the chosen rate). Native webm/mp4 record the live composite
       // stream via MediaRecorder in real time, as before.
@@ -543,7 +543,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
         };
 
         // frames per segment cover [0, seg.ms) EXCLUSIVE, so the last frame of
-        // a looping clip never wraps back to the start pose — a looping GIF
+        // a looping clip never wraps back to the start pose: a looping GIF
         // joins cleanly (frame after the last IS the first)
         const plans = segs.map((seg) => ({ seg, nF: Math.max(1, Math.floor((seg.ms * capFps) / 1000)) }));
         const totalF = plans.reduce((a, pl) => a + pl.nF, 0);
@@ -635,7 +635,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
         enc.width = capW; enc.height = capH; enc.frameRate = capFps;
         enc.kbps = Math.round(WASM_MP4_BPS / 1000);
         enc.initialize();
-        // frames are RGBA + top-down straight from a 2D canvas — no Y-flip. Yield
+        // frames are RGBA + top-down straight from a 2D canvas: no Y-flip. Yield
         // periodically so the status paints and the synchronous encoder doesn't
         // hard-freeze the tab.
         for (let i = 0; i < capFrames.length; i++) {
@@ -656,14 +656,14 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
       }
 
       // re-check after the encode/flush await: the modal may have been closed
-      // (or the recording aborted) while we waited — don't download in that case.
+      // (or the recording aborted) while we waited. Don't download in that case.
       if (stopIf()) { status.textContent = 'Recording cancelled.'; return; }
 
       const name = `rig_${entry.i}${queue.length ? `_clip${queue.map((c) => c.i).join('-')}` : ''}.${ext}`;
       const a = el('a', { href: URL.createObjectURL(blob), download: name });
       a.click();
       URL.revokeObjectURL(a.href);
-      status.textContent = `Done — downloaded ${name} (${(blob.size / 1e6).toFixed(1)} MB).`;
+      status.textContent = `Done: downloaded ${name} (${(blob.size / 1e6).toFixed(1)} MB).`;
       app.banner(`recorded ${name}`, 'b-info');
     } catch (err) {
       status.textContent = `Recording failed: ${err.message}`;
@@ -687,8 +687,8 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
     }
   });
 
-  // Duration (no clips) / Loops-each (clips) are toggled by syncRotUI — in
-  // rotations mode the turntable owns the recording length — so build them as
+  // Duration (no clips) / Loops-each (clips) are toggled by syncRotUI (in
+  // rotations mode the turntable owns the recording length), so build them as
   // named elements rather than inline.
   durLabel = hasClips ? null : el('label', {}, el('span', { text: 'Duration' }), durIn, el('span', { class: 'dim small', text: 'seconds' }));
   loopsWrap = hasClips ? el('span', {}, el('span', { text: 'Loops each' }), loopsIn, el('span', { class: 'sep-mini' })) : null;

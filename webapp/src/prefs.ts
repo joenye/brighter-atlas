@@ -5,7 +5,7 @@ const KEY = 'bs.prefs';
 const DEFAULTS: Record<string, any> = {
   autoplay: true, loop: true, speed: 1, shading: 'tex',
   wireframe: false, twosided: false, skeleton: false, uvmap: false,
-  skelviz: false,  // bone overlay in the skeleton view — off by default (show the clean textured model)
+  skelviz: false,  // bone overlay in the skeleton view, off by default (show the clean textured model)
   skelmesh: 'auto', // composite mesh selection across skeleton pages: auto (all, capped on huge rigs) | all | none
   clipsort: 'index', // clip-picker order in the playback bar: index | seconds | frames | name
   exportfmt: 'glb', // per-asset export format for 3D assets: glb (Blender-ready) | json (raw payload)
@@ -31,7 +31,7 @@ export function setPref(k: string, v: any): void {
 }
 
 // Friendly names the user gives to versions (game builds), keyed by versionId.
-// These are a LOCAL user preference — deliberately kept OUT of the shareable
+// These are a LOCAL user preference, deliberately kept OUT of the shareable
 // asset_overrides.json (which is only per-asset names + texture assignments).
 const VNAMES_KEY = 'bs.versionNames';
 function loadVNames(): Record<string, string> {

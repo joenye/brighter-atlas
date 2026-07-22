@@ -1,5 +1,5 @@
 // Audio player: WebAudio decode -> min/max waveform, click-seek, loop, rate.
-// Codec badges: all three decode exactly — qoa, opus, and type-00 "bslpc" ADPCM.
+// Codec badges: all three decode exactly (qoa, opus, and type-00 "bslpc" ADPCM).
 
 import { el, append, badge, fmtInt, fmtDur, notExported, idLabel } from '../ui.js';
 import { addExportButton } from '../asset-export.js';

@@ -1,12 +1,12 @@
 // One-time migration notices: release-specific messages shown once on boot to
 // EXISTING users whose stored data would benefit from an action (re-extract,
-// re-assign, …). Generic on purpose — future releases add an entry to NOTICES.
+// re-assign, …). Generic on purpose: future releases add an entry to NOTICES.
 //
 // Rules:
 //  - a notice shows only while its when(app) predicate holds, so it self-limits
 //    to the users it actually concerns (fresh extractions never see it);
 //  - it goes away ONLY via the explicit "Understood" button (no Escape, no
-//    overlay click) — anything less re-shows it on the next visit;
+//    overlay click): anything less re-shows it on the next visit;
 //  - acknowledgements persist per-browser in localStorage (bs.noticesAck):
 //    if the user later wipes storage and re-extracts, the predicate is false
 //    anyway, so a lost ack never nags.
@@ -27,7 +27,7 @@ const acked = (): Record<string, string> => {
 };
 const ack = (id: string): void => {
   try { localStorage.setItem(KEY, JSON.stringify({ ...acked(), [id]: new Date().toISOString() })); }
-  catch { /* storage unavailable — it will simply show again */ }
+  catch { /* storage unavailable: it will simply show again */ }
 };
 
 // -> true when this browser holds a client extraction whose strings index
@@ -54,11 +54,11 @@ async function pre040Extraction(app: any): Promise<boolean> {
 const NOTICES: Notice[] = [
   {
     id: 'extraction-engine-0.4.0',
-    title: 'Brighter Atlas 0.4.0 — time for a fresh extraction',
+    title: 'Brighter Atlas 0.4.0: time for a fresh extraction',
     paras: [
       'This release overhauls how the world is extracted: room names now stay correct across game updates, and per-build support arrives without waiting for an app update.',
       'Your stored data was extracted by the previous engine. To get the improvements, add your current game files as a new build: click the version chip in the top-right, then "Add build", and drop in your assetBundle files.',
-      'Your names, texture assignments and Models are keyed by stable ids — they all survive the re-extraction.',
+      'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
     ],
     when: pre040Extraction,
   },
@@ -68,14 +68,14 @@ const NOTICES: Notice[] = [
     paras: [
       'This update decodes the game’s text far more cleanly: the garbled junk and duplicates are gone, and dialogue reads in order.',
       'Your stored text was extracted with the old decoder. To get the improvement, delete this version (click the version chip in the top-right) and re-add your assetBundle files.',
-      'Your names, texture assignments and Models are keyed by stable ids — they all survive the re-extraction.',
+      'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
     ],
     when: oldStringsExtraction,
   },
 ];
 
 // Show pending notices SEQUENTIALLY: one modal at a time, and the next only
-// appears after the previous is acknowledged — a user who missed several
+// appears after the previous is acknowledged, so a user who missed several
 // releases clears the backlog in one sitting without ever seeing a stack.
 // Called fire-and-forget after boot.
 export async function showPendingNotices(app: any): Promise<void> {

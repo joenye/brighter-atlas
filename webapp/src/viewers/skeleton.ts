@@ -132,8 +132,8 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
         if (skinned) {
           // explicit identity bind matrix (bones live under the scene anchor):
           // parameterless bind() would recalculate skeleton.boneInverses from
-          // the bones' CURRENT matrixWorld — wrong while a clip is posing the
-          // rig, and identity before the first render — clobbering Rig's
+          // the bones' CURRENT matrixWorld: wrong while a clip is posing the
+          // rig, and identity before the first render, clobbering Rig's
           // stored inverses for every mesh on this skeleton
           (obj as any).bind(rig.skeleton, new THREE.Matrix4());
           (wire as any).bind(rig.skeleton, (obj as any).bindMatrix);
@@ -248,7 +248,7 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
     }
 
     // sortable like the main mesh list; default puts TEXTURED meshes first,
-    // then highest vertex count — the meshes most likely to matter
+    // then highest vertex count: the meshes most likely to matter
     const texRank = (m: IndexEntry) => (effectiveVariants(m).variants.length ? 1 : 0);
     const SM_SORTS: Record<string, (a: IndexEntry, b: IndexEntry) => number> = {
       'tex-verts': (a, b) => (texRank(b) - texRank(a)) || (b.v - a.v) || (a.i - b.i),
@@ -379,7 +379,7 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
         const sysTex = systemTextureStatus(m);
         const row = el('div', { class: `sm-row${k === cursor ? ' sel' : ''}` },
           cb,
-          el('a', { href: `#/mesh/${m.i}`, text: name || idLabel(m), title: `#${m.i}${m.h ? ` · ${m.h}` : ''}${m.slot ? ` · ${m.slot}` : ''} — open in mesh view`, class: name ? '' : 'mono' }),
+          el('a', { href: `#/mesh/${m.i}`, text: name || idLabel(m), title: `#${m.i}${m.h ? ` · ${m.h}` : ''}${m.slot ? ` · ${m.slot}` : ''} (open in mesh view)`, class: name ? '' : 'mono' }),
           sysTex === 'image' ? badge('Tˢ', 'b-good b-ghost', `${m.sys.variants.length} built-in texture variant${m.sys.variants.length === 1 ? '' : 's'}`) : null,
           texState === 'image' ? badge('T', 'b-good b-ghost', 'texture override set') : (texState === 'cleared' ? badge('T∅', 'b-ghost', 'override: no texture (cleared)') : null),
           el('span', { class: 'dim', text: `${m.slot && slotFilter === 'all' ? `${m.slot} · ` : ''}${fmtInt(m.v)}v · #${m.i}${m.f ? '' : ' · ∅'}` }));
@@ -457,9 +457,9 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
       }
       dead.forEach((key) => sessionStorage.removeItem(key));
     };
-    const allBtn = el('button', { class: 'btn-mini', text: 'all', title: 'Show every (filtered) mesh — persists across rigs' });
+    const allBtn = el('button', { class: 'btn-mini', text: 'all', title: 'Show every (filtered) mesh. Persists across rigs.' });
     allBtn.addEventListener('click', () => { setPref('skelmesh', 'all'); clearSkelStates(); selectAll(); });
-    const noneBtn = el('button', { class: 'btn-mini', text: 'none', title: 'Hide all meshes — persists across rigs' });
+    const noneBtn = el('button', { class: 'btn-mini', text: 'none', title: 'Hide all meshes. Persists across rigs.' });
     noneBtn.addEventListener('click', () => {
       setPref('skelmesh', 'none');
       clearSkelStates();
@@ -468,7 +468,7 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
       renderList();
     });
     // reflect the current selection on the buttons: `all` is highlighted when
-    // every (filtered) mesh is shown, `none` when nothing is shown — so it's
+    // every (filtered) mesh is shown, `none` when nothing is shown, so it's
     // obvious which state is active.
     const updateAllNone = () => {
       const loadable = matches().filter((m) => m.f);
@@ -501,7 +501,7 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
         }
       });
     } else if (getPref('skelmesh') !== 'none') {
-      // default: show every mesh on the rig (unless the user chose 'none') — but
+      // default: show every mesh on the rig (unless the user chose 'none'), but
       // skip auto-loading on pathologically large rigs (the ~2000-mesh player
       // skeleton), where it would hang the browser; there 'all' stays a click away
       const AUTO_ALL_CAP = 200;
@@ -523,8 +523,8 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
       while (p >= 0) { depth++; p = skelJson.bones[p].parent; }
       return `${'  '.repeat(depth)}${i}${b.parent >= 0 ? '' : ' (root)'}`;
     });
-    // collapsed by default: the mesh list is the composite's working surface —
-    // the bone tree only takes space when explicitly wanted
+    // collapsed by default: the mesh list is the composite's working surface.
+    // The bone tree only takes space when explicitly wanted
     app.setDetailsExtra(el('div', {},
       meshSection,
       el('details', { class: 'bone-tree-acc' },

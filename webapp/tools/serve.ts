@@ -18,12 +18,12 @@ const MIME: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
-// Optional CSP header, matching the one served in production — set BS_CSP to
+// Optional CSP header, matching the one served in production: set BS_CSP to
 // the policy string to verify the app runs clean under it. Off by default so
 // normal test runs are unaffected.
 const CSP = process.env.BS_CSP || null;
 
-// Optional overlay mounts — BS_EXTRA_ROOT is a colon-separated list of extra
+// Optional overlay mounts: BS_EXTRA_ROOT is a colon-separated list of extra
 // directories. Requests resolve against the primary root first; on a miss,
 // each extra root is tried in order. Lets a dev serve generated data trees
 // (or any sibling directory) without copying them into webapp/.
@@ -47,7 +47,7 @@ export function serve(root: string, port = 0): Promise<{ server: http.Server; po
           data = await fs.readFile(candidate);
           file = candidate;
           break;
-        } catch { /* miss — try the next root */ }
+        } catch { /* miss, try the next root */ }
       }
       if (data === null) throw new Error('not found in any root');
       res.writeHead(200, {
@@ -68,7 +68,7 @@ export function serve(root: string, port = 0): Promise<{ server: http.Server; po
   });
 }
 
-// CLI: `npm run serve` / `node tools/serve.ts [port]` — serve webapp/ for dev.
+// CLI: `npm run serve` / `node tools/serve.ts [port]`. Serves webapp/ for dev.
 if (import.meta.url === new URL(process.argv[1], 'file://').href
     || process.argv[1]?.endsWith('serve.ts')) {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');

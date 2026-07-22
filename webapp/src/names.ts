@@ -1,5 +1,5 @@
 // Optional friendly names for every asset, keyed by CONTENT HASH (the `h`
-// index field) so they survive bundle re-ordering — same pattern as the
+// index field) so they survive bundle re-ordering, the same pattern as the
 // texture-override store. Authoritative store = IndexedDB 'userdata'
 // (hydrateNames() at boot; localStorage stays as the migration seed +
 // backstop, dual-written). Persistence to disk happens ONLY through the
@@ -34,7 +34,7 @@ export async function hydrateNames(): Promise<void> {
     } else if (Object.keys(cur.names).length) {
       await userdataPut('assetNames', cur);   // one-time migration
     }
-  } catch { /* IDB unavailable — localStorage mirror still works */ }
+  } catch { /* IDB unavailable: localStorage mirror still works */ }
 }
 
 function save(): void {

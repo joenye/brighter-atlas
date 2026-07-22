@@ -218,7 +218,7 @@ export function attachPortableSystemCatalog(doc: any, {
     if (modelIds.has(model.id)) fail(`duplicate model id ${model.id}`);
     modelIds.add(model.id);
     if (!Array.isArray(model.sources) || !model.sources.length) fail(`model ${n} has no source proof`);
-    // A single-part composition needs a complete entity proof — an
+    // A single-part composition needs a complete entity proof: an
     // entity-variant source, a room-spawn actor promotion, or membership in a
     // display-name merge group (catalog.js mergeSameNameModels: the resolved
     // creature name is itself the grouping proof).

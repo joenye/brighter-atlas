@@ -1,4 +1,4 @@
-// Bundle container framing — reading from Blobs (File handles / OPFS files)
+// Bundle container framing: reading from Blobs (File handles / OPFS files)
 // so a 400 MB bundle is never resident: every access is a ranged slice.
 //
 //   assetBundle0:    one raw zstd frame (whole file)
@@ -54,7 +54,7 @@ export async function readRaw(blob: Blob, entry: BundleEntry): Promise<Uint8Arra
 }
 
 // Slab reader for SEQUENTIAL per-object reads: objects come out of 16 MB
-// contiguous slabs instead of one blob.slice().arrayBuffer() per object —
+// contiguous slabs instead of one blob.slice().arrayBuffer() per object, since
 // tens of thousands of tiny async disk round-trips dominate an index pass
 // otherwise. Used by the ingest coordinator and the pool workers (each worker
 // slabs its own contiguous shard).

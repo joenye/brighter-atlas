@@ -3,8 +3,8 @@
 // has global btoa since v16).
 
 export function b64FromBytes(u8: Uint8Array): string {
-  // Native encoder when available (V8 13+): identical output — standard
-  // alphabet, padded — without the per-char JS loop (payload encode is a
+  // Native encoder when available (V8 13+): identical output (standard
+  // alphabet, padded) without the per-char JS loop (payload encode is a
   // main-thread hot path in client mode).
   if (typeof (u8 as any).toBase64 === 'function') return (u8 as any).toBase64();
   let bin = '';

@@ -311,12 +311,12 @@ export class PlaybackBar {
     // Clip picker as a keyboard-navigable LISTBOX (size>1), not a dropdown:
     // ↑/↓ move the selection and fire 'change' on every step, so arrowing
     // through the list live-loads (and auto-plays, when 'auto' is on) the keyed
-    // clip — a dropdown only commits on click. Sortable by index/seconds/frames/
+    // clip. A dropdown only commits on click. Sortable by index/seconds/frames/
     // name via the adjacent sort control. Stays the first <select> in .anim-bar.
     const rows = clips.length ? Math.min(7, clips.length + 1) : 1;
     this.select = el('select', {
       class: 'btn clip-select', size: String(rows),
-      title: 'Animation clip (same rig) — ↑/↓ to preview',
+      title: 'Animation clip (same rig): ↑/↓ to preview',
     });
     this.select.disabled = !clips.length;
 
@@ -324,7 +324,7 @@ export class PlaybackBar {
     // extraction); either way the picker shows a human-readable label.
     const clipName = (c: IndexEntry) => effectiveName(c, 'anims') || (c as any).sn?.[0] || null;
     const CLIP_SORTS: Record<string, (a: IndexEntry, b: IndexEntry) => number> = {
-      // named clips first, then index — the default everywhere clips are listed
+      // named clips first, then index, the default everywhere clips are listed
       named: (a, b) => {
         const an = clipName(a), bn = clipName(b);
         if (!!an !== !!bn) return an ? -1 : 1;
@@ -354,7 +354,7 @@ export class PlaybackBar {
       this.select.replaceChildren(el('option', {
         value: '-1',
         text: clips.length
-          ? `— clip (${q ? `${arr.length}/${clips.length}` : clips.length}) —`
+          ? `clip (${q ? `${arr.length}/${clips.length}` : clips.length})`
           : 'no clips for this rig',
       }));
       for (const c of arr) {
@@ -479,7 +479,7 @@ export class PlaybackBar {
     this.playBtn.disabled = true;
     this.scrub.disabled = true;
     this.scrub.value = '0';
-    this.timeLbl.textContent = '—';
+    this.timeLbl.textContent = '-';
     this.rig.resetToRest();
     this.onApplied?.();
   }

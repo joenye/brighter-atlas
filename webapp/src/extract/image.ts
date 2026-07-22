@@ -73,7 +73,7 @@ function bcAlphaPaletteUnorm(e0: number, e1: number, pal: Uint8Array): void {
 }
 
 // SNORM decodes s8 endpoints to [-1,1] in float32 (fround after every op is
-// exact — double->float32 double rounding is safe for +,*,/,sqrt).
+// exact: double->float32 double rounding is safe for +,*,/,sqrt).
 const snormScratch = new Float32Array(8);
 function bcAlphaPaletteSnorm(b0: number, b1: number, pal: Uint8Array): void {
   const s0 = (b0 << 24) >> 24, s1 = (b1 << 24) >> 24; // sign-extend to int8
@@ -342,7 +342,7 @@ function readDatafileRecords(d: Uint8Array, n: number): DatafileRecord[] | null 
 }
 
 // Trust the ab0 texture_dir count first, fall back to a search (n is not
-// stored in the payload itself — it lives in ab0).
+// stored in the payload itself: it lives in ab0).
 export function parseDatafileRecords(d: Uint8Array, nHint = 0, maxN = 8192): DatafileRecord[] {
   if (nHint > 0 && 5 * nHint <= d.length) {
     const recs = readDatafileRecords(d, nHint);
@@ -376,7 +376,7 @@ export function categorize(
       // authority, and the datatable's n must agree with it. Slicing the
       // tail by a trusted n would silently produce misaligned (impostor)
       // entries whenever the bundle does not belong with this datatable
-      // (mixed game versions) — while the payload decoder splits byte-true,
+      // (mixed game versions), while the payload decoder splits byte-true,
       // so the index and the rendered pixels would disagree.
       const { frames, tail } = splitAb3(raw);
       if (frames.length !== n) {
@@ -401,7 +401,7 @@ export function categorize(
 }
 
 // Font glyph bank -> [{e, w, h, channels, pixels}] (channels 1 = grayscale,
-// 4 = RGBA). e is the RECORD index — files are named NNNNN_e<K>.png and empty
+// 4 = RGBA). e is the RECORD index: files are named NNNNN_e<K>.png and empty
 // glyphs are skipped, so e values may be non-contiguous.
 // fmt 0x28 with 4-aligned dims is a planar-BC3 color icon; everything else is
 // an A8 glyph stored rotated 90° CW (dimA = glyph height = stored row length),

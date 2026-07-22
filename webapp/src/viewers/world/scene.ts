@@ -1,4 +1,4 @@
-// WorldScene — renders extracted world rooms (store.worldIndex() /
+// WorldScene: renders extracted world rooms (store.worldIndex() /
 // store.worldRoom(id)) with instanced placement batches and exact transforms.
 // Mesh geometry is the shared meshes payload (buildMeshGeometry); textures
 // are the images-category PNGs routed by the world index's `textures` table
@@ -24,7 +24,7 @@ export const CATEGORY_COLOURS: Readonly<Record<string, number>> = Object.freeze(
   components: 0x93a2b3,
 });
 
-// Scratch matrices for the hot placement/spawn transform compositions —
+// Scratch matrices for the hot placement/spawn transform compositions:
 // ~1.15M placements on an all-rooms load previously allocated fresh Matrix4s
 // each. Both composers are synchronous end to end (no await between writing
 // and multiplying a scratch into the caller's target), and multiply() copies
@@ -65,7 +65,7 @@ const REQUIRED_SPAWN_MEMBERSHIP_COLUMNS = Object.freeze([
 ]);
 
 /** Column-name -> row index map for one world-index table (optional columns
- *  are simply absent — reads yield undefined, exactly as the lookups expect). */
+ *  are simply absent: reads yield undefined, exactly as the lookups expect). */
 export type ColumnMap = Readonly<Record<string, number>>;
 
 export interface WorldPlacementFlags {
@@ -162,8 +162,8 @@ function optionalFinite(value: any): number | null {
 // spawns, collision and the door/exit tiles all share one frame anchored at
 // the map-rect origin, with the map_size padding lying entirely beyond the
 // content. The shard's stored map_offset (a centred-crop guess) must NOT be
-// applied for display — doing so displaced every cropped room by half its
-// margin (1–5 tiles) against the door-graph stitch, which is exactly the
+// applied for display: doing so displaced every cropped room by half its
+// margin (1 to 5 tiles) against the door-graph stitch, which is exactly the
 // all-rooms door misalignment. Evidence: with a zero offset 1032/1034 exit
 // tiles land on occupied content tiles across the corpus; the centred offset
 // mis-anchors all 115 margin rooms.
@@ -215,8 +215,8 @@ async function eachLimit<T>(
 }
 
 // Yield the main thread between work slices WITHOUT the setTimeout nesting
-// clamp: chained zero-timers are clamped to ~4ms each after a few levels — a
-// real tax on 15–24ms-sliced bakes/releases. A MessageChannel macrotask
+// clamp: chained zero-timers are clamped to ~4ms each after a few levels, a
+// real tax on bakes/releases sliced at 15 to 24ms. A MessageChannel macrotask
 // yields just as well (input and rendering still interleave between slices)
 // but resumes immediately. Lazy setup so non-browser imports never open a port.
 let _yieldPort: MessagePort | null = null;
@@ -287,7 +287,7 @@ export async function loadRoomsWithRetry(world: WorldScene, roomIds: Iterable<nu
   let attempt = 0;
 
   while (pending.length) {
-    if (world.disposed) break;   // view destroyed mid-stream — stop immediately
+    if (world.disposed) break;   // view destroyed mid-stream: stop immediately
     const completedBefore = ids.length - pending.length;
     try {
       await world.loadRooms(pending, {
@@ -557,7 +557,7 @@ export class WorldScene {
     const shard = await (this.shardSource
       ? this.shardSource(Number(meta.id))
       : this.store.worldRoom(meta.id));
-    if (!shard) throw new Error(`room ${meta.id} is not stored — re-extract the World category`);
+    if (!shard) throw new Error(`room ${meta.id} is not stored: re-extract the World category`);
     if (shard.schema !== this.index.schema || Number(shard.room) !== Number(meta.id)) {
       throw new Error(`room ${meta.id} shard does not match the world index`);
     }
@@ -603,7 +603,7 @@ export class WorldScene {
   _meshGeometry(meshId: number | string, reflectLocalX = false): Promise<THREE.BufferGeometry> {
     const cacheKey = `${meshId}:${reflectLocalX ? 1 : 0}`;
     return cachedPromise(this._geometryPromises, cacheKey, async () => {
-      // Abort BEFORE starting new work — dispose() only sweeps promises that
+      // Abort BEFORE starting new work: dispose() only sweeps promises that
       // already exist, so a post-dispose factory must never fetch or allocate.
       if (this.disposed) throw new Error('WorldScene is disposed');
       if (reflectLocalX) {
@@ -899,7 +899,7 @@ export class WorldScene {
   // definition order and the FIRST definition wins depth ties (Dawkin Lane's
   // terrain occ 189 renders above occ 190 in-game); batching and the merged
   // bake lose that order, which z-fights. Rank the occurrences that share an
-  // exact (x,y,z) cell by definition order and push later ranks a hair down —
+  // exact (x,y,z) cell by definition order and push later ranks a hair down:
   // 4% of a height layer per rank, far below any authored spacing, zero for
   // the (vast) unconflicted majority. Render-side only: shards stay byte-true.
   _coplanarRank(shard: any, occurrenceIndex: number | string): number {
@@ -925,7 +925,7 @@ export class WorldScene {
         const ordered = [...set].sort((a, b) => a - b);
         for (let rank = 1; rank < ordered.length; rank++) {
           // keep the LARGEST rank when an occurrence collides in several
-          // cells — consistency matters more than which cell decided it
+          // cells: consistency matters more than which cell decided it
           ranks.set(ordered[rank], Math.max(ranks.get(ordered[rank]) || 0, rank));
         }
       }
@@ -1230,7 +1230,7 @@ export class WorldScene {
     // The room subtree is static once built (session edits rewrite INSTANCE
     // matrices, never node transforms): freeze every node's local matrix so
     // three's per-frame updateMatrixWorld pass stops re-composing hundreds of
-    // objects per room — ~100k across a 451-room stream — every frame.
+    // objects per room (~100k across a 451-room stream) every frame.
     group.traverse((node: THREE.Object3D) => {
       node.matrixAutoUpdate = false;
       node.updateMatrix();
@@ -1683,7 +1683,7 @@ export class WorldScene {
   // it across the bake instead of one synchronous end-of-bake pass: at world
   // scale that pass (451 rooms, ~100k InstancedMeshes) wedged real Firefox,
   // where every GL delete is IPC to its GPU process. Once the merged renderer
-  // is the display path the graph is pure dead weight — roughly DOUBLING GPU
+  // is the display path the graph is pure dead weight, roughly DOUBLING GPU
   // memory. Rooms reload from IndexedDB on demand (merged toggled back off).
 
   /**
@@ -1704,7 +1704,7 @@ export class WorldScene {
    * Textures are deliberately KEPT: the merged materials reference the same
    * THREE.Texture objects, so disposing them here would only force a full
    * re-upload on the next frame (and previously leaked the re-uploaded copies
-   * on navigation) — dispose() frees them with the view.
+   * on navigation): dispose() frees them with the view.
    */
   async releaseGraphCaches({ budgetMs = 15, shouldStop = null, onProgress = null }: {
     budgetMs?: number;

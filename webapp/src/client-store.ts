@@ -1,4 +1,4 @@
-// ClientStore — the Store drop-in backed by browser storage instead of a
+// ClientStore: the Store drop-in backed by browser storage instead of a
 // static HTTP tree. Same surface as store.ts's Store (loadManifest / index /
 // json / payload / arrayBuffer / url / base / manifest / 'fetcherror'), so no
 // viewer knows where the bytes came from.
@@ -78,7 +78,7 @@ export class ClientStore extends EventTarget implements AppStore {
   }
 
   // Recovered clip names ('anim:names', written by World extraction) merged
-  // onto the anims index entries as `sn` — a display/search layer distinct
+  // onto the anims index entries as `sn`, a display/search layer distinct
   // from the hash-keyed user names, which continue to outrank it in the
   // viewers. Older extractions have no doc; entries stay untouched.
   private async _annotateAnimNames(arr: IndexEntry[]): Promise<IndexEntry[]> {
@@ -95,7 +95,7 @@ export class ClientStore extends EventTarget implements AppStore {
   }
 
   // Recovered wearable-item names ('mesh:names', written by World extraction)
-  // merged onto the meshes index entries as `sn` — the same display/search
+  // merged onto the meshes index entries as `sn`, the same display/search
   // layer as anims, distinct from the hash-keyed user names that outrank it.
   // The item's equip slot ('head'/'torso'/…) rides along as `slot`, marking the
   // mesh player-equippable and feeding the slot facet. Older extractions have no
@@ -121,7 +121,7 @@ export class ClientStore extends EventTarget implements AppStore {
   }
 
   // world extraction results: the rooms list + routing tables ('world:index',
-  // cached like other indexes) and one columnar shard per room (NOT cached —
+  // cached like other indexes) and one columnar shard per room (NOT cached:
   // shards are big and a room load is deliberately one IDB get).
   worldIndex(): Promise<any> {
     if (!this._indexes.has('world:index')) {
@@ -201,7 +201,7 @@ export class ClientStore extends EventTarget implements AppStore {
       }
       return { checked, mismatches };
     } catch {
-      return null;   // raw tier evicted / images never extracted — nothing to audit
+      return null;   // raw tier evicted / images never extracted: nothing to audit
     }
   }
 
@@ -210,12 +210,12 @@ export class ClientStore extends EventTarget implements AppStore {
       const sha = this.version.bundles?.[n]?.sha256;
       const p = (sha
         ? rawFile(sha)
-        : Promise.reject(new Error(`assetBundle${n} not stored — extract its category first`))
+        : Promise.reject(new Error(`assetBundle${n} not stored: extract its category first`))
       ).catch((e) => {
         this._blobs.delete(n);   // a later re-pick must be able to retry
         if (sha && e?.code === 'RAW_MISSING') {
           // raw tier evicted (the expected Safari outcome, design §4): the
-          // shell offers a one-bundle re-pick — never a full re-extract
+          // shell offers a one-bundle re-pick, never a full re-extract
           this.dispatchEvent(new CustomEvent('bundlemissing', { detail: { n, sha } }));
         }
         throw e;
@@ -297,7 +297,7 @@ export class ClientStore extends EventTarget implements AppStore {
 
   async arrayBuffer(rel: string): Promise<ArrayBuffer> {
     // SW-served payloads (audio WAV for the WebAudio player, image PNGs):
-    // fetch our own cs/ namespace — the service worker decodes from OPFS raw
+    // fetch our own cs/ namespace: the service worker decodes from OPFS raw
     // and caches, so this shares one decode path with <img>/<audio> consumers
     if (/^(?:audio\/\d{5}\.wav|images\/\d{5}_e\d+\.png)$/.test(rel)) {
       const res = await fetch(this.url(rel));
@@ -320,7 +320,7 @@ export async function ensureServiceWorker(): Promise<ServiceWorkerRegistration> 
   const reg = await navigator.serviceWorker.register('sw.js', { type: 'module' });
   await navigator.serviceWorker.ready;
   if (!navigator.serviceWorker.controller) {
-    // first install: claim() fires 'controllerchange' — wait briefly, then
+    // first install: claim() fires 'controllerchange', so wait briefly, then
     // reload if still uncontrolled (one-time cost on the very first visit)
     await new Promise<void>((resolve) => {
       const t = setTimeout(resolve, 1500);
@@ -342,7 +342,7 @@ export async function hasClientData(): Promise<boolean> {
 // The one place that decides where the app's data comes from:
 //   1. explicit ?data=  -> that HTTP tree (tests, exported-tree browsing)
 //   2. client data      -> ClientStore (extracted in this browser)
-//   3. otherwise        -> onboarding. Deliberately NO auto-mount of data/ —
+//   3. otherwise        -> onboarding. Deliberately NO auto-mount of data/:
 //      a fresh visitor must get the wizard regardless of what the server
 //      happens to host (browse a local export explicitly with ?data=data).
 export async function createStore(): Promise<AppStore> {

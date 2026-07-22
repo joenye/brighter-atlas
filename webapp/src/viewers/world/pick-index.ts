@@ -1,10 +1,10 @@
 // CPU-side picking index for the merged all-rooms world (world.js Inspect
 // mode). The merged bake flattens every placement into large static batches
-// with no per-instance identity, so this index records — per placement — a
+// with no per-instance identity, so this index records, per placement, a
 // world-space AABB plus just enough provenance to re-derive the full readout
 // from the room shard on demand: room, source kind, category, placement row
 // index, mesh id (+reflect), z. Storage is typed arrays only (~56 bytes per
-// placement — the full ~1.15M-placement world costs ~65 MB); the 3×3 linear
+// placement: the full ~1.15M-placement world costs ~65 MB); the 3×3 linear
 // parts of the composed instance matrices are deduplicated into a small pool
 // (quarter-turns × reflections × interned local matrices) so the exact
 // matrix can be rebuilt for the narrow-phase triangle test without storing
@@ -192,7 +192,7 @@ export class WorldPickIndex {
    * Add every instance of one harvested batch. `exact` is the per-room graph
    * batch descriptor (mesh.userData.exact); `instanceArray` the instanced
    * Float32 matrices in ROOM-LOCAL native units; roomX/roomY the room's
-   * stitched offset in native units. Copies everything — safe to call right
+   * stitched offset in native units. Copies everything: safe to call right
    * before the room graph is released.
    */
   addBatch({ geometry, count, instanceArray, roomX, roomY, exact, water = false }: {
@@ -471,7 +471,7 @@ export class WorldPickIndex {
       }
       if (tCell > tExit) break;
     }
-    // moved entries live outside their build-time grid cells — test them all
+    // moved entries live outside their build-time grid cells: test them all
     for (const i of this._moved) testEntry(i);
 
     candidates.sort((a, b) => a.tNear - b.tNear);

@@ -1,10 +1,10 @@
 // Cross-build room-name fill: align this build's stitched world placement
-// against a reference room list ({v:1, rooms:[{n,p,x,y,w,h}]} — single-letter
+// against a reference room list ({v:1, rooms:[{n,p,x,y,w,h}]}: single-letter
 // keys keep the file small) and name the rooms whose derived name is missing.
 //
 // Per plane, rooms whose name uniquely matches a reference name become
-// anchors; each votes a translation delta and the modal delta — when at least
-// MIN_ANCHORS anchors exist and enough of them agree — aligns the plane.
+// anchors; each votes a translation delta and the modal delta (when at least
+// MIN_ANCHORS anchors exist and enough of them agree) aligns the plane.
 // A still-unnamed room is filled only when exactly one reference room sits at
 // its aligned position with near-identical dimensions. Pure and
 // dependency-free; worker-safe.

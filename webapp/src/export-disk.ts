@@ -1,12 +1,12 @@
 // "Download the extracted directories": write the decoded assets to a real
-// folder on disk via the File System Access API (Chromium), or — where FSA is
-// unavailable (Safari/Firefox) — stream the same tree into a .zip download
+// folder on disk via the File System Access API (Chromium), or, where FSA is
+// unavailable (Safari/Firefox), stream the same tree into a .zip download
 // built with the vendored fflate. Two output formats:
 //   - raw data tree: the app's re-servable data-tree shape (manifest.json +
 //     index/ + JSON payloads), so a folder export is itself servable/browsable
 //     with ?data=<dir>;
 //   - standard formats: 3D assets converted to .glb (same gltf-export.js path
-//     as the per-asset Export button), images stay PNG, audio stays WAV — for
+//     as the per-asset Export button), images stay PNG, audio stays WAV: for
 //     Blender & other tools, not re-servable.
 
 import { el, fmtInt, fmtBytes, pad5 } from './ui.js';
@@ -66,7 +66,7 @@ function zipSink(zipName: string): Sink {
       const u8 = typeof data === 'string' ? strToU8(data)
         : data instanceof Blob ? new Uint8Array(await data.arrayBuffer())
           : new Uint8Array(data as ArrayBuffer);
-      // PNG/WAV payloads are already compressed — store; JSON deflates well,
+      // PNG/WAV payloads are already compressed: store; JSON deflates well,
       // and AsyncZipDeflate compresses in a WORKER so the main thread only
       // shuttles bytes (this was the "zip is very slow" hotspot: level-6
       // deflate of thousands of mesh JSONs on the main thread)
@@ -112,10 +112,10 @@ export function openExportDialog(app: any): void {
   const fmtTree = el('input', { type: 'radio', name: 'bulkfmt' });
   fmtGlb.checked = true;
   const fmtRows = el('div', { class: 'filter-panel', style: 'position:static;box-shadow:none' },
-    el('label', { class: 'filter-opt', title: 'glTF binary — opens in Blender, Unity, Unreal, Godot' },
-      fmtGlb, el('span', { text: 'Standard formats — meshes/rigs/animations as .glb, images PNG, audio WAV' })),
-    el('label', { class: 'filter-opt', title: 'The raw decoded data tree (manifest + indexes + JSON payloads) — servable back into this app with ?data=<dir>' },
-      fmtTree, el('span', { text: 'Raw data tree — decoded JSON payloads + indexes' })));
+    el('label', { class: 'filter-opt', title: 'glTF binary: opens in Blender, Unity, Unreal, Godot' },
+      fmtGlb, el('span', { text: 'Standard formats: meshes/rigs/animations as .glb, images PNG, audio WAV' })),
+    el('label', { class: 'filter-opt', title: 'The raw decoded data tree (manifest + indexes + JSON payloads), servable back into this app with ?data=<dir>' },
+      fmtTree, el('span', { text: 'Raw data tree: decoded JSON payloads + indexes' })));
   const status = el('p', { class: 'dim small', text: 'Saves the decoded files so you can use or keep them outside the app.' });
   const note = hasFsa ? null : el('p', { class: 'dim small' },
     'This browser can\'t save straight to a folder, so the files are bundled into a single .zip. ',
@@ -159,7 +159,7 @@ export function openExportDialog(app: any): void {
       }
       // payload jobs: JSON via the store decode path, PNG/WAV via the service
       // worker, GLB via the same gltf-export.js conversion as the per-asset
-      // Export button (with one shared texture cache) — PIPELINED: up to 8
+      // Export button (with one shared texture cache), PIPELINED: up to 8
       // jobs decode/convert ahead of the writer, so decode latency overlaps
       // the zip/disk writes instead of serializing with them
       const GLB_CATS = new Set(['meshes', 'anims', 'rigs']);
@@ -226,7 +226,7 @@ export function openExportDialog(app: any): void {
         }
       }
       const zipped = await sink.finish();
-      status.textContent = `Done — wrote ${fmtInt(done - failed)} of ${fmtInt(total)} files`
+      status.textContent = `Done: wrote ${fmtInt(done - failed)} of ${fmtInt(total)} files`
         + `${failed ? ` (${failed} failed)` : ''}${zipped ? ` · ${fmtBytes(zipped)} .zip downloaded` : ''}.`;
       goBtn.textContent = 'Export again';
     } catch (err) {

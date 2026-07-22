@@ -1,12 +1,12 @@
-# CLAUDE.md — Brighter Atlas
+# CLAUDE.md: Brighter Atlas
 
 A fully client-side viewer for the **Brighter Shores** asset bundles
-(engine "mahogany", Fen Research). Users provide their own `assetBundle0–8`
-cache files; everything decodes in-browser. **No game data is committed or
-distributed — ever.**
+(engine "mahogany", Fen Research). Users provide their own `assetBundle0` to
+`assetBundle8` cache files; everything decodes in-browser. **No game data is
+committed or distributed, ever.**
 
 ## Layout
-- `webapp/` — the app. TypeScript in `src/`, bundled by esbuild
+- `webapp/`: the app. TypeScript in `src/`, bundled by esbuild
   (`npm run build`) to the static runtime layout: `js/*.js` (main + worker
   entries) and `sw.js` at the webapp root. `vendor/` holds the runtime
   libraries (npm devDeps exist only for their types). `defaults/` ships the
@@ -38,14 +38,14 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   workers are spawned by path (`js/extract/worker.js`, …); the service worker
   must stay at the webapp root (`sw.js`) so its scope covers the page, and it
   serves decoded payloads at `cs/<versionId>/…`. The esbuild config
-  (`tools/build.ts`) maps entry points to exactly these paths — keep it
+  (`tools/build.ts`) maps entry points to exactly these paths. Keep it
   that way.
 - **World support is per game build**: the app looks up per-build data on
   the site origin at extraction time; an unsupported build simply lacks the
   World category and everything else keeps working.
 - **World decode is build-agnostic** (older builds shift their structural
   layout). Never hardcode an absolute generic-field op position or a
-  fixed-offset field base in `extract/world/*` — older builds pack these
+  fixed-offset field base in `extract/world/*`: older builds pack these
   differently. Detect the position/offset from the data per build and GUARD it
   to fall back to the current-build default, so supported builds stay
   byte-identical (the e2e must not move). Working examples that carry an older
@@ -54,7 +54,7 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   `terrainParts` custom-mesh guard), and `room.ts` `ownerAnchored` (room-name
   heap self-instance anchor). How the per-build profile is derived is out of
   scope for this repo: here it is only opaque per-build decode data, produced
-  offline purely from analysis of the game's own files — no running game
+  offline purely from analysis of the game's own files: no running game
   process is ever inspected or modified. Any public copy that mentions this
   data must stress that fact.
 - **The production host serves a Content-Security-Policy** that must stay in
@@ -63,10 +63,23 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
 
 ## Git
 - Never commit game assets, bulk extraction output, `webapp/data/`,
-  build output (`webapp/js/`, `webapp/sw.js`), or screenshots.
+  build output (`webapp/js/`, `webapp/sw.js`), or screenshots. One sanctioned
+  exception: `webapp/assets/` holds the small set of curated app-UI preview
+  images the mobile gate shows (screenshots OF the app, deliberately sized
+  and named `preview-*`); nothing else lands there.
 - Conventional Commits (`type: summary`); one coherent change per commit;
   smoke green before committing app changes.
+- No em dashes, en dashes, or emojis anywhere: code, comments, docs,
+  commits, PR text, or player-facing copy. Use commas, colons, parentheses,
+  or "to" for ranges. (An emoji that stands in for a real label still needs
+  its real t() text.)
 - Releases are annotated `v*` tags carrying a structured, player-facing
-  What's-new (subject + body — the in-app changelog and version name are
+  What's-new (subject + body: the in-app changelog and version name are
   generated from it). Tagging and shipping are done by external tooling,
   never by hand from this repo.
+- Release notes are for players: written for amateur, non-technical users.
+  No build, code, RE or AI/LLM jargon, no commit-level detail (the in-app
+  What's new renders summaries only, never commit lists). Patch releases
+  that do not warrant notes get a subject-only tag (`Brighter Atlas X.Y.Z`,
+  empty body) and NEVER appear in the in-app changelog: the newest release
+  with a written What's-new stays the headline.

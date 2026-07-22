@@ -1,10 +1,11 @@
-// Smoke test — the pre-release gate. Drives the built viewer in system Chrome
+// Smoke test: the pre-release gate. Drives the built viewer in system Chrome
 // (puppeteer-core) against the committed synthetic fixtures
 // (webapp/data-fixtures) plus a synthetic-bundle onboarding pass. Asserts:
 // pages load, ZERO console errors, 3D canvases actually paint, skinned
 // animation moves bones, prefs persist, audio decodes, images render, the
-// fixture world renders + edits/animates, and the onboarding wizard walks a
-// fresh user through bundle picking. Needs no game data.
+// fixture world renders + edits/animates, the onboarding wizard walks a
+// fresh user through bundle picking, and a phone-sized touch boot lands on
+// the desktop-only gate (inline help + session bypass). Needs no game data.
 //
 //   cd webapp && npm run build
 //   cd webapp/tools && node smoke.ts
@@ -358,7 +359,7 @@ async function fixtureSuite(browser: any, base: string) {
   visRows = await page.$$eval('#list-host .vrow', (r) => r.length);
   ok(visRows === 1, `'skinned' filter narrows mesh list to 1 (${visRows})`);
   // pick a filtered-out mesh that is NOT the current route (a same-URL goto is
-  // a no-op — no hashchange, no filter reset)
+  // a no-op: no hashchange, no filter reset)
   const hiddenId = page.url().includes('#/mesh/0') ? 2 : 0;
   await page.goto(u(`#/mesh/${hiddenId}`), { waitUntil: 'networkidle0' }); // filtered-out entry
   await sleep(300);
@@ -370,7 +371,7 @@ async function fixtureSuite(browser: any, base: string) {
   // ---- mesh -> Model: save a static mesh as a single-mesh Model --------------
   // Deterministic start: the user stores are empty in this fresh profile. Seed
   // the rigged tube Model through its persisted record (the bs.models
-  // localStorage mirror hydrates on the next boot — storage key names and
+  // localStorage mirror hydrates on the next boot: storage key names and
   // record shapes are part of the app contract); the static cube Model is then
   // created through the real UI. h values come from the committed fixtures.
   // The tube deliberately repeats the same 24-vertex part: the Models vertex
@@ -574,7 +575,7 @@ async function worldSuite(browser: any, base: string) {
     return { wopacity: s.wopacity, ambient: s.ambient, sun: s.sun };
   });
   ok(defState.wopacity === 50 && defState.ambient === 1.85 && defState.sun === 2.8,
-    `defaults apply — water 50%, ambient 1.85, sun 2.80 (${JSON.stringify(defState)})`);
+    `defaults apply: water 50%, ambient 1.85, sun 2.80 (${JSON.stringify(defState)})`);
   // a LEGACY (unversioned) saved state must be discarded once for the new defaults
   await page.evaluate(() => {
     const prefs = JSON.parse(localStorage.getItem('bs.prefs') || '{}');
@@ -861,7 +862,7 @@ async function worldSuite(browser: any, base: string) {
   ok(spawnMatRestored && spawnMatBefore && spawnMatRestored.join(',') === spawnMatBefore.join(','),
     'clip → none restores the static spawn instance matrix exactly');
   // with a clip actively LOOPING, the highlight hides, and clicking away
-  // (unpin mid-play) PARKS the animation — it keeps playing for the session
+  // (unpin mid-play) PARKS the animation: it keeps playing for the session
   // instead of vanishing or reverting to the static.
   await page.evaluate((ref) => window.__bs.worldView.pinPlacement(ref), spawnRef);
   await page.waitForFunction(() => window.__bs.worldView.spawnAnimInfo()?.hasBar === true, { timeout: 15000 });
@@ -913,11 +914,11 @@ async function worldSuite(browser: any, base: string) {
   ok(await page.evaluate(() => window.__bs.worldView.hud.state.collapsed
     && document.querySelector('.world-hud .wh-body').hidden), 'HUD collapses to its fps chip');
 
-  // ---- all-rooms merged view — entered via the pinned All row -----------------
+  // ---- all-rooms merged view, entered via the pinned All row ------------------
   await page.click('.vlist .vrow-all');
   await page.waitForFunction(() => /#\/world\/all/.test(location.hash), { timeout: 10000 });
   // loading every room is heavy, so navigation lands on an explicit confirm
-  // gate first — nothing streams until the user opts in
+  // gate first: nothing streams until the user opts in
   await page.waitForSelector('.canvas-host .world-loading .world-load-confirm', { timeout: 10000 });
   ok(await page.evaluate(() => {
     const v = window.__bs.worldView;
@@ -930,7 +931,7 @@ async function worldSuite(browser: any, base: string) {
   ok(true, 'confirming starts the load behind the loading overlay');
   // the previous (room) view stays in __bs.worldView until the all view mounts.
   // With WebGL2 the merged bake finishes AND releases the per-room graph
-  // (rooms drop to 0 — the GPU-memory fix); without it the graph is the
+  // (rooms drop to 0, the GPU-memory fix); without it the graph is the
   // display path and both fixture rooms stay retained.
   await page.waitForFunction(() => {
     const v = window.__bs.worldView;
@@ -989,7 +990,7 @@ async function worldSuite(browser: any, base: string) {
     ok(await page.$eval('.world-panel .wp-inspect', (n) => !n.disabled && /Hover/.test(n.title)),
       'Inspect mode stays enabled under merged rendering');
     // collision + authored-empty render as STANDALONE wireframe batches built
-    // from the shard data — they survive the graph release
+    // from the shard data: they survive the graph release
     await panelCheck('Collision extents');
     await page.waitForFunction(() => {
       const w = window.__bs.worldView.wireInfo();
@@ -1028,7 +1029,7 @@ async function worldSuite(browser: any, base: string) {
     ok(await page.evaluate(() => window.__bs.worldView.merged.lastBakeMode) === 'worker',
       'all-rooms bake ran on the worker pool');
     // Stream the rooms back, then run a verification bake: every bucket is
-    // baked BOTH ways — worker pool AND forced main thread — and every merged
+    // baked BOTH ways (worker pool AND forced main thread) and every merged
     // buffer (positions/normals/uvs/tangents/meta/recolor/index/bounds) is
     // byte-compared. Permanent regression gate for worker-bake determinism.
     await page.evaluate(() => {
@@ -1062,7 +1063,7 @@ async function worldSuite(browser: any, base: string) {
     ok(pickStats.entries === 12 && pickStats.bytes > 0 && pickStats.bytes < 1e6,
       `pick index covers all 12 baked placements in typed arrays (${pickStats.entries} entries, ${pickStats.bytes}b)`);
     await page.click('.world-panel .wp-inspect');
-    // deterministic vantage for the projection-based picks below — the
+    // deterministic vantage for the projection-based picks below: the
     // default pose starts close-in, where fixture models can occlude the
     // probed tile
     await page.evaluate(async () => {
@@ -1166,7 +1167,7 @@ async function worldSuite(browser: any, base: string) {
     ok(mAnim.active && mAnim.parts === 1 && mq0 && mq1 && mq0.some((v, i) => Math.abs(v - mq1[i]) > 1e-4),
       `merged: composite overlays + animates while the cell re-bakes out the static (parts ${mAnim.parts})`);
     // Inspect off releases the picker but PARKS the playing composite (it keeps
-    // animating for the session — merged path, same as the single-room one).
+    // animating for the session: merged path, same as the single-room one).
     await page.click('.world-panel .wp-inspect');   // Inspect off for the fly tests
     await sleep(300);
     ok(await page.evaluate(() => window.__bs.worldView.spawnAnimInfo() === null),
@@ -1177,34 +1178,34 @@ async function worldSuite(browser: any, base: string) {
     }), 'merged: the animation is parked and keeps playing after inspect-off');
   } else {
     ok(mergedInfo.rooms === 2, `all-rooms retains both rooms without WebGL2 (${mergedInfo.rooms})`);
-    ok(true, 'no WebGL2 — merged bake skipped (per-room fallback)');
-    ok(true, 'no WebGL2 — inspect stays enabled on the graph path');
-    ok(true, 'no WebGL2 — standalone collision overlay skipped (graph path draws it)');
-    ok(true, 'no WebGL2 — standalone authored-empty overlay skipped');
-    ok(true, 'no WebGL2 — wire overlay toggle round-trip skipped');
-    ok(true, 'no WebGL2 — merged toggle round-trip skipped');
-    ok(true, 'no WebGL2 — worker-pool bake mode skipped');
-    ok(true, 'no WebGL2 — worker/main bake byte-compare skipped');
-    ok(true, 'no WebGL2 — determinism-gate re-enable skipped');
-    ok(true, 'no WebGL2 — pick index skipped (graph raycasts instead)');
-    ok(true, 'no WebGL2 — merged pick-probe check skipped');
-    ok(true, 'no WebGL2 — merged pin readout check skipped');
-    ok(true, 'no WebGL2 — merged provenance readout check skipped');
-    ok(true, 'no WebGL2 — merged preview check skipped');
-    ok(true, 'no WebGL2 — merged nudge check skipped');
-    ok(true, 'no WebGL2 — merged cell re-bake check skipped');
-    ok(true, 'no WebGL2 — merged Delete-key check skipped');
-    ok(true, 'no WebGL2 — merged reset check skipped');
-    ok(true, 'no WebGL2 — merged spawn pin skipped');
-    ok(true, 'no WebGL2 — merged spawn playback + overlay skipped');
-    ok(true, 'no WebGL2 — merged spawn restore skipped');
+    ok(true, 'no WebGL2: merged bake skipped (per-room fallback)');
+    ok(true, 'no WebGL2: inspect stays enabled on the graph path');
+    ok(true, 'no WebGL2: standalone collision overlay skipped (graph path draws it)');
+    ok(true, 'no WebGL2: standalone authored-empty overlay skipped');
+    ok(true, 'no WebGL2: wire overlay toggle round-trip skipped');
+    ok(true, 'no WebGL2: merged toggle round-trip skipped');
+    ok(true, 'no WebGL2: worker-pool bake mode skipped');
+    ok(true, 'no WebGL2: worker/main bake byte-compare skipped');
+    ok(true, 'no WebGL2: determinism-gate re-enable skipped');
+    ok(true, 'no WebGL2: pick index skipped (graph raycasts instead)');
+    ok(true, 'no WebGL2: merged pick-probe check skipped');
+    ok(true, 'no WebGL2: merged pin readout check skipped');
+    ok(true, 'no WebGL2: merged provenance readout check skipped');
+    ok(true, 'no WebGL2: merged preview check skipped');
+    ok(true, 'no WebGL2: merged nudge check skipped');
+    ok(true, 'no WebGL2: merged cell re-bake check skipped');
+    ok(true, 'no WebGL2: merged Delete-key check skipped');
+    ok(true, 'no WebGL2: merged reset check skipped');
+    ok(true, 'no WebGL2: merged spawn pin skipped');
+    ok(true, 'no WebGL2: merged spawn playback + overlay skipped');
+    ok(true, 'no WebGL2: merged spawn restore skipped');
   }
   const stall = await page.evaluate(() => ({ ...window.__bs.worldView.stallProbe }));
   ok(stall && stall.phase === 'ready' && stall.worst >= 0,
     `stall probe tracks the whole load to ready (worst ${Math.round(stall.worst || 0)}ms`
     + `${stall.worstStage ? ` @ "${stall.worstStage}"` : ''})`);
 
-  // ---- fly camera — all-rooms only --------------------------------------------
+  // ---- fly camera, all-rooms only ----------------------------------------------
   const flyBase = await page.evaluate(() => {
     const v = window.__bs.worldView;
     return {
@@ -1340,7 +1341,7 @@ async function worldSuite(browser: any, base: string) {
 // Minimal valid zstd frame wrapping `data` as a single RAW block: magic,
 // single-segment frame header with a 1-byte content size, one last-raw-block.
 // Lets the onboarding wizard's build check decompress a synthetic assetBundle0
-// (whose hash then matches no per-build decode data — by design).
+// (whose hash then matches no per-build decode data, by design).
 function zstdRawFrame(data: Buffer) {
   if (data.length > 255) throw new Error('zstdRawFrame: keep the payload under 256 bytes');
   const blockHeader = (data.length << 3) | 0b001;   // last=1, type=raw
@@ -1363,7 +1364,7 @@ async function onboardingSuite(browser: any) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'bs-smoke-bundles-'));
   const files: string[] = [];
   await fs.writeFile(path.join(dir, 'assetBundle0'),
-    zstdRawFrame(Buffer.from('brighter-atlas synthetic assetBundle0 — not a real game build')));
+    zstdRawFrame(Buffer.from('brighter-atlas synthetic assetBundle0, not a real game build')));
   files.push(path.join(dir, 'assetBundle0'));
   for (let n = 1; n <= 8; n++) {
     const p = path.join(dir, `assetBundle${n}`);
@@ -1436,12 +1437,105 @@ async function onboardingSuite(browser: any) {
   await cleanup();
 }
 
+async function mobileGateSuite(browser: any) {
+  console.log('\n== mobile gate (emulated phone) ==');
+  // Fresh origin with no data/ tree (like the onboarding suite): the bypass
+  // must land on the client-extraction wizard, exactly like a new phone user.
+  const { root, cleanup } = await shimWebroot('bs-smoke-mgate-');
+  const { server, port } = await serve(root);
+  const base = `http://127.0.0.1:${port}`;
+
+  const { page, errors } = await newPage(browser, ['data/manifest.json', 'builds/']);
+  // feature-level phone emulation: coarse pointer + touch + small viewport + touch UA
+  await page.emulate({
+    viewport: { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true },
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  });
+  await page.goto(`${base}/index.html`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('.mgate', { timeout: 15000 });
+  ok(await page.$('.ob-drop') === null, 'phone boot mounts the gate, not the onboarding wizard');
+  ok(await page.$eval('#app', (n) => getComputedStyle(n).display === 'none'), 'app chrome stays hidden behind the gate');
+  ok(await page.$eval('.mgate', (n) => n.textContent.includes('mobile lacks the memory + storage this needs')),
+    'gate states the shared desktop-only reason');
+
+  // three large actions; the community links are clones of the topbar anchors
+  const acts = await page.$$eval('.mgate .mgate-action', (els) => els.map((n) => ({
+    label: n.textContent.trim(), h: n.getBoundingClientRect().height,
+    href: n.getAttribute('href'), target: n.getAttribute('target'), rel: n.getAttribute('rel'),
+    svg: !!n.querySelector('svg'),
+  })));
+  ok(acts.length === 3 && acts.every((a) => a.h >= 44),
+    `gate offers 3 tappable actions ≥44px (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
+  // the single source of truth for each URL/icon is the (hidden) topbar markup
+  const srcLinks = await page.evaluate(() => Object.fromEntries(['discord', 'github'].map((k) =>
+    [k, document.querySelector(`#topbar .top-social.${k}`)?.getAttribute('href')])));
+  const discord = acts.find((a) => /Discord/.test(a.label));
+  const github = acts.find((a) => /GitHub/.test(a.label));
+  ok(!!discord && discord.href === srcLinks.discord && /discord\.gg\//.test(discord.href || '')
+    && discord.target === '_blank' && /noopener/.test(discord.rel || '') && discord.svg,
+  `Discord action clones the topbar anchor (${discord?.href})`);
+  ok(!!github && github.href === srcLinks.github && /github\.com\//.test(github.href || '')
+    && github.target === '_blank' && /noopener/.test(github.rel || '') && github.svg,
+  `GitHub action clones the topbar anchor (${github?.href})`);
+
+  // the desktop showcase: all curated previews load real pixels, and each
+  // caption lives INSIDE its image's card (same figure) so association is
+  // unambiguous
+  await page.waitForFunction(() => {
+    const imgs = [...document.querySelectorAll('.mgate-preview img')] as any[];
+    return imgs.length === 3 && imgs.every((i) => i.complete && i.naturalWidth > 0);
+  }, { timeout: 15000 });
+  const prevs = await page.$$eval('.mgate-preview', (els) => els.map((f: any) => ({
+    src: f.querySelector('img')?.getAttribute('src'),
+    alt: f.querySelector('img')?.getAttribute('alt'),
+    caption: f.querySelector('figcaption')?.textContent?.trim(),
+  })));
+  ok(prevs.length === 3 && prevs.every((p) => /^assets\/preview-.*\.jpg$/.test(p.src || '') && p.alt === p.caption),
+    `gate shows 3 desktop previews, captions enclosed with their images (${prevs.map((p) => p.src).join(', ')})`);
+
+  // Help/FAQs renders the SHARED help content inline: full page, no modal
+  await page.$$eval('.mgate .mgate-action', (els) => (els.find((n) => /Help\/FAQs/.test(n.textContent)) as any)?.click());
+  await page.waitForSelector('.mgate .help-body', { timeout: 5000 });
+  const helpTxt = await page.$eval('.mgate .help-body', (n) => n.textContent);
+  ok(/not affiliated with.*Fen Research/i.test(helpTxt) && /no upload, no account/i.test(helpTxt),
+    'help renders inline with the shared help.ts content');
+  ok(await page.$('.modal-overlay') === null, 'inline help mounts no modal overlay');
+  ok(await page.$eval('.mgate-back', (n) => n === document.activeElement), 'back control takes focus (keyboard-reachable)');
+  await page.click('.mgate-back');
+  await page.waitForSelector('.mgate-actions', { timeout: 5000 });
+  ok(await page.$('.mgate .help-body') === null, 'back control returns to the gate');
+
+  // the escape hatch: sets the session flag and proceeds to the normal boot
+  await page.click('.mgate-bypass');
+  await page.waitForSelector('.ob-drop', { timeout: 20000 });
+  ok(await page.$('.mgate') === null
+    && await page.evaluate(() => sessionStorage.getItem('bs.mobileGateBypass') === '1'),
+  'bypass proceeds to onboarding in-place (bs.mobileGateBypass set)');
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('.ob-drop', { timeout: 20000 });
+  ok(await page.$('.mgate') === null, 'bypass persists for the session (reload boots the app)');
+  ok(errors.length === 0, `zero console errors in mobile gate suite${errors.length ? `:\n    ${errors.join('\n    ')}` : ''}`);
+  await page.close();
+
+  // a NARROW DESKTOP window (mouse, no touch) must never gate
+  const desk = await newPage(browser, ['data/manifest.json', 'builds/']);
+  await desk.page.setViewport({ width: 640, height: 720 });
+  await desk.page.goto(`${base}/index.html`, { waitUntil: 'networkidle0' });
+  await desk.page.waitForSelector('.ob-drop', { timeout: 15000 });
+  ok(await desk.page.$('.mgate') === null, 'narrow desktop window (fine pointer) never gates');
+  ok(desk.errors.length === 0, `zero console errors in narrow-desktop check${desk.errors.length ? `:\n    ${desk.errors.join('\n    ')}` : ''}`);
+  await desk.page.close();
+
+  server.close();
+  await cleanup();
+}
+
 async function realSuite(browser: any, base: string, dataDir: string) {
   console.log(`\n== real data suite (${dataDir}) ==`);
   const { page, errors } = await newPage(browser);
   const u = (hash) => `${base}/index.html?data=${dataDir}${hash}`;
 
-  // mesh 3855: largest mesh, skinned — flagship animation test
+  // mesh 3855: largest mesh, skinned, flagship animation test
   await page.goto(u('#/mesh/3855'), { waitUntil: 'networkidle0' });
   await page.waitForSelector('.canvas-host canvas', { timeout: 20000 });
   await sleep(1500);
@@ -1474,7 +1568,7 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       });
       ok(moved === true, `mesh #3855 clip ${clipVal} animates the rig (pose differs at 25% vs 55%)`);
       // scale-driven appear/hide clips park bones at 0.001 for much of the
-      // clip — scrub to 50% (parts at scale 1.0) before measuring paint
+      // clip: scrub to 50% (parts at scale 1.0) before measuring paint
       await page.$eval('.anim-bar input[type=range]', (n) => { n.value = '500'; n.dispatchEvent(new Event('input')); });
       await sleep(300);
       const cov2 = await paintCoverage(page);
@@ -1512,14 +1606,14 @@ async function realSuite(browser: any, base: string, dataDir: string) {
 (async () => {
   requireBuild('smoke.ts');
   if (!CHROME || !existsSync(CHROME)) {
-    console.error('Chrome not found — set CHROME=/path/to/chrome or run: npx puppeteer browsers install chrome');
+    console.error('Chrome not found: set CHROME=/path/to/chrome or run: npx puppeteer browsers install chrome');
     process.exit(2);
   }
   const { server, port } = await serve(WEBAPP);
   const base = `http://127.0.0.1:${port}`;
   const browser = await puppeteer.launch({
     executablePath: CHROME,
-    headless: 'new' as any,   // legacy new-headless flag — harmless on current Chrome
+    headless: 'new' as any,   // legacy new-headless flag, harmless on current Chrome
     args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', '--disable-gpu-sandbox', ...GL_ARGS],
   });
   try {
@@ -1527,11 +1621,12 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       await fixtureSuite(browser, base);
       await worldSuite(browser, base);
       await onboardingSuite(browser);
+      await mobileGateSuite(browser);
     }
     if (realData && existsSync(path.join(WEBAPP, realData, 'manifest.json'))) {
       await realSuite(browser, base, realData);
     } else if (realData) {
-      console.log(`\n(real data dir ${realData} has no manifest.json — skipped)`);
+      console.log(`\n(real data dir ${realData} has no manifest.json, skipped)`);
     }
   } finally {
     await browser.close();

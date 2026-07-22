@@ -2,7 +2,7 @@
 // (source canvas + optional caption bar) in a preview canvas, and downloads it
 // as PNG / JPEG / WebP at a chosen resolution scale. Grid lines and background
 // colour are adjustable (applied to the scene, restored on close), and every
-// setting persists in storage. The current camera pose is captured — orbit the
+// setting persists in storage. The current camera pose is captured: orbit the
 // model in the viewer before opening to reframe; turntable rotation is frozen
 // while the modal is open so the preview (and the shot) is a stable frame.
 
@@ -70,11 +70,11 @@ export function openScreenshotModal({ app, scene, entry, activeSize, cat = 'rigs
 
   const gridCb = el('input', { type: 'checkbox', disabled: !ov.hasGrid });
   gridCb.checked = ov.hasGrid && (saved.grid ?? ov.gridVisible);
-  // a non-colour background would be kept as-is (bgIsColor guard) — with the
+  // a non-colour background would be kept as-is (bgIsColor guard): with the
   // skybox presets removed this is always a colour today
   const bgIn = el('input', { type: 'color', value: saved.bg || ov.bgHex, title: ov.bgIsColor ? '' : 'The scene’s backdrop is used (transparent still works)' });
   const bgDefBtn = el('button', { class: 'btn btn-mini', text: 'default', title: 'Reset the background to the viewer default' });
-  const transpCb = el('input', { type: 'checkbox', title: 'Transparent background (PNG / WebP only — JPEG can’t be transparent)' });
+  const transpCb = el('input', { type: 'checkbox', title: 'Transparent background: PNG / WebP only (JPEG can’t be transparent)' });
   transpCb.checked = !!saved.transparent;
 
   // JPEG has no alpha channel: disable it while transparent (and move off it).
@@ -151,7 +151,7 @@ export function openScreenshotModal({ app, scene, entry, activeSize, cat = 'rigs
       const a = el('a', { href: URL.createObjectURL(blob), download: name });
       a.click();
       URL.revokeObjectURL(a.href);
-      status.textContent = `Done — downloaded ${name} (${out.width}×${out.height}, ${(blob.size / 1024).toFixed(0)} KB).`;
+      status.textContent = `Done: downloaded ${name} (${out.width}×${out.height}, ${(blob.size / 1024).toFixed(0)} KB).`;
       app.banner(`saved ${name}`, 'b-info');
     };
     out.toBlob(done, mime, fmt === 'png' ? undefined : 0.92);
@@ -160,7 +160,7 @@ export function openScreenshotModal({ app, scene, entry, activeSize, cat = 'rigs
   // ---- optional high-res tiled capture (world views) --------------------------
   let hiRow: HTMLElement | null = null;
   if (highRes) {
-    const hiSel = el('select', { class: 'btn wp-shot-res', title: 'Long-edge target. The biggest sizes render many tiles and produce very large PNGs — expect them to take a while.' });
+    const hiSel = el('select', { class: 'btn wp-shot-res', title: 'Long-edge target. The biggest sizes render many tiles and produce very large PNGs, so expect them to take a while.' });
     for (const [key, def] of Object.entries(highRes.options)) hiSel.appendChild(el('option', { value: key, text: def.label }));
     if (highRes.initial && highRes.initial in highRes.options) hiSel.value = highRes.initial;
     hiSel.addEventListener('change', () => highRes.onPick?.(hiSel.value));
@@ -171,7 +171,7 @@ export function openScreenshotModal({ app, scene, entry, activeSize, cat = 'rigs
       try {
         const result = await highRes.capture(hiSel.value, (msg) => { hiBtn.textContent = msg; }, { transparent: transpCb.checked });
         if (result) {
-          status.textContent = `Done — downloaded ${result.name} (${(result.size / 1e6).toFixed(1)} MB).`;
+          status.textContent = `Done: downloaded ${result.name} (${(result.size / 1e6).toFixed(1)} MB).`;
           app.banner(`saved ${result.name}`, 'b-info');
         } else if (!closed) status.textContent = 'High-res capture failed.';
       } finally {

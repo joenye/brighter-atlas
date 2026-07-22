@@ -1,4 +1,4 @@
-// Storage & versions panel — opened from the topbar chip in client mode.
+// Storage & versions panel, opened from the topbar chip in client mode.
 // One surface for: the version registry (switch active / add a new game
 // build / delete), per-version bundle info, "extract more
 // categories" for the active version, persistence status (+ make-permanent),
@@ -45,7 +45,7 @@ export async function openStoragePanel(app: any): Promise<void> {
       radio.checked = isActive;
       radio.addEventListener('change', async () => {
         await setActiveVersionId(v.versionId);
-        location.reload();   // the store is constructed at boot — clean swap
+        location.reload();   // the store is constructed at boot: clean swap
       });
       const cats = ALL_CATS.filter((c: string) => v.cats?.[c]?.state === 'ready');
       const missing = ALL_CATS.filter((c: string) => !cats.includes(c));
@@ -60,14 +60,14 @@ export async function openStoragePanel(app: any): Promise<void> {
           if (await hasRaw(b.sha256, b.size)) present++;
         }
         rawNote.textContent = total
-          ? (present === total ? `all ${total} bundles stored` : `⚠ ${total - present} of ${total} game files were cleared to save space — you'll be asked to re-select them when needed`)
+          ? (present === total ? `all ${total} bundles stored` : `⚠ ${total - present} of ${total} game files were cleared to save space. You'll be asked to re-select them when needed`)
           : '';
       })();
 
       const reliable = versionDateReliable(v);
       const dateTxt = v.builtAt ? `${reliable ? 'built' : 'added'} ${fmtDateTime(v.builtAt)}` : null;
       // the build's decode-data identity (the "(hash8)" that used to sit in
-      // the auto name) — from the stored decompressed-ab0 hash, or parsed out
+      // the auto name): from the stored decompressed-ab0 hash, or parsed out
       // of the label for records that predate ab0RawSha256
       const decodeId = v.ab0RawSha256?.slice(0, 8)
         || v.profileLabel?.match(/\(([0-9a-f]{8,16})\)\s*$/i)?.[1]?.slice(0, 8) || null;
@@ -102,7 +102,7 @@ export async function openStoragePanel(app: any): Promise<void> {
             class: 'badge b-ghost', text: dateTxt,
             title: reliable
               ? "When this game build was published (worked out from the update's file dates)."
-              : "When you added these files. The game doesn't record its real build date, so this is just your download date — rename the version to label it.",
+              : "When you added these files. The game doesn't record its real build date, so this is just your download date. Rename the version to label it.",
           }) : null,
           decodeId ? el('span', {
             class: 'mono dim small', text: `build ${decodeId}`,
@@ -110,7 +110,7 @@ export async function openStoragePanel(app: any): Promise<void> {
           }) : null,
           el('span', {
             class: 'mono dim small', text: v.versionId.slice(0, 16),
-            title: 'Content id of your bundle files (first 16 hex of the game-index file hash) — the stable version id.',
+            title: 'Content id of your bundle files (first 16 hex of the game-index file hash), the stable version id.',
           }),
           el('span', { class: 'spacer' }),
           el('span', { class: 'dim small', text: `${fmtBytes(bundleBytes)} of game files` })),
@@ -159,14 +159,14 @@ export async function openStoragePanel(app: any): Promise<void> {
     // ---- persistence + usage --------------------------------------------
     const persistLine = el('p', { class: 'dim small' },
       persisted
-        ? '● Your data is saved for keeps — the browser won\'t clear it to free up space.'
-        : el('span', {}, '○ Your data isn\'t guaranteed — the browser may clear it after about 7 days without a visit. ',
+        ? '● Your data is saved for keeps: the browser won\'t clear it to free up space.'
+        : el('span', {}, '○ Your data isn\'t guaranteed: the browser may clear it after about 7 days without a visit. ',
           (() => {
             const b = el('a', { href: '#', text: 'make permanent' });
             b.addEventListener('click', async (e) => {
               e.preventDefault();
               const ok = await requestPersist();
-              app.banner(ok ? 'storage marked persistent' : 'the browser declined — it may grant this after more visits', 'b-info');
+              app.banner(ok ? 'storage marked persistent' : 'the browser declined (it may grant this after more visits)', 'b-info');
               render();
             });
             return b;
@@ -192,7 +192,7 @@ export async function openStoragePanel(app: any): Promise<void> {
 // boot: any stored version with no profileLabel yet is re-matched against the
 // shipped data and stamped, so builds name themselves ("build 23-Apr-2025
 // (35f5efbc)") without a re-extract. Versions stored before ab0RawSha256
-// existed derive it once from their stored ab0 (decompress + hash — a few MB,
+// existed derive it once from their stored ab0 (decompress + hash, a few MB,
 // only for still-unlabeled versions), and the key is persisted so later loads
 // are a single cheap fetch. Returns versionId -> new label so callers can
 // refresh live UI. Failures (offline, no data yet) are silent and simply
@@ -208,7 +208,7 @@ export async function backfillProfileLabels(): Promise<Map<string, string>> {
       let entry = null;
       if (v.ab0RawSha256) {
         ({ entry } = await profile.matchWorldProfileEntryByHash(v.ab0RawSha256));
-        if (!entry?.label) continue;   // no data yet — nothing to persist
+        if (!entry?.label) continue;   // no data yet: nothing to persist
       } else {
         const ab0Sha = v.bundles?.[0]?.sha256;
         if (!ab0Sha) continue;

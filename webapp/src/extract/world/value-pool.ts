@@ -1,7 +1,7 @@
 // AB0 interned generic-value pool decode: locate the pool frame structurally,
 // fully decode every pool value with full node retention, record the frame
 // end. Arities come from the per-build decode data; no validation happens
-// here — that is profile.js's job. Floats are big-endian IEEE-754 float32 widened to
+// here: that is profile.js's job. Floats are big-endian IEEE-754 float32 widened to
 // Numbers; opaque payloads stay as Uint8Array views into ab0.
 
 import type { WorldProfile } from './profile.js';
@@ -94,12 +94,12 @@ function canonicalVarint(data: Uint8Array, offset: number, maxBytes = 5): [numbe
 }
 
 // Locate the pool count/start structurally: the pool opens with thousands of
-// back-to-back scalar tag-0x02 material handles — the longest such canonical
-// run in AB0 — and the count is the unique canonical varint ending exactly at
+// back-to-back scalar tag-0x02 material handles (the longest such canonical
+// run in AB0) and the count is the unique canonical varint ending exactly at
 // that run. -> {countOffset, start, count, materialPrefixLength}.
 export function discoverPoolFrame(data: Uint8Array, minimumRun = 256): PoolFrame {
   // Growable typed-array candidate lists (uint32 offsets when ab0 fits, else
-  // float64 lanes) instead of number[]s — millions of 0x02 hits made the
+  // float64 lanes) instead of number[]s: millions of 0x02 hits made the
   // boxed arrays + Map DP the hot spot here.
   const Lane = data.length <= 0xfffffffe ? Uint32Array : Float64Array;
   let starts = new Lane(4096);
@@ -119,7 +119,7 @@ export function discoverPoolFrame(data: Uint8Array, minimumRun = 256): PoolFrame
   // Dynamic-program chain lengths, walked backwards. starts is strictly
   // ascending and unique, so "the run of the candidate starting at ends[k]"
   // (the old Map lookup) is an exact binary-search hit among candidates > k
-  // (ends[k] > starts[k], so an equal start can only sit later) — identical
+  // (ends[k] > starts[k], so an equal start can only sit later), giving identical
   // bestRun/bestStart by construction.
   const runs = new Int32Array(m);
   let bestRun = 0, bestStart = -1;

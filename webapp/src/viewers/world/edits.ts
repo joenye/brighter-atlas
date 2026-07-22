@@ -1,8 +1,8 @@
 // Session-transient placement edits for the world views: nudge (X/Y in
 // tiles, Z in game height layers), quarter-turn rotation about the placement
 // anchor, and delete. Edits are keyed by (room, source kind, category,
-// placement row) so both display paths — the per-room instanced graph and the
-// merged bake — apply the SAME record; they are deliberately never persisted
+// placement row) so both display paths (the per-room instanced graph and the
+// merged bake) apply the SAME record; they are deliberately never persisted
 // (lost on reload) and each view owns its own store.
 //
 // The transform composition:

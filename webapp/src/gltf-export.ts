@@ -1,4 +1,4 @@
-// GLB (glTF 2.0 binary) conversion — turns decoded payloads into the industry
+// GLB (glTF 2.0 binary) conversion: turns decoded payloads into the industry
 // interchange format that Blender/Unity/Unreal/Godot import directly:
 //   mesh     -> geometry (+ its rig & skin when the mesh is skinned), with the
 //               viewer's effective albedo texture baked in
@@ -12,7 +12,7 @@
 // output matches the glTF UV convention without further correction.
 //
 // This module is big-ish (pulls the vendored GLTFExporter), so callers load it
-// with a dynamic import — keep it off the boot path.
+// with a dynamic import (keep it off the boot path).
 
 import * as THREE from '../vendor/three.module.js';
 import { GLTFExporter } from '../vendor/GLTFExporter.js';
@@ -31,7 +31,7 @@ export interface TextureCache {
 }
 
 // mesh payload -> export-clean geometry: the bone-influence vertex colors are a
-// viewer-only visualization, not asset data — never ship them in a GLB. Zero
+// viewer-only visualization, not asset data. Never ship them in a GLB. Zero
 // the joint index wherever its weight is zero (the stored data leaves stale
 // bone ids in unused slots; harmless to skinning but flagged by the Khronos
 // glTF validator).
@@ -52,7 +52,7 @@ function unskin(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   return geo;
 }
 
-// Shared THREE.Texture loader keyed by payload path — meshes sharing an albedo
+// Shared THREE.Texture loader keyed by payload path: meshes sharing an albedo
 // reuse one Texture object (and bulk export re-decodes each PNG only once).
 export function makeTextureCache(store: any): TextureCache {
   const cache = new Map<string, Promise<THREE.Texture | null>>();
@@ -65,7 +65,7 @@ export function makeTextureCache(store: any): TextureCache {
           t.colorSpace = THREE.SRGBColorSpace;
           t.name = rel.split('/').pop()!.replace(/\.png$/i, '');
           return t;
-        }).catch(() => null)); // untextured fallback — never fail the export over a texture
+        }).catch(() => null)); // untextured fallback: never fail the export over a texture
       }
       return cache.get(rel)!;
     },
@@ -119,7 +119,7 @@ function applyModelPartTransform(obj: THREE.Object3D, part: any): void {
 }
 
 function rigRoot(skelJson: any): { rig: any; root: THREE.Group } {
-  const rig = new Rig(skelJson);   // bones named bone_<i> — the track-binding names
+  const rig = new Rig(skelJson);   // bones named bone_<i>, the track-binding names
   const root = new THREE.Group();
   root.name = skelJson.i != null ? `rig_${skelJson.i}` : 'rig';
   root.add(...rig.roots);

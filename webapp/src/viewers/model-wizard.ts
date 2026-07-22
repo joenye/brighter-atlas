@@ -1,4 +1,4 @@
-// "Save as Model" wizard — opened from the skeleton composite toolbar. A full
+// "Save as Model" wizard, opened from the skeleton composite toolbar. A full
 // mesh picker (filter / sort / slot / all-none, like the rig's "meshes on this
 // rig" panel) over EVERY mesh on the rig, a per-mesh texture-variant choice, and
 // a LIVE, interactive 3D preview (independent of the main view) that updates as
@@ -150,7 +150,7 @@ export function openModelWizard({ app, entry, active, boundMeshes, imagesIdx }:
   const onChange = () => { shownLbl.textContent = `${fmtInt(matches().length)} of ${fmtInt(boundMeshes.length)} shown · ${fmtInt(selected.size)} selected`; syncPreview(); syncName(); };
 
   // ---- actions --------------------------------------------------------------
-  const status = el('p', { class: 'dim small', text: 'Pick the meshes to include and their texture variants — the preview updates live.' });
+  const status = el('p', { class: 'dim small', text: 'Pick the meshes to include and their texture variants. The preview updates live.' });
   const createBtn = el('button', { class: 'btn primary', text: '＋ Save model' });
   const cancelBtn = el('button', { class: 'btn', text: 'Cancel' });
   cancelBtn.addEventListener('click', close);

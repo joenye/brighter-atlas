@@ -104,7 +104,7 @@ function fetchProfile(get: FetchJson, rawSha256: string): Promise<WorldProfile> 
 
 // Cheap match for display plumbing (the ingest's default version label,
 // onboarding's build check): hash the decompressed ab0 and fetch its decode
-// data by convention — entry.label carries the build's human-readable label
+// data by convention. entry.label carries the build's human-readable label
 // when it has one. Never throws: any failure (offline, unknown build, a host
 // that rewrites missing files to HTML) comes back as { entry: null, error }
 // so callers can degrade gracefully. The fetched data is cached, so a

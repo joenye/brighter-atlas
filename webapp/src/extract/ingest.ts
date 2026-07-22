@@ -1,12 +1,12 @@
 // The client-side ingest pipeline: user-picked bundle Files -> hashed, copied
 // to OPFS, parsed, per-category indexes built (with per-object content hash h)
-// and persisted. Pure logic — storage goes through a `sink`, progress through a
-// callback — so node tests can drive it with the real bundles and an in-memory
+// and persisted. Pure logic (storage goes through a `sink`, progress through a
+// callback) so node tests can drive it with the real bundles and an in-memory
 // sink. The browser worker (worker.js) is a thin postMessage wrapper.
 //
 // Category selection is first-class: only the bundles the chosen categories
 // need are required, hashed, copied and indexed. ab0 (the master datatable) is
-// always required — it identifies the game build (versionId = sha256(ab0)) and
+// always required: it identifies the game build (versionId = sha256(ab0)) and
 // feeds every cross-bundle join.
 
 import {
@@ -37,7 +37,7 @@ export interface IngestSink {
   setActive(versionId: string): Promise<any>;
 }
 
-// bundles each category needs beyond ab0 (anims uses ab6 only for bone counts —
+// bundles each category needs beyond ab0 (anims uses ab6 only for bone counts,
 // optional; skeletons make it required)
 export const CAT_BUNDLES: Record<string, number[]> = {
   meshes: [5, 2],
@@ -107,7 +107,7 @@ async function sniffBundlePlatform(files: Record<number, BundleFile>): Promise<'
       const at = (o: number) => String.fromCharCode(obj[o], obj[o + 1], obj[o + 2], obj[o + 3]);
       if (at(4) === 'MTLB') return 'mac';
       if (at(5) === 'DXBC') return 'win';
-    } catch { /* unreadable shader bundle — try the other */ }
+    } catch { /* unreadable shader bundle: try the other */ }
   }
   return null;
 }
@@ -160,7 +160,7 @@ async function ingest({
   }
 
   // ---- 1. identity: whole-file hashes (versionId = sha256(ab0), 16 hex) ----
-  // bundles hash concurrently — sha256 of one file is sequential, but the
+  // bundles hash concurrently: sha256 of one file is sequential, but the
   // per-bundle streams overlap (WebCrypto digests off-thread; bundles above
   // the native ceiling stream in their own workers via poolHashBlob, so the
   // giant bundles no longer serialize on this thread)
@@ -208,7 +208,7 @@ async function ingest({
   const dt = parseDatatable(ab0);
   onProgress({ stage: 'datatable', done: 1, total: 1 });
 
-  // Build label from the per-build decode data (display only —
+  // Build label from the per-build decode data (display only;
   // versionId stays the id): the bundles carry no build string, but a known
   // build's profile entry does. Best-effort: any failure (offline, node
   // without the defaults, unknown build) just leaves the mtime-derived
@@ -223,12 +223,12 @@ async function ingest({
   } catch { /* label lookup is optional */ }
 
   // cross-checks: a bundle from a different game build than ab0 is a hard
-  // error. frames[] only holds the bundles this ingest NEEDS — a provided but
+  // error. frames[] only holds the bundles this ingest NEEDS: a provided but
   // unselected bundle (e.g. the whole game folder dropped for a strings-only
   // extract) has no frame and is simply not checked.
   const check = (n: number, want: number, what: string) => {
     if (frames[n] && frames[n].count !== want) {
-      throw new Error(`assetBundle${n} has ${frames[n].count} objects but the datatable expects ${want} ${what} — mixed game versions?`);
+      throw new Error(`assetBundle${n} has ${frames[n].count} objects but the datatable expects ${want} ${what}. Mixed game versions?`);
     }
   };
   check(5, dt.meshDir.length, 'meshes');
@@ -240,7 +240,7 @@ async function ingest({
   const indexes: Record<string, any[]> = {};
 
   // slab reader: sequential object reads come from 16 MB contiguous slabs
-  // instead of one File.slice().arrayBuffer() per object — ~32k tiny async
+  // instead of one File.slice().arrayBuffer() per object: ~32k tiny async
   // disk round-trips dominated the index pass otherwise
   const slabReaders = new Map<number, (e: BundleEntry) => Promise<Uint8Array>>();
   const slabRead = (n: number, e: BundleEntry) => {
@@ -278,13 +278,13 @@ async function ingest({
 
   // skeleton bone counts (needed by skeletons AND anims indexes) without
   // decompressing: the zstd frame header carries the content size. frames[6]
-  // only exists when a selected category needed ab6 — a merely-provided file
+  // only exists when a selected category needed ab6: a merely-provided file
   // (whole game folder dropped for a narrower extract) is not framed.
   let skelBones: number[] | null = null;
   if (files[6] && frames[6]) {
     skelBones = [];
     for (const e of frames[6].entries) {
-      const raw = await slabRead(6, e);   // sequential reads — slab, not per-object round-trips
+      const raw = await slabRead(6, e);   // sequential reads: slab, not per-object round-trips
       skelBones.push((zstdContentSize(raw) ?? zstdDecompress(raw).length) / 89 | 0);
     }
   }
@@ -293,7 +293,7 @@ async function ingest({
     indexes.strings = dt.strings.map((s, i) => {
       // synthetic h = sha256/16(utf8(text)): strings are ab0 heap records with
       // no object frame, so this stands in as their stable content id
-      // (annotation key + cross-version diff key — always diff by text)
+      // (annotation key + cross-version diff key: always diff by text)
       return { i, off: s.off, text: s.text, src: s.src, n: s.n, h: hashText(s.text) };
     });
     onProgress({ stage: 'index', cat: 'strings', done: indexes.strings.length, total: indexes.strings.length });
@@ -302,7 +302,7 @@ async function ingest({
   if (cats.includes('rigs')) {
     // pooled decode+hash (same 'hash' job as meshes/anims). bones comes from
     // skelBones, which is (zstdContentSize ?? full-decode length)/89|0 over
-    // the same frames — exactly the dec.length/89|0 the serial pass computed
+    // the same frames: exactly the dec.length/89|0 the serial pass computed
     // (the anims index already trusts skelBones for the identical field).
     const hs = await pooledPass(6, 'rigs', 'hash');
     indexes.rigs = hs.map((r, i) => (!r || r.err ? null
@@ -328,7 +328,7 @@ async function ingest({
     // ab2 bboxes first (the i-th bbox-bearing record describes mesh ab5[i]).
     // The pooled ab5 hash pass starts FIRST so the serial ab2 decode below
     // overlaps it on this thread instead of gating it; results are awaited
-    // after. ab2objs is still built strictly in bundle order — the bbox
+    // after. ab2objs is still built strictly in bundle order: the bbox
     // alignment contract is untouched.
     onProgress({ stage: 'index', cat: 'meshes', done: 0, total: frames[5].count, note: 'metadata' });
     const hsPromise = pooledPass(5, 'meshes', 'hash');
@@ -379,7 +379,7 @@ async function ingest({
     if (mixed.length) {
       const sample = mixed.slice(0, 3).map((r) => `#${r.i} ${r.err}`).join('; ');
       throw new Error(`assetBundle3 content disagrees with the datatable for `
-        + `${mixed.length} object${mixed.length === 1 ? '' : 's'} (${sample}) — mixed game versions?`);
+        + `${mixed.length} object${mixed.length === 1 ? '' : 's'} (${sample}). Mixed game versions?`);
     }
     indexes.images = rs.map((r) => {
       if (!r || r.err) return null;
@@ -479,7 +479,7 @@ async function ingest({
 
   // ---- 6. persist ------------------------------------------------------------
   onProgress({ stage: 'finalize', done: 0, total: 1 });
-  // build date: the newest file mtime across the picked bundles — Steam stamps
+  // build date: the newest file mtime across the picked bundles. Steam stamps
   // bundle files when an update writes them, so this is the update's date and
   // a far clearer version label than a content hash (which stays as the id)
   const builtAt = Math.max(0, ...need.map((n) => files[n].lastModified || 0)) || null;
@@ -521,7 +521,7 @@ async function ingest({
     };
   }
   for (const c of cats) {
-    if (c === 'world') continue;   // no index array — stamped from the outcome below
+    if (c === 'world') continue;   // no index array: stamped from the outcome below
     rec.cats[c] = { state: 'ready', count: indexes[c]?.filter(Boolean).length ?? 0 };
   }
   if (cats.includes('world')) {
@@ -531,7 +531,7 @@ async function ingest({
   }
 
   // finalize writes batch into ONE transaction where the sink supports it
-  // (same keys, same values — just not ~15 serial round-trips)
+  // (same keys, same values, just not ~15 serial round-trips)
   const derivedEntries: [string, any][] = [];
   for (const n of need) derivedEntries.push([`frames:${n}`, frames[n].entries.map((e) => [e.offset, e.length])]);
   for (const [cat, idx] of Object.entries(indexes)) derivedEntries.push([`index:${cat}`, idx]);
@@ -554,7 +554,7 @@ async function ingest({
     strings: dt.strings.length,
   };
   // world: room count only exists after extraction (0 = not/never extracted);
-  // there is no index/world.json — the rooms list lives in derived world:index
+  // there is no index/world.json: the rooms list lives in derived world:index
   const worldCount = rec.cats.world?.state === 'ready' ? (rec.cats.world.count || 0) : 0;
   const manifest: any = {
     generated: new Date().toISOString().slice(0, 19),

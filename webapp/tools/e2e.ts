@@ -1,8 +1,8 @@
 // Real-bundle end-to-end (local-only, needs the game bundles): a fresh
 // browser profile uploads assetBundle0..8 through the onboarding wizard,
 // extracts EVERY category including World, then asserts the whole app is
-// alive — populated catalogs, a painted 3D mesh, decoded audio, a rendered
-// image, a painted world room, a non-empty Models list — with zero console
+// alive (populated catalogs, a painted 3D mesh, decoded audio, a rendered
+// image, a painted world room, a non-empty Models list) with zero console
 // errors throughout.
 //
 //   node e2e.ts [--bundles PATH] [--room N]
@@ -22,19 +22,19 @@ import { WEBAPP, bundlePath, requireBundles, requireBuild, shimWebroot } from '.
 requireBundles('e2e.ts');
 requireBuild('e2e.ts');
 if (!CHROME || !existsSync(CHROME)) {
-  console.error('Chrome not found — set CHROME=/path/to/chrome or run: npx puppeteer browsers install chrome');
+  console.error('Chrome not found: set CHROME=/path/to/chrome or run: npx puppeteer browsers install chrome');
   process.exit(2);
 }
 
 const roomArg = process.argv.find((a) => a.startsWith('--room='))?.slice(7);
-const DEFAULT_ROOM = 8564;   // Hopeport Garrison — dense, present in the supported builds
+const DEFAULT_ROOM = 8564;   // Hopeport Garrison: dense, present in the supported builds
 const SHOTS = path.join(WEBAPP, 'screenshots');
 
 let pass = 0, fail = 0;
 const ok = (cond: unknown, msg: string) => { console.log(`${cond ? '  ok' : 'FAIL'} - ${msg}`); cond ? pass++ : fail++; };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// fraction of canvas pixels that differ from the app background — >5% means
+// fraction of canvas pixels that differ from the app background: >5% means
 // the view really painted, not just cleared
 async function paintCoverage(page: any, sel = '.canvas-host canvas', bg = [16, 19, 26]) {
   return page.evaluate((sel, bg) => {
@@ -69,7 +69,7 @@ const { server, port } = await serve(root);
 const base = `http://127.0.0.1:${port}`;
 
 const browser = await puppeteer.launch({
-  executablePath: CHROME, headless: 'new' as any,   // legacy new-headless flag — harmless on current Chrome
+  executablePath: CHROME, headless: 'new' as any,   // legacy new-headless flag, harmless on current Chrome
   dumpio: process.env.BS_E2E_DUMPIO === '1',        // surface renderer/OOM crashes when hunting
   args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--mute-audio', ...GL_ARGS, '--window-size=1600,1000'],
 });
@@ -114,18 +114,18 @@ const catState = await page.evaluate(() => Object.fromEntries(
 ok(Object.values<any>(catState).every((s) => s.checked),
   `every category selected (${Object.keys(catState).join(', ')})`);
 ok(catState.World && catState.World.checked && !catState.World.disabled,
-  'World selectable — this build has decode data');
+  'World selectable: this build has decode data');
 // the recognized build's human label shows on the upload screen, before
-// extract — date only, the hash identity lives in the storage panel details
+// extract: date only, the hash identity lives in the storage panel details
 const validateText = await page.$eval('.ob-validate', (el) => el.textContent);
 ok(/· build \d{2}-[A-Z][a-z]{2}-\d{4}\s*$/.test(validateText),
   `upload screen names the recognized build (${validateText.trim()})`);
 
-// ---- 2. extraction (worker) — the wizard reloads the page when done ---------
+// ---- 2. extraction (worker): the wizard reloads the page when done ----------
 t0 = Date.now();
 const navDone = page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 1200000 }).then(() => true).catch(() => false);
 await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Extract').click());
-console.log('  extracting every category — this takes a few minutes…');
+console.log('  extracting every category (this takes a few minutes)…');
 const poll = setInterval(async () => {
   const rows = await page.$$eval('.ob-bar-row', (rs) => rs.slice(-2).map((r) => r.textContent.trim())).catch(() => null);
   if (rows?.length) console.log('   ', rows.join(' | ').slice(0, 140));
@@ -139,7 +139,7 @@ if (!navigated) {
 ok(navigated, `extraction + reload completed in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 for (const line of perfLines) console.log(`  ${line}`);   // in-page stage timings (no skew)
 
-// the version chip carries the profile build label (date, no hash) — not the
+// the version chip carries the profile build label (date, no hash), not the
 // mtime-date or content-id fallbacks a label regression would leave behind
 const chipText = await page.$eval('#data-source', (el) => el.textContent);
 ok(/^build \d{2}-[A-Z][a-z]{2}-\d{4}$/.test(chipText.trim()),
@@ -168,7 +168,7 @@ ok(Array.isArray(clip567Names)
 
 // Recovered wearable-item mesh names rode in with the World extraction and are
 // merged onto the meshes index (client-store `sn`). Resolve the stable Easter
-// Warden Cape mesh by content hash (never ordinal) — its item-def row names it.
+// Warden Cape mesh by content hash (never ordinal). Its item-def row names it.
 const capeSn = await page.evaluate(async () => {
   const idx = await window.__bs.app.store.index('meshes');
   return idx.find((m) => m.h === 'bfc98d6cf426d092')?.sn || null;
@@ -271,7 +271,7 @@ if (clipVal != null) {
   });
   ok(rigMoved === true, `mesh #${skinnedI} clip ${clipVal} animates the rig (pose differs at 25% vs 55%)`);
 } else {
-  ok(true, `mesh #${skinnedI} has no exported clip on this build — playback check skipped`);
+  ok(true, `mesh #${skinnedI} has no exported clip on this build: playback check skipped`);
 }
 
 // ---- 5. audio route: decodes with a real duration -----------------------------
@@ -310,7 +310,7 @@ const wavs = await page.evaluate(async () => {
   return out;
 });
 for (const [codec, w] of Object.entries<any>(wavs)) {
-  if (!w) { ok(true, `no ${codec} entry on this build — WAV check skipped`); continue; }
+  if (!w) { ok(true, `no ${codec} entry on this build: WAV check skipped`); continue; }
   ok(w.status === 200 && w.riff === 'RIFF' && w.size > 44, `SW served a valid ${codec} WAV (#${w.i}, ${w.size} bytes)`);
 }
 
@@ -354,10 +354,10 @@ const warmCheck = await page.evaluate(async () => {
   return out;
 });
 ok(warmCheck.compared >= 3 && warmCheck.mismatches.length === 0,
-  `pre-warmed PNGs byte-equal fresh SW decodes (${warmCheck.compared} compared${warmCheck.mismatches.length ? ` — MISMATCH: ${warmCheck.mismatches.join(', ')}` : ''})`);
+  `pre-warmed PNGs byte-equal fresh SW decodes (${warmCheck.compared} compared${warmCheck.mismatches.length ? `, MISMATCH: ${warmCheck.mismatches.join(', ')}` : ''})`);
 
 // ---- 7. world room: renders with real paint coverage --------------------------
-if (!rooms.length) { console.log('\nFAILED: no rooms in the world index — cannot run the world checks'); process.exit(1); }
+if (!rooms.length) { console.log('\nFAILED: no rooms in the world index, cannot run the world checks'); process.exit(1); }
 const ROOM = Number(roomArg)
   || (rooms.some((r) => r.id === DEFAULT_ROOM) ? DEFAULT_ROOM
     : rooms.reduce((a, b) => (b.meshes > a.meshes ? b : a)).id);   // densest room fallback
@@ -377,7 +377,7 @@ await page.screenshot({ path: shot });
 console.log(`  screenshot: ${shot}`);
 
 // ---- 7b. all-rooms load timing (opt-in: BS_E2E_ALL_ROOMS=1) --------------------
-// Heavy (~all 451 rooms streamed + merged bake, SwiftShader here) — perf
+// Heavy (~all 451 rooms streamed + merged bake, SwiftShader here): perf
 // measurement only, never asserted, kept out of the default gate's runtime.
 if (process.env.BS_E2E_ALL_ROOMS === '1') {
   await page.goto(`${base}/index.html#/world/all`, { waitUntil: 'networkidle0' });
@@ -459,9 +459,9 @@ if (vm) {
 // The Street Hag card: the enemy-definition base name wins over the adjective
 // variant labels (naming anchor). Every one of its tint channels is the
 // grey-127 neutral sentinel (no authored colour), so the two-mask wash must NOT
-// run — the neutral tints are recognised as identity and the card keeps its
+// run: the neutral tints are recognised as identity and the card keeps its
 // albedo (the same guard that keeps the pink staff crystals pink).
-// resolve the merged card BY NAME — the id scheme is deterministic but the
+// resolve the merged card BY NAME: the id scheme is deterministic but the
 // anchor must survive future merges
 const hagCardId = await page.evaluate(async () => {
   const rel = window.__bs.app.store.manifest?.system?.models;
@@ -572,7 +572,7 @@ const trollState = await page.evaluate(() => {
   return out;
 });
 ok(trollState.identityWithMap > 0 && trollState.applied === 0 && /Troll Mystic/.test(trollState.title),
-  `Troll Mystic crystal keeps its pink albedo — neutral grey-127 tints are identity, none recoloured (${JSON.stringify(trollState)})`);
+  `Troll Mystic crystal keeps its pink albedo: neutral grey-127 tints are identity, none recoloured (${JSON.stringify(trollState)})`);
 await page.screenshot({ path: path.join(SHOTS, 'e2e_model_troll_mystic.png') });
 
 // ---- 8b. strings viewer + global search ----------------------------------------

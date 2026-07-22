@@ -7,6 +7,10 @@ import type { IndexEntry } from './store.js';
 export type ElChild = Node | string | null | undefined;
 export type ElAttrs = Record<string, any>;
 
+// The one-line desktop-only rationale, shared by the onboarding legal footer
+// and the mobile gate (mobile-gate.ts) so the two can never drift apart.
+export const DESKTOP_ONLY_LINE = 'Works in desktop browsers (mobile lacks the memory + storage this needs).';
+
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs?: ElAttrs, ...children: (ElChild | ElChild[])[]): HTMLElementTagNameMap[K];
 export function el(tag: string, attrs?: ElAttrs, ...children: (ElChild | ElChild[])[]): HTMLElement;
 export function el(tag: string, attrs: ElAttrs = {}, ...children: (ElChild | ElChild[])[]): HTMLElement {
@@ -40,17 +44,17 @@ export function badge(text: string, kind = '', title = ''): HTMLSpanElement {
   return el('span', { class: `badge ${kind}`, title: title || null, text });
 }
 
-export function fmtInt(n: number | null | undefined): string { return n == null ? '—' : n.toLocaleString('en-US'); }
+export function fmtInt(n: number | null | undefined): string { return n == null ? '-' : n.toLocaleString('en-US'); }
 
 export function fmtBytes(n: number | null | undefined): string {
-  if (n == null) return '—';
+  if (n == null) return '-';
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
 export function fmtDur(sec: number | null | undefined): string {
-  if (sec == null || !isFinite(sec)) return '—';
+  if (sec == null || !isFinite(sec)) return '-';
   if (sec < 60) return `${sec.toFixed(2)}s`;
   const m = Math.floor(sec / 60), s = sec - m * 60;
   return `${m}:${s.toFixed(1).padStart(4, '0')}`;
@@ -68,7 +72,7 @@ export function fmtDate(v: number | string | Date | null | undefined): string | 
   return `${String(d.getDate()).padStart(2, '0')}-${MONTHS_ABBR[d.getMonth()]}-${d.getFullYear()}`;
 }
 
-// fmtDate + HH:MM:SS (24h, local) — the storage panel's detail form
+// fmtDate + HH:MM:SS (24h, local): the storage panel's detail form
 export function fmtDateTime(v: number | string | Date | null | undefined): string | null {
   const date = fmtDate(v);
   if (!date) return null;
@@ -78,7 +82,7 @@ export function fmtDateTime(v: number | string | Date | null | undefined): strin
 }
 
 // The decode-data build label as displayed: the trailing "(hash8)" identity is
-// stripped from the name ("23-Apr-2025 (35f5efbc)" -> "23-Apr-2025") — it
+// stripped from the name ("23-Apr-2025 (35f5efbc)" -> "23-Apr-2025"): it
 // lives in the storage panel's per-version details instead.
 export function profileLabelDate(label: string): string {
   return label.replace(/\s*\([0-9a-f]{8,16}\)\s*$/i, '');
@@ -87,7 +91,7 @@ export function profileLabelDate(label: string): string {
 // Is the version's date a trustworthy BUILD date, or just when the files were
 // written locally? `builtAt` is the newest bundle-file mtime. That equals the
 // real update date only for an in-place Steam update, where unchanged bundles
-// keep their old mtime — so the bundles' mtimes are spread over time. A fresh
+// keep their old mtime, so the bundles' mtimes are spread over time. A fresh
 // full download / clean install (or a depot-downloader pull) writes every
 // bundle at once, so their mtimes cluster tightly and the date is merely the
 // download time. A spread of at least a day is the tell for a real update.
@@ -138,14 +142,14 @@ export function platformIcon(platform: string | null | undefined, source?: strin
   const span = document.createElement('span');
   span.className = `plat-icon plat-${platform}${guessed ? ' plat-guess' : ''}`;
   span.title = guessed
-    ? `${p.label} build — guessed from your browser; drop assetBundle4 or 7 for exact detection`
+    ? `${p.label} build, guessed from your browser; drop assetBundle4 or 7 for exact detection`
     : `${p.label} build`;
   span.innerHTML = `<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">${p.svg}</svg>`;
   return span;
 }
 
 export function fmtNum(x: number | null | undefined, dp = 2): string {
-  if (x == null || !isFinite(x)) return '—';
+  if (x == null || !isFinite(x)) return '-';
   return Number(x).toFixed(dp).replace(/\.?0+$/, (m) => (m.startsWith('.') ? '' : m));
 }
 
@@ -191,7 +195,7 @@ export function placeholderCard(title: string, ...body: (ElChild | ElChild[])[])
 export function notExported(what: string): HTMLDivElement {
   return el('div', { class: 'notexported' },
     badge('not loaded', 'b-warn b-ghost'),
-    el('div', { class: 'small', text: `${what} isn't loaded yet — add it from your game files to view it.` }));
+    el('div', { class: 'small', text: `${what} isn't loaded yet. Add it from your game files to view it.` }));
 }
 
 export function debounce<A extends any[]>(fn: (...args: A) => void, ms: number): (...args: A) => void {

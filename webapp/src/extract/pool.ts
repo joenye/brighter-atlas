@@ -1,4 +1,4 @@
-// poolMap — run per-object index jobs across CPU cores when the environment
+// poolMap: run per-object index jobs across CPU cores when the environment
 // allows (nested Workers: Chrome/Firefox/Safari 15+), falling back to the
 // exact same jobs.js code inline otherwise (node tests, old browsers).
 //
@@ -24,7 +24,7 @@ export function poolSize(): number {
   return Math.max(1, Math.min(hc - 1, 8));
 }
 
-// jobs per dispatch — small enough to level-load across workers, large
+// jobs per dispatch: small enough to level-load across workers, large
 // enough to amortize the postMessage round-trip and keep reads slab-friendly
 const CHUNK_JOBS = 128;
 
@@ -47,7 +47,7 @@ function ensureFleet(count: number): Worker[] {
   return fleet.slice(0, count);
 }
 
-// A worker that errored is in an unknown state — terminate it and let the
+// A worker that errored is in an unknown state: terminate it and let the
 // next pass spawn a replacement, so one bad pass cannot poison later passes.
 function dropWorker(worker: Worker): void {
   worker.terminate();
@@ -60,7 +60,7 @@ function dropWorker(worker: Worker): void {
 // otherwise never resolve once its workers die, wedging the fleet lock.
 const activePasses = new Set<(err: Error) => void>();
 
-// Hard-terminate every pooled worker. Called at ingest end/error/abort — the
+// Hard-terminate every pooled worker. Called at ingest end/error/abort: the
 // fleet must never outlive its ingest. Safe to call repeatedly / when empty.
 export function shutdownPool(): void {
   for (const w of fleet) w.terminate();
@@ -91,7 +91,7 @@ export async function poolMap({ file, n, kind, entries, extraFor, onProgress, si
       return await pooled({ file, n, kind, jobs, workers, onProgress, signal });
     } catch (err) {
       if (signal?.aborted || err.message === 'cancelled') throw new Error('cancelled');
-      // nested workers unavailable / worker died — same jobs, inline
+      // nested workers unavailable / worker died: same jobs, inline
     }
   }
 
@@ -131,7 +131,7 @@ async function pooled({ file, n, kind, jobs, workers, onProgress, signal }: {
   try {
     if (signal?.aborted) throw new Error('cancelled');
     await new Promise<void>((resolve, reject) => {
-      let cursor = 0;    // shared job cursor — workers pull the next chunk when done
+      let cursor = 0;    // shared job cursor: workers pull the next chunk when done
       let completed = 0; // jobs whose results have landed
       let active = 0;    // chunks in flight
       let settled = false;
@@ -217,7 +217,7 @@ export async function poolHashBlob(
     });
   } catch (err) {
     if (signal?.aborted || err?.message === 'cancelled') throw new Error('cancelled');
-    return hashBlob(blob, onProgress); // same bytes, same digest — inline fallback
+    return hashBlob(blob, onProgress); // same bytes, same digest: inline fallback
   } finally {
     if (onAbort) signal?.removeEventListener('abort', onAbort);
     (worker as Worker | null)?.terminate();

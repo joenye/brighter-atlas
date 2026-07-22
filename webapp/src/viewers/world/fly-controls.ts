@@ -2,7 +2,7 @@
 // map-viewer controls: left/right-drag looks (deltas consumed per frame),
 // double-click toggles pointer-lock mouselook, WASD moves in the horizontal
 // plane relative to yaw only, E/R rise + Q/C sink at half speed, arrows turn
-// at a constant rate, Shift ×10, Tab ×0.1. No orbit target — pure yaw/pitch on
+// at a constant rate, Shift ×10, Tab ×0.1. No orbit target: pure yaw/pitch on
 // a Y-up camera. The view calls update(dt) every frame and dispose() on
 // destroy.
 
@@ -72,7 +72,7 @@ export class FlyControls {
     this.onChange = onChange;
     this.enabled = true;
     this.disposed = false;
-    this.moveSpeed = 60;      // world units/s at ×1 — the view scales it to the world span
+    this.moveSpeed = 60;      // world units/s at ×1: the view scales it to the world span
     this.cameraSpeed = 1;     // user-tunable multiplier (exposed on the view)
     this.yaw = 0;
     this.pitch = 0;
@@ -124,7 +124,7 @@ export class FlyControls {
     };
     this._onKeyDown = (event) => {
       if (!this.enabled || !HANDLED_CODES.has(event.code)) return;
-      // Never swallow a browser/OS chord — Ctrl+R reload, Cmd+W, etc. No fly
+      // Never swallow a browser/OS chord: Ctrl+R reload, Cmd+W, etc. No fly
       // control uses a modifier, and KeyR/KeyF/etc. would otherwise block them.
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (!(this.hover || this._locked() || this._dragId !== null)) return;

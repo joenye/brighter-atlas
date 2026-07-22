@@ -1,8 +1,8 @@
 // Per-room world shard + index builder: compact occurrence/link/placement/
 // spawn rows, the columns/enums/semantics/coordinate_system contract, room
-// index entries and totals — the "World package v1 (browser)" contract. No
+// index entries and totals, the "World package v1 (browser)" contract. No
 // mesh/texture payloads are written (placements keep ab5 mesh ordinals and
-// ab3 texture container ordinals) and no package_id/sha stamps exist — IDB is
+// ab3 texture container ordinals) and no package_id/sha stamps exist: IDB is
 // private; integrity comes from the ingest transaction.
 //
 // Per referenced ab3 texture id the texMeta input must supply:
@@ -191,7 +191,7 @@ export const SEMANTICS = {
   spawns: 'room-owned gameplay actor records with an exact typed integer XYZ/direction object and exact parallel mesh/material appearance where present',
   spawn_coordinates: 'spawn x/y are already in full map_size coordinates and do not receive the class-351 map_offset; raw z is retained as actor/navigation provenance, while surface_z is the exact native game-unit height sampled from source terrain face-index 2 triangles at the tile centre (null where this room owns no intersecting top face)',
   spawn_memberships: 'all native room-row generic/direct references are retained; repeated memberships of one registry actor slot produce one spawn row',
-  spawn_origin: 'origin=actor rows are positioned native actor records; origin=roster rows come from the roaming-enemy roster markers — authored tiles in the MINIMAP frame (y-down; the extractor reflects into the y-up occupancy frame) with no direction, grounded by the same terrain sampling as actor rows; the markers\' trailing floats stay undecoded provenance (shape suggests further waypoint pairs, unproven); origin=roster_center rows are the honest fallback for roster enemies whose markers carry no position — clustered on free tiles at the room centre and explicitly approximate',
+  spawn_origin: 'origin=actor rows are positioned native actor records; origin=roster rows come from the roaming-enemy roster markers: authored tiles in the MINIMAP frame (y-down; the extractor reflects into the y-up occupancy frame) with no direction, grounded by the same terrain sampling as actor rows; the markers\' trailing floats stay undecoded provenance (shape suggests further waypoint pairs, unproven); origin=roster_center rows are the honest fallback for roster enemies whose markers carry no position, clustered on free tiles at the room centre and explicitly approximate',
   spawn_recolors: 'two exact actor tint fields are paired by part index when serialized as series, or applied actor-wide when both fields are scalar; the actor schema has implicit neutral output modulation rather than a fabricated third stored colour',
   placement_recolors: 'three values are tint1/tint2/half-range output modulation; a two-value placement with uniform_luminance_tint stores the compact ground schema\'s exact tint/output-modulation pair because its unused second tint is absent rather than fabricated',
   skinned_is_not_spawn: 'AB5 skeleton metadata remains a placement flag only and is never used to identify gameplay actors',
@@ -272,7 +272,7 @@ export function usesUniformLuminanceTint(
   if ((meta.spreadMax ?? 256) > 8) return false;
   if (meta.paramMin == null && meta.paramMax == null) {
     // A texture that ships NO packed plane cannot partition two tints at
-    // all — a stronger form of "packed G is unused" — so the equal-tints and
+    // all (a stronger form of "packed G is unused"), so the equal-tints and
     // grayscale proofs above suffice. The compact schema's proof is defined
     // ON the plane, so it still requires one.
     return !compactUniform;
@@ -332,7 +332,7 @@ function terrainSurfaceZ(
   const pointX = cell[0] + 0.5;
   const pointY = cell[1] + 0.5;
   // Only surfaces in the tile's CONTIGUOUS occupancy span above the actor
-  // ground it: Sewer Entrance's overhead arch (layers 0,1,7 — a gap) must
+  // ground it: Sewer Entrance's overhead arch (layers 0,1,7: a gap) must
   // not ground a floor actor, while Fallen Monument's slab (layers 0..8
   // contiguous) does.
   let span: Set<number> | null = null;
@@ -549,7 +549,7 @@ export interface ShardContextOptions {
   names?: Map<number, string> | null;
   loadMeshBytes: (meshId: number) => Uint8Array;
   profile?: any;
-  // dt.charset — enables the roaming-enemy roster spawns (absent -> none)
+  // dt.charset: enables the roaming-enemy roster spawns (absent -> none)
   charset?: ArrayLike<string> | null;
   // Precomputed shared derivations from the orchestrator, each a pure
   // never-mutated function of the same rows/pool passed here: the
@@ -561,13 +561,13 @@ export interface ShardContextOptions {
 }
 
 // Context factory: everything the per-room builder needs, resolved once.
-//   rows/pool    — replay.js rows + value-pool.js values
-//   meshDir      — datatable.js parseDatatable().meshDir ({v, t, u, sref})
-//   texMeta      — (textureId) -> record (see header) or a Map of them
-//   rooms        — Map(roomId -> room.js roomLayers() result)
-//   names        — optional Map(roomId -> display name)
-//   loadMeshBytes— (meshId) -> decoded ab5 object bytes (surface sampling)
-//   profile      — optional per-build decode data (provenance in the index)
+//   rows/pool    : replay.js rows + value-pool.js values
+//   meshDir      : datatable.js parseDatatable().meshDir ({v, t, u, sref})
+//   texMeta      : (textureId) -> record (see header) or a Map of them
+//   rooms        : Map(roomId -> room.js roomLayers() result)
+//   names        : optional Map(roomId -> display name)
+//   loadMeshBytes: (meshId) -> decoded ab5 object bytes (surface sampling)
+//   profile      : optional per-build decode data (provenance in the index)
 export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
   charset = null, assetMaps = null, materialAssets = null, enemyDefs = null,
@@ -600,7 +600,7 @@ export function createShardContext({
   const texLookup = typeof texMeta === 'function' ? texMeta : (id: number) => texMeta.get(id);
   const surfaceMeshes = new Map<number, SurfaceMesh>();
   // roomOccupancy is deterministic per room and consumed read-only by both the
-  // shard builder and the later structural-binding pass — compute once per room
+  // shard builder and the later structural-binding pass: compute once per room
   const occupancyCache = new Map<number, ReturnType<typeof roomOccupancy>>();
   const ctx: ShardContext = {
     graph,
@@ -928,7 +928,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       const placements: { x: number; y: number; origin: number }[] = [];
       for (const position of roster.positions) {
         // Roster markers speak the minimap/display frame (y-down), like the
-        // roster rows' other minimap fields; occupancy is y-up — reflect.
+        // roster rows' other minimap fields; occupancy is y-up: reflect.
         const x = Math.floor(position.x);
         const y = mapSize[1] - 1 - Math.floor(position.y);
         if (!(x >= 0 && x < mapSize[0] && y >= 0 && y < mapSize[1])) continue;
@@ -1048,7 +1048,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   return { shard, entry };
 }
 
-// Canonical, ordinal-free content signature for one room — the string whose
+// Canonical, ordinal-free content signature for one room: the string whose
 // hash becomes the room's diff identity `h`. Two versions of the game where
 // a room is authored identically produce the same signature even when every
 // registry slot, reader operation and bundle ordinal shifted: the shard is
@@ -1071,7 +1071,7 @@ export function roomContentSignature({ shard, meshHash, imageHash }: {
 
   // occurrences: [record, resource, secondary, x, y, z, entry_slot, packed,
   // rotation_quarters, packed_flags, individual, role, anchor_x, anchor_y,
-  // anchor_kind] — record/resource/secondary are registry slots, entry_slot
+  // anchor_kind]: record/resource/secondary are registry slots, entry_slot
   // is an internal table pointer, and the individual index is replaced by
   // its room-local UUID. Same-cell source row order tiebreaks on the (also
   // dropped) registry record, so every projected list sorts canonically and
@@ -1088,7 +1088,7 @@ export function roomContentSignature({ shard, meshHash, imageHash }: {
 
   // placements: [occurrence, mesh, material, texture, render_texture, flags,
   // matrix, recolor, part_kind, part_index, mesh_field_op, material_field_op,
-  // confidence, category_evidence] — material is a registry slot, the field
+  // confidence, category_evidence]: material is a registry slot, the field
   // ops are reader identities, render_texture is derived from availability.
   const placement = (row: any[]) => JSON.stringify([
     occProjection[row[0]] ?? null,

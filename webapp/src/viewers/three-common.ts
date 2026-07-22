@@ -15,7 +15,7 @@ export function getRenderer(): THREE.WebGLRenderer {
     // EGL config for certain attribute combinations and throw "Error creating
     // WebGL context". Try the ideal options first, then progressively drop the
     // pickiest attributes (powerPreference, then antialias/MSAA, then
-    // preserveDrawingBuffer — which screenshots want) until a context is
+    // preserveDrawingBuffer, which screenshots want) until a context is
     // created, so the app still renders.
     const attempts: THREE.WebGLRendererParameters[] = [
       { antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' },
@@ -43,7 +43,7 @@ export { THREE };
 let _aliveScenes = 0;
 
 // Camera-controls hint, mounted on every Scene3D host (bottom-left). Orbit and
-// zoom are discoverable by accident; right-drag / Ctrl-drag panning is not —
+// zoom are discoverable by accident; right-drag / Ctrl-drag panning is not,
 // so the card is VISIBLE by default. It has no minimise button of its own:
 // the U immersive toggle hides all chrome (this card included).
 function mountCamHint(host: HTMLElement): HTMLElement {
@@ -139,7 +139,7 @@ export class Scene3D {
   // grid in the XY plane + axes, sized to the object. `center` is the object's
   // horizontal (x,y) centre: the game authors rest poses offset from the world
   // origin, so centring the grid + axes UNDER the model (instead of at 0,0) keeps
-  // the reference plane symmetric about the turntable axis — the spin then reads
+  // the reference plane symmetric about the turntable axis: the spin then reads
   // as "on the spot" rather than the model circling an off-to-the-side origin.
   addGround(radius: number, zLevel = 0, center: { x: number; y: number } = { x: 0, y: 0 }): THREE.GridHelper {
     const size = Math.max(1e-6, radius) * 4;
@@ -160,7 +160,7 @@ export class Scene3D {
   }
 
   // fov-aware fit: place the camera so the box's bounding sphere fits BOTH
-  // frustum axes with a margin — no manual zoom needed to see the full model.
+  // frustum axes with a margin: no manual zoom needed to see the full model.
   // keepDirection preserves the user's current orbit angle (used on refits).
   frameBox(min: ArrayLike<number>, max: ArrayLike<number>,
     { margin = 1.12, keepDirection = false }: { margin?: number; keepDirection?: boolean } = {}): { center: THREE.Vector3; radius: number } {
@@ -338,7 +338,7 @@ export function mountImmersiveControls({ pane, toolbar }:
     try {
       if (fsActive()) await document.exitFullscreen();
       else await fsTarget.requestFullscreen?.();
-    } catch { /* denied / unsupported — ignore */ }
+    } catch { /* denied / unsupported: ignore */ }
   }
   const syncFs = () => fsBtn.classList.toggle('active', fsActive());
   document.addEventListener('fullscreenchange', syncFs);

@@ -1,5 +1,5 @@
 // AB0 registry-stream replay, driven by the per-build decode data.
-// The parser is capture-pruned — it consumes each
+// The parser is capture-pruned: it consumes each
 // generic value byte-for-byte but retains only what edge rows need (tag +
 // edge value). Every varint in a supported build fits in 2^32, so values are
 // plain Numbers; the 63-bit guard is a decode-failure bound, not a real range.

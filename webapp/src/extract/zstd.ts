@@ -4,11 +4,11 @@
 // its cold texture path decodes big single frames and pays the wasm compile
 // ONCE per SW startup. Extraction contexts measured net-NEGATIVE with wasm
 // (~10 worker spawns each recompiling the module outweighed the decode wins
-// on 2026-07 hardware) — do not re-add init there without re-measuring.
+// on 2026-07 hardware). Do not re-add init there without re-measuring.
 // Whenever the WASM path can't take a call (no adopted impl, frame header
 // carries no content size and the caller supplied none, any wasm error),
-// fzstd decodes instead. Output bytes are identical either way — zstd
-// decoding is deterministic by spec — so callers never see which path ran.
+// fzstd decodes instead. Output bytes are identical either way (zstd
+// decoding is deterministic by spec), so callers never see which path ran.
 // Also provides a structural (no-decompress) zstd frame walker used to split
 // ab3 objects into their concatenated frames + raw metadata tail.
 
@@ -18,8 +18,8 @@ interface ZstdWasmImpl { decompress(u8: Uint8Array, capacity: number): Uint8Arra
 let wasm: ZstdWasmImpl | null = null;
 
 // Hand the seam an initialized WASM impl (the vendor module namespace after
-// its init() resolved). Keeping the vendor import in the ADOPTING bundle —
-// not here — is what keeps the ~334 kB embedded wasm out of every other
+// its init() resolved). Keeping the vendor import in the ADOPTING bundle,
+// not here, is what keeps the ~334 kB embedded wasm out of every other
 // entry point.
 export function adoptZstdWasm(impl: ZstdWasmImpl): void { wasm = impl; }
 

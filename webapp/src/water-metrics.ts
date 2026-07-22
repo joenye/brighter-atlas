@@ -82,7 +82,7 @@ export function waterMetricsFromSample(data: Uint8Array | Uint8ClampedArray): Wa
   return { rowVariation, colVariation, gradX, luminance, meanSat };
 }
 
-// Box-average an RGBA image down to the sample grid (extraction path — the
+// Box-average an RGBA image down to the sample grid (extraction path: the
 // viewer path samples via canvas drawImage, whose filtering differs slightly;
 // the classifier's margins absorb that).
 export function sampleRgba(

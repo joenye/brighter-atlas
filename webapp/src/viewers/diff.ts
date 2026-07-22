@@ -1,7 +1,7 @@
-// #/diff/A..B — the version-diff view (design §5). Groups added / removed /
+// #/diff/A..B: the version-diff view (design §5). Groups added / removed /
 // changed / moved per category, with carry-annotation on changed pairs and
 // an on-demand image pixel-diff (decodes strictly on click, via the service
-// worker's cs/<versionId>/ namespace — both versions are addressable).
+// worker's cs/<versionId>/ namespace, so both versions are addressable).
 
 import { el, clear, fmtInt, badge, idLabel, versionDateLabel, versionLabel } from '../ui.js';
 import { getVersion, derivedGet } from '../storage.js';
@@ -40,7 +40,7 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
     const [recA, recB] = await Promise.all([getVersion(baseId), getVersion(activeId)]);
     clear(body);
     if (!recA || !recB) {
-      body.appendChild(el('div', { class: 'center-note', text: 'One of these versions isn\'t on this device — open both versions here first.' }));
+      body.appendChild(el('div', { class: 'center-note', text: 'One of these versions isn\'t on this device. Open both versions here first.' }));
       return;
     }
 
@@ -64,12 +64,12 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
     const { cats, skipped } = await diffVersions(recA, recB, loadIndex);
 
     for (const { cat, reason } of skipped) {
-      body.appendChild(el('p', { class: 'dim small', text: `${cat}: skipped — ${reason}` }));
+      body.appendChild(el('p', { class: 'dim small', text: `${cat}: skipped (${reason})` }));
     }
 
     // ---- per-category groups --------------------------------------------
     for (const [cat, d] of Object.entries(cats)) {
-      // all groups start COLLAPSED — the summary line carries the counts, and
+      // all groups start COLLAPSED: the summary line carries the counts, and
       // opening is a deliberate act (large groups stay cheap until wanted)
       // "jump to diff": open this category's list filtered to just the added
       // entries (other filters cleared). Only when there are additions + a route.
@@ -108,7 +108,7 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
       };
 
       // image rows get an inline thumbnail via the service worker's cs/
-      // namespace — removed images decode from the BASE version's raw bundles
+      // namespace: removed images decode from the BASE version's raw bundles
       const thumb = (versionId: string, i: number) => (cat === 'images'
         ? el('img', { class: 'diff-thumb', loading: 'lazy', src: `cs/${versionId}/images/${String(i).padStart(5, '0')}_e0.png` })
         : null);
@@ -130,7 +130,7 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
             ROUTE[cat] ? el('a', { href: `#/${ROUTE[cat]}/${pair.active.i}`, text: label(pair.active) }) : el('span', { text: label(pair.active) })),
           el('span', { class: 'dim small', text: `${pair.confidence} confidence` }));
         if (cat === 'world') {
-          // rooms aren't hash-named assets — instead of carry, an on-demand
+          // rooms aren't hash-named assets: instead of carry, an on-demand
           // "what changed" summary (pure index-level, no shard decode)
           row.appendChild(roomChangeButton(baseId, activeId, pair));
           return row;
@@ -165,7 +165,7 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
 }
 
 // on-demand per-room change summary: which fields moved and which meshes/
-// textures entered or left the room — content-hash set differences over the
+// textures entered or left the room: content-hash set differences over the
 // two versions' indexes, computed strictly on click (no shard decode)
 function roomChangeButton(baseId: string, activeId: string, pair: ChangedPair): HTMLButtonElement {
   const btn = el('button', { class: 'btn btn-mini', text: 'what changed?' });
@@ -182,7 +182,7 @@ function roomChangeButton(baseId: string, activeId: string, pair: ChangedPair): 
         meshesA: meshesA?.filter(Boolean), meshesB: meshesB?.filter(Boolean),
         imagesA: imagesA?.filter(Boolean), imagesB: imagesB?.filter(Boolean),
       });
-      const fmt = (v: any) => (Array.isArray(v) ? v.join('×') : v === null ? '—' : String(v));
+      const fmt = (v: any) => (Array.isArray(v) ? v.join('×') : v === null ? '-' : String(v));
       for (const f of d.fields) {
         host.appendChild(el('div', { class: 'small' },
           el('b', { text: `${f.label}: ` }), `${fmt(f.before)} → ${fmt(f.after)}`));
@@ -204,7 +204,7 @@ function roomChangeButton(baseId: string, activeId: string, pair: ChangedPair): 
       assetList('textures', 'images', d.textures.added, d.textures.removed);
       if (!d.fields.length && !d.meshes.added.length && !d.meshes.removed.length
           && !d.textures.added.length && !d.textures.removed.length) {
-        host.appendChild(el('p', { class: 'dim small', text: 'Same footprint, meshes and textures — the change is inside the room source (placement moves/rotations or recolours).' }));
+        host.appendChild(el('p', { class: 'dim small', text: 'Same footprint, meshes and textures: the change is inside the room source (placement moves/rotations or recolours).' }));
       }
     } catch (e) {
       host.appendChild(el('p', { class: 'err small', text: e.message }));
@@ -226,7 +226,7 @@ function pixelDiffButton(baseId: string, activeId: string, pair: ChangedPair): H
     const load = (url: string) => new Promise<HTMLImageElement>((res, rej) => {
       const img = new Image();
       img.onload = () => res(img);
-      img.onerror = () => rej(new Error('Couldn\'t load one of the images to compare — try opening the version again.'));
+      img.onerror = () => rej(new Error('Couldn\'t load one of the images to compare. Try opening the version again.'));
       img.src = url;
     });
     try {
@@ -253,7 +253,7 @@ function pixelDiffButton(baseId: string, activeId: string, pair: ChangedPair): H
       ctx.putImageData(out, 0, 0);
       const pct = (100 * diffPx / (w * h)).toFixed(1);
       const wrap = (img: HTMLImageElement | HTMLCanvasElement, cap: string) => el('figure', {}, img, el('figcaption', { class: 'dim small', text: cap }));
-      host.append(wrap(a, 'before'), wrap(b, 'after'), wrap(canvas, `changes — ${pct}% of pixels differ`));
+      host.append(wrap(a, 'before'), wrap(b, 'after'), wrap(canvas, `changes: ${pct}% of pixels differ`));
     } catch (e) {
       host.appendChild(el('p', { class: 'err small', text: e.message }));
     }

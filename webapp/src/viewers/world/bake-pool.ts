@@ -1,14 +1,14 @@
 // Main-thread side of the merged-bake worker pool. MergedWorld.build() fans
 // per-bucket bake jobs across the pool; the workers run the byte-identical
 // port of the bucket math (bake-worker.ts) and return the merged buffers as
-// transferables. The pool lives for exactly one bake — build() disposes it in
-// its finally, and MergedWorld.dispose() sweeps a live one — so a cancelled
+// transferables. The pool lives for exactly one bake (build() disposes it in
+// its finally, and MergedWorld.dispose() sweeps a live one), so a cancelled
 // or destroyed bake never leaves threads behind.
 //
 // Job promises always RESOLVE (never reject) with a BakeJobOutcome; failed or
 // cancelled jobs resolve { ok:false }, so a torn-down bake can never surface
 // an unhandled rejection. Replies are matched by job id and stamped with the
-// bake generation — a stale or post-dispose reply is dropped on the floor.
+// bake generation: a stale or post-dispose reply is dropped on the floor.
 //
 // Mesh attribute arrays are sent to each worker at most once and cached
 // worker-side by mesh id. The cache policy is driven entirely from HERE:
@@ -108,7 +108,7 @@ export class MergedBakePool {
   /**
    * Queue one bucket bake. `onSettled` fires when the outcome arrives (in
    * completion order, unlike the returned promise which the caller awaits in
-   * bucket order) — build() uses it for aggregate progress.
+   * bucket order): build() uses it for aggregate progress.
    */
   submit(
     bucket: MergedBucketDef,
@@ -186,7 +186,7 @@ export class MergedBakePool {
           const positions = geometry.attributes.position.array as Float32Array;
           const normals = geometry.attributes.normal.array as Float32Array;
           const uvs = geometry.attributes.uv.array as Float32Array;
-          // Always ship tangents when the geometry has them — a later
+          // Always ship tangents when the geometry has them: a later
           // tangent-layout bucket may reuse this cache entry.
           const tangents = geometry.attributes.tangent
             ? geometry.attributes.tangent.array as Float32Array : null;
@@ -209,7 +209,7 @@ export class MergedBakePool {
         palette: item.palette,
       });
     }
-    // LRU-evict down to the cap — never a mesh THIS job needs (if one job's
+    // LRU-evict down to the cap, never a mesh THIS job needs (if one job's
     // meshes alone exceed the cap, the cap is soft for that job).
     const evict: number[] = [];
     if (entry.cacheBytes > WORKER_CACHE_CAP_BYTES) {
@@ -243,7 +243,7 @@ export class MergedBakePool {
     this._jobs.delete(data.id);
     if (entry.job === job) entry.job = null;
     // Generation stamp: a reply minted for a superseded bake never reaches
-    // its caller as a success (belt-and-braces — the pool is per-bake).
+    // its caller as a success (belt-and-braces: the pool is per-bake).
     const outcome: BakeJobOutcome = data.ok && data.generation === job.generation && data.arrays
       ? { ok: true, arrays: data.arrays }
       : { ok: false, error: data.error || 'stale bake generation' };

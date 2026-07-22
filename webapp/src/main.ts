@@ -7,6 +7,7 @@ import { buildVersionLabel, buildInfoReady } from './build-info.js';
 import { openWhatsNew, maybeAutoShowWhatsNew } from './changelog.js';
 import { animClass } from './anim-class.js';
 import { mountOnboarding } from './onboard.js';
+import { maybeMountMobileGate } from './mobile-gate.js';
 import { derivedGet, getVersion } from './storage.js';
 import { diffIndexes } from './diff.js';
 import { VList } from './virtual-list.js';
@@ -87,13 +88,13 @@ const isWorldAllRoute = (r: Route | null | undefined) => r?.cat === 'world' && (
 
 const imgMaxArea = (e: any) => Math.max(0, ...(e.entries || []).map((s: any) => (s.w || 0) * (s.h || 0)));
 const imgMaxDim = (e: any) => Math.max(0, ...(e.entries || []).map((s: any) => Math.max(s.w || 0, s.h || 0)));
-// highest-resolution sub-image (mip level 0) — what the list should headline,
+// highest-resolution sub-image (mip level 0): what the list should headline,
 // not entries[0] (the smallest in the stored mip chain).
 const imgMaxEntry = (e: any) => (e.entries || []).reduce(
   (best: any, s: any) => (!best || (s.w || 0) * (s.h || 0) > (best.w || 0) * (best.h || 0)) ? s : best, null);
 // sub-images sorted high→low res (for tooltips / the detail panel).
 const imgSizesDesc = (e: any) => (e.entries || []).slice().sort((a: any, b: any) => (b.w || 0) * (b.h || 0) - (a.w || 0) * (a.h || 0));
-// encoded (in-bundle) byte size per format as (block-dim, block-bytes) —
+// encoded (in-bundle) byte size per format as (block-dim, block-bytes):
 // BC* are 4×4-block compressed, RGBA8 is raw.
 const FMT_BYTES: Record<string, [number, number]> = { RGBA8: [1, 4], BC4: [4, 8], BC5LA: [4, 16], BC5S: [4, 16], BC1: [4, 8], BC3: [4, 16] };
 function texBytes(fmt: string, w: number, h: number): number {
@@ -112,7 +113,7 @@ type FilterDef = [label: string, pred: (it: any) => boolean, tip?: string];
 
 // list filters: [label, predicate]. Presented as a checkbox dropdown; multiple
 // checked filters AND together (an item must satisfy every checked filter). No
-// 'all' entry — nothing checked = show everything.
+// 'all' entry: nothing checked = show everything.
 const FILTERS: Record<string, FilterDef[]> = {
   meshes: [
     ['named', (m) => !!effectiveName(m, 'meshes')],
@@ -139,7 +140,7 @@ const FILTERS: Record<string, FilterDef[]> = {
     ['font', (i) => i.cat === 'font'],
     ['lut', (i) => i.cat === 'lut'],
     ['large (≥512px)', (i) => imgMaxDim(i) >= 512],
-    ['medium (128–511px)', (i) => { const d = imgMaxDim(i); return d >= 128 && d < 512; }],
+    ['medium (128 to 511px)', (i) => { const d = imgMaxDim(i); return d >= 128 && d < 512; }],
     ['small (<128px)', (i) => { const d = imgMaxDim(i); return d > 0 && d < 128; }],
     ['square', (i) => (i.entries || []).some((s2: any) => s2.w === s2.h && s2.w > 0)],
   ],
@@ -151,12 +152,12 @@ const FILTERS: Record<string, FilterDef[]> = {
     ['no motion (≤1 frame)', (a) => (a.frames ?? 99) <= 1 || (a.dur ?? 99) <= 20],
     ['long loop (≥18s)', (a) => (a.dur ?? 0) >= 18000],
   ],
-  // strings: no facets — the corpus is pre-cleaned at extraction and the text
+  // strings: no facets. The corpus is pre-cleaned at extraction and the text
   // speaks for itself; search + sorts cover navigation.
 };
 
 // filters checked by default the first time a category is visited (an explicit
-// "clear all" sticks — saveCatFilters stores the empty set)
+// "clear all" sticks: saveCatFilters stores the empty set)
 const DEFAULT_FILTERS: Record<string, string[]> = {};
 
 function bboxVolume(m: any): number {
@@ -248,7 +249,7 @@ const CAT_SORTS: Record<string, SortDef[]> = {
   ],
   anims: [
     // named clips first (a friendly name OR a recovered animatic name),
-    // then plain index order — matches the clip pickers' default
+    // then plain index order: matches the clip pickers' default
     ['named', 'sort: named first', (a, b) => {
       const an = effectiveName(a, 'anims') || a.sn?.length ? 1 : 0;
       const bn = effectiveName(b, 'anims') || b.sn?.length ? 1 : 0;
@@ -303,10 +304,16 @@ function saveCatSort(cat: string, sort: string, dir: string): void {
 // active list filters persist per category (localStorage) so they survive
 // navigating away and back, and page reloads.
 const FILTERS_KEY = 'bs.listFilters';
+// filter labels double as the persisted keys; renamed labels map old -> new
+// here so saved filter state survives the rename (the old key holds the
+// legacy en dash, written as \u2013 so the source itself stays dash-free)
+const FILTER_KEY_RENAMES: Record<string, string> = { 'medium (128\u2013511px)': 'medium (128 to 511px)' };
 function loadCatFilters(cat: string): Set<string> {
   try {
     const all = JSON.parse(localStorage.getItem(FILTERS_KEY)!) || {};
-    if (cat in all) return new Set(all[cat]);            // saved (possibly cleared)
+    if (cat in all) {
+      return new Set((all[cat] as string[]).map((k) => FILTER_KEY_RENAMES[k] ?? k));
+    }
   } catch { /* fall through */ }
   return new Set(DEFAULT_FILTERS[cat] || []);            // first visit
 }
@@ -382,7 +389,7 @@ class App {
 
     this.store.addEventListener('fetcherror', (e) => this.banner((e as CustomEvent<FetchErrorDetail>).detail.message));
     // Background audit for stored client versions: a bundle that does not
-    // belong with this version's datatable (mixed game versions — possible
+    // belong with this version's datatable (mixed game versions, possible
     // for versions ingested before the per-object ingest gate) silently
     // shows impostor sub-images. Sampled, header-only, never blocks boot.
     if (typeof this.store.validateBundleConsistency === 'function') {
@@ -392,7 +399,7 @@ class App {
           if (audit?.mismatches?.length) {
             const sample = audit.mismatches.slice(0, 3).map((m) => `#${m.i}`).join(', ');
             this.banner(`This version's game images don't match its data tables `
-              + `(${audit.mismatches.length}/${audit.checked} sampled objects differ, e.g. ${sample}) — `
+              + `(${audit.mismatches.length}/${audit.checked} sampled objects differ, e.g. ${sample}): `
               + 'mixed game versions. Re-extract this version from one clean game folder '
               + '(Storage panel) to fix wrong textures.');
           }
@@ -467,14 +474,14 @@ class App {
     document.getElementById('help-btn')?.addEventListener('click', () => openHelpModal());
     document.getElementById('overrides-btn')!.addEventListener('click', () => this.openOverridesPanel());
 
-    // Build version in the topbar — click it to open "What's new" (the current
+    // Build version in the topbar: click it to open "What's new" (the current
     // release's changelog). The full version + commit also lives in Help.
     const badgeEl = document.getElementById('build-badge');
     if (badgeEl) {
       const setBadge = () => { badgeEl.textContent = buildVersionLabel(); };
       setBadge();
       buildInfoReady.then(setBadge);
-      badgeEl.title = "What's new — this release's changes";
+      badgeEl.title = "What's new: this release's changes";
       badgeEl.addEventListener('click', () => openWhatsNew());
     }
     // Auto-show "What's new" once when the app has updated since the last visit.
@@ -571,10 +578,10 @@ class App {
         const nOv = obj.overrides ? replaceOverrides(obj.overrides) : null;
         const nNm = obj.names ? replaceNames(obj.names) : null;
         const nMd = obj.models ? replaceModels(obj.models) : null;
-        this.banner(`Loaded${nOv != null ? ` ${nOv} texture assignment(s)` : ''}${nNm != null ? ` ${nNm} name(s)` : ''}${nMd != null ? ` ${nMd} model(s)` : ''} — replaced what was saved in this browser.`, 'b-info');
+        this.banner(`Loaded${nOv != null ? ` ${nOv} texture assignment(s)` : ''}${nNm != null ? ` ${nNm} name(s)` : ''}${nMd != null ? ` ${nMd} model(s)` : ''}, replacing what was saved in this browser.`, 'b-info');
         await render();
         this.renderTabs();
-        this.reloadUserItems();   // user-cat sidebars list store snapshots — resync
+        this.reloadUserItems();   // user-cat sidebars list store snapshots: resync
         this.refreshList();
         this.mountView(this.cur!, ++this._navToken);   // re-texture/re-label the open view
       } catch (err) { this.banner(`Couldn't load that file: ${err.message}`); }
@@ -606,14 +613,14 @@ class App {
     closeBtn.addEventListener('click', close);
 
     overlay.appendChild(el('div', { class: 'modal card' },
-      el('h2', { text: 'Overrides — texture assignments + names (any asset type)' }),
+      el('h2', { text: 'Overrides: texture assignments + names (any asset type)' }),
       body,
       el('div', { class: 'modal-actions' }, exportBtn, loadBtn, clearBtn, fileInput, el('span', { class: 'spacer' }), closeBtn)));
     await render();
     document.body.appendChild(overlay);
   }
 
-  // the user-created categories' sidebar lists snapshot their stores — resync
+  // the user-created categories' sidebar lists snapshot their stores: resync
   // after an overrides-file import/clear replaces the records wholesale
   reloadUserItems(): void {
     if (this.cur?.cat === 'models') this.items = this.allModels();
@@ -642,7 +649,7 @@ class App {
         const { openStoragePanel } = await import('./versions.js');
         openStoragePanel(this);
       });
-      // build labels can ship after a build was extracted — backfill stored
+      // build labels can ship after a build was extracted: backfill stored
       // versions in the background and live-refresh the chip if the active
       // version just gained its real name
       void (async () => {
@@ -674,14 +681,14 @@ class App {
     const h = location.hash;
     const parsed = parseHash(h);
     // First entry (no route) and unknown/removed routes land on the meshes
-    // category card — the same plain landing box every category shows.
+    // category card, the same plain landing box every category shows.
     const route = parsed || { cat: 'meshes', id: null };
     await this.applyRoute(route, { replace: true });
     showPendingNotices(this);   // one-time migration notices (fire-and-forget)
   }
 
   showOnboarding(): void {
-    // explicit ?data= means the user asked for a specific HTTP tree — keep the
+    // explicit ?data= means the user asked for a specific HTTP tree: keep the
     // static-tree guidance instead of the client-extraction wizard
     if (new URLSearchParams(location.search).get('data')) {
       clear(this.viewerEl);
@@ -724,7 +731,7 @@ class App {
     if (!baseId || !this.store.versionId) return;
     const base = await getVersion(baseId);
     const host = el('span', { id: 'compare-chip' });
-    const open = el('button', { class: 'btn-mini diff-link', text: `Δ diff vs ${versionLabel(base) || baseId.slice(0, 8)}`, title: 'Compare mode is on — open the full diff view (list filters gain diff facets)' });
+    const open = el('button', { class: 'btn-mini diff-link', text: `Δ diff vs ${versionLabel(base) || baseId.slice(0, 8)}`, title: 'Compare mode is on. Open the full diff view (list filters gain diff facets)' });
     open.addEventListener('click', () => { location.hash = `#/diff/${baseId}..${this.store.versionId}`; });
     const stop = el('button', { class: 'btn-mini', text: '✕', title: 'Leave compare mode' });
     stop.addEventListener('click', () => {
@@ -756,7 +763,7 @@ class App {
           title: partial ? `${fmtInt(exported)} of ${fmtInt(count)} exported` : '',
         }));
       btn.addEventListener('click', () => {
-        // images: the tab IS the master grid — always go there (the breadcrumb
+        // images: the tab IS the master grid, so always go there (the breadcrumb
         // in the detail view is the way back too)
         if (cat.key === 'images') { location.hash = '#/images'; return; }
         const last = sessionStorage.getItem(`bs.last.${cat.key}`);
@@ -764,7 +771,7 @@ class App {
         else location.hash = `#/${cat.key}`;
       });
       // "?" opens the category overview (the id-less route). It's a SIBLING of the
-      // tab button — never nested inside it — so the markup stays valid and each
+      // tab button (never nested inside it) so the markup stays valid and each
       // control is independently focusable/announced. It reaches the overview
       // WITHOUT restoring bs.last.<cat>, so a normal tab click still reopens the
       // last-viewed item.
@@ -839,7 +846,7 @@ class App {
     }
 
     // compare mode: added/changed/moved/unchanged facets vs the diff base
-    // (h-set membership — zero payload decode). World rooms carry the same
+    // (h-set membership, zero payload decode). World rooms carry the same
     // content-hash contract via their index entries; the pinned "All rooms"
     // row is derived and never enters the diff.
     this._diffFacets = [];
@@ -861,7 +868,7 @@ class App {
             ['diff: =unchanged', (e) => !addedH.has(e.h) && !changedH.has(e.h)],
           ];
           if (d.removed.length) {
-            this.setStatus3(`${d.removed.length} removed vs base — see the diff view`);
+            this.setStatus3(`${d.removed.length} removed vs base (see the diff view)`);
           }
         }
       } catch { /* base version index unavailable */ }
@@ -934,7 +941,7 @@ class App {
     const filters = this.catFilters(cat);
     if (!filters.length) return;
     const dd = el('details', { class: 'filter-dd' });
-    const sum = el('summary', { title: 'Filter the list — shows items matching ALL checked filters (AND)' });
+    const sum = el('summary', { title: 'Filter the list: shows items matching ALL checked filters (AND)' });
     const panel = el('div', { class: 'filter-panel' });
     const syncSum = () => { sum.textContent = this.filters.size ? `Filter · ${this.filters.size}` : 'Filter'; };
     for (const [label, , tip] of filters) {
@@ -1068,7 +1075,7 @@ class App {
           item.sk ? badge('S', 'b-accent b-ghost', `skinned, rig ${item.skel} (shared by ${fmtInt(item.share)} meshes, ${fmtInt(item.clips)} clips)`) : null,
           sys === 'image' ? badge('Tˢ', 'b-good b-ghost', `${item.sys.variants.length} built-in texture variant${item.sys.variants.length === 1 ? '' : 's'}`) : null,
           ovs === 'image' ? badge('T', 'b-good b-ghost', 'texture override set') : ovs === 'cleared' ? badge('T∅', 'b-ghost', 'override: no texture (cleared)') : null,
-          // recovered wearable-item name (world extraction) — display layer only,
+          // recovered wearable-item name (world extraction): display layer only,
           // the hash-keyed user name (via main()) still outranks it
           !name && item.sn?.length ? el('span', {
             class: 'r-meta', text: item.sn[0], title: item.sn.join('\n'),
@@ -1112,7 +1119,7 @@ class App {
         append(row,
           rid(item),
           main(`rig ${item.skel} · ${item.bones}b`),
-          // recovered animatic name (world extraction) — display layer only,
+          // recovered animatic name (world extraction): display layer only,
           // the hash-keyed user name (rid) still outranks it
           item.sn?.length ? el('span', {
             class: 'r-meta', text: item.sn[0], title: item.sn.join('\n'),
@@ -1135,7 +1142,7 @@ class App {
             el('span', { class: 'r-main', text: 'All' }),
             el('span', {
               class: 'r-meta', text: `${fmtInt(this.items.length)} rooms`,
-              title: 'Open the whole world — every room merged into one 3D scene (heavy)',
+              title: 'Open the whole world: every room merged into one 3D scene (heavy)',
             }));
           break;
         }
@@ -1198,20 +1205,20 @@ class App {
 
     switch (cat) {
       case 'models': {
-        if (id == null) return this.showCatLanding('Models', 'Open any rig, arrange its meshes and textures, then use ❖ Save as Model — your saved models show up here. A single mesh can be saved too, from its own viewer.');
+        if (id == null) return this.showCatLanding('Models', 'Open any rig, arrange its meshes and textures, then use ❖ Save as Model. Your saved models show up here. A single mesh can be saved too, from its own viewer.');
         const model = this.items.find((item) => item.id === id) || getModel(id as string);
-        if (!model) return this.showCatLanding('Models', 'That model no longer exists — pick another from the list.');
+        if (!model) return this.showCatLanding('Models', 'That model no longer exists. Pick another from the list.');
         this.setModelDetails(model);
         this.view = createModelView(this, model);
         break;
       }
       case 'meshes':
-        if (!entry) return this.showCatLanding('Meshes', 'Pick a mesh from the list — skinned meshes play their animations.');
+        if (!entry) return this.showCatLanding('Meshes', 'Pick a mesh from the list. Skinned meshes play their animations.');
         this.setEntryDetails(cat, entry);
         this.view = createMeshView(this, entry);
         break;
       case 'audio':
-        if (!entry) return this.showCatLanding('Audio', 'Pick a sound to play it — every clip plays right here in your browser.');
+        if (!entry) return this.showCatLanding('Audio', 'Pick a sound to play it. Every clip plays right here in your browser.');
         this.setEntryDetails(cat, entry);
         this.view = createAudioView(this, entry);
         break;
@@ -1222,7 +1229,7 @@ class App {
           // and goes straight to the browsable grid.
           if (route.sub === 'about') {
             return this.showCatLanding('Images',
-              'Every picture the game draws — textures, sprites, icons, skyboxes and fonts. Open one to see it full-size, zoom and pan, and step through its different resolutions.',
+              'Every picture the game draws: textures, sprites, icons, skyboxes and fonts. Open one to see it full-size, zoom and pan, and step through its different resolutions.',
               el('p', {}, el('a', { class: 'landing-cta', href: '#/images', text: 'Browse all images →' })));
           }
           this.view = createImageGrid(this, this.filteredItems()); break;
@@ -1241,12 +1248,12 @@ class App {
         this.view = createSkeletonView(this, entry);
         break;
       case 'strings':
-        if (!entry) return this.showCatLanding('Text', 'Every piece of text in the game — dialogue, on-screen labels, identifiers and symbols. Use the box above the list to filter.');
+        if (!entry) return this.showCatLanding('Text', 'Every piece of text in the game: dialogue, on-screen labels, identifiers and symbols. Use the box above the list to filter.');
         this.setEntryDetails(cat, entry);
         this.view = createStringView(this, entry);
         break;
       case 'world': {
-        // lazily loaded like diff — the room viewer (three.js) must not weigh
+        // lazily loaded like diff: the room viewer (three.js) must not weigh
         // down the shell for users who never open the World tab
         const roomEntry = id != null ? (this.items.find((it) => it.i === id) || null) : null;
         if (roomEntry) this.setWorldDetails(roomEntry);
@@ -1314,7 +1321,7 @@ class App {
         ['bounds min', e.bbox ? e.bbox.slice(0, 3).map((x: number) => fmtNum(x, 1)).join(', ') : null],
         ['bounds max', e.bbox ? e.bbox.slice(3, 6).map((x: number) => fmtNum(x, 1)).join(', ') : null],
         ['texture', (() => {   // live replace/supplement composition
-          // resolve strictly by content hash (needs the images index) — never by
+          // resolve strictly by content hash (needs the images index), never by
           // a stale ordinal from another bundle build.
           if (this._imagesIdx == null) this._ensureImagesIdx(cat, e);
           const st = effectiveTex(e, this._imagesIdx);
@@ -1350,9 +1357,9 @@ class App {
       pairs = [
         ['index', `#${e.i}`], ['category', e.cat],
         ['resolutions', e.n],
-        ['formats', (e.entries || []).map((s: any) => s.fmt).filter((v: any, i: number, a: any[]) => a.indexOf(v) === i).join(', ') || '—'],
-        ['sizes', imgSizesDesc(e).slice(0, 8).map((s: any) => `${s.w}×${s.h}`).join(', ') || '—'],
-        ['data size', imgBytes(e) ? fmtBytes(imgBytes(e)) : '—'],
+        ['formats', (e.entries || []).map((s: any) => s.fmt).filter((v: any, i: number, a: any[]) => a.indexOf(v) === i).join(', ') || '-'],
+        ['sizes', imgSizesDesc(e).slice(0, 8).map((s: any) => `${s.w}×${s.h}`).join(', ') || '-'],
+        ['data size', imgBytes(e) ? fmtBytes(imgBytes(e)) : '-'],
         ['files', e.f?.length ? `${e.f.length} file(s)` : 'not included'],
       ];
     } else if (cat === 'anims') {
@@ -1380,7 +1387,7 @@ class App {
         ['length', fmtInt(e.text.length)],
       ];
     }
-    if (e.h) pairs.push(['content id', el('span', { class: 'mono', text: e.h, title: 'A stable id for this asset — it stays the same across game updates, so the names and textures you add stay attached to it.' })]);
+    if (e.h) pairs.push(['content id', el('span', { class: 'mono', text: e.h, title: 'A stable id for this asset: it stays the same across game updates, so the names and textures you add stay attached to it.' })]);
     const catDef = CATS.find((c) => c.key === cat)!;
     const body = el('div', {},
       cat === 'strings' ? null : this.nameEditor(cat, e),   // strings: the text IS the name
@@ -1390,7 +1397,7 @@ class App {
     this.setDetails(`${catDef.single} ${name || (cat === 'strings' ? `#${e.i}` : idLabel(e))}`, body, e);
   }
 
-  // Details panel for a world room (read-only — rooms carry their in-game
+  // Details panel for a world room (read-only: rooms carry their in-game
   // names, so there is no name editor and no hash-keyed annotation row).
   setWorldDetails(r: any): void {
     const pairs: [string, any][] = [
@@ -1590,7 +1597,14 @@ export function parseHash(h: string | null | undefined): Route | null {
 
 // annotations hydrate from IndexedDB (authoritative) before first render;
 // a legacy localStorage set migrates transparently on first boot
-const [store] = await Promise.all([createStore(), hydrateOverrides(), hydrateNames(), hydrateModels()]);
-const app = new App(store);
-(window as any).__bs = { app };   // exposed for the smoke test
-app.start();
+async function boot(): Promise<void> {
+  const [store] = await Promise.all([createStore(), hydrateOverrides(), hydrateNames(), hydrateModels()]);
+  const app = new App(store);
+  (window as any).__bs = { app };   // exposed for the smoke test
+  app.start();
+}
+
+// Phones get the desktop-only gate INSTEAD of the app: when it mounts, the
+// whole boot is skipped (no store, no service worker, no hydration): the
+// gate is all the device pays for. Its escape hatch calls back into boot().
+if (!maybeMountMobileGate(boot)) await boot();

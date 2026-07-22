@@ -1,7 +1,7 @@
 // A small, self-contained 3D preview for the Save-as-Model wizard. It renders
 // its OWN scene (the selected mesh geometries at bind pose, each with its chosen
 // texture variant) to a render target via the shared renderer and blits the
-// result to a 2D canvas — the same render-to-target-and-composite trick the
+// result to a 2D canvas, the same render-to-target-and-composite trick the
 // screenshot/video previews use, so it never touches the live composite behind
 // the modal. Geometries are BORROWED from the skeleton view's loaded meshes and
 // must NOT be disposed here; only the materials we build are ours to dispose.

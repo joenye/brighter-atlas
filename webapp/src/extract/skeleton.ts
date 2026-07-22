@@ -3,7 +3,7 @@
 //
 // object = n 89-byte bone records, depth-first pre-order:
 //   22 BE f32: 3x4 bind matrix (row-major), scale xyz, quat xyzw, trans xyz
-//   u8 num_children — parents are reconstructed by replaying the pre-order
+//   u8 num_children: parents are reconstructed by replaying the pre-order
 //   walk with a stack of remaining child counts.
 
 export interface SkeletonBone {

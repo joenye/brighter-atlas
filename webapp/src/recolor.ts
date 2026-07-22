@@ -69,7 +69,7 @@ function recolorValues(input: any): number[][] | null {
 // A tint carries no authored colour when it is one of the two native neutral
 // sentinels: pure white (native x1) OR the half-range grey 127/255 (~0.498).
 // Both are ubiquitous in the corpus (census over the real bundles: ~50k white
-// and ~37k grey-127 tint channels) and both mean the same thing — leave the
+// and ~37k grey-127 tint channels) and both mean the same thing: leave the
 // masked region as the albedo.
 const NEUTRAL_TINT_HALF = 127 / 255;
 const isNeutralTint = (color: number[]) => {
@@ -80,13 +80,13 @@ const isNeutralTint = (color: number[]) => {
 
 // True when every authored TINT is a neutral sentinel (white or grey-127). The
 // recovered two-mask formula colorizes a masked pixel from its luminance, so no
-// tint value can preserve the albedo's own hue — but in-game, neutral-tinted
+// tint value can preserve the albedo's own hue. But in-game, neutral-tinted
 // masks demonstrably keep their authored colours: the gold Cave of the Future
 // fortune table carries white/white tints over its gold trim, and the pink
 // staff crystals (Troll Mystic "Sparkling", Scaramdar) carry grey-127/grey-127
 // tints over a mask covering the pink gem. A neutral tint therefore means "no
 // recolour" and the mask mix must not run (it would desaturate the authored hue
-// to grey — the crystals washed to white); colored tints keep the recovered
+// to grey: the crystals washed to white); colored tints keep the recovered
 // behaviour.
 export function isIdentityRecolor(input: any): boolean {
   const recolors = recolorValues(input);

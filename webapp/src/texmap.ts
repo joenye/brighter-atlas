@@ -12,7 +12,7 @@
 //   synchronous in-memory mirror at boot (hydrateOverrides());
 //   localStorage is kept as a legacy/migration seed + same-machine backstop
 //   (every save writes both). Persistence to disk happens ONLY through the
-//   topbar "overrides" manager (asset_overrides.json —
+//   topbar "overrides" manager (asset_overrides.json,
 //   {version:2, overrides, names}).
 
 import { userdataGet, userdataPut } from './storage.js';
@@ -27,7 +27,7 @@ type OverrideMode = 'replace' | 'supplement';
 
 interface VariantRef { image: number | null; image_hash: string | null; }
 
-// serialized override record — the value shape inside asset_overrides.json's
+// serialized override record: the value shape inside asset_overrides.json's
 // {version:2, overrides} map (and the localStorage/IndexedDB mirrors)
 interface StoredOverride {
   mode: OverrideMode;
@@ -105,7 +105,7 @@ export async function hydrateOverrides(): Promise<void> {
     } else if (Object.keys(cur.overrides).length) {
       await userdataPut('texOverrides', cur);   // one-time migration
     }
-  } catch { /* IDB unavailable — localStorage mirror still works */ }
+  } catch { /* IDB unavailable: localStorage mirror still works */ }
 }
 
 function save(): void {
@@ -349,7 +349,7 @@ export function getActiveIndex(meshEntry: any): number | null { return effective
 // valid for the game version the override was authored against, so a hash match
 // (content-addressed) takes precedence. Callers rendering a variant directly
 // (e.g. cycling a mesh's skin variants) MUST go through this, exactly as effectiveTex
-// does — otherwise vended defaults resolve to the wrong image on a different
+// does. Otherwise vended defaults resolve to the wrong image on a different
 // game build.
 export function resolveVariantImage(variant: any, imagesIndex: any): number | null {
   if (!variant) return null;
@@ -360,7 +360,7 @@ export function resolveVariantImage(variant: any, imagesIndex: any): number | nu
     return entryByOrdinal(imagesIndex, variant.image) ? variant.image : null;
   }
   // The content hash is the ONLY stable cross-version key. If the variant was
-  // authored with an image_hash, resolve strictly by hash — a stored ab3 ordinal
+  // authored with an image_hash, resolve strictly by hash: a stored ab3 ordinal
   // points at a different asset in another bundle build, so it must NOT be used
   // as a fallback (that is what rendered wrong textures after a bundle change).
   // A missing hash match => the texture isn't in this build => render nothing.

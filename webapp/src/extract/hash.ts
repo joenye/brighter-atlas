@@ -31,7 +31,7 @@ export async function hashObject(
   }
   // digest() snapshots its BufferSource SYNCHRONOUSLY (WebIDL "get a copy of
   // the bytes held by the buffer source" runs before the promise is returned),
-  // and it respects a view's byteOffset/byteLength — so a subarray view hashes
+  // and it respects a view's byteOffset/byteLength, so a subarray view hashes
   // exactly its own bytes with no re-slice copy and no exposure to any later
   // write into the backing buffer. The old defensive slice was pure cost.
   const digest = await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>);
@@ -41,7 +41,7 @@ export async function hashObject(
 // Synthetic content id for strings: sha256/16 of the UTF-8 text. Strings live
 // inside ab0 (no per-object frame), so this synthesised h unifies them with
 // every other category's hash-keyed machinery (names, diffing by text).
-// Synchronous on purpose — 48k awaits would dominate ingest.
+// Synchronous on purpose: 48k awaits would dominate ingest.
 const utf8enc = new TextEncoder();
 export function hashText(text: string): string {
   const digest = new Sha256().update(utf8enc.encode(text)).digest();
@@ -53,7 +53,7 @@ export function hashText(text: string): string {
 // Full sha256 of a Blob, streamed in chunks to bound memory. Identity must
 // equal `sha256sum file`, and WebCrypto has no incremental API: read into one
 // buffer when moderately sized (native digest runs off-thread and concurrent
-// across bundles — the JS stream serializes them all on the ingest thread);
+// across bundles, while the JS stream serializes them all on the ingest thread);
 // only the two giant bundles fall back to the JS SHA-256 stream.
 // memory ceiling for the native one-shot digest path; above it the JS stream
 // takes over (pool.js poolHashBlob moves that stream off the ingest thread)
@@ -76,7 +76,7 @@ export async function hashBlob(
 
 // ---- minimal streaming SHA-256 (FIPS 180-4), used only for whole-file hashes
 // where WebCrypto's one-shot API would need the entire file in memory. ~100 MB/s
-// in modern JITs — fine for a one-time ingest of ~1 GB.
+// in modern JITs, fine for a one-time ingest of ~1 GB.
 
 const K = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,

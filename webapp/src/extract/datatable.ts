@@ -1,6 +1,6 @@
 // ab0 master-datatable parser for the regions the viewer needs:
 //
-//   region 1 charset     : 2,039 glyphs — the game's text encoding (strings are
+//   region 1 charset     : 2,039 glyphs, the game's text encoding (strings are
 //                          varint charset indices, NOT bytes)
 //   region 2 audio_dir   : one varint per ab8 object (PCM sample count)
 //   region 3 symbols     : 901 '$identifier' strings {u32 BE len, utf8}
@@ -8,11 +8,11 @@
 //   region 6 texture_dir : {flags, n_subimages} per ab3 object
 //   region 8 mesh_dir    : {n_vertices, n_triangles, f2, skeleton_ref, 1} per ab5 object
 //   region 9 anim_dir    : {ab6_skeleton, duration_ms, 0x14 ms/frame, flags4} per ab1 clip
-//   strings              : resolved corpus — full 0x0e sweep over the
+//   strings              : resolved corpus: full 0x0e sweep over the
 //                          object-table + heap, then resolveStrings (text-table
 //                          tiling + overlap resolution + junk gate + dedupe)
 //
-// The parse is self-contained — ab0 bytes only — so the scan-found tables are
+// The parse is self-contained (ab0 bytes only), so the scan-found tables are
 // located by structural validation, chained to make a false lock practically
 // impossible: a texture_dir candidate must be followed by a valid mesh_dir, a
 // mesh_dir candidate by a valid anim_dir (every record carries a literal 0x14
@@ -97,7 +97,7 @@ function parseSymbols(u8: Uint8Array, off: number): { symbols: string[]; end: nu
   return { symbols, end: i };
 }
 
-// Region 4 is {u8 tag 0x00, varint count, count x {varint, u64 BE}} — content not
+// Region 4 is {u8 tag 0x00, varint count, count x {varint, u64 BE}}. Content not
 // needed here (the viewer keys assets off content hashes), but it must be walked
 // exactly to find where region 5 starts.
 function skipHashes(u8: Uint8Array, off: number): number {
@@ -128,7 +128,7 @@ function tryPairTable(u8: Uint8Array, p: number): { dir: TextureDirEntry[]; end:
     [flags, i] = readVarint(u8, i);
     if (flags > 1) return null;
     [count, i] = readVarint(u8, i);
-    // n_subimages is mips x 3 maps (flags=0) or a record count (flags=1) — small
+    // n_subimages is mips x 3 maps (flags=0) or a record count (flags=1), small
     if (count > 0xffffff || i > len) return null;
     dir[k] = { flags, n: count };
   }
@@ -200,7 +200,7 @@ function tryClassTable(u8: Uint8Array, p: number): { end: number } | null {
   return { end: i };
 }
 
-// Find the offset where the master object registry begins — a 0x00 byte
+// Find the offset where the master object registry begins: a 0x00 byte
 // (record id 0) from which a chain of records with ids 0,1,2,...,>=40 can be
 // parsed, allowing 5..23 varint fields per record.
 function findObjectTableStart(u8: Uint8Array, lo: number, hi: number): number | null {
@@ -211,7 +211,7 @@ function findObjectTableStart(u8: Uint8Array, lo: number, hi: number): number | 
     const seen = new Set<number>();
     while (stack.length) {
       const [rid, off] = stack.pop()!;
-      const key = off * 64 + rid; // rid < 41, off < 2^32 — exact as a double
+      const key = off * 64 + rid; // rid < 41, off < 2^32: exact as a double
       if (seen.has(key)) continue;
       seen.add(key);
       if (rid >= 40) return cand;
@@ -237,18 +237,18 @@ function findObjectTableStart(u8: Uint8Array, lo: number, hi: number): number | 
 // 0x0e and {varint n<=4096, n varint charset indices} decodes in-bounds, emit
 // {off, end, text}. This applies NO filters and does NOT skip over accepted
 // strings: any 0x0e byte inside a float/hash also "decodes", so the raw sweep is
-// a noisy superset — resolveStrings below reduces it to the real corpus.
+// a noisy superset: resolveStrings below reduces it to the real corpus.
 function sweepStrings(u8: Uint8Array, glyphs: string[], lo: number, hi: number): StringCandidate[] {
   const out = [];
   const len = u8.length;
   const nGlyphs = glyphs.length;
   // Allocation-free scan: indexOf jumps between 0x0e bytes (same ascending
-  // visit order) and the varints decode inline — no [value, offset] tuple per
+  // visit order) and the varints decode inline: no [value, offset] tuple per
   // varint, no string parts until a candidate fully validates. The inlined
   // arithmetic is readVarint's EXACTLY, including reads past the end decoding
   // as byte 0 (undefined & 0x7f === 0, undefined & 0x80 === 0) so overruns
   // still land on the j > len rejection. Acceptance conditions and candidate
-  // order are unchanged — the string corpus is threshold-defined.
+  // order are unchanged: the string corpus is threshold-defined.
   const scratch = new Uint32Array(4096);   // n is hard-capped at 4096 below
   for (let i = u8.indexOf(0x0e, lo); i >= 0 && i < hi; i = u8.indexOf(0x0e, i + 1)) {
     let j = i + 1;
@@ -273,7 +273,7 @@ function sweepStrings(u8: Uint8Array, glyphs: string[], lo: number, hi: number):
 
 // ---------------------------------------------------------------- string resolution
 // Table-chain detection + max-coverage selection + junk gate + dedupe. The
-// thresholds below define the string corpus — do not tweak them.
+// thresholds below define the string corpus. Do not tweak them.
 
 const TABLE_MIN_ROWS = 256; // a chain this long can only be a real string table
 

@@ -1,8 +1,8 @@
-// Per-object index jobs — the CPU-bound decode+hash work of an ingest index
+// Per-object index jobs: the CPU-bound decode+hash work of an ingest index
 // pass, factored out so it can run EITHER inline on the ingest thread (node
 // tests, browsers without nested workers) or sharded across a pool of workers
 // (pool.js / pool-worker.js). Every job is a pure function of (raw bytes,
-// small extra), so the two paths are byte-identical by construction — the
+// small extra), so the two paths are byte-identical by construction: the
 // ingest coordinator derives all ab0-side fields itself.
 
 import { decodeObject } from './bundles.js';
@@ -26,18 +26,18 @@ import { encodePng, SERVED_PNG_LEVEL, DECODED_CACHE, DECODED_CACHE_MAX_BYTES } f
 // The bytes must stay role-identical to sw.js servePng: same decodeSubImage,
 // same applyMaterialCutout on the albedo plane (the caller passes the
 // already-cutout albedo buffer), same encodePng. The cache name/cap are the
-// SHARED constants from png.js — sw.js uses the same ones, so the two writers
+// SHARED constants from png.js: sw.js uses the same ones, so the two writers
 // cannot drift.
 //
 // CRITICAL: the pool hands worldtex jobs a DENSE SUBSET of ab3 (only the
 // world-referenced containers), so the job-local `i` is a position, NOT the
-// ab3 ordinal. Warm URLs must be keyed by the true ordinal (extra.ord) —
+// ab3 ordinal. Warm URLs must be keyed by the true ordinal (extra.ord):
 // keying by position once cached foreign images under other containers' URLs.
 
 // base: absolute `<origin>/cs/<versionId>/images/` URL prefix; entries/subs:
 // the container's parsed metadata + raw sub-image planes; decodedRgba holds
 // the planes the job already decoded (albedo post-cutout). A warm failure of
-// any kind degrades silently — the cache is an optimization, never a
+// any kind degrades silently: the cache is an optimization, never a
 // correctness dependency (and node tests have no Cache API at all).
 async function warmWorldTexturePngs({ base, ord, entries, subs, roles, decodedRgba }: {
   base: string; ord: number; entries: ImageMeta[]; subs: Uint8Array[];
@@ -51,7 +51,7 @@ async function warmWorldTexturePngs({ base, ord, entries, subs, roles, decodedRg
     const urls = planes.map((k) => `${base}${String(ord).padStart(5, '0')}_e${k}.png`);
     // one PARALLEL match round instead of a serial await per plane: a fresh
     // extraction sees all misses at once, a re-extraction still skips the
-    // encode work (nothing observes the skips — the cache is the only output)
+    // encode work (nothing observes the skips: the cache is the only output)
     const warm = await Promise.all(urls.map((url) => cache.match(url)));
     const puts: Promise<void>[] = [];
     for (let p = 0; p < planes.length; p++) {
@@ -68,7 +68,7 @@ async function warmWorldTexturePngs({ base, ord, entries, subs, roles, decodedRg
       })));
     }
     await Promise.all(puts);
-  } catch { /* quota/security/... — stay silent, sw.js decodes on demand */ }
+  } catch { /* quota/security/...: stay silent, sw.js decodes on demand */ }
 }
 
 // kind -> async (bundleIndex, i, raw, extra) -> per-object result
@@ -112,14 +112,14 @@ export const INDEX_JOBS: Record<string,
   // World texture render metadata for one referenced AB3 container: material
   // role sub-images, authored alpha + albedo RGB spread AFTER packed-blue
   // cutout recovery, last packed plane channel ranges (the
-  // uniform-luminance-tint inputs), and the content-based water fingerprint —
+  // uniform-luminance-tint inputs), and the content-based water fingerprint,
   // all decided once at extraction so the world shard builder and viewer need
   // no pixel access. Keep in lockstep with the shard flag rules in
   // world/shards.js.
   //
   // extra.warmPngBase (browser world extraction only): pre-encode the role
-  // sub-images as PNGs into the service worker's cache — see
-  // warmWorldTexturePngs above. Guarded on the Cache API existing.
+  // sub-images as PNGs into the service worker's cache (see
+  // warmWorldTexturePngs above). Guarded on the Cache API existing.
   worldtex: async (n, i, raw, extra) => {
     const out: {
       i: number; kind: string; alpha: boolean; spreadMax: number | null;
@@ -148,7 +148,7 @@ export const INDEX_JOBS: Record<string,
       let last = null;
       // Only two kinds of parameter plane feed the verdicts: albedo-sized
       // planes (cutout recovery inputs, kept in decodedRgba) and the FINAL
-      // plane (the paramMin/Max channel-range source — `last` only ever kept
+      // plane (the paramMin/Max channel-range source: `last` only ever kept
       // its decode). Planes that are neither were decoded and dropped; skip
       // them. The warm path re-decodes on demand for anything it needs that
       // is not in decodedRgba, exactly as before.

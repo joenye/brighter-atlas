@@ -4,7 +4,7 @@
 // reaches them (an ab2 object is a self-describing stream: varint header
 // count, then {u8 tag, payload} to EOF).
 //
-// Fixed payloads are big-endian, EXCEPT tag 0x3c (UV rect, little-endian) — size
+// Fixed payloads are big-endian, EXCEPT tag 0x3c (UV rect, little-endian). Size
 // only matters here. Worker-safe: no DOM, no Node APIs.
 
 import { readVarint } from './bundles.js';
@@ -19,7 +19,7 @@ for (const [tag, size] of [
 
 // Parse one decompressed ab2 object. Returns { bbox: [minX,minY,minZ,maxX,maxY,maxZ]
 // | null, radius: number | null } (first 0x25 / first 0x0b in the stream).
-// Throws unless the stream parses to EXACT EOF — partial parses must not be
+// Throws unless the stream parses to EXACT EOF: partial parses must not be
 // trusted, since one mis-sized skip would desync every later tag.
 export function parseAb2Object(u8: Uint8Array): { bbox: number[] | null; radius: number | null } {
   const len = u8.length;
@@ -30,7 +30,7 @@ export function parseAb2Object(u8: Uint8Array): { bbox: number[] | null; radius:
   while (i < len) {
     const tag = u8[i++];
     // varint payload (0x00 int, 0x0f int, 0x20 array header, 0x24 group id,
-    // 0x26 ref, 0x2c int) — array elements are inline tagged values, so 0x20
+    // 0x26 ref, 0x2c int). Array elements are inline tagged values, so 0x20
     // needs no recursion when only scanning for tags
     if (tag === 0x00 || tag === 0x0f || tag === 0x20 || tag === 0x24 || tag === 0x26 ||
         tag === 0x2c) {
@@ -74,7 +74,7 @@ export function parseAb2Object(u8: Uint8Array): { bbox: number[] | null; radius:
 
 // bboxes aligned to ab5 mesh ordinals: the i-th bbox-BEARING ab2 record
 // describes mesh ab5[i] (the bbox-bearing records are exactly the class-501
-// model records, in order — extents match the ab5 vertex buffers). Objects
+// model records, in order: extents match the ab5 vertex buffers). Objects
 // that fail to parse are treated as non-bbox-bearing.
 export function bboxesForMeshes(ab2Objects: Uint8Array[]): number[][] {
   const out = [];

@@ -41,7 +41,7 @@ export function createAnimView(app: any, entry: IndexEntry) {
     if (destroyed) return;
 
     // full-width preview column (the low-level per-bone S/R/T channel table was
-    // dropped — it only restated the clip's data structure, not useful browsing)
+    // dropped: it only restated the clip's data structure, not useful browsing)
     const previewCol = el('div', { style: 'flex:1;min-height:0;display:flex;flex-direction:column' });
     root.appendChild(previewCol);
 

@@ -32,7 +32,7 @@ export function createImageView(app: any, entry: IndexEntry) {
       isData
         ? el('div', { class: 'notexported' },
             badge(entry.cat || 'data', 'b-warn'),
-            el('div', { class: 'small dim', text: entry.cat === 'font' ? 'Font characters — no picture to preview.' : entry.cat === 'lut' ? 'Colour lookup table (used for tinting) — no picture to preview.' : 'No picture to preview for this item.' }))
+            el('div', { class: 'small dim', text: entry.cat === 'font' ? 'Font characters. No picture to preview.' : entry.cat === 'lut' ? 'Colour lookup table (used for tinting). No picture to preview.' : 'No picture to preview for this item.' }))
         : notExported(`Image #${entry.i}`)));
     strip.remove();
     return view;
@@ -170,7 +170,7 @@ export function createImageGrid(app: any, initialItems: IndexEntry[]) {
   const CHUNK = 400;
   const more = el('button', { class: 'btn', style: 'margin:0 14px 20px', text: 'Load more…' });
   // infinite scroll: when the sentinel (the Load more button) nears the
-  // viewport, the next chunk renders automatically — the button stays as a
+  // viewport, the next chunk renders automatically: the button stays as a
   // no-JS-observer fallback
   const moreIo = new IntersectionObserver((entries) => {
     if (entries.some((e) => e.isIntersecting) && more.style.display !== 'none') renderChunk();
@@ -196,7 +196,7 @@ export function createImageGrid(app: any, initialItems: IndexEntry[]) {
     i = 0;
     io.disconnect();
     clear(grid);
-    countLbl.textContent = `${items.length} shown (follows the list filter) — click a tile to open`;
+    countLbl.textContent = `${items.length} shown (follows the list filter). Click a tile to open`;
     renderChunk();
   }
   more.addEventListener('click', renderChunk);

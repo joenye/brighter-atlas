@@ -1,4 +1,4 @@
-// World viewer — the production room renderer for the World category. Routes:
+// World viewer: the production room renderer for the World category. Routes:
 //   #/world            landing (stats + how to extract)
 //   #/world/<roomId>   single room: instanced placements, category/z toggles,
 //                      collision + authored-empty wireframes, animated water,
@@ -18,12 +18,12 @@
 // picking index immediately and re-bake ONLY the affected bucket(s) of the
 // affected cell through merged.replaceBuckets. Nothing is ever persisted.
 //
-// View state persists ONLY in prefs ('world', versioned — a bumped version
+// View state persists ONLY in prefs ('world', versioned: a bumped version
 // discards stale saved defaults once). The routes stay plain: no view state
 // is mirrored into the URL.
 //
 // Both views mount the world/hud.js perf overlay (fps · draws · tris, live
-// load/bake stage, GPU line). destroy() — also wired to pagehide — aborts the
+// load/bake stage, GPU line). destroy() (also wired to pagehide) aborts the
 // room stream, the asset fetches and the merged bake, and frees every GL
 // resource the view created; the renderer itself is shared and survives.
 
@@ -70,8 +70,8 @@ interface WorldViewHandle {
 }
 
 const SPAWN_ORIGIN_NOTES: Record<number, string> = {
-  1: 'roster spawn — authored tile from the roaming-enemy roster',
-  2: 'approx. position — roster enemy without an authored tile, placed at the room centre',
+  1: 'roster spawn: authored tile from the roaming-enemy roster',
+  2: 'approx. position: roster enemy without an authored tile, placed at the room centre',
 };
 const CATEGORY_LABELS: Record<string, [string, string]> = {
   terrain: ['Terrain', '#65976f'],
@@ -80,7 +80,7 @@ const CATEGORY_LABELS: Record<string, [string, string]> = {
   components: ['Components', '#a4aeba'],
 };
 const RENDER_SCALES: (number | 'native')[] = [0.5, 0.75, 1, 'native', 1.5, 2];
-const TEXTURE_ANISOTROPY = 8;   // fixed — the user-facing control was removed
+const TEXTURE_ANISOTROPY = 8;   // fixed: the user-facing control was removed
 
 // Bumping this discards previously saved prefs ONCE so everyone lands on the
 // current defaults (v2: water 50%, ambient 1.85, sun 2.80, no aniso control).
@@ -132,7 +132,7 @@ interface WorldState {
 
 // High-res screenshot long-edge targets. The capture reads tiles back one at
 // a time and streams assembled scanline rows through a zlib PNG encoder, so
-// no full-frame (or even full-width) canvas is ever allocated — the only
+// no full-frame (or even full-width) canvas is ever allocated: the only
 // per-size costs are tile count (scale²), a one-tile-row scanline buffer,
 // and the output blob. 64K/128K are for the patient: thousands of tiles and
 // multi-gigabyte PNGs that most image viewers will refuse to open.
@@ -151,7 +151,7 @@ function createLandingView(app: WorldViewApp): WorldViewHandle {
   const status = el('p', { class: 'dim', text: 'Checking for world data…' });
   const extra = el('div', {});
   root.appendChild(placeholderCard('World',
-    el('p', { text: 'Walk the game\'s world room by room — terrain, placed models and spawns, rebuilt entirely from your own game files.' }),
+    el('p', { text: 'Walk the game\'s world room by room: terrain, placed models and spawns, rebuilt entirely from your own game files.' }),
     status,
     extra,
     el('p', { class: 'dim small' }, 'Keys: ', el('kbd', { text: '↑' }), ' ', el('kbd', { text: '↓' }), ' navigate list · ', el('kbd', { text: '/' }), ' search')));
@@ -161,14 +161,14 @@ function createLandingView(app: WorldViewApp): WorldViewHandle {
     if (!root.isConnected) return;
     const rooms = index?.rooms?.length || 0;
     if (rooms) {
-      status.textContent = `${fmtInt(rooms)} room${rooms === 1 ? '' : 's'} extracted for this version — pick one from the list to walk it in 3D, or sort the list by size, placements or spawns.`;
+      status.textContent = `${fmtInt(rooms)} room${rooms === 1 ? '' : 's'} extracted for this version. Pick one from the list to walk it in 3D, or sort the list by size, placements or spawns.`;
       append(extra,
         el('p', {}, el('a', { class: 'landing-cta', href: '#/world/all', text: 'Open the whole world →' }),
-          el('span', { class: 'dim small', text: ' (heavy — loads every room)' })));
+          el('span', { class: 'dim small', text: ' (heavy: loads every room)' })));
     } else if (app.store.versionId) {
       status.textContent = 'World hasn\'t been extracted for this version yet. '
-        + 'Click the version chip in the topbar, choose "extract more", and tick World — '
-        + 'it re-uses your game files and includes Meshes, Images and Rigs.';
+        + 'Click the version chip in the topbar, choose "extract more", and tick World. '
+        + 'It re-uses your game files and includes Meshes, Images and Rigs.';
     } else {
       status.textContent = 'This data source doesn\'t include World data.';
     }
@@ -201,7 +201,7 @@ function persistState(state: WorldState): void {
   setPref('world', out);
 }
 
-// True when a current-version saved world state exists — the gate for the
+// True when a current-version saved world state exists: the gate for the
 // GPU-adaptive first-run defaults (a returning user's settings are never
 // clobbered; stale-version saves are discarded by loadState anyway).
 function hasSavedWorldState(): boolean {
@@ -214,13 +214,13 @@ const GPU_WARN_SOFTWARE = (label: string): string =>
   `This browser is rendering without GPU acceleration (software rendering: ${label}), `
   + 'so the whole-world view will be extremely slow. Check that hardware acceleration '
   + 'is enabled in your browser settings, then restart the browser. Performance '
-  + 'settings have been set conservatively — raise them in the HUD if it runs well.';
+  + 'settings have been set conservatively. Raise them in the HUD if it runs well.';
 const GPU_WARN_INTEGRATED = (label: string): string =>
-  `This browser is running on integrated graphics (${label}) — the whole-world view `
+  `This browser is running on integrated graphics (${label}). The whole-world view `
   + 'is heavy and may run at a low frame rate. If this machine also has a dedicated '
   + 'GPU, tell your OS to run your browser on it (Windows 11: Settings → System → '
   + 'Display → Graphics → add your browser → High performance; then restart the '
-  + 'browser). Performance settings have been set conservatively — raise them in '
+  + 'browser). Performance settings have been set conservatively. Raise them in '
   + 'the HUD if it runs well.';
 
 // ---------------------------------------------------------------- room view
@@ -302,7 +302,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // so this view is Y-up unlike the app's other Z-up asset views.
   scene3d.camera.up.set(0, 1, 0);
   // OrbitControls bakes its orbit axis from camera.up AT CONSTRUCTION, and
-  // Scene3D builds it in the app's Z-up frame — so this view's controls must
+  // Scene3D builds it in the app's Z-up frame, so this view's controls must
   // be rebuilt Y-up. Without this, polar angles are measured about world Z:
   // a vertical drag walks the orbit to the sideways pole where pitch wedges
   // and the camera can only look at the map edge-on/from below. Same feel
@@ -322,12 +322,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   // All-rooms only: Scene3D renders unconditionally every rAF, but here a
   // single render can block the main thread for a second on weak GPUs while
-  // rooms stream in — starving input, progress, the streaming tasks and
+  // rooms stream in, starving input, progress, the streaming tasks and
   // destroy (the Firefox "page is frozen / WebGL wedged" report). Replace THIS
   // instance's frame loop (view-local; the shared class is untouched) with one
   // that keeps ticks + damping at full rate but, whenever the previous render
   // exceeded its budget, skips presenting until an equal wall-time gap has
-  // passed — bounding rendering to ≤50% duty so the event loop always drains.
+  // passed, bounding rendering to ≤50% duty so the event loop always drains.
   // While the loading overlay hides the canvas the cap is far stricter still
   // (see STREAM_PRESENT_MS below).
   let fly: any = null;     // first-person fly camera (all-rooms only; created below)
@@ -335,7 +335,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const RENDER_BUDGET_MS = 40;
     // While the loading overlay hides the canvas and the merged bake hasn't
     // started, presented frames exist ONLY to pace the reveal queue's GPU
-    // uploads — cap them hard (4× the last cost, floor 250ms) so the room
+    // uploads: cap them hard (4× the last cost, floor 250ms) so the room
     // stream keeps the main thread instead of rendering a 94%-hidden scene
     // at full rate. Normal cadence resumes the moment the bake starts (its
     // upload pacing wants frames) and after the overlay dismisses.
@@ -379,7 +379,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       domElement: renderer.domElement,
       onChange: () => updateSunShadow(),
     });
-    // the Scene3D hint card describes orbit controls — retext it for the fly cam
+    // the Scene3D hint card describes orbit controls: retext it for the fly cam
     const hintCard = (scene3d as any)._camHint.querySelector('.cam-hint-card');
     hintCard.querySelectorAll('.cam-hint-row').forEach((node: Element) => node.remove());
     for (const [keys, verb] of [
@@ -411,7 +411,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   // The scene chain above the world graph is static (identity scene, flatten
   // toggling displayRoot.scale explicitly): frozen local matrices keep three's
-  // per-frame updateMatrixWorld from dirtying — and thus re-multiplying — the
+  // per-frame updateMatrixWorld from dirtying (and thus re-multiplying) the
   // entire ~100k-object graph under it every frame. Every transform change on
   // these roots below calls updateMatrix() explicitly.
   scene3d.scene.matrixAutoUpdate = false;
@@ -424,7 +424,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   highlightRoot.matrixAutoUpdate = false;
   displayRoot.add(highlightRoot);
   // Skinned NPC playback overlays here (mirrors world.root's Z-up->Y-up
-  // rotation/scale, set once the index resolves) — the animated composite is
+  // rotation/scale, set once the index resolves): the animated composite is
   // placed at the spawn's native world matrix, exactly like the highlight.
   const spawnAnimRoot = new THREE.Group();
   spawnAnimRoot.name = 'world-spawn-anim';
@@ -457,7 +457,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // mid-load), the bake-failure fallback, and graph reloads.
   let bakeFailed = false;
   const deferStreamReveal = () => !!merged && state.merged && !bakeFailed;
-  // Queue every retained-but-hidden room for the paced reveal — the catch-up
+  // Queue every retained-but-hidden room for the paced reveal: the catch-up
   // for rooms whose reveal was skipped (Merged unticked mid-load / bake
   // failure re-showing the graph path).
   function queueHiddenRooms(): void {
@@ -489,7 +489,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         if (room) {
           if (allMode) {
             room.group.visible = false;
-            // headed for the merged bake: stay hidden — never uploads
+            // headed for the merged bake: stay hidden, never uploads
             if (!deferStreamReveal()) revealQueue.push(room.id);
           }
           applyRoomWater(room);
@@ -510,7 +510,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   // rAF-gap stall probe (all-rooms only): records the worst main-thread gap
   // across the whole load, and separately across the finalize window (water
-  // sheets → uploads → graph release → ready) — the exact phase where a
+  // sheets → uploads → graph release → ready), the exact phase where a
   // real-world Firefox freeze pointed. Read via api.stallProbe.
   const stallProbe = allMode
     ? { phase: 'load', worst: 0, worstStage: '', finalizeWorst: 0, finalizeWorstStage: '' }
@@ -578,7 +578,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let overlayProgress = 0;
   let gateResolve: ((v: boolean) => void) | null = null;
   // Loading every room is deliberately gated behind an explicit confirmation:
-  // the merged world is heavy (all rooms streamed + baked; roughly 1–2 GB of
+  // the merged world is heavy (all rooms streamed + baked; roughly 1 to 2 GB of
   // memory) and must never start from a mere navigation.
   let confirmGate: Promise<boolean> = Promise.resolve(true);
   if (allMode) {
@@ -591,7 +591,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const note = el('p', {
       class: 'wlo-note',
       text: 'Streams every extracted room into one scene and bakes it for fast '
-        + 'rendering. This is heavy: expect roughly 1–2 GB of memory and a long '
+        + 'rendering. This is heavy: expect roughly 1 to 2 GB of memory and a long '
         + 'first load on slower machines.',
     });
     const confirmBtn = el('button', { class: 'btn world-load-confirm', type: 'button', text: '⛰ Load the world' });
@@ -612,7 +612,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       gateResolve = null;
       location.hash = '#/world';
     });
-    // GPU-tier warning, part of the confirm overlay (no dismiss of its own —
+    // GPU-tier warning, part of the confirm overlay (no dismiss of its own:
     // it lives and dies with the overlay). Built here so it also shows when
     // the user lands directly on #/world/all.
     let gpuWarn: HTMLElement | null = null;
@@ -630,7 +630,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       const count = index?.rooms?.length;
       if (count && note.isConnected) {
         note.textContent = `Streams all ${fmtInt(count)} rooms into one scene and `
-          + 'bakes it for fast rendering. This is heavy: expect roughly 1–2 GB of '
+          + 'bakes it for fast rendering. This is heavy: expect roughly 1 to 2 GB of '
           + 'memory and a long first load on slower machines.';
       }
     }).catch(() => {});
@@ -914,7 +914,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
   function applyFlatten(): void {
     displayRoot.scale.y = state.flatten ? 0.02 : 1;
-    displayRoot.updateMatrix();   // frozen root — re-compose explicitly
+    displayRoot.updateMatrix();   // frozen root: re-compose explicitly
   }
   // Shadows follow the orbit target, with the ortho frustum sized to the
   // current viewing distance (close-ups dense, wide views covered).
@@ -968,7 +968,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (active) {
       world.root.removeFromParent();
       // The merged batches are the display path now; the per-room graph's
-      // GPU buffers would sit resident alongside them (~2x world GPU memory —
+      // GPU buffers would sit resident alongside them (~2x world GPU memory,
       // enough to wedge Firefox's GPU process on tab close). Free them in
       // slices; unticking Merged streams the rooms back in from IndexedDB.
       if (world.rooms.size) releaseGraphPaced();
@@ -984,7 +984,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     dismissOverlay();
   }
   // Chunked release of whatever per-room graph remains, then the shared
-  // geometry/material caches — ~15ms slices so the GL deletes (IPC to
+  // geometry/material caches: ~15ms slices so the GL deletes (IPC to
   // Firefox's GPU process) never pile into one main-thread stall. Safe to
   // call repeatedly; a single release runs at a time.
   let graphReleasePromise: Promise<void> | null = null;
@@ -1023,7 +1023,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
     try {
       // Swap the display to the (initially empty) merged root up front: baked
-      // cells attach — and upload — incrementally across frames instead of in
+      // cells attach (and upload) incrementally across frames instead of in
       // one end-of-bake stall, and the per-room graph's draw cost stops
       // starving the bake immediately. applyRenderMode() below settles the
       // final state (including the failure path, which re-attaches the graph).
@@ -1095,7 +1095,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (destroyed) return;
     applyRenderMode();
     // Failure or a mid-bake untick can leave already-released rooms missing
-    // from the graph path — stream them back in.
+    // from the graph path: stream them back in.
     if (!mergedActive()) reloadGraphIfReleased();
     syncStatus();
   }
@@ -1140,7 +1140,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       check('cull', 'Hide small distant objects', () => { cullRange.hidden = !state.cull; applyCull(); },
         { swatch: '#c99a5b' }),
       cullRange,
-      // escape hatch — merged is the invisible default; the raw per-room
+      // escape hatch: merged is the invisible default; the raw per-room
       // graph remains reachable here for debugging/inspection workflows.
       // Session edits are undone first: the other path's display data
       // (a fresh graph reload / a fresh bake) would not carry them.
@@ -1177,7 +1177,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       range('tableLight', 'Table brightness', 0.2, 2, 0.05, (v) => Number(v).toFixed(2), () => applyFloor()));
   }
 
-  // Advanced accordion — collapsed by default, its open state persisted.
+  // Advanced accordion: collapsed by default, its open state persisted.
   // Category/wireframe/names toggles and the Inspect mode stay top-level.
   const advanced = el('details', { class: 'wp-advanced' },
     el('summary', { text: 'Advanced' }));
@@ -1187,7 +1187,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   append(panel, inspectBtn, resetEditsBtn, readout, statusEl, visSection, advanced);
 
-  // --- pref sync (state lives ONLY in prefs/localStorage — no URL mirroring) ---
+  // --- pref sync (state lives ONLY in prefs/localStorage, no URL mirroring) ---
   function syncState(): void {
     persistState(state);
   }
@@ -1213,8 +1213,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let inspectPoint: [number, number] | null = null;
   let pointerDown: [number, number] | null = null;
   // Pinned selection context (null unless pinned):
-  //   {mode:'graph', object, instanceId, info}                — instanced path
-  //   {mode:'index', entryIndex, ref, info, geometry, shard}  — merged path
+  //   {mode:'graph', object, instanceId, info}                (instanced path)
+  //   {mode:'index', entryIndex, ref, info, geometry, shard}  (merged path)
   let pinnedCtx: any = null;
   let pickToken = 0;       // stales in-flight async merged picks
   let groupHighlights: any[] = [];   // whole-model selection: sibling part outlines
@@ -1267,7 +1267,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
   function primaryMember(): any { return primaryMemberFrom(pinnedCtx); }
 
-  // Stable identity of the MODEL a placement belongs to (all parts share it) —
+  // Stable identity of the MODEL a placement belongs to (all parts share it),
   // so re-pinning within the same model doesn't tear down its overlays.
   function modelKeyOf(info: any): string | null {
     if (!info) return null;
@@ -1355,7 +1355,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // --- apply a System Model VARIANT to the pinned model in-world ---------------
   // Variants re-texture (occasionally re-mesh) the same entity. Applying one
   // renders the model's parts as a static overlay with the variant's
-  // materials at each part's world matrix, hiding the authored statics — the
+  // materials at each part's world matrix, hiding the authored statics: the
   // same seam the animation composite uses, minus the rig. Applied variants
   // PERSIST for the session exactly like animations: leaving a model
   // (unpin / pin another / inspect-off) PARKS its overlay here (statics stay
@@ -1397,7 +1397,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // Hard revert of ONE overlay (active or parked): drop its meshes and restore
   // the authored statics it hid (graph: un-zero the instance; merged: drop the
   // hidden-set keys and re-bake). Does not touch variantOverlay/persistentVariants
-  // bookkeeping — the caller owns that.
+  // bookkeeping: the caller owns that.
   function disposeVariantOverlay(ov: any): void {
     if (!ov) return;
     for (const mesh of ov.meshes) mesh.removeFromParent();
@@ -1454,7 +1454,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
   }
 
-  // Every live overlay (active + parked) — used to keep them all pickable so the
+  // Every live overlay (active + parked), used to keep them all pickable so the
   // hidden statics they stand in for never swallow a click into the floor.
   function allVariantOverlays(): any[] {
     return [variantOverlay, ...persistentVariants.values()].filter((o) => o?.meshes.length);
@@ -1516,7 +1516,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const variants = modelVariantList(group?.model);
     if (!variants.length) return;
     const guardKey = inspectedKey;
-    // variants and animation both override the statics — one at a time
+    // variants and animation both override the statics: one at a time
     if (spawnAnim?.active) { if (spawnAnim.bar) spawnAnim.bar.select.value = '-1'; deactivateSpawnComposite(); }
     clearVariantOverlay();
     if (index <= 0) return;   // variant 0 is the authored appearance (statics)
@@ -1560,7 +1560,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   // Resolve the group's mesh set against the read-only System Models catalog
-  // (smallest model containing every part mesh wins — entity variants share
+  // (smallest model containing every part mesh wins: entity variants share
   // their base meshes). Built once per view; user models key by hash, not
   // ordinal, and stay out of this lookup.
   let systemModelsByMesh: Map<number, any[]> | null = null;
@@ -1588,7 +1588,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   // Build the full member list at pin time (geometries resolved up front so
-  // group nudges stay synchronous). Async — attaches to pinnedCtx when done.
+  // group nudges stay synchronous). Async: attaches to pinnedCtx when done.
   // A pinned spawn's part rows -> group members (all parts of the entity).
   // Unlike a models occurrence group, a spawn is always ONE model even with a
   // single part, so the group attaches unconditionally.
@@ -1652,7 +1652,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // models occurrence, resolve its System Model, highlight all parts, preview
   // the whole model, and mount the animation picker if rigged. A LONE models
   // placement only becomes a "model" when it resolves to a catalog model
-  // (otherwise it stays a plain part — most ambient props aren't models);
+  // (otherwise it stays a plain part: most ambient props aren't models);
   // spawns and multi-part occurrences always group.
   async function attachModelGroup(token: number): Promise<void> {
     const primary = primaryMember();
@@ -1688,7 +1688,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // placement indexes live in their own namespace).
   const hiddenModelParts = new Set<string>();
 
-  // --- session edits (move/delete/reset — never persisted) -------------------
+  // --- session edits (move/delete/reset, never persisted) -------------------
   const edits = new WorldEdits();
   let editStep = 0.5;      // tiles for X/Y, height layers for Z
   const editScratch = new THREE.Matrix4();
@@ -1718,7 +1718,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   const identifier = (value: any, prefix = '#'): string => (
     Number.isFinite(Number(value)) && Number(value) >= 0 ? `${prefix}${Number(value)}` : 'none');
-  // All-rooms only: readout links open a new tab — navigating in place would
+  // All-rooms only: readout links open a new tab. Navigating in place would
   // tear down the merged world scene the user waited to load. Room views keep
   // normal same-tab navigation.
   const readoutLink = (href: string, text: string) =>
@@ -1733,7 +1733,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const rows: [string, any][] = [['Room', roomCell]];
 
     // A pinned model (spawn entity or multi-part occurrence group) reads at the
-    // MODEL level — the per-mesh mesh/material/texture/recolor fields belong to
+    // MODEL level: the per-mesh mesh/material/texture/recolor fields belong to
     // one part and only mislead here, so they are replaced by the model name +
     // link (#/model/…). Single non-model placements keep the full detail.
     if (group) {
@@ -1800,7 +1800,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           : `Δ ${compact(edit.dx)}, ${compact(edit.dy)} tiles · ${compact(edit.dz)} layers · ${edit.turns * 90}°`]);
       }
     }
-    rows.push(['Inspect', pinned ? 'pinned — click again to release' : 'hover · click to pin']);
+    rows.push(['Inspect', pinned ? 'pinned (click again to release)' : 'hover · click to pin']);
     return rows;
   }
 
@@ -1947,7 +1947,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   // --- pinned-spawn animation player ------------------------------------------
-  // One picker per pinned spawn (keyed by room + spawn index — every part of
+  // One picker per pinned spawn (keyed by room + spawn index: every part of
   // the spawn shares it). Playing a clip swaps the spawn's STATIC render for a
   // Rig-driven composite at the same world transform; clip → none / unpin /
   // destroy restores the static representation. Works on both display paths.
@@ -2001,7 +2001,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return [0, 0];
   }
 
-  // The spawn's native world matrix, honouring any session edit — so the
+  // The spawn's native world matrix, honouring any session edit, so the
   // composite tracks exactly where the static spawn would sit (including nudges).
   function computeSpawnBaseMatrix(info: any, shard: any): THREE.Matrix4 | null {
     const partRow = info.parts?.[0]?.row;
@@ -2091,7 +2091,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   // Merged: mark the spawn's parts hidden and re-bake only their cell bucket(s)
-  // (runMergedRebake honours hiddenSpawnParts) — cheaper than a full re-bake and
+  // (runMergedRebake honours hiddenSpawnParts), cheaper than a full re-bake and
   // never recorded as a session edit. Restore clears the flag and re-bakes back.
   async function queueSpawnBucketRebake(sa: any): Promise<void> {
     if (destroyed || !mergedActive() || !merged?.ready) return;
@@ -2262,7 +2262,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     sa.box?.remove();
   }
 
-  // Leave the current pinned anim: if it is ACTIVE (a clip is applied — playing
+  // Leave the current pinned anim: if it is ACTIVE (a clip is applied: playing
   // or paused at a pose) park it so it keeps running; otherwise (idle picker,
   // no clip) dispose it. Detaching the box from the readout keeps the bar +
   // composite alive.
@@ -2334,8 +2334,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   function pivotFor(info: any): [number, number] {
-    // Occurrences and spawns share one raw room-local frame (no crop offset
-    // — see the map_offset note in world/scene.js).
+    // Occurrences and spawns share one raw room-local frame (no crop offset:
+    // see the map_offset note in world/scene.js).
     const anchor = info.placementAnchor?.center || [
       Number(info.position[0]) + 0.5,
       Number(info.position[1]) + 0.5,
@@ -2344,7 +2344,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   // First edit of a placement captures everything reset needs: the pristine
-  // matrix, the anchor pivot (room-local), the per-path binding and — merged —
+  // matrix, the anchor pivot (room-local), the per-path binding and (merged)
   // the pick-index snapshot plus the bucket the re-bake must target.
   function ensureEditForMember(member: any): any {
     const info = member.info;
@@ -2649,7 +2649,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   );
   pickScratchMesh.matrixAutoUpdate = false;
   // Tiny LRU of shard promises: the readout needs the source rows, but merged
-  // mode must not retain shard JSON world-wide — 4 rooms is plenty for
+  // mode must not retain shard JSON world-wide: 4 rooms is plenty for
   // hovering around a seam (cleared with the view).
   const shardCache = new Map<number, Promise<any>>();
   function cachedShard(roomId: any): Promise<any> {
@@ -2702,7 +2702,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   // Narrow phase: load each candidate's mesh through the shared geometry path
   // and triangle-test it in display space; the nearest confirmed hit wins.
-  // Returns null (miss) or undefined (stale — a newer pick superseded us).
+  // Returns null (miss) or undefined (stale: a newer pick superseded us).
   async function resolveIndexPick(clientX: number, clientY: number, token: number): Promise<any> {
     const candidates = indexPickCandidates(clientX, clientY);
     if (!candidates || !candidates.length) return null;
@@ -2735,7 +2735,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     );
     if (!info) { clearInspection(pinned); return; }
     // Hovering a different PART of the model already outlined leaves the whole-
-    // model highlight in place — no clear + async rebuild, so it can't flicker.
+    // model highlight in place: no clear + async rebuild, so it can't flicker.
     if (!pinned) {
       const mk = modelKeyOf(info);
       if (mk && mk === hoverModelKey && highlight?.parent) {
@@ -2798,7 +2798,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   // Which variant overlay (active or parked) the pointer ray hits, or null.
-  // Every overlay stands in for hidden statics, so all must stay pickable — the
+  // Every overlay stands in for hidden statics, so all must stay pickable: the
   // nearest hit wins so a click selects the overlay actually in front.
   function pickVariantOverlay(clientX: number, clientY: number): any {
     const overlays = allVariantOverlays();
@@ -2854,7 +2854,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const info = world.describeInstance(hit.object, hit.instanceId);
     if (!info) { clearInspection(true); return; }
     // Hovering a different PART of the model already outlined leaves the whole-
-    // model highlight in place — no clear + async rebuild, so it can't flicker.
+    // model highlight in place: no clear + async rebuild, so it can't flicker.
     if (!pinned) {
       const mk = modelKeyOf(info);
       if (mk && mk === hoverModelKey && highlight?.parent) {
@@ -2967,7 +2967,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     pointerDown = null;
     if (!state.inspect) return;
     // A variant overlay (active OR parked) stands in for hidden statics, so it
-    // must be pickable — otherwise a click on the recoloured model rays through
+    // must be pickable: otherwise a click on the recoloured model rays through
     // to the floor. Clicking the pinned model's own overlay unpins it (parks
     // the variant); clicking a parked model's overlay re-pins that model so it
     // stays interactive (change/revert its variant, read its detail).
@@ -3073,7 +3073,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (!worldFrame) return;
     const span = worldFrame.span;
     scene3d.controls.target.set(0, 0, 0);
-    // start well inside the world rather than framing the whole span — the
+    // start well inside the world rather than framing the whole span: the
     // fly camera makes pulling back trivial, and the close-up reads instantly
     scene3d.camera.position.set(0, span * 0.15, span * 0.16);
     scene3d.camera.near = 0.5;
@@ -3149,7 +3149,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     ctx.closePath();
   }
   // Text sprite factory shared by room names and NPC-spawn names. The defaults
-  // ARE the room-name look (fontSize 34, scale 0.03, light text) — spawn labels
+  // ARE the room-name look (fontSize 34, scale 0.03, light text): spawn labels
   // pass smaller values and the category tint, so room names stay byte-identical.
   function labelSprite(text: string, {
     fontSize = 34, scale = 0.03, color = '#eef2f7',
@@ -3172,7 +3172,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     texture.minFilter = THREE.LinearFilter;
     texture.anisotropy = 4;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      // fog off: labels are UI text (already depth-test-off) — distance fog
+      // fog off: labels are UI text (already depth-test-off). Distance fog
       // would wash far room names into the background colour
       map: texture, depthTest: false, transparent: true, fog: false,
     }));
@@ -3196,7 +3196,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         3.2,
         frame.y + worldFrame.oz + frame.h / 2,
       );
-      sprite.matrixAutoUpdate = false;   // static label — compose once
+      sprite.matrixAutoUpdate = false;   // static label: compose once
       sprite.updateMatrix();
       namesGroup.add(sprite);
     }
@@ -3214,17 +3214,17 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // all-rooms: every streamed room, before the merged bake releases graphs),
   // toggled purely by group visibility, released on destroy.
   //
-  // Positioning is correct BY CONSTRUCTION — it reuses the exact matrix the
+  // Positioning is correct BY CONSTRUCTION: it reuses the exact matrix the
   // spawn's own mesh is placed with (see the wire/empty overlay bake, which
   // stamps the same recipe for spawn parts):
-  //   * world._spawnMatrix(shard, partRow, m) — the room-local raw matrix the
+  //   * world._spawnMatrix(shard, partRow, m): the room-local raw matrix the
   //     renderer bakes every spawn instance with (tile-centre + facing).
-  //   * spawnRoomOffset(roomId) — the same raw-space room offset the overlay
+  //   * spawnRoomOffset(roomId): the same raw-space room offset the overlay
   //     bake and the spawn-anim composite add (room.group.position, or the
   //     world-frame stitch once merged mode has released the graph).
   //   * world.root.matrix maps that raw point into displayRoot-local space
-  //     (world.root is a direct child of displayRoot — sibling of namesGroup /
-  //     spawnAnimRoot — so its LOCAL matrix is the raw->display transform,
+  //     (world.root is a direct child of displayRoot, sibling of namesGroup /
+  //     spawnAnimRoot, so its LOCAL matrix is the raw->display transform,
   //     rotateX(-90°) + scale, incl. the roomYSign Y-flip). No hand axis math.
   // describeShardPlacement still supplies the label + per-spawn dedupe.
   const SPAWN_LABEL_HEIGHT = 1.6;   // displayRoot Y lift, below the 3.2 room band
@@ -3234,7 +3234,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     spawnNamesGroup = new THREE.Group();
     spawnNamesGroup.name = 'world-spawn-names';
     spawnNamesGroup.visible = !!state.spawnnames;
-    world.root.updateMatrix();   // frozen root — ensure its local matrix is current
+    world.root.updateMatrix();   // frozen root: ensure its local matrix is current
     const rawMatrix = new THREE.Matrix4();
     // The rooms the current view renders: the single loaded room, or every
     // streamed room (all-rooms builds this before the merged graph release).
@@ -3262,7 +3262,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         p.applyMatrix4(world.root.matrix);   // raw world -> displayRoot-local
         const sprite = labelSprite(name, { fontSize: 22, scale: 0.017, color: '#f0b49c' });
         sprite.position.set(p.x, p.y + SPAWN_LABEL_HEIGHT, p.z);
-        sprite.matrixAutoUpdate = false;   // static label — compose once
+        sprite.matrixAutoUpdate = false;   // static label: compose once
         sprite.updateMatrix();
         spawnNamesGroup.add(sprite);
       }
@@ -3289,7 +3289,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // A flat wooden "table" plane just under z=0 spanning the stitched world, so
   // the merged map reads like a board game. Viewer-only: the wood is drawn
   // procedurally on a canvas (seamlessly tiling planks + grain) so the app
-  // stays self-contained — no image asset, nothing in the extraction.
+  // stays self-contained: no image asset, nothing in the extraction.
   let tableTop: any = null;
   let voidPlane: any = null;
   function woodTexture(): THREE.CanvasTexture {
@@ -3390,14 +3390,14 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       0,
       minZ + worldFrame.oz + (maxZ - minZ) / 2,
     );
-    tableTop.traverse((node: any) => {   // static furniture — compose once
+    tableTop.traverse((node: any) => {   // static furniture: compose once
       node.matrixAutoUpdate = false;
       node.updateMatrix();
     });
     displayRoot.add(tableTop);
 
     // the alternative surface: a huge matte-black plane at the same height.
-    // fog:false keeps it pure black to the horizon — a hard void edge
+    // fog:false keeps it pure black to the horizon: a hard void edge
     // instead of fading into the fog colour.
     voidPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(worldFrame.span * 12, worldFrame.span * 12),
@@ -3442,7 +3442,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // Re-renders the CURRENT camera framing at the selected long-edge target
   // (4K..32K) by tiling camera.setViewOffset renders. Tiles are stitched one
   // ROW at a time into a strip canvas (full width, one tile tall) whose pixels
-  // stream through fflate's zlib as PNG scanlines — no full-frame canvas or
+  // stream through fflate's zlib as PNG scanlines: no full-frame canvas or
   // pixel buffer ever exists, which is what makes 16K/32K possible (Chrome
   // caps canvas area around 268 MP). The camera pose is cloned first, so the
   // capture stays coherent even if the fly camera moves while tiles render.
@@ -3500,7 +3500,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         batch.matrices.push(matrix.clone());
       };
       // batched reads (32 shards per IDB transaction) instead of ~451 serial
-      // per-room gets — bounded, so the overlay build never holds more than
+      // per-room gets: bounded, so the overlay build never holds more than
       // one batch of undelivered shards; misses fall back to per-room fetch
       const overlayMetas = (world.index?.rooms || []).filter(
         (meta: any) => worldFrame!.frames.has(Number(meta.id)));
@@ -3612,7 +3612,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         let geometry = null;
         try {
           // clone: independent of the shared graph caches, which merged mode
-          // releases — the overlay owns (and disposes) its own copies
+          // releases: the overlay owns (and disposes) its own copies
           geometry = (await world._meshGeometry(batch.mesh, batch.reflect)).clone();
         } catch { continue; }
         if (destroyed) { geometry.dispose(); return null; }
@@ -3637,7 +3637,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         emptyGroup.add(instanced);
       }
       wireRoot.add(collisionGroup, emptyGroup);
-      wireRoot.traverse((node: any) => {   // static overlays — compose once
+      wireRoot.traverse((node: any) => {   // static overlays: compose once
         node.matrixAutoUpdate = false;
         node.updateMatrix();
       });
@@ -3739,7 +3739,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     waterRegistry = new WorldWaterRegistry(world.index.textures);
     highlightRoot.rotation.copy(world.root.rotation);
     highlightRoot.scale.copy(world.root.scale);
-    highlightRoot.updateMatrix();   // frozen root — re-compose explicitly
+    highlightRoot.updateMatrix();   // frozen root: re-compose explicitly
     spawnAnimRoot.rotation.copy(world.root.rotation);
     spawnAnimRoot.scale.copy(world.root.scale);
     spawnAnimRoot.updateMatrix();
@@ -3793,7 +3793,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           pickIndex,  // per-placement CPU picking survives the graph release
           // While the loading overlay hides the canvas, uploaded cells stay
           // invisible so the bake's upload-pacing frames draw only the new
-          // cells — not the whole growing world — until ready.
+          // cells (not the whole growing world) until ready.
           uploadCurtain: () => !!overlay,
         });
       } else {
@@ -3811,7 +3811,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       // transaction instead of ~451 gets. Entries are consumed as rooms take
       // them so the map drains with the stream; misses (or a failed bulk
       // read) fall back to the per-room fetch. HTTP mode keeps per-room
-      // fetches — waiting on one Promise.all of every shard would pipeline
+      // fetches: waiting on one Promise.all of every shard would pipeline
       // worse than the interleaved per-room requests.
       if (app.store.worldRooms && app.store.versionId) {
         // Rolling prefetch window: batches of 32 shards fetched at most two
@@ -3858,7 +3858,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       });
       world.shardSource = null;   // release the prefetch closure/map
       if (destroyed) return;
-      // all rooms are streamed in (shards live in world.rooms) — build spawn
+      // all rooms are streamed in (shards live in world.rooms): build spawn
       // labels now, before buildMerged() releases the per-room graphs.
       buildSpawnNameSprites();
       buildZUI();
@@ -3886,7 +3886,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // then strands the world's buffers browser-wide (observed ~6GB retained
   // after tab close until Firefox was killed). An explicit context teardown
   // is the one signal that reclaims them. Skipped for bfcache navigations
-  // (event.persisted) — the page may come back and the renderer is shared.
+  // (event.persisted): the page may come back and the renderer is shared.
   const onPageHide = (event: PageTransitionEvent) => {
     api.destroy();
     if (!event?.persisted) {
@@ -4092,7 +4092,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       spawnAnim = null;
       for (const parked of persistentAnims.values()) disposeSpawnAnim(parked);
       persistentAnims.clear();
-      // Variant overlays (active + parked): just drop the meshes/geometry — the
+      // Variant overlays (active + parked): just drop the meshes/geometry. The
       // whole scene is going away, so restoring the authored statics is moot and
       // a merged re-bake mid-teardown would be wasted work.
       for (const ov of [variantOverlay, ...persistentVariants.values()]) {
@@ -4129,7 +4129,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       highlightMaterial.dispose();
       for (const material of sheetMaterialCache.values()) material.dispose();
       sheetMaterialCache.clear();
-      // the renderer is shared across views — undo world-only settings
+      // the renderer is shared across views: undo world-only settings
       renderer.shadowMap.enabled = false;
       renderer.setPixelRatio(savedPixelRatio);
       scene3d.destroy();

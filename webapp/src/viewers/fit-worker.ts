@@ -25,7 +25,7 @@ async function scoreOne(features: FitFeatures, job: FitJob, S: number): Promise<
     bmp.close?.();
     const { data } = g2d!.getImageData(0, 0, S, S);
     // native resolution comes from the index (job.nativeRes), NOT the fetched
-    // pixels — f[0] is the smallest mip, so bmp.width would be ~native/4.
+    // pixels: f[0] is the smallest mip, so bmp.width would be ~native/4.
     const nr = job.nativeRes || 0;
     const { fit } = scoreTexture(features, data, S, S, nr, nr);
     return Number.isFinite(fit) ? fit : null;

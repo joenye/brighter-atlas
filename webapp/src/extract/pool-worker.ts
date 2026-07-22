@@ -20,7 +20,7 @@ const ctx = self as any;
 const PROGRESS_EVERY = 64;
 
 // Chunk-bounded slab reader: like bundles.js makeSlabReader but slabs never
-// read past the chunk's last byte — with many small chunks per pass, a plain
+// read past the chunk's last byte. With many small chunks per pass, a plain
 // 16 MB slab tail-overshoots on EVERY chunk and multiplies total disk reads.
 function chunkSlabReader(
   file: Blob, chunkEnd: number, slabBytes = 16 * 1024 * 1024,

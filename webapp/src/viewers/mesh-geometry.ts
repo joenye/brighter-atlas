@@ -7,7 +7,7 @@ import { THREE } from './three-common.js';
 import { b64f32, b64u16, b64u32, b64u8 } from '../store.js';
 import { el, hashColorRGB, hashColor } from '../ui.js';
 
-// `boneColors: false` skips the bone-influence vertex-color attribute — the
+// `boneColors: false` skips the bone-influence vertex-color attribute: the
 // world renderer never enables vertexColors on its materials, and computing
 // the palette per vertex across a 451-room stream is pure waste there. Every
 // other caller keeps the default (mesh/skeleton views render the colors).

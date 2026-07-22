@@ -3,13 +3,13 @@
 // The datatable's ~2,690 `*_animatic*` identifier strings ARE per-clip names,
 // but no positional mapping exists and the 63-bit name-hash is uncracked
 // (pipeline docs/anim_names.md). The join that works is structural: each name
-// row carries the name string plus an op-0 UNSIGNED SCALAR — a raw registry
-// slot number, invisible to typed-reference walks — pointing at an animatic
+// row carries the name string plus an op-0 UNSIGNED SCALAR (a raw registry
+// slot number, invisible to typed-reference walks) pointing at an animatic
 // CONTROLLER row; the controller's generic pool fields reference the 0x61
 // clip-record rows, whose single edge is the AB1 clip ordinal:
 //
-//   name row —(op-0 scalar)→ controller —(pool refs, ≤2 hops)→
-//     clip record —(0x61)→ ab1 clip
+//   name row -(op-0 scalar)→ controller -(pool refs, ≤2 hops)→
+//     clip record -(0x61)→ ab1 clip
 //
 // Validated on the current build far above the 2026-07 spike's chance
 // baselines (human/player-prefix names -> the human rig 490/514 strict,
@@ -71,7 +71,7 @@ export function extractAnimNames(
     }
   }
 
-  // registry refs reachable from one pool value (through reference chains) —
+  // registry refs reachable from one pool value (through reference chains):
   // the shared memoized walk (models.js makePoolRegistryRefs)
   const poolRegistryRefs = shared.poolRegistryRefs ?? makePoolRegistryRefs(pool);
 

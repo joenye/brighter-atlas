@@ -5,7 +5,7 @@
 // Input rooms (from room.js): [{ idx, exits, name, w, h, gridW, gridH }] where
 // exits = roomExits(...), w/h = roomLayers stack dims (null when undecodable),
 // gridW/gridH = the minimap inner-rect dims. Rooms must be in ascending idx
-// order — vote/link ordering depends on it.
+// order: vote/link ordering depends on it.
 //
 // Worker-safe: no DOM, no Node APIs.
 
@@ -20,7 +20,7 @@ export const FERRY_GAP = 1; // tiles between ferry-linked rooms (thin seam)
 // WITHOUT sharing a border row/column, and a paired door's two tiles are
 // ADJACENT world tiles (you step through), not the same tile. The classic
 // door-tile constraint (pos[a]+aTile == pos[b]+bTile) therefore places every
-// joined pair one tile too close — the historic all-rooms 1-tile overlap.
+// joined pair one tile too close, the historic all-rooms 1-tile overlap.
 // With the +1 outward step applied per join (see joinStep), the whole door
 // graph becomes perfectly consistent: 0 contradictory edges of 511 on the
 // validated build, versus 46 without the step. The connector meshes are the
@@ -32,12 +32,12 @@ export const CONNECTOR_MESH_HASHES = {
 };
 
 // Ferry crossings a newer build carries in its own data but an older bundle
-// is missing — expressed by STABLE in-game room NUMBER (the door `code` space,
+// is missing, expressed by STABLE in-game room NUMBER (the door `code` space,
 // which is consistent across builds: 451 is always Ferry South Shore, 67
 // always Hopeforest Ferry). Modern builds spell the crossing out as a pair of
 // direction-less (type-null) ferry exits, so ferryEdges recovers it from the
 // data and the pair attaches to the main map; the episode-6-era bundle has NO
-// type-null exits at all, so the same crossing — and its Himatik Ruins annex —
+// type-null exits at all, so the same crossing (and its Himatik Ruins annex)
 // would otherwise be left unplaced. These reinstate exactly the crossing a
 // current build already resolves, keyed to survive bundle re-ordering. A build
 // that already carries the crossing yields the identical edge and dedups to a
@@ -312,10 +312,10 @@ export function solvePositions(nodes: number[], pairs: DoorLink[]): {
 // The +1 outward separation for one door link: the unit vector from room a
 // toward room b along the join axis (pos[b] - pos[a] = aTile - bTile + step).
 // Derived from where the two door tiles sit against their room rects:
-//   1. exact-edge votes — a door tile on a room edge names the join side
+//   1. exact-edge votes: a door tile on a room edge names the join side
 //      (a's east edge / b's west edge both vote (+1,0)); a unique majority
 //      wins. Covers 880/1026 links on the validated build.
-//   2. nearest-edge fallback — interior door tiles (arrival squares one or
+//   2. nearest-edge fallback: interior door tiles (arrival squares one or
 //      two tiles inside the room) take the closest edge within 2 tiles when
 //      it is unique. Coverage rises to 1022/1026; the whole graph is exactly
 //      consistent under these steps (0 contradictory edges).
@@ -482,14 +482,14 @@ export interface WorldPlacement {
 
 export const DETACHED_GAP = 6; // tiles between the main map and each parked region
 
-// Park the door-graph components the main stitch could not reach — regions cut
+// Park the door-graph components the main stitch could not reach: regions cut
 // from later builds (the episode-6 Bleakholm cluster on the old bundle) that
 // share no door AND no ferry with the main map, so both the reciprocal-door
 // stitch and the ferry annex leave every one of their rooms unplaced. Rather
 // than let them collapse into the viewer's fallback grid, solve each on its OWN
 // door-graph (the same least-squares stitch, so the region stays internally
-// coherent) and place it just EAST of the placed map's eastern edge — past
-// Crenopolis, the main map's easternmost region — stacking multiple regions in
+// coherent) and place it just EAST of the placed map's eastern edge (past
+// Crenopolis, the main map's easternmost region), stacking multiple regions in
 // Y so they sit side by side without overlapping each other or the main map.
 // Each region is based at the world's ground plane, its internal plane offsets
 // preserved, so it reads flat alongside the world.
@@ -597,7 +597,7 @@ export function stitchWorld(
 
   const { links, numbers } = buildLinks(exitsByRoom, roomIndices);
   // Calibrated solver copies: aTile is rewritten so aTile - bTile carries the
-  // +1 outward separation (joinStep) — rooms tile edge to edge, door tiles
+  // +1 outward separation (joinStep): rooms tile edge to edge, door tiles
   // adjacent. The returned `links` keep their real door tiles; only the
   // placement math takes the steps.
   const solveLinks = connectors

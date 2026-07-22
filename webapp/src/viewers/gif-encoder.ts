@@ -1,5 +1,5 @@
 // Minimal animated-GIF encoder (GIF89a): median-cut 256-colour global palette
-// + LZW. Self-contained (no vendored dependency) — built for the video
+// + LZW. Self-contained (no vendored dependency), built for the video
 // wizard's short turntable clips, not general-purpose fidelity.
 //
 //   encodeGif(frames, width, height, { delayMs, transparent }) -> Uint8Array
@@ -8,7 +8,7 @@
 // transparent: 1-bit alpha. Pixels with alpha < ALPHA_CUT become the reserved
 // transparent palette index 0; the palette is built from opaque pixels only and
 // occupies indices 1..255. (GIF has no partial alpha, so anti-aliased edges get
-// a hard cutout — expected.)
+// a hard cutout, as expected.)
 
 const ALPHA_CUT = 128;
 

@@ -3,7 +3,7 @@
 // Normals / UV-checker / Bone-influence, plus Wireframe / 2-sided / Skeleton /
 // UV-map), and the matFor / refit / refreshUv helpers both need. The mesh SET
 // and per-mesh texture resolution differ per viewer, so those stay in the
-// callers — this owns only what is identical between the two.
+// callers. This owns only what is identical between the two.
 //
 // Assumes each `active` mesh carries userData { texMat, wire } (the caller sets
 // them up in its enableMesh()). Call this once, at the point the caller has its

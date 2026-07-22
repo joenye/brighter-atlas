@@ -1,4 +1,4 @@
-// "What's new" — renders the deploy-time changelog.json (generated at release
+// "What's new": renders the deploy-time changelog.json (generated at release
 // from git tags + Conventional-Commit-grouped commits). Opens from the topbar
 // version badge, and auto-shows ONCE when the app has updated to a version the
 // user hasn't seen. Modal shell mirrors help.ts.
@@ -24,9 +24,14 @@ export interface ChangelogEntry {
 let cache: Promise<ChangelogEntry[] | null> | undefined; // Promise<array|null>
 export function changelogReady(): Promise<ChangelogEntry[] | null> {
   if (!cache) {
+    // Only releases with a written What's-new exist as far as the app is
+    // concerned: notes-free patch tags are excluded at bake time too, but
+    // filtering here guarantees they can never surface in-app.
     cache = fetch('./changelog.json', { cache: 'no-cache' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((v) => (Array.isArray(v) && v.length ? v : null))
+      .then((v) => (Array.isArray(v)
+        ? v.filter((e) => e && typeof e.summary === 'string' && e.summary.trim()) : null))
+      .then((v) => (v && v.length ? v : null))
       .catch(() => null);
   }
   return cache;
@@ -43,7 +48,7 @@ function markSeen(): void {
 }
 
 // The app shows dates as DD-MMM-YYYY everywhere (ui.fmtDate). The changelog date
-// is a "YYYY-MM-DD" tag date — parse it as LOCAL (not the UTC midnight that
+// is a "YYYY-MM-DD" tag date: parse it as LOCAL (not the UTC midnight that
 // new Date('YYYY-MM-DD') yields) so the day never slips across a timezone.
 function fmtWnDate(s: string | undefined): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || '');
@@ -56,22 +61,11 @@ function head(e: ChangelogEntry): HTMLElement {
     el('span', { class: 'wn-meta small dim', text: `${e.version} · ${fmtWnDate(e.date)}` }));
 }
 
-// the summary paragraph + grouped commit lines — shared by the prominent latest
-// entry and the collapsed older ones
+// The player-facing summary only. Commit lists are technical detail and are
+// deliberately never rendered in-app (the notes convention: written for
+// non-technical players).
 function details(e: ChangelogEntry): HTMLElement[] {
-  const parts: HTMLElement[] = [];
-  if (e.summary) parts.push(el('p', { class: 'wn-summary', text: e.summary }));
-  for (const g of e.groups || []) {
-    parts.push(el('div', { class: 'wn-group-label small', text: g.label }));
-    const ul = el('ul', { class: 'wn-commits' });
-    for (const c of g.commits) {
-      ul.appendChild(el('li', {},
-        el('span', { class: 'wn-sha mono', text: c.shortSha }),
-        ' ', el('span', { text: c.subject })));
-    }
-    parts.push(ul);
-  }
-  return parts;
+  return e.summary ? [el('p', { class: 'wn-summary', text: e.summary })] : [];
 }
 
 // latest release: shown in full and prominent
@@ -98,7 +92,9 @@ export async function openWhatsNew(): Promise<void> {
 
   const body = el('div', { class: 'wn-body' });
   if (list && list.length) {
-    body.appendChild(renderLatest(list[0]));           // newest, in full
+    // changelogReady only yields summarized releases, so the newest entry is
+    // always the headline; notes-free patch tags never appear at all.
+    body.appendChild(renderLatest(list[0]));
     if (list.length > 1) {
       const earlier = el('details', { class: 'wn-earlier' },
         el('summary', { class: 'wn-earlier-summary', text: `Earlier releases (${list.length - 1})` }));
@@ -118,9 +114,19 @@ export async function openWhatsNew(): Promise<void> {
   markSeen(); // opening it counts as seeing the current version
 }
 
-// Auto-show once when the app updated since the user's last visit. First-ever
-// visit (no stored version) is recorded silently so a brand-new user is never
-// interrupted — only genuine upgrades pop the modal.
+// 'v1.2.3' ordering; non-parseable versions compare equal (never pop on them)
+function cmpVersions(a: string, b: string): number {
+  const pa = /^v(\d+)\.(\d+)\.(\d+)$/.exec(a);
+  const pb = /^v(\d+)\.(\d+)\.(\d+)$/.exec(b);
+  if (!pa || !pb) return 0;
+  for (let i = 1; i <= 3; i++) { const d = (+pa[i]) - (+pb[i]); if (d) return d; }
+  return 0;
+}
+
+// Auto-show once when a release WITH release notes shipped since the user's
+// last visit. First-ever visit (no stored version) is recorded silently so a
+// brand-new user is never interrupted, and notes-free patch releases never
+// pop the modal (there is nothing new to read: the seen marker just advances).
 export async function maybeAutoShowWhatsNew(): Promise<void> {
   await buildInfoReady;
   const cur = currentVersion();
@@ -130,5 +136,6 @@ export async function maybeAutoShowWhatsNew(): Promise<void> {
   if (seen == null) { markSeen(); return; } // first run: record, don't nag
   if (seen === cur) return; // already on this version
   const list = await changelogReady();
-  if (list) openWhatsNew(); else markSeen();
+  if (list && cmpVersions(list[0].version, seen) > 0) openWhatsNew();
+  else markSeen();
 }

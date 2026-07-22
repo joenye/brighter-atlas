@@ -1,4 +1,4 @@
-// Water for the world viewer — NO runtime pixel classification: the world
+// Water for the world viewer. NO runtime pixel classification: the world
 // index's texture routing table already carries each texture's water verdict
 // ('chromatic' | 'neutral' | null), computed once at extraction
 // (js/extract/jobs.js worldtex → js/water-metrics.js). Rendering covers the
@@ -125,7 +125,7 @@ export function collectRoomWaterTiles(
     for (const row of exact.placementRows) {
       const occurrence = room.shard.occurrences[row[pc.occurrence]];
       if (!occurrence) continue;
-      // Raw room-local coordinates — the same no-crop-offset frame as
+      // Raw room-local coordinates: the same no-crop-offset frame as
       // _placementMatrix, so sheets stay glued to the baked terrain.
       const x = Number(occurrence[oc.x]);
       const y = Number(occurrence[oc.y]);

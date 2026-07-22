@@ -1,12 +1,12 @@
 // Version diff engine (design §5). Pure functions over version records +
-// index arrays — no DOM. Two tiers:
+// index arrays, no DOM. Two tiers:
 //
-//   Tier 0 — bundle diff: nine sha256 comparisons. Instant "which bundles
+//   Tier 0, bundle diff: nine sha256 comparisons. Instant "which bundles
 //            changed"; drives the bundle strip before any per-asset work.
-//   Tier 1 — per-asset diff keyed on the content hash `h`, O(n), using
+//   Tier 1, per-asset diff keyed on the content hash `h`, O(n), using
 //            COUNT-maps (content-duplicate multiplicity handled): an asset
 //            that moves index but keeps its hash is UNCHANGED (sub-flagged
-//            `moved`) — never a false add/remove on reorder.
+//            `moved`): never a false add/remove on reorder.
 //
 // "Changed" is heuristic pairing of added × removed on a stable non-content
 // key, emitted with a confidence label; unpaired items honestly stay
@@ -64,8 +64,8 @@ function countMap(idx: IndexEntry[]): Map<string, { count: number; entries: Inde
   return m;
 }
 
-// per-category stable non-content pairing keys (design §5: weak signatures —
-// pair only when the key is UNIQUE on both sides, otherwise stay honest
+// per-category stable non-content pairing keys (design §5: weak signatures.
+// Pair only when the key is UNIQUE on both sides, otherwise stay honest
 // add/remove)
 const PAIR_KEYS: Record<string, { key: (e: any) => string; confidence: string }> = {
   meshes: { key: (e) => `v${e.v}t${e.t}s${e.sk ? e.skel : '-'}`, confidence: 'medium' },
@@ -155,7 +155,7 @@ export async function diffVersions(
 
 // Which per-room count keys are meaningful "what changed" facts. The rest of
 // `counts` is anchor-audit accounting, and link/collision counts are
-// build-decoding provenance (see roomContentSignature) — none of it is room
+// build-decoding provenance (see roomContentSignature): none of it is room
 // content.
 const ROOM_COUNT_LABELS: Record<string, string> = {
   occurrences: 'placements',
@@ -169,7 +169,7 @@ export interface RoomPairDiff {
   textures: { added: IndexEntry[]; removed: IndexEntry[] };
 }
 
-// What changed inside one paired room — pure index-level computation over the
+// What changed inside one paired room: pure index-level computation over the
 // two versions' room entries plus their mesh/image indexes (no shard loads).
 // meshesA/B + imagesA/B are the per-version category index arrays; mesh and
 // texture deltas are CONTENT-hash set differences, so a renumbered-but-

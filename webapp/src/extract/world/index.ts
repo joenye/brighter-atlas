@@ -1,4 +1,4 @@
-// World extraction orchestrator — turns the user's bundles into the stored
+// World extraction orchestrator: turns the user's bundles into the stored
 // world package: match the per-build decode data against ab0, replay the
 // registry + value pool, parse every ab2 room, stitch the door graph into
 // world placement, build per-room shards + the world index, classify every
@@ -33,7 +33,7 @@ import * as meshNamesMod from './mesh-names.js';
 
 
 // default JSON fetch for world data files (same contract as profile.js):
-// rel is site-root-relative — 'builds/…' for the per-build decode data on the
+// rel is site-root-relative: 'builds/…' for the per-build decode data on the
 // site origin, 'defaults/…' for files shipped with the app.
 const defaultFetchJson: FetchJson = async (rel) => {
   const url = new URL(`../../../${rel}`, import.meta.url);
@@ -92,8 +92,8 @@ export async function extractWorld({
   // ---- (e) worldtex: render metadata for every referenced ab3 container -----
   // Referenced = every ab3 container a registry row points at (tag-0x47
   // edges), the superset of what materials and spawn parts can use. texIds
-  // derive from the replay rows ONLY, so the pooled pass is kicked off HERE —
-  // immediately after replay — and works the other cores while this thread
+  // derive from the replay rows ONLY, so the pooled pass is kicked off HERE,
+  // immediately after replay, and works the other cores while this thread
   // decodes the value pool and parses rooms. Its results are awaited below,
   // before the shard context first consumes texMeta, so a texture-stage
   // failure still fails before the shard loop (progress bars interleave).
@@ -130,7 +130,7 @@ export async function extractWorld({
       signal,
       onProgress: (done: number, total: number) => step('textures', done, total),
     });
-    texPromise.catch(() => {});   // surfaced at the await below — never unhandled
+    texPromise.catch(() => {});   // surfaced at the await below, never unhandled
   }
 
   // ---- (c) interned value pool ---------------------------------------------
@@ -148,7 +148,7 @@ export async function extractWorld({
   // ab2 is only decompressed once; the bytes are identical (zstd is
   // deterministic) and the loop below still visits ascending ab2 idx.
   const sharedAb2 = ab2Objects && ab2Objects.length === entries2.length ? ab2Objects : null;
-  // ascending ab2 idx — stitch ordering contract
+  // ascending ab2 idx: stitch ordering contract
   const rooms: {
     idx: number; exits: any[]; name: string | null;
     w: number | null; h: number | null; gridW: number; gridH: number;
@@ -181,7 +181,7 @@ export async function extractWorld({
     }
     if (i % 10 === 0 || i === entries2.length - 1) step('rooms', i + 1, entries2.length);
   }
-  if (!layersById.size) throw new Error('no rooms found in assetBundle2 — mixed game versions?');
+  if (!layersById.size) throw new Error('no rooms found in assetBundle2. Mixed game versions?');
 
   // room names straight from ab0, then the shipped content-hash overrides
   // for the name-hash-gated rooms (a missing file just means no overrides).
@@ -190,7 +190,7 @@ export async function extractWorld({
     // Ships with the app at defaults/room_name_overrides.json.
     const doc = await (fetchJson || defaultFetchJson)('defaults/room_name_overrides.json');
     if (doc?.overrides) roomMod.applyRoomNameOverrides(names, doc.overrides, contentHashes);
-  } catch { /* no shipped overrides — derived names only */ }
+  } catch { /* no shipped overrides: derived names only */ }
   for (const r of rooms) r.name = names.get(r.idx) ?? null;
 
   // World placement runs AFTER the shard loop: the jigsaw connector meshes
@@ -200,7 +200,7 @@ export async function extractWorld({
 
   // ---- (e, results) worldtex verdicts, started right after replay above.
   // Awaited here because per-placement flags (alpha, authored-empty,
-  // unrenderable) come from these verdicts — the shard context below is the
+  // unrenderable) come from these verdicts: the shard context below is the
   // first consumer, and a texture-stage failure must throw before shards.
   if (texPromise) {
     const results = await texPromise;
@@ -262,7 +262,7 @@ export async function extractWorld({
   });
   // Jigsaw connector meshes, resolved to this build's ab5 ordinals by content
   // hash. Missing pieces (no meshes index, or a stale-cached stitch.js from a
-  // mid-session update) degrade to the plain door-tile stitch — the connector
+  // mid-session update) degrade to the plain door-tile stitch: the connector
   // calibration is an enhancement and must never fail the extraction.
   const pcOccurrence = shardsMod.PLACEMENT_COLUMNS.indexOf('occurrence');
   const pcMesh = shardsMod.PLACEMENT_COLUMNS.indexOf('mesh');
@@ -279,7 +279,7 @@ export async function extractWorld({
   }
   const connectorTiles = new Map<number, { m: number[][]; f: number[][] }>(); // room idx -> connector tiles
 
-  // stream each shard to storage — writes batch into one transaction per ~32
+  // stream each shard to storage: writes batch into one transaction per ~32
   // rooms (sink.derivedPutMany when available) and the per-room content hash
   // is pipelined in a small window, so room N+1's shard is computed while
   // room N's write/hash are still in flight. shardsMeta stays pushed in exact
@@ -312,7 +312,7 @@ export async function extractWorld({
     if (putBatch.length >= 32) await flushShards();
     // ordinal-free room content hash: the diff identity for this room, so
     // version diffs pair rooms as unchanged/moved/changed like every other
-    // asset category. The signature string is fixed here, synchronously —
+    // asset category. The signature string is fixed here, synchronously:
     // only the digest itself is deferred, so pipelining cannot change it.
     hashPending.push(hashObject(UTF8_ENCODER.encode(roomContentSignature({
       shard,
@@ -410,7 +410,7 @@ export async function extractWorld({
         if (name != null) { entry.name = name; names.set(entry.id, name); }
       }
     }
-  } catch { /* no reference room list — derived names only */ }
+  } catch { /* no reference room list: derived names only */ }
   const worldIndex = buildWorldIndex(ctx, shardsMeta);
   // texture routing table (sw.js worldtex/ routes decode from it)
   // + paired door adjacency for the merged all-rooms view
@@ -436,12 +436,12 @@ export async function extractWorld({
   });
   bail();
   // AB2 structural records: occurrence-qualified terrain/block texture
-  // bindings appended before catalog packaging. A FRESH graph is required —
+  // bindings appended before catalog packaging. A FRESH graph is required:
   // face-base learning is order-sensitive, and this structural stage must run
   // on its own AssetGraph, not the room exporter's warmed one. Only the
   // constructor's pure row scan is shared (the maps are frozen at
-  // construction and never written afterwards); every lazy cache — including
-  // the order-sensitive face-base learning — starts empty here.
+  // construction and never written afterwards); every lazy cache, including
+  // the order-sensitive face-base learning, starts empty here.
   // Own step key: this phase follows the row-scale 'catalog' pass and would
   // otherwise rewind its finished 240k-row bar to 0/1 on the same line.
   step('package', 0, 1);

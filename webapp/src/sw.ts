@@ -7,7 +7,7 @@
 // Decoded responses are cached in the Cache API keyed by full URL (which
 // embeds the versionId, so game updates can never serve stale bytes).
 //
-// Bundled to the webapp root as sw.js — root scope is required for the cs/
+// Bundled to the webapp root as sw.js: root scope is required for the cs/
 // URL namespace.
 
 import { getVersion, derivedGet, rawFile } from './storage.js';
@@ -29,7 +29,7 @@ import * as zstdWasm from '../vendor/zstd-wasm.module.js';
 const sw = self as any;
 
 preloadOpusModule(OpusVendor);   // dynamic import() is disallowed inside service workers
-// Warm WASM zstd at SW startup — the one context that keeps it: cold texture
+// Warm WASM zstd at SW startup, the one context that keeps it: cold texture
 // serves decode big single frames and the compile runs once per SW life.
 // Pre-init (or failed-init) decodes take the fzstd path, byte-identically.
 (globalThis as any).__zstdWasm = 'pending';
@@ -158,7 +158,7 @@ async function serveWav(c: VersionCtx, i: number): Promise<Response> {
 sw.addEventListener('fetch', (event: any) => {
   const m = new URL(event.request.url).pathname.match(
     /\/cs\/([0-9a-f]{16})\/(?:images\/(\d{5})_e(\d+)\.png|audio\/(\d{5})\.wav)$/);
-  if (!m || event.request.method !== 'GET') return;   // not ours — passthrough
+  if (!m || event.request.method !== 'GET') return;   // not ours: passthrough
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(event.request);

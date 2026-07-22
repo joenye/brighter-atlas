@@ -1,5 +1,5 @@
 // Mesh viewer: BufferGeometry from the exported typed arrays, render modes,
-// wireframe/UV overlays and — for skinned meshes — full skeletal animation
+// wireframe/UV overlays and, for skinned meshes, full skeletal animation
 // (Rig + ClipSampler + PlaybackBar from rig.js).
 //
 // Conventions handled here:
@@ -35,7 +35,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
   const view = { root, destroy() { destroyed = true; immersive.destroy(); scene?.destroy(); bar?.destroy(); picker?.close(); modalClose?.(); } };
   let destroyed = false;
   let scene: Scene3D | null = null;
-  let modalClose: (() => void) | null = null;   // Save-as-Model dialog — must not outlive the view
+  let modalClose: (() => void) | null = null;   // Save-as-Model dialog: must not outlive the view
   let bar: PlaybackBar | null = null;
   let picker: { root: HTMLElement; close: () => void } | null = null;
 
@@ -130,7 +130,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           const anims = await app.store.index('anims');
           clips = anims.filter((a: IndexEntry) => a.skel === m.skel);
         } else {
-          skelNote = `Rig #${m.skel} isn't in your files — showing the default pose.`;
+          skelNote = `Rig #${m.skel} isn't in your files. Showing the default pose.`;
         }
       } catch {
         skelNote = `rig #${m.skel} failed to load`;
@@ -218,7 +218,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           parameterMap: clearPackedRecolor(texMat),
         };
         if (!st) {
-          setBadge('no texture', 'b-ghost', 'No texture is assigned yet — use Texture… to add one.');
+          setBadge('no texture', 'b-ghost', 'No texture is assigned yet. Use Texture… to add one.');
         } else if (st.a == null) {
           setBadge(`no texture (override${st.local ? '' : ', saved'})`, 'b-accent b-ghost', 'User override: texture cleared');
         } else {
@@ -248,7 +248,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           }
           if (recolor) {
             // the extraction-baked uniform-luminance verdict (grayscale
-            // albedo × equal tints) — same full-tint path as the room renderer
+            // albedo × equal tints): the same full-tint path as the room renderer
             applyPackedRecolor(texMat, map ? parameterMap : null, recolor, {
               fullTint: (st.variant as any)?.uniform_luminance_tint === true,
             });
@@ -260,7 +260,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
             texMat.map = null;
             setBadge(`#${st.a} missing`, 'b-bad', 'This image has no colour texture to show.');
           } else if (st.src === 'preview') {
-            setBadge(`#${st.a} · preview`, 'b-warn', 'Previewing — Enter/✓ commits as an override, Esc reverts');
+            setBadge(`#${st.a} · preview`, 'b-warn', 'Previewing: Enter/✓ commits as an override, Esc reverts');
           } else if (st.src === 'system') {
             setBadge(`#${st.a} · system`, 'b-good',
               `${st.systemVariants} built-in variant${st.systemVariants === 1 ? '' : 's'} recovered from owner-qualified asset data.`);
@@ -306,14 +306,14 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
         const active = getActiveIndex(entry);
         vs.forEach((v, i) => {
           const on = i === active;
-          // resolve the swatch image by CONTENT HASH, not the stored ordinal —
+          // resolve the swatch image by CONTENT HASH, not the stored ordinal:
           // the ordinal is only valid for the bundle build the override was made
           // against, so indexing the current images by it shows the wrong asset.
           const ai = resolveVariantImage(v, imagesIdx);
           const img = ai != null ? imagesIdx?.[ai] : null;
           const missing = v.image_hash && img == null;
           const source = v.alsoSystem ? 'user + system' : v.origin || 'user';
-          const chip = el('span', { class: `tv-chip tv-${v.origin || 'user'}${on ? ' active' : ''}${missing ? ' tv-missing' : ''}`, title: `${source} variant ${i + 1}${img ? ` · image #${ai}` : missing ? ' · not in your files' : ` · image #${v.image}`}${v.material != null ? ` · material ${v.material}` : ''}${on ? ' (active)' : ' — click to use'}` });
+          const chip = el('span', { class: `tv-chip tv-${v.origin || 'user'}${on ? ' active' : ''}${missing ? ' tv-missing' : ''}`, title: `${source} variant ${i + 1}${img ? ` · image #${ai}` : missing ? ' · not in your files' : ` · image #${v.image}`}${v.material != null ? ` · material ${v.material}` : ''}${on ? ' (active)' : ' (click to use)'}` });
           chip.appendChild(img?.f?.length ? el('img', { src: app.store.url(img.f[0]), alt: `#${ai}` }) : el('span', { class: 'tv-id', text: missing ? '⃠' : `#${ai ?? v.image}` }));
           chip.appendChild(el('span', { class: 'tv-origin', text: v.origin === 'system' ? 'S' : 'U', title: source }));
           if (v._userIndex != null) {
@@ -412,7 +412,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
 
     addExportButton(toolbar, app, 'meshes', entry);
 
-    // ▣ Screenshot — capture the current 3D view as a still (same modal as the
+    // ▣ Screenshot: capture the current 3D view as a still (same modal as the
     // skeleton/model viewers). No Video: a single mesh has nothing to animate on
     // its own beyond a turntable, so a still is the useful capture here.
     const shotBtn = el('button', { class: 'btn', text: '▣ Screenshot', title: 'Capture the current 3D view as a PNG/JPEG/WebP image, with caption, grid and background options' });
@@ -432,13 +432,13 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
     });
     toolbar.appendChild(shotBtn);
 
-    // ❖ Save as Model — a single-mesh Model (no picker: it's just this mesh)
+    // ❖ Save as Model: a single-mesh Model (no picker: it's just this mesh)
     // with the CURRENTLY ACTIVE texture pinned by content hash, so it can be
     // placed in Scenes like any skeleton-built Model.
     const modelBtn = el('button', { class: 'btn', text: '❖ Save as Model', title: 'Save this mesh (with its currently active texture) as a Model, usable in Scenes' });
     modelBtn.addEventListener('click', async () => {
-      if (!entry.h) { app.banner('this export has no content ids — re-export to save Models'); return; }
-      picker?.close();   // a transient picker PREVIEW is never saved — close (and revert) it so the viewport matches what gets pinned
+      if (!entry.h) { app.banner('this export has no content ids. Re-export to save Models'); return; }
+      picker?.close();   // a transient picker PREVIEW is never saved: close (and revert) it so the viewport matches what gets pinned
       // the pinned image hash = the active variant, else the effective texture
       const imgHashFor = (): string | null => {
         const vs = imagesIdx ? getVariants(entry) : [];
@@ -476,7 +476,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
       });
       overlay.appendChild(el('div', { class: 'modal card mesh-model-modal' },
         el('h2', { text: 'Save as Model' }),
-        el('p', { class: 'dim small', text: `This mesh${imgHashFor() ? ' with its active texture' : ' (untextured)'}${skelH ? ', on its rig,' : ''} becomes a reusable Model — place it in Scenes, rename or delete it any time.` }),
+        el('p', { class: 'dim small', text: `This mesh${imgHashFor() ? ' with its active texture' : ' (untextured)'}${skelH ? ', on its rig,' : ''} becomes a reusable Model. Place it in Scenes, rename or delete it any time.` }),
         el('label', { class: 'mw-namerow' }, el('span', { text: 'Name' }), nameIn),
         el('div', { class: 'modal-actions' }, createBtn, el('span', { class: 'spacer' }), cancelBtn)));
       document.body.appendChild(overlay);

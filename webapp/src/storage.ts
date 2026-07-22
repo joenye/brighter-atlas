@@ -1,14 +1,14 @@
 // Browser persistence for client-side extraction. Two backends, one module:
 //
-//   OPFS  bs/raw/<sha256>   — raw bundle copies, content-addressed by file hash
+//   OPFS  bs/raw/<sha256>   : raw bundle copies, content-addressed by file hash
 //                             (identical bundles shared across versions for free).
 //                             Where OPFS is unavailable or fails, raw blobs fall
 //                             back to the IndexedDB 'rawblobs' store (design §4:
 //                             treat OPFS as may-fail).
-//   IndexedDB 'bs-assets'   — 'versions' registry, 'derived' per-version JSON
+//   IndexedDB 'bs-assets'   : 'versions' registry, 'derived' per-version JSON
 //                             (indexes, datatable extracts, frame tables, manifest),
 //                             'meta' (active version id, flags), 'userdata'
-//                             (overrides + names — durable, cross-version),
+//                             (overrides + names: durable, cross-version),
 //                             'rawblobs' (OPFS fallback tier).
 //
 // Works from both the main thread and workers; OPFS writes prefer
@@ -34,9 +34,9 @@ export interface VersionRecord {
   /** extraction-engine generation; absent = pre-0.4.0 data (see notices.ts) */
   engine?: number;
   label?: string;
-  /** build label from the per-build decode data (e.g. "23-Apr-2025 (35f5efbc)") — display precedence in ui.versionLabel */
+  /** build label from the per-build decode data (e.g. "23-Apr-2025 (35f5efbc)"). Display precedence in ui.versionLabel */
   profileLabel?: string;
-  /** sha256 of the decompressed ab0 — the decode-data lookup key, kept so a label can be matched later without re-reading bundles */
+  /** sha256 of the decompressed ab0, the decode-data lookup key, kept so a label can be matched later without re-reading bundles */
   ab0RawSha256?: string;
   builtAt?: number | string;
   bundles?: Record<string, BundleInfo>;
@@ -114,8 +114,8 @@ export async function derivedGet(versionId: string, name: string): Promise<any> 
 export async function derivedPut(versionId: string, name: string, value: any): Promise<any> { return idbPut('derived', value, dKey(versionId, name)); }
 
 // Batch write: ONE readwrite transaction for many derived records. Every
-// put() is issued synchronously — an await between put()s would let the
-// transaction auto-commit under us — and the promise settles on oncomplete.
+// put() is issued synchronously (an await between put()s would let the
+// transaction auto-commit under us) and the promise settles on oncomplete.
 export async function derivedPutMany(versionId: string, entries: [string, any][]): Promise<void> {
   const db = await idbOpen();
   return new Promise((resolve, reject) => {
@@ -166,7 +166,7 @@ export async function userdataPut(key: string, value: any): Promise<any> { retur
 
 // ------------------------------------------------------------------ quota
 // Decorate QuotaExceededError with actionable guidance (design §4: always
-// catch it — a silent quota failure reads as data corruption to the user).
+// catch it: a silent quota failure reads as data corruption to the user).
 async function quotaError(err: any, what: string): Promise<any> {
   if (err?.name !== 'QuotaExceededError') return err;
   let detail = '';
@@ -174,7 +174,7 @@ async function quotaError(err: any, what: string): Promise<any> {
     const { usage, quota } = await navigator.storage.estimate();
     detail = ` (using ${(usage! / 1e9).toFixed(2)} GB of ~${(quota! / 1e9).toFixed(1)} GB)`;
   } catch { /* estimate unavailable */ }
-  return new Error(`browser storage quota exceeded while ${what}${detail} — `
+  return new Error(`browser storage quota exceeded while ${what}${detail}: `
     + 'free disk space, delete an old version from storage, or extract fewer categories');
 }
 
@@ -208,7 +208,7 @@ async function opfsHasRaw(sha: string, size: number | null = null): Promise<bool
 }
 
 // Copy a user-picked File into OPFS in chunks (progress by bytes). Prefers
-// sync access handles (worker-only API) — they write IN PLACE, where
+// sync access handles (worker-only API): they write IN PLACE, where
 // createWritable stages a swap file that is copied over on close(), doubling
 // the IO of a multi-hundred-MB bundle copy. Falls back to createWritable on
 // the main thread / on error.
@@ -247,7 +247,7 @@ async function opfsWriteRaw(sha: string, blob: Blob, onProgress?: ProgressFn): P
   await w.close();
 }
 
-// unified raw API — every consumer (ingest sink, ClientStore, sw.js) goes
+// unified raw API: every consumer (ingest sink, ClientStore, sw.js) goes
 // through these; the OPFS/IDB split is invisible above this line
 export async function hasRaw(sha: string, size: number | null = null): Promise<boolean> {
   if (await opfsAvailable()) {
@@ -266,7 +266,7 @@ export async function writeRaw(sha: string, blob: Blob, onProgress?: ProgressFn)
       return;
     } catch (e) {
       if (e?.name === 'QuotaExceededError') throw await quotaError(e, `storing a ${(blob.size / 1e6).toFixed(0)} MB bundle`);
-      // OPFS failed for another reason — fall through to the IDB tier
+      // OPFS failed for another reason: fall through to the IDB tier
     }
   }
   try {
@@ -283,7 +283,7 @@ export async function rawFile(sha: string): Promise<Blob> {
       const dir = await rawDir();
       const fh = await dir.getFileHandle(sha);
       return await fh.getFile();
-    } catch { /* not in OPFS — try the IDB tier */ }
+    } catch { /* not in OPFS: try the IDB tier */ }
   }
   const blob = await idbGet('rawblobs', sha);
   if (!blob) {
@@ -357,7 +357,7 @@ export async function storageEstimate(): Promise<StorageEstimate> {
 
 export async function wipeAll(): Promise<void> {
   const db = await idbOpen();
-  // 'userdata' (overrides/names) is deliberately NOT wiped — it is the only
+  // 'userdata' (overrides/names) is deliberately NOT wiped: it is the only
   // irreplaceable tier and carries across versions by design (§4 tier 4)
   for (const s of ['meta', 'versions', 'derived', 'rawblobs']) await tx(db, s, 'readwrite', (st) => st.clear());
   try {

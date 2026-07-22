@@ -49,7 +49,7 @@ export function mergedPaletteTuple(recolors: any, uniformLuminanceTint = false):
 
 // One animation frame, with a timeout fallback so a suspended rAF (background
 // window) can never wedge the bake. Hidden tab: rAF never fires and background
-// timers clamp to ≥1s — resume via the never-throttled channel yield instead.
+// timers clamp to ≥1s: resume via the never-throttled channel yield instead.
 function nextFrameOrTimeout(ms = 150): Promise<void> {
   if (typeof document !== 'undefined' && document.hidden) return yieldToBrowser();
   return new Promise((resolve) => {
@@ -247,7 +247,7 @@ export class MergedWorld {
    * main-thread fallback); 'main': force the single-threaded path. */
   bakeMode: 'auto' | 'main';
   /** Test hook (smoke): with the worker path, ALSO bake every bucket on the
-   * main thread and byte-compare — result lands in verifyResult. */
+   * main thread and byte-compare: result lands in verifyResult. */
   bakeVerify: boolean;
   lastBakeMode: 'worker' | 'main' | null;
   verifyResult: { buckets: number; mismatches: number } | null;
@@ -283,7 +283,7 @@ export class MergedWorld {
    * picking index, filled during the harvest (one entry per placement) so
    * Inspect mode works after the graph release. `uploadCurtain`: while it
    * returns true (the host's loading overlay hides the canvas), cells whose
-   * GPU upload has completed are kept INVISIBLE until the build finishes —
+   * GPU upload has completed are kept INVISIBLE until the build finishes:
    * upload-pacing frames then only rasterise the ≤MAX_PENDING_UPLOADS new
    * cells instead of the whole growing world, which on slow/software GPUs
    * turns an O(cells²) bake-long raster bill into O(cells).
@@ -482,7 +482,7 @@ export class MergedWorld {
   }
 
   /**
-   * Classify one placement batch for bucketing — the shared seam between the
+   * Classify one placement batch for bucketing: the shared seam between the
    * live-graph harvest and the session-edit cell re-bake, so both produce
    * byte-identical bucket keys and per-vertex meta bits. `exact` needs
    * category / renderTexture / flags / recolors / z.
@@ -572,7 +572,7 @@ export class MergedWorld {
   // Current cooperative slice budget for the harvest/bake/water loops: tight
   // when the merged scene is live (input + rAF stay responsive), generous
   // while the host's loading overlay hides the canvas or the tab is hidden.
-  // Only the yield frequency changes — operation order (and therefore float
+  // Only the yield frequency changes: operation order (and therefore float
   // output) is identical either way.
   _sliceBudgetMs(): number {
     const hidden = typeof document !== 'undefined' && document.hidden;
@@ -582,12 +582,12 @@ export class MergedWorld {
   /**
    * Harvest every loaded room's batches into bucket descriptors. Water tiles
    * are collected here too (they need the live room graph), so once a room is
-   * harvested nothing reads its graph objects again — `onRoomHarvested` lets
+   * harvested nothing reads its graph objects again: `onRoomHarvested` lets
    * the host free that room immediately, spreading the graph release across
    * the bake instead of one end-of-bake avalanche. The bucket items keep only
    * shared-cache geometries and CPU instance arrays, both of which survive a
    * room release. The pick index (when present) copies each batch's instance
-   * data here too — the last moment the graph is guaranteed alive.
+   * data here too, the last moment the graph is guaranteed alive.
    */
   async _harvest(cancelled: (() => boolean) | null, { onRoomHarvested = null, onProgress = null }: {
     onRoomHarvested?: ((roomId: number) => void) | null;
@@ -730,7 +730,7 @@ export class MergedWorld {
   /**
    * The main-thread bucket bake. DETERMINISM CONTRACT: bake-worker.ts is a
    * verbatim port of this loop (same operations, same order, same float
-   * stores) and MUST be kept in lockstep — the smoke test byte-compares the
+   * stores) and MUST be kept in lockstep: the smoke test byte-compares the
    * two paths. Only the yield cadence may differ (yields never change the
    * math).
    */
@@ -868,7 +868,7 @@ export class MergedWorld {
     const index = new THREE.BufferAttribute(indices, 1);
     releasable.push(index);
     geometry.setIndex(index);
-    // Free the CPU copies once uploaded — the merged world is static and
+    // Free the CPU copies once uploaded: the merged world is static and
     // never raycast; holding the baked arrays in the JS heap serves no reader.
     for (const attribute of releasable) {
       attribute.onUpload(function release(this: any) { this.array = null; });
@@ -954,7 +954,7 @@ export class MergedWorld {
     }
     if (flush) {
       // Leftovers (hidden tab, curtains never drawn) keep their arrays until
-      // first render — the pre-pacing behaviour — but cull normally again.
+      // first render (the pre-pacing behaviour) but cull normally again.
       for (const mesh of this._pendingUploads) mesh.frustumCulled = true;
       this._pendingUploads = [];
       this._uncurtainAll();
@@ -963,7 +963,7 @@ export class MergedWorld {
 
   /**
    * Create one bucket's display mesh (textures + material + depth material)
-   * and attach it to the merged root — shared by build() and the session-edit
+   * and attach it to the merged root, shared by build() and the session-edit
    * replaceBuckets(). Texture/parameter promises are the scene's caches, so
    * post-prefetch awaits resolve immediately.
    */
@@ -1068,7 +1068,7 @@ export class MergedWorld {
       // completion order), so the final scene arrays are order-identical to
       // the single-threaded path, and the GPU-upload drain below is
       // unchanged. No pool (bakeMode 'main' / spawn failure) or a worker
-      // failing mid-bake falls back to the main-thread bake — per bucket.
+      // failing mid-bake falls back to the main-thread bake, per bucket.
       bakePool = this.bakeMode === 'main' || !totalBuckets
         ? null : this._ensureBakePool(totalBuckets);
       const pool = bakePool;
@@ -1102,7 +1102,7 @@ export class MergedWorld {
         while (dispatched < totalBuckets && dispatched - assembled < ahead) {
           const bucket = harvest.buckets[dispatched];
           jobs[dispatched] = pool.submit(bucket, cellUnits, generation, (outcome) => {
-            // progress ticks as workers finish (any order — aggregate count);
+            // progress ticks as workers finish (any order, aggregate count);
             // failed buckets tick after their main-thread fallback instead
             if (outcome.ok && !cancelled()) tickBucket(bucket);
           });
@@ -1203,7 +1203,7 @@ export class MergedWorld {
    * bucket key -> descriptor {key, cellX, cellY, materialToken, renderTexture,
    * flatCategory, alpha, tangent, water, items} (or null to just remove the
    * bucket, e.g. every placement in it was deleted). Items carry raw
-   * `recolors`/`fullTint` — palette slots are interned here against the
+   * `recolors`/`fullTint`: palette slots are interned here against the
    * retained build-time palette so recolors keep their exact GPU tuples.
    * Reuses the same _bakeBucket machinery (yielded, bounded to the edited
    * texture within one cell) and the upload pacing from the main build.

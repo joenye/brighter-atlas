@@ -1,4 +1,4 @@
-// World-view loading/perf HUD — a compact overlay panel shared by the
+// World-view loading/perf HUD, a compact overlay panel shared by the
 // single-room and all-rooms views. Shows a live stage line (wired to the real
 // streaming/bake counters by world.js), rolling FPS + draw calls + triangles
 // from renderer.info, and a one-off environment line (WebGL tier + unmasked
@@ -31,7 +31,7 @@ export interface WorldHud {
   destroy(): void;
 }
 
-// The unmasked renderer is "ANGLE (<vendor>, <adapter>, <backend>)" — a naive
+// The unmasked renderer is "ANGLE (<vendor>, <adapter>, <backend>)": a naive
 // comma split would truncate it to "ANGLE (NVIDIA". Prefer the adapter
 // (second) field inside ANGLE(...), else the full string; the raw string
 // rides along for the tooltip. Degrades to the masked GL_RENDERER when the
@@ -65,14 +65,14 @@ export type GpuTier = 'software' | 'integrated' | 'discrete' | 'unknown';
 // Adapter classification for GPU-adaptive defaults + the all-rooms warning.
 // 'software' = no GPU acceleration at all; 'integrated' = shared-memory iGPU
 // (Apple Mx deliberately counts as capable → 'discrete'); 'unknown' when
-// WEBGL_debug_renderer_info is blocked (Firefox often masks it — a masked
+// WEBGL_debug_renderer_info is blocked (Firefox often masks it: a masked
 // adapter must NEVER be scored weak). Anything else with the extension
 // available is assumed capable.
 export function classifyGpu(renderer: Pick<HudRenderer, 'getContext'>): { label: string; raw: string; tier: GpuTier } {
   const { label, raw } = gpuLabel(renderer);
   let masked = true;
   try { masked = !renderer.getContext().getExtension('WEBGL_debug_renderer_info'); }
-  catch { /* no context — stays masked/unknown */ }
+  catch { /* no context: stays masked/unknown */ }
   const s = raw || label;
   let tier: GpuTier;
   if (/swiftshader|llvmpipe|microsoft basic render/i.test(s)) {
@@ -82,7 +82,7 @@ export function classifyGpu(renderer: Pick<HudRenderer, 'getContext'>): { label:
   } else if (/apple (m\d|gpu)/i.test(s)) {
     tier = 'discrete';
   } else if (
-    // Intel iGPU families (HD/UHD/Iris/Iris Xe) — but not the discrete Arc line
+    // Intel iGPU families (HD/UHD/Iris/Iris Xe), but not the discrete Arc line
     (/\bintel\b/i.test(s) && /\b(hd|uhd|iris)\b/i.test(s) && !/\barc\b/i.test(s))
     // AMD iGPUs: bare "Radeon(TM) Graphics" APUs and the Vega-Graphics APU strings
     || /radeon\s*\(tm\)\s*graphics/i.test(s)
@@ -133,7 +133,7 @@ export function createWorldHud({ host, renderer }: {
 
   // Rolling FPS + last-frame renderer.info, refreshed at 2 Hz. Ticks run just
   // before each render; info carries the previous frame, and
-  // info.render.frame counts ACTUAL renders — the honest rate when the
+  // info.render.frame counts ACTUAL renders: the honest rate when the
   // all-rooms view throttles presentation under load.
   let frameBase = renderer.info.render.frame;
   let windowStart = performance.now();

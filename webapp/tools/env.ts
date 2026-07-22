@@ -1,6 +1,6 @@
 // Shared test-environment helpers: locate the app and the game bundles, and
 // SKIP (exit 0) with a clear message when a local-only prerequisite is
-// missing — so the smoke suite (which never needs the copyrighted game
+// missing, so the smoke suite (which never needs the copyrighted game
 // bundles) runs anywhere, and e2e.ts skips cleanly without them.
 //
 // The game bundles are NOT stored in the repo. To run the local-only suites,
@@ -30,22 +30,22 @@ export const haveBundles = (): boolean => Array.from({ length: 9 }, (_, n) => ex
 
 function skip(name: string, why: string): never {
   console.log(`SKIP ${name}: ${why}.`);
-  console.log('  (local-only suite — the smoke suite runs without any game data)');
+  console.log('  (local-only suite: the smoke suite runs without any game data)');
   process.exit(0);
 }
 
 /** Skip the suite unless assetBundle0..8 are present (via BS_BUNDLES or repo root). */
 export const requireBundles = (name: string): boolean =>
-  haveBundles() || skip(name, 'needs the game bundles assetBundle0..8 — pass --bundles PATH, set BS_BUNDLES=/path/to/bundles, or place them at the repo root');
+  haveBundles() || skip(name, 'needs the game bundles assetBundle0..8: pass --bundles PATH, set BS_BUNDLES=/path/to/bundles, or place them at the repo root');
 
 /** Hard precondition: the esbuild output must exist before any browser test. */
 export function requireBuild(name: string): void {
   if (existsSync(path.join(WEBAPP, 'js', 'main.js')) && existsSync(path.join(WEBAPP, 'sw.js'))) return;
-  console.error(`${name}: webapp/js/main.js or webapp/sw.js is missing — run \`npm run build\` first`);
+  console.error(`${name}: webapp/js/main.js or webapp/sw.js is missing. Run \`npm run build\` first`);
   process.exit(2);
 }
 
-// A disposable copy of the app WITHOUT any served data tree — a truly fresh
+// A disposable copy of the app WITHOUT any served data tree: a truly fresh
 // user, so the client-extraction onboarding wizard is what boots. Real copies,
 // not symlinks (symlinks need admin rights on Windows). Caller cleans up.
 export async function shimWebroot(prefix = 'bs-webroot-'): Promise<{ root: string; cleanup: () => Promise<void> }> {

@@ -127,7 +127,7 @@ export class SpawnGraph {
   // The unique typed integer XYZ + direction value on one row, or null.
   //
   // The location typed object serializes in TWO forms: interned in the value
-  // pool (a depth-0 tag-0 field — most actors), or INLINE in the row's own
+  // pool (a depth-0 tag-0 field, most actors), or INLINE in the row's own
   // event stream as a postorder tag-0x24 completion marker whose direct
   // depth+1 children are pool references (bosses/one-offs whose unique
   // position was never worth interning: Thruntyx, the Bear Clearing bears).
@@ -161,7 +161,7 @@ export class SpawnGraph {
     }
     // Inline typed completions: group the row's events per operation, find
     // depth-0 tag-0x24 markers, and take their direct depth+1 tag-0 children
-    // (postorder — everything after the previous depth<=0 event).
+    // (postorder: everything after the previous depth<=0 event).
     const byOperation = new Map<number, any[][]>();
     for (const event of this.rows[ownerSlot].g) {
       const list = byOperation.get(event[0]);
