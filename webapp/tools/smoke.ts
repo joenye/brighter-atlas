@@ -136,6 +136,66 @@ async function fixtureSuite(browser: any, base: string) {
   ok(await page.$eval('#details-body', (n) => n.querySelector('.rawjson') !== null), 'raw JSON toggle works');
   await page.click('#raw-toggle');
 
+  // ---- collapsible side panels: rails, reflow, aria, persistence ----------
+  const panelW = (sel) => page.$eval(sel, (n) => n.getBoundingClientRect().width);
+  const ariaExpanded = (sel) => page.$eval(`${sel} > .panel-toggle`, (n) => n.getAttribute('aria-expanded'));
+  const sideW0 = await panelW('#sidebar');
+  const mainW0 = await panelW('#main');
+  await page.click('#sidebar > .panel-toggle');
+  await sleep(150);
+  const sideW1 = await panelW('#sidebar');
+  const mainW1 = await panelW('#main');
+  ok(sideW1 <= 36 && mainW1 - mainW0 > 100,
+    `collapse left: sidebar -> ${Math.round(sideW1)}px rail, main +${Math.round(mainW1 - mainW0)}px`);
+  // every non-toggle child must vanish; #cat-tabs once leaked (its ID display
+  // rule outranked the bare class rule), so assert the lot, not one sample
+  ok(await page.$eval('#sidebar', (n) => [...n.children]
+    .filter((c: any) => !c.classList.contains('panel-toggle'))
+    .every((c: any) => getComputedStyle(c).display === 'none')),
+  'collapse left: ALL panel content hidden (incl. category icons)');
+  ok(await ariaExpanded('#sidebar') === 'false', 'collapse left: toggle reports aria-expanded=false');
+  await page.click('#sidebar > .panel-toggle');
+  await sleep(150);
+  ok(Math.abs(await panelW('#sidebar') - sideW0) < 2, 'expand left: sidebar width restored');
+  ok(await page.$$eval('#list-host .vrow', (r) => r.length > 0), 'expand left: virtual list shows rows again');
+  ok(await ariaExpanded('#sidebar') === 'true', 'expand left: toggle reports aria-expanded=true');
+  const detW0 = await panelW('#details');
+  await page.click('#details > .panel-toggle');
+  await sleep(150);
+  const detW1 = await panelW('#details');
+  ok(detW1 <= 36 && await page.$eval('#details-body', (n) => getComputedStyle(n).display === 'none'),
+    `collapse right: details -> ${Math.round(detW1)}px rail, content hidden`);
+  ok(await ariaExpanded('#details') === 'false', 'collapse right: toggle reports aria-expanded=false');
+  await page.click('#details > .panel-toggle');
+  await sleep(150);
+  ok(Math.abs(await panelW('#details') - detW0) < 2, 'expand right: details width restored');
+  // both collapsed persists across a full reload (bs.panels in localStorage)
+  await page.click('#sidebar > .panel-toggle');
+  await page.click('#details > .panel-toggle');
+  await sleep(150);
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('#sidebar > .panel-toggle', { timeout: 10000 });
+  ok(await page.evaluate(() => document.getElementById('sidebar').classList.contains('collapsed')
+    && document.getElementById('details').classList.contains('collapsed')),
+    'both panels stay collapsed across a reload');
+  ok(await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('bs.panels') || '{}');
+    return s.sidebar === true && s.details === true;
+  }), 'bs.panels stores both collapsed flags');
+  ok(await ariaExpanded('#sidebar') === 'false' && await ariaExpanded('#details') === 'false',
+    'aria-expanded=false on both toggles after reload');
+  // navigating to an item auto-expands the details panel (its content just
+  // changed); the sidebar deliberately stays collapsed
+  await page.evaluate(() => { location.hash = '#/mesh/1'; });
+  await sleep(300);
+  ok(await page.evaluate(() => !document.getElementById('details').classList.contains('collapsed')
+    && document.getElementById('sidebar').classList.contains('collapsed')),
+    'selecting an item auto-expands details (sidebar stays collapsed)');
+  await page.click('#sidebar > .panel-toggle');   // restore for the remaining suites
+  await sleep(150);
+  ok(await page.$$eval('#list-host .vrow', (r) => r.length > 0), 'sidebar re-expanded: list rows back');
+  await page.goto(u('#/mesh/0'), { waitUntil: 'networkidle0' });   // back where this section started
+
   // ---- mesh 1: skinned animation ------------------------------------------
   await page.goto(u('#/mesh/1'), { waitUntil: 'networkidle0' });
   await page.waitForSelector('.anim-bar select');

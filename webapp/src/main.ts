@@ -13,6 +13,7 @@ import { diffIndexes } from './diff.js';
 import { VList } from './virtual-list.js';
 import { GlobalSearch } from './search.js';
 import { el, clear, append, badge, kvTable, rawJson, fmtInt, fmtDur, fmtBytes, fmtNum, debounce, placeholderCard, idLabel, makeResizable, versionLabel, platformIcon } from './ui.js';
+import { initPanels, expandPanelForContent } from './panels.js';
 import { effectiveName, setLocalName, buildNamesFile, replaceNames, hydrateNames } from './names.js';
 import { buildOverridesFile, replaceOverrides, effectiveTex, effectiveVariants,
   overrideStatus, systemTextureStatus, hydrateOverrides } from './texmap.js';
@@ -434,7 +435,15 @@ class App {
       this.refreshList({ keepScroll: false });
     });
 
-    window.addEventListener('hashchange', () => this.applyRoute(parseHash(location.hash)));
+    window.addEventListener('hashchange', () => {
+      const route = parseHash(location.hash);
+      // navigating to an item lands its details in the right panel: surface it
+      // if collapsed. Deliberately NOT done for the initial (load-time) route,
+      // so a collapsed panel stays collapsed across reloads; the sidebar is
+      // never auto-expanded.
+      if (route?.id != null) expandPanelForContent('details');
+      this.applyRoute(route);
+    });
 
     document.addEventListener('keydown', (e) => {
       const target = e.target as HTMLElement;
@@ -467,6 +476,9 @@ class App {
     // every fixed panel is user-resizable (widths persist in localStorage)
     makeResizable(document.getElementById('sidebar'), { edge: 'right', key: 'sidebar', min: 220, max: 640 });
     makeResizable(document.getElementById('details'), { edge: 'left', key: 'details', min: 220, max: 720 });
+    // ... and both side panels collapse to a chevron rail (panels.ts; runs
+    // after makeResizable so a collapsed boot can clear its inline width)
+    initPanels();
 
     this.searchInput = document.getElementById('global-search') as HTMLInputElement;
     this.search = new GlobalSearch(this, this.searchInput, document.getElementById('search-results')!);

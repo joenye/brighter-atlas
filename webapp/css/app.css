@@ -117,6 +117,7 @@ button { font: inherit; color: inherit; }
 #sidebar {
   width: 320px; flex: none; display: flex; flex-direction: column;
   background: var(--bg1); border-right: 1px solid var(--line); min-height: 0;
+  position: relative;   /* anchors the collapse toggle + resize handle */
 }
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--bg0); }
 #viewer { flex: 1; min-height: 0; overflow: auto; position: relative; }
@@ -131,6 +132,36 @@ button { font: inherit; color: inherit; }
   font-weight: 600; flex: none;
 }
 #details-body { overflow: auto; padding: 10px 12px; flex: 1; }
+
+/* ---------- collapsible side panels (panels.ts) ---------- */
+/* expanded: a slim chevron pull-tab straddling the panel's inner border,
+   vertically centered; sits in the viewer gutter so it never covers panel
+   content. Collapsed: the panel is a 32px rail and the whole rail is the
+   expand button. */
+.panel-toggle {
+  position: absolute; z-index: 27; top: 50%; transform: translateY(-50%);
+  width: 15px; height: 64px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg1); border: 1px solid var(--line);
+  color: var(--fg2); font-size: 13px; line-height: 1; cursor: pointer;
+}
+#sidebar > .panel-toggle { right: -15px; border-left: none; border-radius: 0 6px 6px 0; }
+#details > .panel-toggle { left: -15px; border-right: none; border-radius: 6px 0 0 6px; }
+.panel-toggle:hover { background: var(--bg3); color: var(--fg0); }
+.panel-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#sidebar.collapsed, #details.collapsed { width: 32px; }
+/* content + resize handle. The panel-ID prefix is load-bearing: children
+   like #cat-tabs set display via ID selectors, which would outrank a bare
+   class rule and leave icons peeking out of the collapsed rail. */
+#sidebar.collapsed > :not(.panel-toggle),
+#details.collapsed > :not(.panel-toggle) { display: none !important; }
+#sidebar.collapsed > .panel-toggle, #details.collapsed > .panel-toggle {
+  inset: 0; transform: none; width: auto; height: auto;
+  background: none; border: none; border-radius: 0;
+}
+#sidebar.collapsed > .panel-toggle:hover, #details.collapsed > .panel-toggle:hover {
+  background: var(--bg2); color: var(--fg0);
+}
 
 /* ---------- category tabs ---------- */
 #cat-tabs { padding: 8px; display: flex; flex-direction: column; gap: 2px; flex: none; }
