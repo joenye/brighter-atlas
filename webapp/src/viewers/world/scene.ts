@@ -33,9 +33,55 @@ const _scratchRotZ = new THREE.Matrix4();
 const _scratchReflect = new THREE.Matrix4();
 const _scratchLocal = new THREE.Matrix4();
 
+// Pure placement-matrix composer: translate(centre * tileUnits, z *
+// layerUnits) . rotateZ((quarterTurns + meshForwardQuarterTurns) * 90deg) .
+// optional reflect(-1,1,1) . optional local 3x4 matrix. This is exactly the
+// frame the room renderer places every mesh instance in (_placementMatrix
+// below supplies its inputs from the live shard). Exported so any other
+// consumer that must reproduce the SAME frame (world/effects-layer.ts
+// particle placement) calls this instead of re-deriving the math: sharing
+// the one implementation is what keeps them from drifting apart.
+export function composePlacementMatrix(
+  target: THREE.Matrix4,
+  {
+    centerX, centerY, z, quarterTurns, meshForwardQuarterTurns,
+    packedFlags = 0, localMatrix = null, tileUnits, layerUnits,
+    reflectionBaked = false, tieBias = 0,
+  }: {
+    centerX: number; centerY: number; z: number; quarterTurns: number;
+    meshForwardQuarterTurns: number; packedFlags?: number;
+    localMatrix?: number[] | null; tileUnits: number; layerUnits: number;
+    reflectionBaked?: boolean; tieBias?: number;
+  },
+): THREE.Matrix4 {
+  target.makeTranslation(
+    centerX * tileUnits, centerY * tileUnits, z * layerUnits - tieBias,
+  );
+  target.multiply(_scratchRotZ.makeRotationZ(
+    ((quarterTurns & 3) + meshForwardQuarterTurns) * Math.PI / 2,
+  ));
+  if ((packedFlags & 0x4) !== 0 && !reflectionBaked) {
+    target.multiply(_scratchReflect.makeScale(-1, 1, 1));
+  }
+  if (localMatrix) {
+    if (localMatrix.length !== 12 || localMatrix.some((value) => !Number.isFinite(value))) {
+      throw new Error('placement has invalid local matrix (expected 12 finite values)');
+    }
+    target.multiply(_scratchLocal.set(
+      localMatrix[0], localMatrix[1], localMatrix[2], localMatrix[3],
+      localMatrix[4], localMatrix[5], localMatrix[6], localMatrix[7],
+      localMatrix[8], localMatrix[9], localMatrix[10], localMatrix[11],
+      0, 0, 0, 1,
+    ));
+  }
+  return target;
+}
+
 // AB5 meshes face opposite the authored object-tree forward direction; the
-// index coordinate_system carries the same constant.
-const DEFAULT_MESH_FORWARD_QUARTER_TURNS = 2;
+// index coordinate_system carries the same constant. Exported so other
+// consumers of the exact placement frame (world/effects-layer.ts particle
+// placement) can default to it without duplicating the magic number.
+export const DEFAULT_MESH_FORWARD_QUARTER_TURNS = 2;
 // Spawned actors face 180° opposite the static mesh-forward convention.
 const SPAWN_FACING_HALF_TURN = 2;
 
@@ -941,37 +987,29 @@ export class WorldScene {
     const occurrence = shard.occurrences[occurrenceIndex];
     if (!occurrence) throw new Error(`placement references occurrence ${occurrenceIndex}`);
     const placementAnchor = this._placementAnchor(shard, occurrenceIndex);
-    const x = placementAnchor?.center[0] ?? finite(occurrence[oc.x]) + 0.5;
-    const y = placementAnchor?.center[1] ?? finite(occurrence[oc.y]) + 0.5;
+    const centerX = placementAnchor?.center[0] ?? finite(occurrence[oc.x]) + 0.5;
+    const centerY = placementAnchor?.center[1] ?? finite(occurrence[oc.y]) + 0.5;
     const z = finite(occurrence[oc.z]);
     const quarterTurns = finite(occurrence[oc.rotation_quarters], 0) & 3;
     const tieBias = this._coplanarRank(shard, occurrenceIndex) * this.layerUnits * 0.04;
-
-    target.makeTranslation(
-      x * this.tileUnits, y * this.tileUnits, z * this.layerUnits - tieBias,
-    );
-    target.multiply(_scratchRotZ.makeRotationZ(
-      (quarterTurns + this.meshForwardQuarterTurns) * Math.PI / 2,
-    ));
     const packedFlags = finite(occurrence[oc.packed_flags], 0);
-    if ((packedFlags & 0x4) !== 0 && !reflectionBaked) {
-      target.multiply(_scratchReflect.makeScale(-1, 1, 1));
-    }
 
     const matrixIndex = finite(placement[pc.matrix], -1);
+    let localMatrix: number[] | null = null;
     if (matrixIndex >= 0) {
       const values = shard.matrices?.[matrixIndex];
       if (!Array.isArray(values) || values.length !== 12 || values.some((value) => !Number.isFinite(value))) {
         throw new Error(`placement has invalid local matrix ${matrixIndex}`);
       }
-      target.multiply(_scratchLocal.set(
-        values[0], values[1], values[2], values[3],
-        values[4], values[5], values[6], values[7],
-        values[8], values[9], values[10], values[11],
-        0, 0, 0, 1,
-      ));
+      localMatrix = values;
     }
-    return target;
+    return composePlacementMatrix(target, {
+      centerX, centerY, z, quarterTurns,
+      meshForwardQuarterTurns: this.meshForwardQuarterTurns,
+      packedFlags, localMatrix,
+      tileUnits: this.tileUnits, layerUnits: this.layerUnits,
+      reflectionBaked, tieBias,
+    });
   }
 
   _spawnMatrix(shard: any, part: any, target: THREE.Matrix4): THREE.Matrix4 {

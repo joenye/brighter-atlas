@@ -1003,6 +1003,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         textures: world.index.textures || {},
         tileUnits: world.tileUnits,
         layerUnits: world.layerUnits,
+        meshForwardQuarterTurns: world.meshForwardQuarterTurns,
         anisotropy: TEXTURE_ANISOTROPY,
         // Merged mode activates far more room effect sets than a lone room
         // ever holds at once, and the alive budget must thin proportionally

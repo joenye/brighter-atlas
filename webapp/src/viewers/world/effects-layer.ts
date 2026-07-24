@@ -21,6 +21,7 @@ import * as THREE from '../../../vendor/three.module.js';
 import {
   EmitterSim, EffectsClock, planStrides, SINGLE_VIEW_ALIVE_BUDGET,
 } from './effects-sim.js';
+import { composePlacementMatrix, DEFAULT_MESH_FORWARD_QUARTER_TURNS } from './scene.js';
 import type { WorldEffectsDoc, EffectSystem } from '../../extract/world/effects.js';
 
 // World units of a particle at display scale 1.0 (1024 units per tile). The
@@ -35,6 +36,13 @@ export const EFFECTS_RENDER_ORDER = 3;
 
 // Normal-blend batches above this alive count skip the back-to-front sort.
 const MIX_SORT_CAP = 2048;
+
+// Scratch matrices for the placement-matrix composition in addRoom() (one
+// system instance at a time, never in the per-particle hot loop): reused
+// exactly like scene.ts's own scratch matrices, matching that module's
+// documented reuse discipline.
+const _scratchObj = new THREE.Matrix4();
+const _scratchOffset = new THREE.Matrix4();
 
 const pad5 = (value: number | string): string => String(value).padStart(5, '0');
 
@@ -70,20 +78,32 @@ void main() {
   #include <fog_fragment>
 }`;
 
-interface Anchor { x: number; y: number; z: number; c: number; s: number }
+// The placement matrix M_obj (viewers/world/scene.ts composePlacementMatrix)
+// for the occurrence a system is attached to, EXACTLY the frame the room
+// renderer draws the owning mesh in: translate(owner-dimensions centre) .
+// rotateZ(occ.rot + meshForward) . optional reflect . optional local
+// matrix. `m` holds THREE.Matrix4.elements (column-major 16 numbers); the
+// per-particle hot loop in _fill() reads only the 12 affine entries,
+// inlined there (never via a per-call tuple allocation). A pure translation
+// (the pre-v2 anchor) is the degenerate case of this same matrix.
+interface Anchor { m: Float32Array }
 
 interface InstanceRec {
   key: string;
   system: EffectSystem;
   anchor: Anchor;
-  emitters: { sim: EmitterSim; batchKey: string }[];
+  // boneOffset: the emitter's bound rig bone's rest-world translation
+  // (native units, in the SAME local frame as the emitter's own origin),
+  // added to the simulated position before `anchor` transforms it to world;
+  // [0,0,0] for a root-anchored (unrigged, or no bone attachment) emitter.
+  emitters: { sim: EmitterSim; batchKey: string; boneOffset: [number, number, number] }[];
 }
 
 interface Batch {
   key: string;
   texId: number;         // ab3 container ordinal, -1 = built-in fallback
   blend: 'add' | 'mix';
-  members: { sim: EmitterSim; anchor: Anchor }[];
+  members: { sim: EmitterSim; anchor: Anchor; boneOffset: [number, number, number] }[];
   capacity: number;
   count: number;
   geometry: THREE.InstancedBufferGeometry;
@@ -107,6 +127,12 @@ export interface WorldEffectsLayerOptions {
   textures: Record<string, any>;           // world index texture routing table
   tileUnits: number;
   layerUnits: number;
+  // The build's mesh-forward convention (world index coordinate_system),
+  // the SAME value scene.ts uses to place every mesh instance: particle
+  // placement must use it too, or systems land 180 degrees off their mesh.
+  // Defaults to the scene.ts default so a caller that has not wired the
+  // real value still gets a self-consistent frame.
+  meshForwardQuarterTurns?: number;
   anisotropy?: number;
   aliveBudget?: number;
 }
@@ -119,6 +145,7 @@ export class WorldEffectsLayer {
   private _textures: Record<string, any>;
   private _tileUnits: number;
   private _layerUnits: number;
+  private _meshForwardQuarterTurns: number;
   private _anisotropy: number;
   private _budget: number;
   private _systemsBySlot: Map<number, EffectSystem>;
@@ -142,6 +169,7 @@ export class WorldEffectsLayer {
 
   constructor({
     root, doc, url, textures, tileUnits, layerUnits,
+    meshForwardQuarterTurns = DEFAULT_MESH_FORWARD_QUARTER_TURNS,
     anisotropy = 8, aliveBudget = SINGLE_VIEW_ALIVE_BUDGET,
   }: WorldEffectsLayerOptions) {
     this.root = root;
@@ -151,6 +179,7 @@ export class WorldEffectsLayer {
     this._textures = textures || {};
     this._tileUnits = tileUnits;
     this._layerUnits = layerUnits;
+    this._meshForwardQuarterTurns = meshForwardQuarterTurns;
     this._anisotropy = anisotropy;
     this._budget = aliveBudget;
     this._systemsBySlot = new Map((doc?.systems || []).map((s) => [s.slot, s]));
@@ -179,36 +208,54 @@ export class WorldEffectsLayer {
       if (!system || !system.emitters.length) continue;
       if (opts.loopOnly && !system.loop) continue;
       const cell = Array.isArray(att.cell) ? att.cell : [0, 0, 0];
-      // native-unit offset from the tile placement point (cell centre, floor
-      // layer) to the owning occurrence's real anchor: XY at its bounding-box
-      // centre, Z at its top (hanging systems) or base (grounded systems).
-      // Absent on older docs or bbox-less occurrences, in which case the
-      // system stays at the tile corner / floor exactly as before.
-      const off3 = Array.isArray(att.anchor) ? att.anchor : [0, 0, 0];
-      const dx = Number(off3[0]) || 0;
-      const dy = Number(off3[1]) || 0;
-      const dz = Number(off3[2]) || 0;
-      const angle = (((Number(att.rot) | 0) % 4 + 4) % 4) * (Math.PI / 2);
-      const anchor: Anchor = {
-        x: (Number(cell[0]) + 0.5) * this._tileUnits + offset[0] + dx,
-        y: (Number(cell[1]) + 0.5) * this._tileUnits + offset[1] + dy,
-        z: (Number(cell[2]) | 0) * this._layerUnits + dz,
-        c: Math.cos(angle),
-        s: Math.sin(angle),
-      };
+      // M_obj: EXACTLY the frame scene.ts places the owning mesh instance
+      // in (composePlacementMatrix, shared with scene.ts's own
+      // _placementMatrix so the two can never drift apart) -- owner-
+      // dimensions centre pivot, occ.z, Rz(occ.rot + meshForward), optional
+      // reflect, optional local matrix -- then the room's own display
+      // offset (merged all-rooms view) composed on top. `center`/
+      // `packedFlags`/`matrix` are absent on older docs (pre-v2
+      // extraction), in which case this degrades to the tile-centre pivot
+      // rotated by att.rot alone, same as the pre-v2 anchor.
+      const center = Array.isArray(att.center) ? att.center : [Number(cell[0]) + 0.5, Number(cell[1]) + 0.5];
+      const packedFlags = Number(att.packedFlags) || 0;
+      const localMatrix = Array.isArray(att.matrix) && att.matrix.length === 12
+        ? att.matrix.map(Number) : null;
+      composePlacementMatrix(_scratchObj, {
+        centerX: Number(center[0]), centerY: Number(center[1]),
+        z: Number(cell[2]) || 0, quarterTurns: Number(att.rot) | 0,
+        meshForwardQuarterTurns: this._meshForwardQuarterTurns,
+        packedFlags, localMatrix,
+        tileUnits: this._tileUnits, layerUnits: this._layerUnits,
+      });
+      _scratchObj.premultiply(_scratchOffset.makeTranslation(offset[0], offset[1], 0));
+      const anchor: Anchor = { m: Float32Array.from(_scratchObj.elements) };
       const rec: InstanceRec = { key: `${id}|${key}`, system, anchor, emitters: [] };
+      // Rigged bone binding: attachments.rooms[].bones (rest-WORLD bone
+      // translations for the owning RIGGED occurrence) plus each emitter's
+      // own `bone` (an integer bone index, or null -> root). Neither side
+      // present -> [0,0,0], i.e. root-anchored exactly like a static object.
+      const bones = Array.isArray(att.bones) ? att.bones : null;
       system.emitters.forEach((emitter, index) => {
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
         const texId = emitter.sprite?.images?.length ? Number(emitter.sprite.images[0]) : -1;
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
-        rec.emitters.push({ sim, batchKey: `${texId}|${blend}` });
+        let boneOffset: [number, number, number] = [0, 0, 0];
+        const boneIndex = emitter.bone;
+        if (bones && Number.isInteger(boneIndex) && boneIndex! >= 0 && boneIndex! < bones.length) {
+          const b = bones[boneIndex!];
+          if (Array.isArray(b) && b.length === 3) {
+            boneOffset = [Number(b[0]) || 0, Number(b[1]) || 0, Number(b[2]) || 0];
+          }
+        }
+        rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, boneOffset });
       });
       recs.push(rec);
     }
     this._rooms.set(id, recs);
     for (const rec of recs) {
-      for (const { sim, batchKey } of rec.emitters) {
-        this._batchFor(batchKey).members.push({ sim, anchor: rec.anchor });
+      for (const { sim, batchKey, boneOffset } of rec.emitters) {
+        this._batchFor(batchKey).members.push({ sim, anchor: rec.anchor, boneOffset });
       }
     }
     this._rebalance();
@@ -288,7 +335,10 @@ export class WorldEffectsLayer {
         const bySlot = Number.isFinite(slot) && rec.system.slot === slot;
         const byName = text != null
           && rec.system.names.some((n) => n.name.includes(text));
-        if (bySlot || byName) return { x: rec.anchor.x, y: rec.anchor.y, z: rec.anchor.z };
+        if (bySlot || byName) {
+          const m = rec.anchor.m;
+          return { x: m[12], y: m[13], z: m[14] };
+        }
       }
     }
     return null;
@@ -517,8 +567,9 @@ export class WorldEffectsLayer {
   }
 
   // Per-frame scratch fill: evaluate the closed form per alive particle and
-  // write sequentially into [0, alive). Positions are anchored (translate +
-  // quarter-turn) here on the CPU so one batch serves every instance.
+  // write sequentially into [0, alive). Positions are anchored (M_obj . bone
+  // offset, see the Anchor comment above) here on the CPU so one batch
+  // serves every instance.
   private _fill(camera: THREE.Camera | null): void {
     const T = this.clock.t;
     const sizeScale = SPRITE_SCALE_UNITS / this._tileUnits;
@@ -534,13 +585,20 @@ export class WorldEffectsLayer {
       let idx = 0;
       const sortable = batch.blend === 'mix' && rootMatrix != null;
       for (const member of batch.members) {
-        const { sim, anchor } = member;
+        const { sim, anchor, boneOffset } = member;
+        const m = anchor.m;
+        const [bx, by, bz] = boneOffset;
         sim.ensure(T);
         sim.evaluate(T, (x, y, z, scale, r, g, b, a, roll) => {
           if (idx >= cap) return;
-          const wx = anchor.x + anchor.c * x - anchor.s * y;
-          const wy = anchor.y + anchor.s * x + anchor.c * y;
-          const wz = anchor.z + z;
+          // M_obj . (bone offset + simulated position), inlined rather than
+          // a helper returning a tuple: no per-particle allocation, since
+          // this loop runs thousands of times a frame across a merged room
+          // set.
+          const lx = x + bx; const ly = y + by; const lz = z + bz;
+          const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+          const wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+          const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
           const at4 = idx * 4;
           posSize[at4] = wx;
           posSize[at4 + 1] = wy;

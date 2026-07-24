@@ -31,6 +31,7 @@ import * as catalogMod from './catalog.js';
 import * as animNamesMod from './anim-names.js';
 import * as meshNamesMod from './mesh-names.js';
 import * as effectsMod from './effects.js';
+import { decodeSkeleton, restWorldTranslations } from '../skeleton.js';
 
 
 // default JSON fetch for world data files (same contract as profile.js):
@@ -385,12 +386,46 @@ export async function extractWorld({
   // only cancellation). Byte-identity of every existing output is untouched:
   // the stage only reads shared state and writes one new key.
   step('effects', 0, 1);
+  // Rig rest-world bone translations, needed for particle-effect bone
+  // binding (effects.js): every distinct rig ANY mesh references, decoded
+  // once from ab6 and reduced via forward kinematics to rest-WORLD bone
+  // translations (extract/skeleton.js). 'world' always requires bundle 6
+  // (CAT_BUNDLES.world), so files[6]/frames[6] are expected present; the
+  // guard below is belt-and-braces, matching this module's own "never let a
+  // recovery-only stage fail the extraction" discipline. A rig that fails to
+  // decode (malformed skeleton) simply stays out of the map: effects.js
+  // degrades any reference to it to bone:null (root) placement.
+  const rigBoneTranslations = new Map<number, number[][]>();
+  if (files[6] && frames[6]) {
+    const rigIds = new Set<number>();
+    for (const entry of dt.meshDir) if (entry.sref >= 2) rigIds.add(entry.sref - 2);
+    if (rigIds.size) {
+      try {
+        const ab6 = new Uint8Array(await files[6].arrayBuffer());
+        for (const rigId of rigIds) {
+          const e = frames[6].entries[rigId];
+          if (!e) continue;
+          try {
+            const dec = decodeObject(6, ab6.subarray(e.offset, e.offset + e.length));
+            const { bones } = decodeSkeleton(dec, { i: rigId });
+            rigBoneTranslations.set(rigId, restWorldTranslations(bones));
+          } catch { /* malformed skeleton: this rig stays unresolved */ }
+        }
+      } catch { /* bundle 6 unreadable: every rig stays unresolved */ }
+    }
+  }
   try {
     const effects = effectsMod.extractWorldEffects(rows, pool.values, ab0, profile, {
       charset: dt.charset, symbols: dt.symbols, strings: poolStrings, poolRegistryRefs,
       textureSlots: assetMaps.textureSlots, roomIds: ctx.roomIds,
-      occupancy: (id) => ctx.occupancy(id), bounds3f: (slot) => ctx.graph.bounds3f(slot),
+      occupancy: (id) => ctx.occupancy(id),
       spawnActors: spawnActorsBySlot,
+      meshSkeletonRef: (meshId) => (dt.meshDir[meshId]?.sref ?? 0),
+      roomPlacements: (occurrences) => ctx.graph.roomPlacements(occurrences as any) as any,
+      occurrenceAnchor: (hit) => ctx.graph.occurrenceAnchor(hit as any, {
+        tileUnits: shardsMod.TILE_UNITS, meshForwardQuarterTurns: shardsMod.MESH_FORWARD_QUARTER_TURNS,
+      }),
+      rigBoneTranslations,
       bail, onStep: (d, t) => step('effects', d, t),
     });
     await sink.derivedPut(versionId, 'world:effects', effects);

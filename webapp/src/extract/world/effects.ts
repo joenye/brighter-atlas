@@ -101,6 +101,12 @@ export interface EffectConfig {
 export interface EffectEmitter {
   slot: number; family: number;
   burst: number | null; shape: number | null;  // -> configs[slot]
+  // rig bone binding: the emitter's own attachment field, detected by TAG
+  // (an int, tag 0x0a) never by absolute op position. Non-null only means
+  // something when the owning attachment's mesh is RIGGED (see
+  // attachments.rooms[].bones); a symbol (tag 0x0f) or the field's absence
+  // both mean "no bone, use the object/mesh root", so both decode to null.
+  bone: number | null;
   sprite: { material: number; images: number[] } | null;  // ab3 container ordinals
   blend: 'add' | 'mix' | null;                 // emitter override, else system's
   life: { ticks: number; op: number } | null;
@@ -144,10 +150,22 @@ export interface WorldEffectsDoc {
   configs: Record<string, EffectConfig>;       // key = String(slot), ascending insert
   systems: EffectSystem[];                     // ascending slot
   attachments: {
+    // Placement-frame inputs for the OWNING occurrence, sufficient for a
+    // consumer to reproduce the exact mesh-placement matrix scene.ts uses
+    // (see viewers/world/scene.ts composePlacementMatrix): `center` is the
+    // owner-dimensions anchor centre (tile-fractional units, == scene.ts
+    // _placementAnchor.center); `cell[2]` is occ.z (layer units); `rot` is
+    // occ.rotation_quarters; `packedFlags` carries the reflect bit (0x4);
+    // `matrix` is the occurrence's representative local 3x4 matrix (row-
+    // major, 12 values) or null for identity. `bones` is the RIGGED owner's
+    // rest-WORLD bone translations ([x,y,z] per bone index), or null when
+    // the owner is static, unrigged, or its rig could not be resolved (an
+    // emitter attachment then falls back to the object root, never crashes).
     rooms: { room: number; cell: [number, number, number]; occurrence: number;
              resource: number; rot: number; via: 'resource' | 'secondary';
              system: number; controller: number | null;
-             anchor: [number, number, number] }[]; // sorted (room, occurrence, system, controller)
+             center: [number, number]; packedFlags: number;
+             matrix: number[] | null; bones: number[][] | null }[]; // sorted (room, occurrence, system, controller)
     actors: { actor: number; label: string | null; system: number;
               controller: number | null }[];                // sorted (actor, system)
     owners: { owner: number; system: number; controller: number | null }[]; // sorted (owner, system)
@@ -160,8 +178,24 @@ export interface WorldEffectsShared {
   textureSlots: Map<number, number[]>;        // material slot -> ab3 ids
   roomIds: number[];
   occupancy: (roomId: number) => { occurrences: RoomOccurrence[] }; // read-only cached
-  bounds3f: (ownerSlot: number) => number[] | null; // owner's native-unit model envelope, read-only cached
   spawnActors: Map<number, { owner_slot: number; label: string | null }>;
+  // Mesh-frame placement + rig-binding inputs (see attachments.rooms above).
+  // meshSkeletonRef: ab0 mesh directory region 8 index [3] (0 = static).
+  // roomPlacements: the SAME occurrence/mesh join buildRoomShard uses to
+  // fill placement rows (shards.ts), reused here read-only so mesh ordinals
+  // and local matrices never drift from what the room actually renders.
+  // occurrenceAnchor: the exact owner-dimensions centre scene.ts's
+  // _placementAnchor stores per occurrence (tileUnits/meshForwardQuarterTurns
+  // are baked in by the caller, matching the build's coordinate_system).
+  // rigBoneTranslations: rig id (ab6 object index, == skeleton_ref-2) ->
+  // rest-WORLD bone translations, precomputed once per build; a rig absent
+  // from this map could not be decoded (missing bundle, malformed skeleton)
+  // and every reference to it must degrade to bone:null (root) placement.
+  meshSkeletonRef: (meshId: number) => number;
+  roomPlacements: (occurrences: RoomOccurrence[]) =>
+    { occurrence: RoomOccurrence; part: { mesh: number; local_matrix_game?: number[] | null } }[];
+  occurrenceAnchor: (hit: RoomOccurrence) => [number, number, string];
+  rigBoneTranslations: Map<number, number[][]>;
   bail: () => void;                           // cancellation check, throws on cancel
   onStep?: (done: number, total: number) => void;
 }
@@ -484,35 +518,6 @@ function windowsOf(e: EffectExtra): [number, number][] | null {
     out.push(...w);
   }
   return out.length ? out : null;
-}
-
-// ------------------------------------------------------ room-attachment anchor
-
-// The middle of a sorted sample (even counts average the two middle values);
-// null on an empty sample.
-function medianOf(values: number[]): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-// Native-unit offset from a room occurrence's placement pivot (tile centre,
-// floor layer) to a system's world origin: XY at the owning occurrence's own
-// bounding-box centre (its real centroid, not the tile corner), Z at the
-// bounding-box top for a hanging system or the base for a grounded one (a
-// hanging chandelier's glow belongs near its housing, not the floor it is
-// nominally placed on; a grounded emitter's spray belongs at the object's
-// foot, not its model-space midpoint). Absent bounds degrade to the pivot
-// itself (an all-zero offset), so an occurrence with no resolvable envelope
-// keeps today's tile-corner / floor placement rather than guessing.
-function roomSystemAnchor(bbox: number[] | null, hanging: boolean): [number, number, number] {
-  if (!bbox) return [0, 0, 0];
-  return [
-    Math.round((bbox[0] + bbox[3]) / 2),
-    Math.round((bbox[1] + bbox[4]) / 2),
-    Math.round(hanging ? bbox[5] : bbox[2]),
-  ];
 }
 
 // ------------------------------------------------------------ empty document
@@ -1066,23 +1071,6 @@ function extractEffects(
   audit.systems = systemDocs.length;
   audit.emitters = emitterTotal;
 
-  // A system "hangs" when its emitters' own spawn-shape origins sit, on the
-  // median, below their attach point (negative local Z: the room-attachment
-  // anchor below picks the owning occurrence's bounding-box top for these,
-  // its base otherwise). Systems with no shape-classified emitter default to
-  // grounded (their emitters have no local origin to vote hanging with).
-  const hangingBySystem = new Map<number, boolean>();
-  for (const sys of systemDocs) {
-    const originZ: number[] = [];
-    for (const emitter of sys.emitters) {
-      if (emitter.shape == null) continue;
-      const info = configInfo.get(emitter.shape);
-      if (info && info.kind === 'shape' && info.center) originZ.push(info.center[2]);
-    }
-    const median = medianOf(originZ);
-    hangingBySystem.set(sys.slot, median !== null && median < 0);
-  }
-
   // configs record: every classified reference target of a shipped emitter
   const configs: Record<string, EffectConfig> = {};
   for (const slot of [...shippedConfigs].sort((a, b) => a - b)) {
@@ -1140,14 +1128,65 @@ function extractEffects(
     onStep(progressBase + r, progressTotal);
     const roomId = roomIds[r];
     const { occurrences } = shared.occupancy(roomId);
+    // Every rendered mesh part for this room, joined back to its owning
+    // occurrence: the SAME join buildRoomShard uses to fill placement rows
+    // (shards.ts), reused read-only so the mesh ordinal(s) and local matrix
+    // recorded here can never drift from what the room actually renders. A
+    // resolution failure degrades every occurrence in the room to no parts
+    // (bones stay null, matrix stays null: root-anchored placement, the
+    // graceful default), never fails the room.
+    const occIndexOf = new Map<RoomOccurrence, number>();
+    occurrences.forEach((hit, index) => occIndexOf.set(hit, index));
+    const partsByOcc = new Map<number, { mesh: number; matrix: number[] | null }[]>();
+    try {
+      for (const { occurrence, part } of shared.roomPlacements(occurrences)) {
+        const index = occIndexOf.get(occurrence);
+        if (index === undefined) continue;
+        const entry = {
+          mesh: Number(part.mesh),
+          matrix: Array.isArray(part.local_matrix_game) ? part.local_matrix_game.map(Number) : null,
+        };
+        const list = partsByOcc.get(index);
+        if (list) list.push(entry); else partsByOcc.set(index, [entry]);
+      }
+    } catch { /* placement join failed: every occurrence below keeps no parts */ }
+
     for (let index = 0; index < occurrences.length; index++) {
       const hit = occurrences[index];
-      // the owning occurrence's native-unit model envelope: read once per
-      // occurrence (bounds3f is itself memoized by owner slot), never per
-      // attachment. An inverted-bounds throw on a malformed owner degrades to
-      // "no envelope" like every other absence here, never fails the room.
-      let bbox: number[] | null = null;
-      try { bbox = shared.bounds3f(hit.resource); } catch { bbox = null; }
+      // Placement-frame centre: the owner-dimensions anchor scene.ts stores
+      // per occurrence (== _placementAnchor.center). Falls back to the tile
+      // centre (today's placement) if it cannot be resolved.
+      let center: [number, number] = [
+        (Number(hit.cell[0]) || 0) + 0.5, (Number(hit.cell[1]) || 0) + 0.5,
+      ];
+      try {
+        const resolved = shared.occurrenceAnchor(hit);
+        if (Number.isFinite(resolved[0]) && Number.isFinite(resolved[1])) {
+          center = [resolved[0], resolved[1]];
+        }
+      } catch { /* keep the tile-centre default */ }
+      const packedFlags = hit.packedFlags ?? 0;
+      const parts = partsByOcc.get(index) || [];
+      // Representative local matrix: the occurrence's first part that
+      // carries one. Effect-bearing objects observed so far place their
+      // mesh instance(s) at identity, so this is exact today; a future
+      // occurrence with a genuine multi-matrix layout degrades to the
+      // first carrying part's matrix.
+      const matrix = parts.find((p) => p.matrix)?.matrix ?? null;
+      // RIGGED discrimination: any part's mesh with a nonzero skeleton_ref
+      // (ab0 mesh directory region 8 index [3]) marks the whole occurrence
+      // rigged (a multi-mesh object's parts are expected to share one rig).
+      // Bones resolve from the precomputed rest-world translation table; a
+      // rig this build could not decode simply leaves bones null.
+      let bones: number[][] | null = null;
+      for (const part of parts) {
+        let skeletonRef = 0;
+        try { skeletonRef = shared.meshSkeletonRef(part.mesh); } catch { skeletonRef = 0; }
+        if (skeletonRef >= 2) {
+          const resolved = shared.rigBoneTranslations.get(skeletonRef - 2);
+          if (resolved) { bones = resolved; break; }
+        }
+      }
       // deterministic tie order: resource-derived pairs first; secondary pairs
       // only when they add a (system, controller) pair the occurrence lacks
       const emitted = new Set<string>();
@@ -1164,7 +1203,7 @@ function extractEffects(
             resource: slot,
             rot: hit.rotationQuarters ?? 0,
             via, system, controller,
-            anchor: roomSystemAnchor(bbox, hangingBySystem.get(system) === true),
+            center, packedFlags, matrix, bones,
           });
         }
       };
@@ -1312,11 +1351,39 @@ function buildEmitter(
     direction = take(vec3s[0]);
     acceleration = take(vec3s[vec3s.length - 1]);
   }
+  // rig bone binding: detected by TAG and SHAPE, never a fixed op index. The
+  // attachment field sits in a two-slot pattern next to a marker symbol
+  // (observed as "$additional_transform"): a root-anchored emitter fills
+  // ITS OWN slot with a second copy of that same marker (the symbol
+  // appears twice, adjacent); a bone-bound emitter fills that slot with an
+  // int instead (the bone index, tag 0x0a), leaving a single marker
+  // occurrence. Scanning for the marker and checking BOTH neighbours (build
+  // layouts are not assumed to order the pair one way) finds the field
+  // regardless of its absolute op position: other unrelated top-level ints
+  // on this build (fixed configuration flags) never sit adjacent to the
+  // marker, so they are never mistaken for it.
+  let bone: number | null = null;
+  for (let i = 0; i < ops.length; i++) {
+    const e = ops[i];
+    if (e.kind !== 'symbol' || e.name === null || !e.name.includes('transform') || consumed.has(i)) continue;
+    const before = i > 0 ? ops[i - 1] : null;
+    const after = i + 1 < ops.length ? ops[i + 1] : null;
+    const dupBefore = !!before && before.kind === 'symbol' && before.name === e.name && !consumed.has(i - 1);
+    const dupAfter = !!after && after.kind === 'symbol' && after.name === e.name && !consumed.has(i + 1);
+    const intBefore = !!before && before.kind === 'int' && Number.isInteger(before.value) && before.value >= 0 && !consumed.has(i - 1);
+    const intAfter = !!after && after.kind === 'int' && Number.isInteger(after.value) && after.value >= 0 && !consumed.has(i + 1);
+    if (dupAfter) { consumed.add(i); consumed.add(i + 1); }              // this slot IS the marker; the copy follows: root
+    else if (dupBefore) { consumed.add(i - 1); consumed.add(i); }        // the copy precedes this marker: root
+    else if (intBefore) { bone = before!.value; consumed.add(i - 1); consumed.add(i); }
+    else if (intAfter) { bone = after!.value; consumed.add(i); consumed.add(i + 1); }
+    else { consumed.add(i); }   // lone marker with no paired slot either side: still root
+    break;   // one attachment field per emitter
+  }
   const extra: EffectExtra[] = [];
   for (let i = 0; i < ops.length; i++) if (!consumed.has(i)) extra.push(ops[i]);
   return {
     slot: row.slot, family: row.runtime,
-    burst, shape, sprite, blend,
+    burst, shape, bone, sprite, blend,
     life: life && { ticks: life.ticks, op: life.op },
     fade_in: fadeIn && { ticks: fadeIn.ticks, op: fadeIn.op },
     fade_out: fadeOut && { ticks: fadeOut.ticks, op: fadeOut.op },
