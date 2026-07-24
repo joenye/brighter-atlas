@@ -177,6 +177,7 @@ export class EmitterSim {
   cycleCount: number;     // spawns per cycle (windowed)
   period: number | null;  // cycle length in ticks (looping windowed)
   totalCount: number;     // finite spawn count for one-shot schedules
+  densityScale: number;   // per-particle alpha correction for the steady-population boost below
   // thinning + ring state
   k: number;
   capacity: number;
@@ -253,9 +254,33 @@ export class EmitterSim {
           this.totalCount = total;
         }
       }
-    } else if (rate > 0 && !system.loop && cycleTicks > 0) {
-      // one-shot continuous stream bounded by the system cycle
-      this.totalCount = Math.floor(cycleTicks / this.step) + 1;
+    }
+    // A genuinely continuous (non-windowed) stream never gets a finite
+    // totalCount from the system cycle: loop detection ($infinite) is a
+    // fragile symbol match, so a continuous stream that is ever
+    // misclassified as non-looping must keep streaming rather than silently
+    // truncate to a single cycle. Only windowed one-shots (handled above)
+    // bound totalCount.
+
+    // Minimum-steady-population boost: a sparse continuous stream (few
+    // particles alive at once) shows the raw fade-in/full/fade-out/death of
+    // its lone alive particle as a visible pulse instead of a steady glow.
+    // Sub-dividing the spawn interval densifies the schedule so ages
+    // [0, life) are always well covered, and densityScale corrects each
+    // particle's alpha down by the same factor so additive brightness is
+    // unchanged (many faint, age-staggered copies sum to the same steady
+    // glow). This only ever applies to genuinely continuous streams (never
+    // windowed/one-shot bursts, which must keep their exact per-burst
+    // counts), and it only changes `step`: the schedule stays a pure
+    // function of spawn index, so seek/determinism/frozen-clock
+    // byte-identity is preserved.
+    const MIN_STEADY = 8;
+    const nativeAlive = (this.rate * this.life) / this.tickRate;
+    this.densityScale = 1;
+    if (this.windows == null && this.totalCount === Infinity && this.rate > 0 && nativeAlive < MIN_STEADY) {
+      const boost = MIN_STEADY / nativeAlive;
+      this.step = this.tickRate / (this.rate * boost);
+      this.densityScale = 1 / boost;
     }
 
     this.k = 1;
@@ -263,10 +288,13 @@ export class EmitterSim {
     this.setStride(1);
   }
 
-  /** Steady-state alive estimate before stride thinning. */
+  /** Steady-state alive estimate before stride thinning. Derived from
+   *  life/step (not rate directly) so it tracks the density boost above:
+   *  for an unboosted schedule step === tickRate/rate and this is identical
+   *  to the native rate*life/tickRate estimate. */
   expectedAlive(): number {
     if (!(this.rate > 0)) return 0;
-    return (this.rate * this.life) / this.tickRate;
+    return this.life / this.step;
   }
 
   /** Apply a deterministic stride: only spawn indices n % k == 0 are kept,
@@ -449,7 +477,7 @@ export class EmitterSim {
         r0c + (r1c - r0c) * u,
         g0c + (g1c - g0c) * u,
         b0c + (b1c - b0c) * u,
-        (a0c + (a1c - a0c) * u) * env,
+        (a0c + (a1c - a0c) * u) * env * this.densityScale,
         this.rot0[slot] + this.spin * age);
     }
   }

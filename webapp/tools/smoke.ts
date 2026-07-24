@@ -838,8 +838,11 @@ async function worldSuite(browser: any, base: string) {
   ok(fxLayer.systems === 2 && fxLayer.emitters === 3,
     `effects layer builds the room's 2 systems / 3 emitters (${JSON.stringify(fxLayer)})`);
   // Frozen clock: the alive set is a pure function of the clock, so the
-  // count is exactly analytic against the fixture doc's tick rate: torch
-  // 20/s x 120 ticks = 4, jet 40/s x 300 = 20, ring 30/s x 200 = 10.
+  // count is exactly analytic against the fixture doc's tick rate: jet 40/s
+  // x 300 = 20, ring 30/s x 200 = 10. The torch's native overlap (20/s x 120
+  // ticks = 4) is below MIN_STEADY, so the continuous-emission density boost
+  // sub-divides its schedule up to a steady 8 (densityScale corrects alpha
+  // so total brightness is unchanged); total 20 + 10 + 8 = 38.
   const fxFrozen = await page.evaluate(() => {
     const fx = window.__bs.worldView.effectsApi;
     fx.setRunning(false);
@@ -854,8 +857,8 @@ async function worldSuite(browser: any, base: string) {
       identical: snapA === snapB, bytes: snapA.length,
     };
   });
-  ok(fxFrozen.liveA === 34 && fxFrozen.liveB === 34,
-    `frozen clock 2000 gives the exact analytic alive count (${fxFrozen.liveA}/${fxFrozen.liveB} = 34)`);
+  ok(fxFrozen.liveA === 38 && fxFrozen.liveB === 38,
+    `frozen clock 2000 gives the exact analytic alive count incl. the torch density boost (${fxFrozen.liveA}/${fxFrozen.liveB} = 38)`);
   ok(fxFrozen.draws === 3, `one draw per sprite x blend batch (${fxFrozen.draws} = 3)`);
   ok(fxFrozen.identical === true,
     `same clock twice -> byte-identical particle attribute buffers (${fxFrozen.bytes} chars compared)`);
@@ -892,7 +895,7 @@ async function worldSuite(browser: any, base: string) {
     fx.setClock(2000);
     return fx.info();
   });
-  ok(fxRestored.live === 34 && fxRestored.draws === 3,
+  ok(fxRestored.live === 38 && fxRestored.draws === 3,
     `re-ticking Effects rebuilds the exact frozen state (${fxRestored.live} live, ${fxRestored.draws} draws)`);
   await page.evaluate(() => window.__bs.worldView.effectsApi.setRunning(true));
 
@@ -930,6 +933,34 @@ async function worldSuite(browser: any, base: string) {
     `searching by an attached room's name finds both room-1 systems (${JSON.stringify(searchByRoom)})`);
   await page.evaluate(() => { const inp = document.querySelector('.we-search'); inp.value = ''; inp.dispatchEvent(new Event('input')); });
   await sleep(300);
+
+  // ---- continuous-emission density boost: sparse torch no longer pulses ------
+  // The torch fixture emitter has native overlap 4 (20/s x 120 ticks),
+  // below MIN_STEADY, so its schedule is sub-divided to a steady population
+  // instead of the raw ~4 whose fade-in/full/fade-out/death would otherwise
+  // read as a "clumsy repeat" pulse. Scrub to two different developed clocks
+  // (both well past life, so the ring is fully ramped) and confirm the alive
+  // count holds steady at a MIN_STEADY-ish population at both, rather than
+  // swinging with the raw fade envelope.
+  ok(await page.evaluate(() => window.__bs.effectsView.select('fixture_torch_idle')),
+    'effectsView.select() finds the sparse torch fixture system');
+  await sleep(500);
+  const torchSteady = await page.evaluate(() => {
+    const scrub = document.querySelector('.we-scrub');
+    scrub.value = '150';
+    scrub.dispatchEvent(new Event('input'));
+    const liveA = window.__bs.effectsView.previewInfo().live;
+    scrub.value = '300';
+    scrub.dispatchEvent(new Event('input'));
+    const liveB = window.__bs.effectsView.previewInfo().live;
+    return { liveA, liveB };
+  });
+  ok(torchSteady.liveA >= 7 && torchSteady.liveB >= 7,
+    `sparse torch emitter (native overlap 4) holds a boosted, near-MIN_STEADY population `
+    + `at a developed clock (${JSON.stringify(torchSteady)})`);
+  ok(torchSteady.liveA === torchSteady.liveB,
+    `boosted population is identical across two different frozen clocks `
+    + `(${torchSteady.liveA} === ${torchSteady.liveB}) -> the clumsy-repeat throb is gone`);
 
   // select + preview a specific system by name (debug API), then the transport
   ok(await page.evaluate(() => window.__bs.effectsView.select('fixture_fountain_loop')),

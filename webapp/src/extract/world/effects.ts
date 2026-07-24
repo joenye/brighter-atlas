@@ -1282,8 +1282,19 @@ function buildEmitter(
   let fadeIn: typeof life = null;
   let fadeOut: typeof life = null;
   if (template.fades === 'three' && durations.length >= 3) {
-    fadeIn = take(durations[1]);
-    fadeOut = take(durations[durations.length - 1]);
+    // Some families repeat the total lifetime as a trailing duration entry
+    // (structural padding, not a second fade boundary). Strip trailing
+    // entries that merely duplicate life before picking the fade slots, so
+    // fade_out binds to the true second fade duration instead of being
+    // inflated to the whole lifetime.
+    const fadeSlots = durations.slice(1);
+    while (fadeSlots.length > 2 && life && fadeSlots[fadeSlots.length - 1].ticks === life.ticks) {
+      fadeSlots.pop();
+    }
+    if (fadeSlots.length >= 2) {
+      fadeIn = take(fadeSlots[0]);
+      fadeOut = take(fadeSlots[1]);
+    }
   } else if (template.fades === 'two' && durations.length >= 2) {
     fadeOut = take(durations[1]);
   }
