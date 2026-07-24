@@ -935,6 +935,41 @@ if (!snail) {
   console.log(`  screenshot: ${snailShot}`);
 }
 
+// ---- 8a4. model-page particle effects: Giant Rat (ambient aura) ----------------
+// The rat's aura is a generic, centre-less ambient system (shared by ~2000
+// creature owners, so it does not carry the creature's name), attached
+// through the same owner-slot join model.ts uses. Unlike the snail's timed
+// burst this is an infinite ambient loop, so it should already be live once
+// the model page settles: a good regression check that particles anchor on
+// the body (not the floor/feet).
+const rat = await page.evaluate(async () => {
+  const rel = (window as any).__bs.app.store.manifest?.system?.models;
+  if (!rel) return null;
+  const models = await (window as any).__bs.app.store.json(rel);
+  if (!Array.isArray(models)) return null;
+  const hit = models.find((m: any) => /giant rat/i.test(m.name || ''));
+  return hit ? { id: hit.id, name: hit.name } : null;
+});
+if (!rat) {
+  console.log('  WARN: no Giant Rat model found in this build, skipping rat aura screenshot');
+  ok(true, 'model-page rat aura skipped (Giant Rat absent)');
+} else {
+  await page.goto(`${base}/index.html#/model/${rat.id}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
+  await page.waitForFunction(() => typeof (window as any).__bs.modelView?.effectsInfo === 'function', { timeout: 20000 });
+  await page.waitForFunction(() => ((window as any).__bs.modelView.effectsInfo().systems || []).length > 0, { timeout: 20000 })
+    .catch(() => { /* asserted (and reported) below with whatever resolved */ });
+  const info = await page.evaluate(() => (window as any).__bs.modelView.effectsInfo());
+  ok(info.systems.length >= 1,
+    `${rat.name} (${rat.id}) has >= 1 attached effect system (${info.systems.length}: ${info.systems.map((s: any) => `${s.name}/${s.mode}`).join(', ')})`);
+  await sleep(500);
+  const live = await page.evaluate(() => (window as any).__bs.modelView.effectsInfo().live);
+  ok(live > 0, `Giant Rat aura renders live particles (live=${live})`);
+  const ratShot = path.join(SHOTS, 'e2e_effects_rat.png');
+  await page.screenshot({ path: ratShot });
+  console.log(`  screenshot: ${ratShot}`);
+}
+
 // ---- 8b. strings viewer + global search ----------------------------------------
 await page.goto(`${base}/index.html#/strings`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.vrow', { timeout: 15000 });

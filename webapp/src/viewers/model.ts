@@ -361,13 +361,17 @@ export function createModelView(app: any, model: ModelRecord) {
 
   let destroyed = false, scene: any = null, bar: any = null;
   let effectsPlayer: EffectsPlayer | null = null;
+  // sibling group anchored at the model's rest-pose bbox centre; the
+  // EffectsPlayer mounts here so ambient effects (e.g. auras) radiate from
+  // the body rather than from the rig-root/scene-origin at the model's feet
+  let effectsAnchor: any = null;
   // the (at most one) timed system currently slaved to the clip transport:
   // its clock is driven from bar.t every tick while that clip keeps playing
   let effectsSlaved: { slot: number; clip: number } | null = null;
   const immersive = mountImmersiveControls({ pane: root, host, toolbar });
   const view = {
     root,
-    destroy() { destroyed = true; immersive.destroy(); effectsPlayer?.dispose(); scene?.destroy(); bar?.destroy(); },
+    destroy() { destroyed = true; immersive.destroy(); effectsPlayer?.dispose(); effectsAnchor?.removeFromParent(); scene?.destroy(); bar?.destroy(); },
     // ←/→ from the global key handler: → enters/advances the variant strip,
     // ← retreats; ← on the leftmost variant exits strip focus back to the list
     variantNav(dir: number): boolean {
@@ -574,6 +578,12 @@ export function createModelView(app: any, model: ModelRecord) {
       scene.frameBox([bb.min.x, bb.min.y, bb.min.z], [bb.max.x, bb.max.y, bb.max.z]);
       scene.addGround(dim / 2, Math.min(0, bb.min.z), { x: (bb.min.x + bb.max.x) / 2, y: (bb.min.y + bb.max.y) / 2 });
       toolbar.append(makeGridToggle(scene), makeLightToggle(scene));
+      // dedicated anchor at the mesh bbox centre: effects mount here, not at
+      // the scene root, so a floor-level model origin doesn't put ambient
+      // effects at the model's feet
+      effectsAnchor = new THREE.Group();
+      effectsAnchor.position.copy(bb.getCenter(new THREE.Vector3()));
+      scene.scene.add(effectsAnchor);
       const capStatic = { i: model.id.slice(0, 8), h: model.id, name: model.name };
       const staticShot = el('button', { class: 'btn', text: '▣ Screenshot', title: 'Capture the current 3D view as a PNG/JPEG/WebP image' });
       staticShot.addEventListener('click', async () => {
@@ -592,7 +602,7 @@ export function createModelView(app: any, model: ModelRecord) {
       });
       toolbar.append(el('span', { class: 'sep' }), staticShot, el('span', { class: 'sep' }), ...exportGroup(app, model, []));
       scene.addTick((dt: number) => tickModelEffects(dt, null));
-      void attachModelEffects(scene.scene, null, []);
+      void attachModelEffects(effectsAnchor, null, []);
       if ((window as any).__bs) {
         (window as any).__bs.modelView = {
           model, skelEntry: null, rig: null, bar: null, active: null, scene, meshRows,
@@ -616,6 +626,15 @@ export function createModelView(app: any, model: ModelRecord) {
     anchor.add(...rig.roots);
     scene.scene.add(anchor);
 
+    // dedicated sibling group at the rest-pose bbox centre: do NOT translate
+    // `anchor` itself (it holds the rig roots; moving it would move the
+    // model). Ambient effects (e.g. auras) mount on this group instead, so
+    // they radiate from the body rather than from the rig-root/scene-origin
+    // that sits at the model's feet
+    effectsAnchor = new THREE.Group();
+    effectsAnchor.position.set((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
+    scene.scene.add(effectsAnchor);
+
     const viz = new SkeletonViz(scene.scene, rig, { jointRadius: Math.max(dim * 0.018, 0.12), onTop: true });
     viz.update();
 
@@ -629,7 +648,7 @@ export function createModelView(app: any, model: ModelRecord) {
       if (viz.group.visible && bar.playing) viz.update();
       tickModelEffects(dt, bar);
     });
-    void attachModelEffects(anchor, bar, clips);
+    void attachModelEffects(effectsAnchor, bar, clips);
 
     const active = new Map<string, any>();
     const meshCountLbl = el('b', { text: '0' });
