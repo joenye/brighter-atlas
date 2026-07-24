@@ -30,6 +30,8 @@ import type { ModelPart, ModelRecord } from '../models.js';
 import { entryByOrdinal } from '../store.js';
 import type { IndexEntry } from '../store.js';
 import { applyPackedRecolor, partRecolor } from '../recolor.js';
+import { EffectsPlayer } from './world/effects-player.js';
+import type { EffectSystem, WorldEffectsDoc } from '../extract/world/effects.js';
 
 function applyPartTransform(obj: any, part: ModelPart | undefined): void {
   const a = part?.local_matrix;
@@ -309,6 +311,48 @@ async function renderVariantThumb(app: any, model: any, v: number): Promise<stri
   }
 }
 
+// ---- particle effects: join the displayed model to the world effects doc --
+// A system model's `sources[]` (extract/world/catalog.ts, the portable
+// catalog build) retain the registry slot(s) that produced it: the row that
+// owns the mesh/material directly (owner_slot), and, when the entity is
+// grouped under a shared descriptor, its family/base owner
+// (entity_owner_slot, entity_family_owner_slot). Any of those may be the
+// slot the effects doc's owner attachments reference, so the join checks
+// their union. User-authored models carry no `sources`, so this is empty
+// for them and the model page simply shows no effects.
+function modelOwnerSlots(model: ModelRecord): Set<number> {
+  const slots = new Set<number>();
+  const sources = Array.isArray(model.sources) ? model.sources : [];
+  for (const source of sources) {
+    for (const key of ['owner_slot', 'entity_owner_slot', 'entity_family_owner_slot']) {
+      const value = source?.[key];
+      if (Number.isInteger(value)) slots.add(value);
+    }
+  }
+  return slots;
+}
+
+// Systems attached to any of the model's owner slots, ascending by slot
+// (deterministic chip order), emitter-less systems excluded (nothing to
+// render).
+function systemsForModel(doc: WorldEffectsDoc, slots: Set<number>): EffectSystem[] {
+  if (!slots.size || !Array.isArray(doc?.systems) || !doc.systems.length) return [];
+  const wanted = new Set<number>();
+  for (const att of doc.attachments?.owners || []) {
+    if (slots.has(Number(att.owner))) wanted.add(Number(att.system));
+  }
+  if (!wanted.size) return [];
+  const bySlot = new Map(doc.systems.map((s) => [s.slot, s]));
+  return [...wanted]
+    .map((slot) => bySlot.get(slot))
+    .filter((s): s is EffectSystem => !!s && s.emitters.length > 0)
+    .sort((a, b) => a.slot - b.slot);
+}
+
+function effectSystemLabel(system: EffectSystem): string {
+  return system.names[0]?.name || `effect #${system.slot}`;
+}
+
 export function createModelView(app: any, model: ModelRecord) {
   const root = el('div', { class: 'viewer-pane' });
   const toolbar = el('div', { class: 'viewer-toolbar' });
@@ -316,10 +360,14 @@ export function createModelView(app: any, model: ModelRecord) {
   root.append(toolbar, host);
 
   let destroyed = false, scene: any = null, bar: any = null;
+  let effectsPlayer: EffectsPlayer | null = null;
+  // the (at most one) timed system currently slaved to the clip transport:
+  // its clock is driven from bar.t every tick while that clip keeps playing
+  let effectsSlaved: { slot: number; clip: number } | null = null;
   const immersive = mountImmersiveControls({ pane: root, host, toolbar });
   const view = {
     root,
-    destroy() { destroyed = true; immersive.destroy(); scene?.destroy(); bar?.destroy(); },
+    destroy() { destroyed = true; immersive.destroy(); effectsPlayer?.dispose(); scene?.destroy(); bar?.destroy(); },
     // ←/→ from the global key handler: → enters/advances the variant strip,
     // ← retreats; ← on the leftmost variant exits strip focus back to the list
     variantNav(dir: number): boolean {
@@ -337,6 +385,67 @@ export function createModelView(app: any, model: ModelRecord) {
       return true;
     },
   };
+
+  // Advances the effects player each frame (called from the existing
+  // scene.addTick, beside bar.tick). While a timed system is slaved to the
+  // clip transport, its progress tracks bar.t directly instead of the
+  // player's own master clock, so windowed bursts land on the animation
+  // timeline; it releases back to standalone once that clip stops playing.
+  function tickModelEffects(dt: number, playbackBar: any | null): void {
+    if (!effectsPlayer) return;
+    if (effectsSlaved) {
+      if (playbackBar?.playing && playbackBar.clipJson?.i === effectsSlaved.clip) {
+        effectsPlayer.syncClock(effectsSlaved.slot, playbackBar.t * (effectsPlayer.clock.tickRate / 1000));
+      } else {
+        effectsPlayer.unslave(effectsSlaved.slot);
+        effectsSlaved = null;
+      }
+    }
+    effectsPlayer.tick(dt, scene.camera);
+  }
+
+  // Resolves the model's attached particle effect systems (if any) and, once
+  // found, mounts an EffectsPlayer on `effectsRoot` (the same native-unit
+  // group the model mesh lives under). Idle/ambient systems auto-play;
+  // timed (attack/impact) systems get a "Play effect" chip that either fires
+  // standalone or, when bound to a clip this model actually has, slaves to
+  // the PlaybackBar. Fire-and-forget: never blocks mesh loading.
+  async function attachModelEffects(effectsRoot: any, playbackBar: any | null, clipList: IndexEntry[]): Promise<void> {
+    const slots = modelOwnerSlots(model);
+    if (!slots.size || typeof app.store.worldEffects !== 'function') return;
+    let doc: WorldEffectsDoc | null = null;
+    try { doc = await app.store.worldEffects(); } catch { /* no effects data for this version */ }
+    if (destroyed || !doc) return;
+    const systems = systemsForModel(doc, slots);
+    if (!systems.length) return;
+    const player = new EffectsPlayer({
+      root: effectsRoot, doc, url: (rel: string) => app.store.url(rel), anisotropy: 8,
+    });
+    const chips: HTMLElement[] = [];
+    for (const system of systems) {
+      if (player.addSystem(system.slot) !== 'timed') continue;
+      const btn = el('button', {
+        class: 'btn', text: `▶ ${effectSystemLabel(system)}`,
+        title: 'Play this timed particle effect once',
+      });
+      btn.addEventListener('click', () => {
+        const boundClip = playbackBar
+          ? system.clips.find((ordinal) => clipList.some((c) => c.i === ordinal && c.f))
+          : undefined;
+        if (playbackBar && boundClip != null) {
+          const entry = clipList.find((c) => c.i === boundClip)!;
+          effectsSlaved = { slot: system.slot, clip: boundClip };
+          playbackBar.loadClip(entry).then(() => playbackBar.play());
+        } else {
+          effectsSlaved = null;
+          player.play(system.slot);
+        }
+      });
+      chips.push(btn);
+    }
+    effectsPlayer = player;
+    if (chips.length) toolbar.append(el('span', { class: 'sep' }), ...chips);
+  }
 
   const parts = modelParts(model);
   toolbar.append(
@@ -482,7 +591,14 @@ export function createModelView(app: any, model: ModelRecord) {
         });
       });
       toolbar.append(el('span', { class: 'sep' }), staticShot, el('span', { class: 'sep' }), ...exportGroup(app, model, []));
-      if ((window as any).__bs) (window as any).__bs.modelView = { model, skelEntry: null, rig: null, bar: null, active: null, scene, meshRows };
+      scene.addTick((dt: number) => tickModelEffects(dt, null));
+      void attachModelEffects(scene.scene, null, []);
+      if ((window as any).__bs) {
+        (window as any).__bs.modelView = {
+          model, skelEntry: null, rig: null, bar: null, active: null, scene, meshRows,
+          effectsInfo: () => (effectsPlayer ? effectsPlayer.info() : { systems: [], live: 0 }),
+        };
+      }
       return;
     }
 
@@ -508,7 +624,12 @@ export function createModelView(app: any, model: ModelRecord) {
       onApplied: () => { if (viz.group.visible) viz.update(); },
       onError: (msg: string) => app.banner(msg),
     });
-    scene.addTick((dt: number) => { bar.tick(dt); if (viz.group.visible && bar.playing) viz.update(); });
+    scene.addTick((dt: number) => {
+      bar.tick(dt);
+      if (viz.group.visible && bar.playing) viz.update();
+      tickModelEffects(dt, bar);
+    });
+    void attachModelEffects(anchor, bar, clips);
 
     const active = new Map<string, any>();
     const meshCountLbl = el('b', { text: '0' });
@@ -607,7 +728,12 @@ export function createModelView(app: any, model: ModelRecord) {
     // load the fixed mesh set
     await enableMany(meshRows.filter((m) => m.f));
 
-    if ((window as any).__bs) (window as any).__bs.modelView = { model, skelEntry, rig, bar, active, scene, meshRows, get mode() { return getMode(); } };
+    if ((window as any).__bs) {
+      (window as any).__bs.modelView = {
+        model, skelEntry, rig, bar, active, scene, meshRows, get mode() { return getMode(); },
+        effectsInfo: () => (effectsPlayer ? effectsPlayer.info() : { systems: [], live: 0 }),
+      };
+    }
   })();
 
   return view;

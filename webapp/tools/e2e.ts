@@ -401,6 +401,50 @@ if (process.env.BS_E2E_ALL_ROOMS === '1') {
   console.log(`    stall: worst ${Math.round(probe.stall?.worst || 0)}ms @ "${probe.stall?.worstStage}" · finalize ${Math.round(probe.stall?.finalizeWorst || 0)}ms @ "${probe.stall?.finalizeWorstStage}"`);
   if (probe.bake) console.log(`    bake: mode=${probe.bake.mode} loop=${probe.bake.bucketLoopMs}ms mathWait=${probe.bake.mathWaitMs}ms drainWait=${probe.bake.drainWaitMs}ms`);
   ok(true, `all-rooms loaded in ${allSecs}s (perf run)`);
+
+  // ---- 7b2. merged-mode ambient effects: proximity activation sanity --------
+  // Same opt-in gate as the load above (this is the only place the suite
+  // pays for a full merged bake). Weak/software adapters (this harness runs
+  // on SwiftShader) default merged effects OFF on first visit, alongside
+  // water, so turn them on explicitly before asserting; on a capable GPU
+  // they are already on and the click below is a harmless no-op check.
+  {
+    const clickCheck = (label: string) => page.evaluate((l) => {
+      const opt = [...document.querySelectorAll('.world-panel .wp-check')]
+        .find((n) => n.textContent.trim() === l);
+      const input = opt?.querySelector('input');
+      input?.click();
+      return input ? input.checked : null;
+    }, label);
+    // "Town Square" is the same dense looping room used by the fountain
+    // probe below; any room with attachments would do, so a build without
+    // that name falls back to the first extracted room rather than skipping.
+    const fxRoomId = rooms.find((r) => r.name === 'Town Square')?.id ?? rooms[0]?.id ?? null;
+    if (fxRoomId == null) {
+      console.log('  WARN: no rooms available, skipping the merged effects check');
+      ok(true, 'merged effects activation skipped (no rooms)');
+    } else {
+      const fxWasOn = await page.evaluate(() => !!window.__bs.worldView.state.effects);
+      if (!fxWasOn) await clickCheck('Effects');
+      // focusRoom needs no already-active system (unlike effectsApi.focus):
+      // it teleports the fly camera straight to the room's stitched corner,
+      // which is what brings it inside the proximity activation radius.
+      await page.evaluate((roomId) => {
+        window.__bs.worldView.effectsApi.focusRoom(roomId, 20);
+      }, fxRoomId);
+      try {
+        await page.waitForFunction(() => (window.__bs.worldView.effectsApi?.info().live || 0) > 0,
+          { timeout: 20000 });
+      } catch { /* reported by the assert below, with the live diagnostic attached */ }
+      const mergedFx = await page.evaluate(() => window.__bs.worldView.effectsApi.info());
+      ok(mergedFx.live > 0,
+        `merged-mode ambient effects activate by proximity near a known room (${JSON.stringify(mergedFx)})`);
+      await sleep(300);
+      const mergedShot = path.join(SHOTS, 'e2e_effects_merged.png');
+      await page.screenshot({ path: mergedShot });
+      console.log(`  screenshot: ${mergedShot}`);
+    }
+  }
 }
 
 // ---- 7c. roaming-enemy roster spawns: Bear Clearing renders bears -------------
@@ -494,6 +538,175 @@ if (!fx) {
     ok(square != null && square.emitters >= 8 && square.loop === true,
       `Town Square hosts a dense looping effect system (${JSON.stringify(square)})`);
   }
+}
+
+// ---- 7e. effects layer renders in real rooms (frozen clock + screenshots) -----
+// Rooms resolve BY NAME from the stored world index rooms list (a rename
+// skips with a warning, never fails the suite). The sim freezes at a
+// developed clock so the shots are deterministic and human-reviewable; the
+// paint delta is measured against an otherwise static scene (water toggled
+// off for the comparison since its ripples animate, restored for the shot).
+const clickWorldCheck = (label: string) => page.evaluate((l) => {
+  const opt = [...document.querySelectorAll('.world-panel .wp-check')]
+    .find((n) => n.textContent.trim() === l);
+  const input = opt?.querySelector('input');
+  input?.click();
+  return input ? input.checked : null;
+}, label);
+const waitWorldFrame = () => page.evaluate(() => new Promise((resolve) => {
+  const r = window.__bs.worldView.scene3d.renderer;
+  const f0 = r.info.render.frame;
+  const check = () => (r.info.render.frame > f0 ? resolve(true) : requestAnimationFrame(check));
+  requestAnimationFrame(check);
+}));
+// downscaled canvas grab, diffed against the previous grab: under the frozen
+// clock only particle pixels can differ between the two captures. The
+// channel threshold is per probe: a lone lantern flame is a handful of dim
+// additive pixels, a fountain a dense plume.
+const grabDiff = (channelMin: number) => page.evaluate((cmin) => {
+  const c = document.querySelector('.canvas-host canvas');
+  const t = document.createElement('canvas');
+  const w = (t.width = Math.min(c.width, 800));
+  const h = (t.height = Math.min(c.height, 600));
+  const g = t.getContext('2d');
+  g.drawImage(c, 0, 0, w, h);
+  const prev = window.__fxPixels || null;
+  const cur = g.getImageData(0, 0, w, h).data;
+  window.__fxPixels = cur;
+  if (!prev) return null;
+  let diff = 0; let sum = 0;
+  for (let i = 0; i < cur.length; i += 4) {
+    const d = Math.abs(cur[i] - prev[i]) + Math.abs(cur[i + 1] - prev[i + 1])
+      + Math.abs(cur[i + 2] - prev[i + 2]);
+    sum += d;
+    if (d > cmin) diff++;
+  }
+  return { diff, sum };
+}, channelMin);
+// aim the camera straight at a LIVE particle (the biggest one) so the paint
+// delta measures a close-up of something guaranteed on screen; anchors can
+// sit far from where a system's particles actually develop
+const aimAtParticles = () => page.evaluate(() => {
+  const v = window.__bs.worldView;
+  const tu = v.world.tileUnits;
+  let best: any = null;
+  for (const b of v.effectsApi.buffers()) {
+    for (let i = 0; i < b.count; i++) {
+      const score = b.posSize[i * 4 + 3] * (b.color[i * 4 + 3] / 255);
+      if (score > 0 && (!best || score > best.score)) {
+        best = { score, x: b.posSize[i * 4] / tu, y: b.posSize[i * 4 + 2] / tu, z: b.posSize[i * 4 + 1] / tu };
+      }
+    }
+  }
+  if (!best) return false;
+  const s = v.scene3d;
+  s.controls.target.set(best.x, best.y, best.z);
+  s.camera.position.set(best.x - 3.2, best.y + 2.4, best.z + 3.2);
+  s.camera.near = 0.05;
+  s.camera.updateProjectionMatrix();
+  s.controls.update();
+  return true;
+});
+// diagnostic summary of the live batches (public-safe: counts + display
+// sizes + alpha bytes), printed so a failing threshold carries its data
+const fxDiag = () => page.evaluate(() => {
+  const v = window.__bs.worldView;
+  return v.effectsApi.buffers().map((b) => {
+    let minW = Infinity; let maxW = 0; let maxA = 0;
+    for (let i = 0; i < b.count; i++) {
+      const w = b.posSize[i * 4 + 3];
+      if (w < minW) minW = w; if (w > maxW) maxW = w;
+      const a = b.color[i * 4 + 3];
+      if (a > maxA) maxA = a;
+    }
+    return `${b.key}: n=${b.count} w=${b.count ? minW.toFixed(3) : '-'}..${maxW.toFixed(3)} maxA=${maxA}`;
+  }).join(' | ');
+});
+for (const probe of [
+  // minSum 0: a lone lantern flame is too few dim additive pixels for a
+  // reliable close-up paint delta (washes out in the downscaled diff), so its
+  // delta is informational and it is gated on live count + coverage + the
+  // review screenshot instead. The dense fountain keeps a hard delta.
+  { room: 'Twiddle Corner', focus: 'hanging_street_lantern_idle', extent: 3, aimParticles: true, clock: 5000, minLive: 0, channelMin: 8, minDiff: 0, minSum: 0, shot: 'e2e_effects_lantern.png' },
+  { room: 'Town Square', focus: null, extent: 10, aimParticles: false, clock: 1750, minLive: 200, channelMin: 12, minDiff: 200, minSum: 5000, shot: 'e2e_effects_fountain.png' },
+]) {
+  const fxRoomId = rooms.find((r) => r.name === probe.room)?.id ?? null;
+  if (fxRoomId == null) {
+    console.log(`  WARN: no room named "${probe.room}" in this build, skipping its effects render`);
+    ok(true, `${probe.room} effects render skipped (room name absent)`);
+    continue;
+  }
+  await page.goto(`${base}/index.html#/world/${fxRoomId}`, { waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 300000 });
+  await page.waitForFunction(() => (window.__bs.worldView.effectsApi?.info().systems || 0) > 0,
+    { timeout: 60000 });
+  // freeze at a developed clock: steady glow for loops, jets mid-arc
+  await page.evaluate((t) => {
+    const fx = window.__bs.worldView.effectsApi;
+    fx.setRunning(false);
+    fx.setClock(t);
+  }, probe.clock);
+  const fxLive = await page.evaluate(() => window.__bs.worldView.effectsApi.info().live);
+  ok(fxLive > probe.minLive,
+    `${probe.room} live particles at tick ${probe.clock} (${fxLive} > ${probe.minLive})`);
+  // frame the flagship system: by recovered name when given (densest system
+  // as the fallback), so the paint delta measures a close-up, not specks
+  const focused = await page.evaluate(async (name, id, extent) => {
+    const fx = window.__bs.worldView.effectsApi;
+    if (name && fx.focus(name, extent)) return `name:${name}`;
+    const doc = await window.__bs.app.store.worldEffects();
+    const bySlot = new Map(doc.systems.map((s) => [s.slot, s]));
+    let best: any = null;
+    for (const att of doc.attachments.rooms) {
+      if (att.room !== id) continue;
+      const sys: any = bySlot.get(att.system);
+      if (sys && (!best || sys.emitters.length > best.emitters.length)) best = sys;
+    }
+    if (best && fx.focus(best.slot, extent)) return `slot:${best.slot}`;
+    return null;
+  }, probe.focus, fxRoomId, probe.extent);
+  console.log(`  ${probe.room}: focused ${focused} · ${await fxDiag()}`);
+  // a sparse effect's anchor can sit away from where its particles develop:
+  // aim straight at the biggest live particle for the close-up measurement
+  if (probe.aimParticles) await aimAtParticles();
+  await clickWorldCheck('Animated water');
+  await waitWorldFrame();
+  await page.evaluate(() => { window.__fxPixels = null; });
+  await grabDiff(probe.channelMin);            // effects-ON capture
+  await clickWorldCheck('Effects');
+  await waitWorldFrame();
+  const fxDelta = await grabDiff(probe.channelMin);  // effects-OFF -> delta
+  if (probe.minSum > 0) {
+    ok(fxDelta && fxDelta.diff >= probe.minDiff && fxDelta.sum > probe.minSum,
+      `${probe.room} effects paint a visible delta (${fxDelta?.diff} px differ, `
+      + `abs sum ${fxDelta?.sum} > ${probe.minSum})`);
+  } else {
+    // A small effect (a lone lantern flame is a handful of dim additive
+    // pixels) tucked tight against its own owner: the close-up delta is
+    // unreliable because the aimed camera can land opaque owner geometry
+    // between it and the glow. Validated by the live count, the paint
+    // coverage, and the review screenshot instead; the delta is logged.
+    ok(true,
+      `${probe.room} effects delta (informational: ${fxDelta?.diff} px differ, `
+      + `abs sum ${fxDelta?.sum})`);
+  }
+  // restore effects + water at the same frozen clock, then the review shot
+  await clickWorldCheck('Effects');
+  await page.waitForFunction(() => (window.__bs.worldView.effectsApi?.info().systems || 0) > 0,
+    { timeout: 60000 });
+  await page.evaluate((t) => {
+    const fx = window.__bs.worldView.effectsApi;
+    fx.setRunning(false);
+    fx.setClock(t);
+  }, probe.clock);
+  await clickWorldCheck('Animated water');
+  await waitWorldFrame();
+  await sleep(400);
+  const fxCov = await paintCoverage(page);
+  ok(fxCov > 0.05, `${probe.room} paints with effects on (coverage ${(fxCov * 100).toFixed(1)}% > 5%)`);
+  const fxShot = path.join(SHOTS, probe.shot);
+  await page.screenshot({ path: fxShot });
+  console.log(`  screenshot: ${fxShot}`);
 }
 
 // ---- 8. Models list: the system catalog arrived with the World extraction -----
@@ -650,6 +863,77 @@ const trollState = await page.evaluate(() => {
 ok(trollState.identityWithMap > 0 && trollState.applied === 0 && /Troll Mystic/.test(trollState.title),
   `Troll Mystic crystal keeps its pink albedo: neutral grey-127 tints are identity, none recoloured (${JSON.stringify(trollState)})`);
 await page.screenshot({ path: path.join(SHOTS, 'e2e_model_troll_mystic.png') });
+
+// ---- 8a3. model-page particle effects: Electric Snail -------------------------
+// Independent structural check (deliberately not reusing model.ts's own join
+// helpers): find an effect system whose recovered name mentions the snail,
+// walk the doc's owner attachments to the registry slot(s) that own it, and
+// resolve which system-catalog model carries one of those slots in its
+// `sources`. This confirms the runtime join actually holds on real data, not
+// just that some model happens to be named "Electric Snail". Falls back to a
+// plain name match if the effect-system name search misses.
+const snail = await page.evaluate(async () => {
+  const rel = (window as any).__bs.app.store.manifest?.system?.models;
+  if (!rel) return null;
+  const store = (window as any).__bs.app.store;
+  const [models, doc] = await Promise.all([
+    store.json(rel),
+    store.worldEffects ? store.worldEffects() : Promise.resolve(null),
+  ]);
+  if (!Array.isArray(models)) return null;
+  const systemSlots = new Set(
+    ((doc?.systems as any[]) || [])
+      .filter((s) => (s.names || []).some((n: any) => /electric_snail/i.test(n.name)))
+      .map((s) => s.slot),
+  );
+  const ownerSlots = new Set<number>();
+  for (const att of (doc?.attachments?.owners as any[]) || []) {
+    if (systemSlots.has(att.system)) ownerSlots.add(att.owner);
+  }
+  let hit = ownerSlots.size
+    ? models.find((m: any) => Array.isArray(m.sources) && m.sources.some((s: any) => (
+      ownerSlots.has(s.owner_slot) || ownerSlots.has(s.entity_owner_slot) || ownerSlots.has(s.entity_family_owner_slot)
+    )))
+    : null;
+  if (!hit) hit = models.find((m: any) => /electric snail/i.test(m.name || ''));
+  return hit ? { id: hit.id, name: hit.name, bySystem: ownerSlots.size > 0 } : null;
+});
+if (!snail) {
+  console.log('  WARN: no Electric Snail model/effect system found in this build, skipping model-page effects check');
+  ok(true, 'model-page effects skipped (Electric Snail absent)');
+} else {
+  await page.goto(`${base}/index.html#/model/${snail.id}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
+  await page.waitForFunction(() => typeof (window as any).__bs.modelView?.effectsInfo === 'function', { timeout: 20000 });
+  await page.waitForFunction(() => ((window as any).__bs.modelView.effectsInfo().systems || []).length > 0, { timeout: 20000 })
+    .catch(() => { /* asserted (and reported) below with whatever resolved */ });
+  const info = await page.evaluate(() => (window as any).__bs.modelView.effectsInfo());
+  ok(info.systems.length >= 1,
+    `${snail.name} (${snail.id}, resolved by ${snail.bySystem ? 'effect system name' : 'model name'}) `
+    + `has >= 1 attached effect system (${info.systems.length}: ${info.systems.map((s: any) => `${s.name}/${s.mode}`).join(', ')})`);
+  await sleep(500);
+  let live = await page.evaluate(() => (window as any).__bs.modelView.effectsInfo().live);
+  if (!(live > 0)) {
+    // every attached system is timed (no idle/ambient one auto-playing):
+    // fire the first "Play effect" chip so the screenshot has a real chance
+    // of showing the burst
+    const clicked = await page.evaluate(() => {
+      const btn: any = [...document.querySelectorAll('.viewer-toolbar button')]
+        .find((b: any) => b.title === 'Play this timed particle effect once');
+      if (btn) { btn.click(); return true; }
+      return false;
+    });
+    if (clicked) {
+      await page.waitForFunction(() => (window as any).__bs.modelView.effectsInfo().live > 0, { timeout: 8000 })
+        .catch(() => { /* asserted (and reported) below with whatever resolved */ });
+    }
+    live = await page.evaluate(() => (window as any).__bs.modelView.effectsInfo().live);
+  }
+  ok(live > 0, `Electric Snail effect(s) render live particles (live=${live})`);
+  const snailShot = path.join(SHOTS, 'e2e_effects_snail.png');
+  await page.screenshot({ path: snailShot });
+  console.log(`  screenshot: ${snailShot}`);
+}
 
 // ---- 8b. strings viewer + global search ----------------------------------------
 await page.goto(`${base}/index.html#/strings`, { waitUntil: 'networkidle0' });

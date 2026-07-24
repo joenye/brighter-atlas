@@ -53,6 +53,9 @@ import { Rig, PlaybackBar } from './rig.js';
 import {
   resolveSpawnAnim, SpawnAnimComposite, resolveShardRecolors,
 } from './world/spawn-anim.js';
+import { WorldEffectsLayer } from './world/effects-layer.js';
+import { MERGED_VIEW_ALIVE_BUDGET } from './world/effects-sim.js';
+import { createEffectsBrowserView } from './world/effects-browser.js';
 import type { AppStore, IndexEntry } from '../store.js';
 
 // What the world views need from the app shell (main.ts owns the full shape).
@@ -82,6 +85,16 @@ const CATEGORY_LABELS: Record<string, [string, string]> = {
 const RENDER_SCALES: (number | 'native')[] = [0.5, 0.75, 1, 'native', 1.5, 2];
 const TEXTURE_ANISOTROPY = 8;   // fixed: the user-facing control was removed
 
+// Merged all-rooms ambient-effects activation policy (design 4.4): a hard cap
+// on simultaneously active room effect sets, chosen by proximity to the fly
+// camera and re-ranked on a slow cadence (never every frame). The +-hysteresis
+// band keeps a room hovering near the boundary from thrashing activate/
+// deactivate every re-rank.
+const MAX_ACTIVE_MERGED = 24;               // hard cap on active room effect sets
+const MERGED_ACTIVATION_RADIUS = 96;        // tiles: activation search radius
+const MERGED_ACTIVATION_HYSTERESIS = 8;     // tiles: +/- band around the radius
+const MERGED_ACTIVATION_INTERVAL_MS = 500;  // re-rank cadence
+
 // Bumping this discards previously saved prefs ONCE so everyone lands on the
 // current defaults (v2: water 50%, ambient 1.85, sun 2.80, no aniso control).
 const STATE_VERSION = 2;
@@ -98,6 +111,7 @@ const DEFAULT_STATE = Object.freeze({
   spawnnames: false,
   inspect: false,
   water: true,
+  effects: true,
   wcolor: 'auto',
   wopacity: 50,
   ambient: 1.85,
@@ -121,7 +135,7 @@ interface WorldState {
   terrain: boolean; models: boolean; spawns: boolean; components: boolean;
   untextured: boolean; collision: boolean; empty: boolean; names: boolean;
   spawnnames: boolean;
-  inspect: boolean; water: boolean;
+  inspect: boolean; water: boolean; effects: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
   shadows: boolean; flatten: boolean; merged: boolean;
   scale: number; cull: boolean; culld: number;
@@ -137,10 +151,12 @@ interface WorldState {
 // and the output blob. 64K/128K are for the patient: thousands of tiles and
 // multi-gigabyte PNGs that most image viewers will refuse to open.
 const isAllRoute = (): boolean => /^#\/?world\/all(\?|$)/i.test(location.hash || '');
+const isEffectsRoute = (): boolean => /^#\/?world\/effects(\?|$)/i.test(location.hash || '');
 
 export function createWorldView(app: WorldViewApp, entry?: IndexEntry | null): WorldViewHandle {
   if (entry) return createSceneView(app, entry, false);
   if (isAllRoute()) return createSceneView(app, null, true);
+  if (isEffectsRoute()) return createEffectsBrowserView(app);
   return createLandingView(app);
 }
 
@@ -293,6 +309,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       state.scale = RENDER_SCALES.indexOf(0.5);
       state.water = false;
       state.cull = true;
+      // Weak-GPU default (design 4.4, judge-decided): merged first-run on a
+      // software adapter starts with effects off too, alongside water.
+      // Single-room keeps effects ON unconditionally (see DEFAULT_STATE) and
+      // relies on the per-emitter/per-view caps instead: accept-and-cap, not
+      // a blanket disable. Always user-toggleable via the panel checkbox.
+      state.effects = false;
     } else if (gpu.tier === 'integrated') {
       state.scale = RENDER_SCALES.indexOf(0.75);
       state.cull = true;
@@ -430,6 +452,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   spawnAnimRoot.name = 'world-spawn-anim';
   spawnAnimRoot.matrixAutoUpdate = false;
   displayRoot.add(spawnAnimRoot);
+  // Ambient particle effects overlay here (same recipe): instanced billboard
+  // batches authored in native game space under a root mirroring world.root's
+  // rotation/scale, placed by room offset + occurrence-anchor cells.
+  const effectsRoot = new THREE.Group();
+  effectsRoot.name = 'world-effects';
+  effectsRoot.matrixAutoUpdate = false;
+  displayRoot.add(effectsRoot);
 
   // --- water + status state -------------------------------------------------
   const waterUniforms = createWaterUniforms();
@@ -437,6 +466,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const roomWaterSheets = new Map<number, any[]>();     // room id -> [sheet meshes]
   const roomWaterCurtains = new Map<number, any[]>();   // room id -> [curtain meshes]
   let waterRegistry: any = null;
+  // Ambient effects layer state, shared by both view modes (see the "ambient
+  // particle effects" section below for the split single-room / merged
+  // activation logic).
+  let effectsLayer: any = null;
+  let effectsDoc: any = null;
+  let effectsDocRequested = false;
+  const effectsRooms = new Set<number>();       // single-room: loaded rooms wanting effects
+  const activeEffectRooms = new Set<number>();  // merged: proximity-activated rooms
+  let effectsActivationAccum = 0;               // ms since the last merged re-rank
   let merged: any = null;
   let pickIndex: any = null;   // all-rooms WebGL2 only: CPU picking for merged mode
   let destroyed = false;
@@ -493,6 +531,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             if (!deferStreamReveal()) revealQueue.push(room.id);
           }
           applyRoomWater(room);
+          // Single-room only: the merged all-rooms path activates effects by
+          // camera proximity (updateMergedEffectsActivation), not by the
+          // stream's loaded/unloaded events, which fire for every one of the
+          // (possibly 451) streamed rooms regardless of where the camera is.
+          if (!allMode) effectsRoomLoaded(room.id);
         }
         syncStatus();
       }
@@ -500,13 +543,22 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         for (const id of event.rooms || [event.room]) {
           roomWaterCurtains.delete(Number(id));
           disposeRoomWaterSheets(Number(id));
+          if (!allMode) effectsRoomUnloaded(Number(id));
         }
       }
     },
   });
 
   // --- control panel ---------------------------------------------------------
-  const hud = createWorldHud({ host, renderer });
+  const hud = createWorldHud({
+    host,
+    renderer,
+    // live particle count rides the 2 Hz stats line while the layer runs
+    extra: () => {
+      const live = effectsLayer ? effectsLayer.liveCount() : 0;
+      return live > 0 ? `${fmtInt(live)} fx` : '';
+    },
+  });
 
   // rAF-gap stall probe (all-rooms only): records the worst main-thread gap
   // across the whole load, and separately across the finalize window (water
@@ -739,6 +791,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     check('collision', 'Collision extents', applyToggles, { swatch: '#79a9c9' }),
     check('empty', 'Empty materials', applyToggles,
       { swatch: '#d87dc0', title: 'Placements whose material is authored empty, as wireframes' }),
+    check('effects', 'Effects', applyEffects,
+      { swatch: '#e8b04c', title: 'Ambient particle effects recovered from this game version' }),
     allMode ? check('names', 'Room names', () => applyNames(),
       { swatch: '#e8e4d8', title: 'Floating name labels at each room\'s stitched position' }) : null,
     check('spawnnames', 'NPC names', () => applySpawnNames(),
@@ -898,6 +952,126 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       mesh.geometry.dispose();
     }
     roomWaterSheets.delete(Number(roomId));
+  }
+
+  // ambient particle effects (per-room layer + merged all-rooms) --------------
+  // Single room: driven by the same loaded/unloaded seam as water. Merged
+  // all-rooms: proximity activation instead (updateMergedEffectsActivation
+  // below) -- the loaded/unloaded stream events fire for every one of the
+  // (possibly 451) rooms regardless of camera position, so they are guarded
+  // off for allMode at the onStatus call sites above. Both modes share one
+  // effectsLayer instance, the same effectsRoot and the same doc fetch: the
+  // doc is optional and multi-MB, so it is fetched once, lazily, the first
+  // time either mode wants the layer.
+  function effectsSupported(): boolean {
+    return typeof app.store.worldEffects === 'function';
+  }
+  function effectsRoomLoaded(roomId: any): void {
+    if (!effectsSupported()) return;
+    effectsRooms.add(Number(roomId));
+    applyEffects();
+  }
+  function effectsRoomUnloaded(roomId: number): void {
+    effectsRooms.delete(Number(roomId));
+    effectsLayer?.removeRoom(Number(roomId));
+  }
+  function ensureEffectsDoc(): void {
+    if (effectsDocRequested || !effectsSupported()) return;
+    effectsDocRequested = true;
+    Promise.resolve(app.store.worldEffects!()).then((doc: any) => {
+      if (destroyed || !doc || !Array.isArray(doc.systems) || !doc.systems.length) return;
+      effectsDoc = doc;
+      applyEffects();
+    }).catch(() => { /* no effects data for this version: layer stays dormant */ });
+  }
+  function applyEffects(): void {
+    if (destroyed) return;
+    if (!state.effects || !effectsSupported()) {
+      // toggle-off DISPOSES (not hides) so GL memory returns to baseline
+      effectsLayer?.dispose();
+      effectsLayer = null;
+      activeEffectRooms.clear();
+      return;
+    }
+    ensureEffectsDoc();
+    if (!effectsDoc || !world.index) return;
+    if (!effectsLayer) {
+      effectsLayer = new WorldEffectsLayer({
+        root: effectsRoot,
+        doc: effectsDoc,
+        url: (rel: string) => app.store.url(rel),
+        textures: world.index.textures || {},
+        tileUnits: world.tileUnits,
+        layerUnits: world.layerUnits,
+        anisotropy: TEXTURE_ANISOTROPY,
+        // Merged mode activates far more room effect sets than a lone room
+        // ever holds at once, and the alive budget must thin proportionally
+        // across all of them, not per room.
+        ...(allMode ? { aliveBudget: MERGED_VIEW_ALIVE_BUDGET } : {}),
+      });
+    }
+    if (allMode) {
+      updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick
+    } else {
+      for (const id of effectsRooms) effectsLayer.addRoom(id, spawnRoomOffset(id));
+    }
+  }
+
+  // Merged all-rooms candidate rooms: every distinct room the doc attaches
+  // ANY system to, with its stitched tile-space center (same frame the fly
+  // camera and focusExtent() operate in). Built once the doc and worldFrame
+  // are both ready; a room without a system that survives the loopOnly
+  // filter simply activates to nothing (harmless, not worth a second join
+  // here just to keep it out of the candidate list).
+  let effectsCandidates: { id: number; x: number; z: number }[] | null = null;
+  function ensureEffectsCandidates(): { id: number; x: number; z: number }[] {
+    if (effectsCandidates) return effectsCandidates;
+    if (!effectsDoc || !worldFrame) return [];
+    const seen = new Set<number>();
+    const list: { id: number; x: number; z: number }[] = [];
+    for (const att of effectsDoc.attachments?.rooms || []) {
+      const id = Number(att.room);
+      if (seen.has(id)) continue;
+      const frame = worldFrame.frames.get(id);
+      if (!frame) continue;
+      seen.add(id);
+      list.push({ id, x: frame.x + worldFrame.ox + frame.w / 2, z: frame.y + worldFrame.oz + frame.h / 2 });
+    }
+    effectsCandidates = list;
+    return list;
+  }
+  // Re-rank candidate rooms by fly-camera distance and reconcile the active
+  // set against MAX_ACTIVE_MERGED, honouring the +-hysteresis band so a room
+  // sitting near the radius boundary doesn't activate/deactivate every
+  // re-rank. Called on a slow cadence from the tick loop, plus once
+  // immediately whenever the layer/doc first becomes ready.
+  function updateMergedEffectsActivation(): void {
+    if (!allMode || !effectsLayer || destroyed) return;
+    const candidates = ensureEffectsCandidates();
+    if (!candidates.length) return;
+    const cam = scene3d.camera.position;
+    const enterRadius = MERGED_ACTIVATION_RADIUS - MERGED_ACTIVATION_HYSTERESIS;
+    const keepRadius = MERGED_ACTIVATION_RADIUS + MERGED_ACTIVATION_HYSTERESIS;
+    const eligible: { id: number; d: number }[] = [];
+    for (const room of candidates) {
+      const dx = room.x - cam.x;
+      const dz = room.z - cam.z;
+      const d = Math.hypot(dx, dz);
+      const wasActive = activeEffectRooms.has(room.id);
+      if (d <= (wasActive ? keepRadius : enterRadius)) eligible.push({ id: room.id, d });
+    }
+    eligible.sort((a, b) => a.d - b.d);
+    const nextActive = new Set(eligible.slice(0, MAX_ACTIVE_MERGED).map((r) => r.id));
+    for (const id of activeEffectRooms) {
+      if (nextActive.has(id)) continue;
+      activeEffectRooms.delete(id);
+      effectsLayer!.removeRoom(id);
+    }
+    for (const id of nextActive) {
+      if (activeEffectRooms.has(id)) continue;
+      activeEffectRooms.add(id);
+      effectsLayer!.addRoom(id, spawnRoomOffset(id), { loopOnly: true });
+    }
   }
 
   // lighting ---------------------------------------------------------------------
@@ -1725,6 +1899,58 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     el('a', allMode ? { href, text, target: '_blank', rel: 'noopener' } : { href, text });
   const compact = (value: any): string => (Number.isFinite(Number(value)) ? String(Number(Number(value).toFixed(3))) : '?');
 
+  // --- inspector tie-in: pinned occurrence -> attached particle systems -----
+  // Reuses the effectsDoc the room view's own ambient effects layer already
+  // fetches lazily (ensureEffectsDoc/applyEffects above): no second fetch
+  // here, so a doc that has not resolved yet simply means no row, same as an
+  // occurrence with no attached effects. Matches primarily by (room,
+  // occurrence) -- exactly what attachments.rooms records to join back to
+  // this same inspector's Occurrence row -- falling back to a resource-only
+  // match if the occurrence index isn't present.
+  function attachedEffectSystems(info: any): { system: number; controller: number | null }[] {
+    const roomAttachments = effectsDoc?.attachments?.rooms;
+    if (!Array.isArray(roomAttachments)) return [];
+    const room = Number(info.room);
+    const occurrence = Number(info.occurrenceIndex);
+    let matches = roomAttachments.filter((att: any) => Number(att.room) === room && Number(att.occurrence) === occurrence);
+    if (!matches.length) {
+      const resource = Number(info.resource);
+      if (Number.isFinite(resource)) {
+        matches = roomAttachments.filter((att: any) => Number(att.room) === room && Number(att.resource) === resource);
+      }
+    }
+    const bySystem = new Map<number, number | null>();
+    for (const att of matches) {
+      const system = Number(att.system);
+      if (!bySystem.has(system)) bySystem.set(system, att.controller == null ? null : Number(att.controller));
+    }
+    return [...bySystem.entries()].map(([system, controller]) => ({ system, controller }));
+  }
+
+  // "Effects: <name>" (or "Effects: N systems") linking to the effects
+  // browser, following the same readout-link idiom as Mesh/Material/Texture
+  // above. The click writes the same sessionStorage selection handoff shape
+  // the browser's own "View in room" link writes in the other direction
+  // (system slot + controller slot), then navigates same-tab (new tab in
+  // all-rooms mode, matching readoutLink).
+  function effectsReadoutRow(info: any): HTMLElement | null {
+    const attached = attachedEffectSystems(info);
+    if (!attached.length) return null;
+    const first = attached[0];
+    const sys = effectsDoc?.systems?.find((s: any) => Number(s.slot) === first.system);
+    const name = sys?.names?.[0]?.name || `system #${first.system}`;
+    const text = attached.length === 1 ? name : `${attached.length} systems`;
+    const attrs: any = allMode
+      ? { href: '#/world/effects', text, target: '_blank', rel: 'noopener' }
+      : { href: '#/world/effects', text };
+    attrs.onclick = () => {
+      try {
+        sessionStorage.setItem('bs.effects.reveal', JSON.stringify({ system: first.system, controller: first.controller }));
+      } catch { /* storage unavailable: navigation still works, just no reveal handoff */ }
+    };
+    return el('a', attrs);
+  }
+
   function readoutRows(info: any, pinned: boolean): [string, any][] {
     const isSpawn = info.sourceKind === 'spawn';
     const group = pinned && pinnedCtx?.info === info ? pinnedCtx.group : null;
@@ -1788,6 +2014,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         const source = [identifier(info.occurrenceIndex), `resource ${identifier(info.resource)}`];
         if (info.secondary !== null && info.secondary !== undefined) source.push(`secondary ${identifier(info.secondary)}`);
         rows.push(['Occurrence', source.join(' · ')]);
+        const effectsRow = effectsReadoutRow(info);
+        if (effectsRow) rows.push(['Effects', effectsRow]);
       }
       rows.push(['Tile', tileCell], ['Anchor', anchor]);
       if (!isSpawn) rows.push(['Local', local]);
@@ -3717,6 +3945,18 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     // sampler+playing; the shared render loop then poses the skinned mesh).
     if (spawnAnim?.bar) spawnAnim.bar.tick(dt);
     for (const parked of persistentAnims.values()) parked.bar?.tick(dt);
+    // effects: advance the tick clock and refill the particle batches
+    if (effectsLayer) effectsLayer.tick(dt, scene3d.camera);
+    // merged all-rooms: re-rank proximity activation on a slow cadence
+    // (never every frame -- ranking every candidate room's distance is cheap
+    // once, but not worth paying 60 times a second)
+    if (allMode && effectsLayer) {
+      effectsActivationAccum += dt || 0;
+      if (effectsActivationAccum >= MERGED_ACTIVATION_INTERVAL_MS) {
+        effectsActivationAccum = 0;
+        updateMergedEffectsActivation();
+      }
+    }
     if (revealQueue.length && renderer.info.render.frame !== revealFrame) {
       revealFrame = renderer.info.render.frame;   // only advance per real render
       let budget = Math.max(8, Math.ceil(revealQueue.length / 4));
@@ -3743,6 +3983,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     spawnAnimRoot.rotation.copy(world.root.rotation);
     spawnAnimRoot.scale.copy(world.root.scale);
     spawnAnimRoot.updateMatrix();
+    effectsRoot.rotation.copy(world.root.rotation);
+    effectsRoot.scale.copy(world.root.scale);
+    effectsRoot.updateMatrix();
     applyLights();
     applyShadows();
     applyFlatten();
@@ -3867,6 +4110,14 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       syncStatus();
       await buildMerged();
       if (destroyed) return;
+      // Merged mode's effects activation has no per-room loaded/unloaded
+      // trigger (see the guard on those events above), so it needs this one
+      // explicit kick once the world is otherwise ready: lazily fetches the
+      // doc (if not already requested) and, once it resolves, builds the
+      // layer and runs the first proximity ranking. Deliberately placed
+      // AFTER the heavy bake, not during it, so effects never compete with
+      // the initial load for main-thread time behind the loading overlay.
+      applyEffects();
       setReadyStage();
     }
     ready = true;
@@ -4071,6 +4322,39 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         emptyVisible: wire.emptyGroup.visible,
       };
     },
+    // Effects debug/test handle: live counts, the frozen-clock controls the
+    // harness drives, and a camera-focus helper for screenshots.
+    effectsApi: {
+      info: () => ({
+        systems: effectsLayer ? effectsLayer.systemCount() : 0,
+        emitters: effectsLayer ? effectsLayer.emitterCount() : 0,
+        live: effectsLayer ? effectsLayer.liveCount() : 0,
+        draws: effectsLayer ? effectsLayer.drawCount() : 0,
+        // merged all-rooms only: proximity-activated room count (0 in the
+        // single-room view, where every wanted room is simply always on)
+        active: activeEffectRooms.size,
+      }),
+      setClock(ticks: number) { effectsLayer?.setClock(Number(ticks) || 0, scene3d.camera); },
+      setRunning(on: boolean) { effectsLayer?.setRunning(!!on); },
+      focus(nameOrSlot: any, extent = 10) {
+        const anchor = effectsLayer?.findAnchor(nameOrSlot);
+        if (!anchor) return false;
+        focusExtent(anchor.x / world.tileUnits, anchor.y / world.tileUnits,
+          Math.max(1, Number(extent) || 10));
+        return true;
+      },
+      // Test/debug: jump the camera to a room's stitched (or graph) corner
+      // without requiring the room's effects to already be instantiated
+      // (unlike focus(), which looks up a currently-active system's anchor).
+      // Used by the merged-mode harness to bring a known room within the
+      // proximity activation radius before asserting on it.
+      focusRoom(roomId: number, extent = 20) {
+        const [ox, oy] = spawnRoomOffset(Number(roomId));
+        focusExtent(ox / world.tileUnits, oy / world.tileUnits, Math.max(1, Number(extent) || 20));
+        return true;
+      },
+      buffers: () => (effectsLayer ? effectsLayer.snapshot() : []),
+    },
     destroy() {
       if (destroyed) return;
       destroyed = true;
@@ -4104,6 +4388,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       hiddenSpawnParts.clear();
       hiddenModelParts.clear();
       spawnAnimRoot.removeFromParent();
+      effectsLayer?.dispose();
+      effectsLayer = null;
+      effectsRooms.clear();
+      activeEffectRooms.clear();
+      effectsRoot.removeFromParent();
       destroyPreview();
       pickScratchMesh.material.dispose();
       edits.clear();

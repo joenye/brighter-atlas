@@ -998,6 +998,48 @@ kbd {
 /* clip picker text filter (PlaybackBar) */
 .clip-filter { width: 110px; min-width: 0; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg3); color: var(--fg0); font-size: 11.5px; }
 
+/* ---------- particle effects browser (#/world/effects) ---------- */
+.we-body { flex: 1; min-height: 0; min-width: 0; display: flex; }
+.we-left {
+  width: 360px; flex: none; display: flex; flex-direction: column;
+  border-right: 1px solid var(--line); min-height: 0; background: var(--bg1);
+}
+.we-search-row { padding: 8px; border-bottom: 1px solid var(--line-soft); flex: none; }
+.we-search {
+  width: 100%; padding: 5px 9px; border-radius: 6px;
+  background: var(--bg3); border: 1px solid var(--line); color: var(--fg0); outline: none;
+}
+.we-search:focus { border-color: var(--accent-dim); }
+.we-list-host { flex: 1; min-height: 0; position: relative; }
+/* two-line row: the name gets its own full-width line (system names run
+   long and are the primary way a system is found); badges + where-used
+   share a tighter second line, so neither squeezes the other. */
+.vrow .we-row-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; justify-content: center; }
+.we-row-top { display: flex; min-width: 0; }
+.we-row-top .r-main { flex: 1; min-width: 0; }
+.we-row-bottom { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.we-row-bottom .r-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.we-row-header {
+  cursor: pointer; background: var(--bg2); color: var(--fg2);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+}
+.we-row-header:hover { background: var(--bg3); }
+.we-row-header .we-row-toggle { flex: none; width: 14px; text-align: center; }
+.we-right { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.we-canvas { flex: 1 1 50%; min-height: 180px; }
+.we-transport {
+  flex: none; padding: 8px 12px; background: var(--bg1);
+  border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
+}
+.we-transport-row { display: flex; align-items: center; gap: 8px; }
+.we-scrub { flex: 1; min-width: 0; }
+.we-time { flex: none; min-width: 76px; text-align: right; }
+.we-details { flex: 1 1 auto; min-height: 100px; overflow: auto; padding: 10px 12px; }
+.we-swatches, .we-thumbs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.we-swatch { width: 16px; height: 16px; border-radius: 3px; border: 1px solid var(--line); display: inline-block; }
+.we-thumb { width: 28px; height: 28px; border-radius: 4px; border: 1px solid var(--line); object-fit: cover; background: var(--bg3); image-rendering: pixelated; }
+.we-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
 /* ------------------------------------------------------------------ mobile
    desktop-only gate (src/mobile-gate.ts)
    Anti-flash: on coarse-pointer (touch-first) devices the static app chrome

@@ -97,9 +97,12 @@ export function classifyGpu(renderer: Pick<HudRenderer, 'getContext'>): { label:
   return { label, raw, tier };
 }
 
-export function createWorldHud({ host, renderer }: {
+export function createWorldHud({ host, renderer, extra }: {
   host: HTMLElement;
   renderer: HudRenderer;
+  /** Optional live suffix for the stats line (e.g. the effects layer's
+   *  particle count); empty string omits it. Sampled at the 2 Hz refresh. */
+  extra?: () => string;
 }): WorldHud {
   const gpu = gpuLabel(renderer);
   const envText = `WebGL${renderer.capabilities.isWebGL2 ? '2' : '1'} · ${gpu.label}`;
@@ -150,7 +153,9 @@ export function createWorldHud({ host, renderer }: {
     const tris = state.triangles >= 1e6
       ? `${(state.triangles / 1e6).toFixed(1)}M`
       : state.triangles.toLocaleString();
-    statsEl.textContent = `${state.fps} fps · ${state.drawCalls.toLocaleString()} draws · ${tris} tris`;
+    const suffix = extra ? extra() : '';
+    statsEl.textContent = `${state.fps} fps · ${state.drawCalls.toLocaleString()} draws · ${tris} tris`
+      + (suffix ? ` · ${suffix}` : '');
     chipFps.textContent = `${state.fps} fps`;
   };
 

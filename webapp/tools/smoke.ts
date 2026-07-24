@@ -591,33 +591,34 @@ async function worldSuite(browser: any, base: string) {
   ok(await page.$eval('.card', (n) => !!n.querySelector('a[href="#/world/all"]')),
     'world landing links to the all-rooms view');
 
-  // ---- sidebar: pinned "All" row above the rooms ----------------------------
-  const allRow = await page.evaluate(() => {
-    const rows = [...document.querySelectorAll('.vlist .vrow')];
-    return {
-      n: rows.length,
-      pinned: rows[0]?.classList.contains('vrow-all') || false,
-      label: rows[0]?.querySelector('.r-main')?.textContent || '',
-      meta: rows[0]?.querySelector('.r-meta')?.textContent || '',
-      selected: rows[0]?.classList.contains('selected') || false,
-    };
-  });
-  ok(allRow.n === 3 && allRow.pinned && allRow.label === 'All',
-    `world list pins an "All" row above the 2 rooms (${JSON.stringify(allRow)})`);
-  ok(/2 rooms/.test(allRow.meta), `All row shows the room count (${allRow.meta})`);
-  ok(!allRow.selected, 'All row is not active on the landing route');
-  // pinned through sort direction flips and through a filter that hides every room
+  // ---- sidebar: pinned "All" + "Effects" rows above the rooms ---------------
+  // The fixtures carry a world:effects doc (commit 1), so the C12-gated
+  // Effects row rides pinned above the rooms right alongside All.
+  const pinnedRows = await page.evaluate(() => [...document.querySelectorAll('.vlist .vrow')].map((r) => ({
+    pinned: r.classList.contains('vrow-all'),
+    label: r.querySelector('.r-main')?.textContent || '',
+    meta: r.querySelector('.r-meta')?.textContent || '',
+    selected: r.classList.contains('selected'),
+  })));
+  ok(pinnedRows.length === 4 && pinnedRows[0]?.pinned && pinnedRows[0]?.label === 'All'
+    && pinnedRows[1]?.pinned && pinnedRows[1]?.label === 'Effects',
+    `world list pins "All" then "Effects" above the 2 rooms (${JSON.stringify(pinnedRows)})`);
+  ok(/2 rooms/.test(pinnedRows[0]?.meta || ''), `All row shows the room count (${pinnedRows[0]?.meta})`);
+  ok(!pinnedRows[0]?.selected && !pinnedRows[1]?.selected, 'neither pinned row is active on the landing route');
+  // both pinned through sort direction flips and through a filter that hides every room
   await page.click('#list-sort-dir');
-  ok(await page.evaluate(() => document.querySelector('.vlist .vrow')?.classList.contains('vrow-all')),
-    'All row stays first when the sort direction flips');
+  ok(await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.vlist .vrow')];
+    return rows.length >= 2 && rows[0].classList.contains('vrow-all') && rows[1].classList.contains('vrow-all');
+  }), 'both pinned rows stay first when the sort direction flips');
   await page.click('#list-sort-dir');   // restore (persists in localStorage)
   await page.type('#list-filter', 'no room matches this');
   await sleep(300);   // input debounce
-  const filtered = await page.evaluate(() => ({
-    n: document.querySelectorAll('.vlist .vrow').length,
-    pinned: !!document.querySelector('.vlist .vrow.vrow-all'),
-  }));
-  ok(filtered.n === 1 && filtered.pinned, 'All row stays pinned when a filter hides every room');
+  const filtered = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.vlist .vrow')];
+    return { n: rows.length, pinned: rows.filter((r) => r.classList.contains('vrow-all')).length };
+  });
+  ok(filtered.n === 2 && filtered.pinned === 2, `both pinned rows stay pinned when a filter hides every room (${JSON.stringify(filtered)})`);
   await page.evaluate(() => {
     const f = document.getElementById('list-filter');
     f.value = '';
@@ -827,6 +828,133 @@ async function worldSuite(browser: any, base: string) {
   }), 'water toggle persists in the versioned prefs record');
   await panelCheck('Animated water');
 
+  // ---- ambient effects layer: exact frozen-clock counts + determinism --------
+  // Room 1 hosts the torch + fountain fixture systems (3 emitters over 3
+  // sprite x blend batches). The layer attaches once the async doc fetch
+  // lands, so wait for its systems first.
+  await page.waitForFunction(() => window.__bs.worldView.effectsApi?.info().systems === 2,
+    { timeout: 15000 });
+  const fxLayer = await page.evaluate(() => window.__bs.worldView.effectsApi.info());
+  ok(fxLayer.systems === 2 && fxLayer.emitters === 3,
+    `effects layer builds the room's 2 systems / 3 emitters (${JSON.stringify(fxLayer)})`);
+  // Frozen clock: the alive set is a pure function of the clock, so the
+  // count is exactly analytic against the fixture doc's tick rate: torch
+  // 20/s x 120 ticks = 4, jet 40/s x 300 = 20, ring 30/s x 200 = 10.
+  const fxFrozen = await page.evaluate(() => {
+    const fx = window.__bs.worldView.effectsApi;
+    fx.setRunning(false);
+    fx.setClock(2000);
+    const first = fx.info();
+    const snapA = JSON.stringify(fx.buffers());
+    fx.setClock(2000);
+    const second = fx.info();
+    const snapB = JSON.stringify(fx.buffers());
+    return {
+      liveA: first.live, liveB: second.live, draws: first.draws,
+      identical: snapA === snapB, bytes: snapA.length,
+    };
+  });
+  ok(fxFrozen.liveA === 34 && fxFrozen.liveB === 34,
+    `frozen clock 2000 gives the exact analytic alive count (${fxFrozen.liveA}/${fxFrozen.liveB} = 34)`);
+  ok(fxFrozen.draws === 3, `one draw per sprite x blend batch (${fxFrozen.draws} = 3)`);
+  ok(fxFrozen.identical === true,
+    `same clock twice -> byte-identical particle attribute buffers (${fxFrozen.bytes} chars compared)`);
+  const covFx = await paintCoverage(page);
+  ok(covFx > 0.05, `room paints with the effects layer on (coverage ${(covFx * 100).toFixed(1)}% > 5%)`);
+  // real draw-call delta + GL release on toggle-off (dispose, not hide)
+  const lastFrameCalls = () => page.evaluate(() => new Promise((resolve) => {
+    const r = window.__bs.worldView.scene3d.renderer;
+    const f0 = r.info.render.frame;
+    const check = () => (r.info.render.frame > f0
+      ? resolve(r.info.render.calls) : requestAnimationFrame(check));
+    requestAnimationFrame(check);
+  }));
+  const callsOn = await lastFrameCalls();
+  const memFxOn = await page.evaluate(() => ({ ...window.__bs.worldView.scene3d.renderer.info.memory }));
+  await panelCheck('Effects');
+  await sleep(150);
+  const fxOff = await page.evaluate(() => window.__bs.worldView.effectsApi.info());
+  ok(fxOff.systems === 0 && fxOff.live === 0 && fxOff.draws === 0,
+    `unticking Effects disposes the layer (${JSON.stringify(fxOff)})`);
+  const callsOff = await lastFrameCalls();
+  const memFxOff = await page.evaluate(() => ({ ...window.__bs.worldView.scene3d.renderer.info.memory }));
+  ok(Number(callsOn) - Number(callsOff) === 3,
+    `effects contribute exactly their 3 batch draw calls (${callsOn} -> ${callsOff})`);
+  ok(memFxOff.geometries < memFxOn.geometries && memFxOff.textures <= memFxOn.textures,
+    `effects GL objects release on toggle-off (geometries ${memFxOn.geometries} -> ${memFxOff.geometries}, `
+    + `textures ${memFxOn.textures} -> ${memFxOff.textures})`);
+  await panelCheck('Effects');
+  await page.waitForFunction(() => window.__bs.worldView.effectsApi.info().systems === 2,
+    { timeout: 15000 });
+  const fxRestored = await page.evaluate(() => {
+    const fx = window.__bs.worldView.effectsApi;
+    fx.setRunning(false);
+    fx.setClock(2000);
+    return fx.info();
+  });
+  ok(fxRestored.live === 34 && fxRestored.draws === 3,
+    `re-ticking Effects rebuilds the exact frozen state (${fxRestored.live} live, ${fxRestored.draws} draws)`);
+  await page.evaluate(() => window.__bs.worldView.effectsApi.setRunning(true));
+
+  // ---- effects browser: #/world/effects --------------------------------------
+  await page.evaluate(() => { location.hash = '#/world/effects'; });
+  await page.waitForFunction(() => typeof window.__bs.effectsView?.count === 'function'
+    && window.__bs.effectsView.count() === 4, { timeout: 15000 });
+  const browserRows = await page.evaluate(() =>
+    [...document.querySelectorAll('.we-left .vlist .vrow')].map((r) => r.querySelector('.r-main')?.textContent));
+  ok(browserRows.length === 4 && browserRows.every((t) => !!t),
+    `effects browser lists all 4 fixture systems (${JSON.stringify(browserRows)})`);
+  await sleep(500);   // the first system's preview mounts async
+  const covBrowse0 = await paintCoverage(page, '.we-canvas canvas');
+  ok(covBrowse0 > 0.02, `effects browser preview paints on load (coverage ${(covBrowse0 * 100).toFixed(1)}% > 2%)`);
+
+  await page.type('.we-search', 'fountain');
+  await sleep(300);
+  const searchByName = await page.evaluate(() => ({
+    total: window.__bs.effectsView.count(),
+    shown: document.querySelectorAll('.we-left .vlist .vrow').length,
+    label: document.querySelector('.we-left .vlist .vrow .r-main')?.textContent || '',
+  }));
+  ok(searchByName.total === 4 && searchByName.shown === 1 && searchByName.label === 'fixture_fountain_loop',
+    `typing "fountain" filters the list to 1 match (${JSON.stringify(searchByName)})`);
+
+  // the killer feature: search by the NAME of an attached room, not just the
+  // system's own name (fixture room 1 is "Fixture Meadow")
+  await page.evaluate(() => { const inp = document.querySelector('.we-search'); inp.value = ''; inp.dispatchEvent(new Event('input')); });
+  await sleep(300);
+  await page.type('.we-search', 'Fixture Meadow');
+  await sleep(300);
+  const searchByRoom = await page.evaluate(() =>
+    [...document.querySelectorAll('.we-left .vlist .vrow .r-main')].map((n) => n.textContent));
+  ok(searchByRoom.length === 2 && searchByRoom.includes('fixture_torch_idle') && searchByRoom.includes('fixture_fountain_loop'),
+    `searching by an attached room's name finds both room-1 systems (${JSON.stringify(searchByRoom)})`);
+  await page.evaluate(() => { const inp = document.querySelector('.we-search'); inp.value = ''; inp.dispatchEvent(new Event('input')); });
+  await sleep(300);
+
+  // select + preview a specific system by name (debug API), then the transport
+  ok(await page.evaluate(() => window.__bs.effectsView.select('fixture_fountain_loop')),
+    'effectsView.select() finds a fixture system by name');
+  await sleep(500);
+  const selInfo = await page.evaluate(() => window.__bs.effectsView.previewInfo());
+  ok(selInfo.label === 'fixture_fountain_loop' && selInfo.mode === 'loop' && selInfo.live > 0,
+    `previewInfo() reports the selected loop system with live particles (${JSON.stringify(selInfo)})`);
+  const covFountain = await paintCoverage(page, '.we-canvas canvas');
+  ok(covFountain > 0.02, `fountain preview paints (coverage ${(covFountain * 100).toFixed(1)}% > 2%)`);
+  ok(await page.$$eval('.we-transport .btn', (b) => b.some((x) => /Pause|Play/.test(x.textContent))),
+    'transport exposes a play/pause toggle');
+
+  // navigation: "View in room" hands off a reveal + routes to the room view,
+  // landing exactly where the inspector checks right below expect to be
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.we-details .we-nav .btn')].find((b) => /View in room/.test(b.textContent));
+    btn?.click();
+  });
+  await page.waitForFunction(() => /world\/1(\?|$)/.test(location.hash), { timeout: 10000 });
+  const reveal = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bs.effects.reveal') || 'null'));
+  ok(reveal?.system === 201, `"View in room" hands off the selected system via sessionStorage (${JSON.stringify(reveal)})`);
+  await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 30000 });
+  ok(true, '"View in room" routes back to #/world/1');
+
   // ---- inspector: click a terrain tile -> pinned readout with source rows ----
   // Inspect is a distinct button-style MODE toggle at the top of the panel
   ok(await page.$eval('.world-panel .wp-inspect', (n) => n.tagName === 'BUTTON'
@@ -1008,6 +1136,31 @@ async function worldSuite(browser: any, base: string) {
   await page.click('.world-hud .wh-toggle');
   ok(await page.evaluate(() => window.__bs.worldView.hud.state.collapsed
     && document.querySelector('.world-hud .wh-body').hidden), 'HUD collapses to its fps chip');
+
+  // ---- inspector effects readout: pinned occurrence -> attached system -------
+  // Room 1's terrain tile (0.5, 0.5) is occurrence 0, exactly the fixture
+  // doc's room-1/occurrence-0 attachment (system 101, "fixture_torch_idle"),
+  // so pinning it by reference (the same test hook used for spawnRef above)
+  // recovers the row without repeating the raycast.
+  ok(await page.evaluate((ref) => window.__bs.worldView.pinPlacement(ref),
+    { room: 1, category: 'terrain', sourceKind: 'occurrence', placementIndex: 0 }),
+  'pinPlacement pins the torch-fixture terrain occurrence');
+  const fxRowText = await page.$eval('.world-panel .wp-readout', (n) => n.textContent);
+  ok(/Effects/.test(fxRowText) && /fixture_torch_idle/.test(fxRowText),
+    `pinned readout surfaces the attached effect system by its recovered name (${JSON.stringify(fxRowText.includes('fixture_torch_idle'))})`);
+  const fxLink = await page.$eval('.world-panel .wp-readout', (n) => {
+    const a = [...n.querySelectorAll('dd a')].find((x) => x.textContent === 'fixture_torch_idle');
+    return a ? { href: a.getAttribute('href'), text: a.textContent } : null;
+  });
+  ok(fxLink?.href === '#/world/effects' && fxLink.text === 'fixture_torch_idle',
+    `effects row follows the same readout-link idiom as Mesh/Material/Texture (${JSON.stringify(fxLink)})`);
+  await page.evaluate(() => sessionStorage.removeItem('bs.effects.reveal'));
+  await page.$$eval('.world-panel .wp-readout dd a',
+    (as) => as.find((a) => a.textContent === 'fixture_torch_idle')?.click());
+  await page.waitForFunction(() => /world\/effects/.test(location.hash), { timeout: 10000 });
+  const fxReveal = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bs.effects.reveal') || 'null'));
+  ok(fxReveal?.system === 101 && fxReveal?.controller === 120,
+    `clicking the row hands off the same {system, controller} shape the browser's own "View in room" link writes (${JSON.stringify(fxReveal)})`);
 
   // ---- all-rooms merged view, entered via the pinned All row ------------------
   await page.click('.vlist .vrow-all');
@@ -1271,6 +1424,33 @@ async function worldSuite(browser: any, base: string) {
       const p = window.__bs.worldView.persistentAnimInfo();
       return p.count === 1 && p.playing[0] === true;
     }), 'merged: the animation is parked and keeps playing after inspect-off');
+
+    // ---- ambient effects: merged-mode proximity activation --------------------
+    // The fixture world has 2 rooms; only room 1 carries room attachments (the
+    // same 2 systems / 3 emitters the single-room section above already
+    // exercised), so it is always well inside the activation radius of the
+    // tiny fixture stitch and activates on the very first proximity re-rank.
+    // effects were left ON at the end of the single-room section and that
+    // state persists into this fresh view (GPU-adaptive first-run defaults
+    // only apply when NO saved world state exists yet); guard it anyway so
+    // this check does not depend on section order.
+    const fxOnMerged = await page.evaluate(() => !!window.__bs.worldView.state.effects);
+    if (!fxOnMerged) await panelCheck('Effects');
+    await page.waitForFunction(() => (window.__bs.worldView.effectsApi?.info().systems || 0) === 2,
+      { timeout: 20000 });
+    const mergedFx = await page.evaluate(() => window.__bs.worldView.effectsApi.info());
+    ok(mergedFx.systems === 2 && mergedFx.emitters === 3 && mergedFx.live > 0 && mergedFx.active === 1,
+      `merged view activates the fixture room's effects by proximity (${JSON.stringify(mergedFx)})`);
+    // toggling off in merged mode disposes exactly like the single-room view
+    await panelCheck('Effects');
+    await sleep(150);
+    const mergedFxOff = await page.evaluate(() => window.__bs.worldView.effectsApi.info());
+    ok(mergedFxOff.systems === 0 && mergedFxOff.live === 0 && mergedFxOff.active === 0,
+      `merged view: unticking Effects disposes the layer (${JSON.stringify(mergedFxOff)})`);
+    await panelCheck('Effects');
+    await page.waitForFunction(() => (window.__bs.worldView.effectsApi?.info().systems || 0) === 2,
+      { timeout: 20000 });
+    ok(true, 'merged view: re-ticking Effects re-activates the fixture room by proximity');
   } else {
     ok(mergedInfo.rooms === 2, `all-rooms retains both rooms without WebGL2 (${mergedInfo.rooms})`);
     ok(true, 'no WebGL2: merged bake skipped (per-room fallback)');
@@ -1294,6 +1474,9 @@ async function worldSuite(browser: any, base: string) {
     ok(true, 'no WebGL2: merged spawn pin skipped');
     ok(true, 'no WebGL2: merged spawn playback + overlay skipped');
     ok(true, 'no WebGL2: merged spawn restore skipped');
+    ok(true, 'no WebGL2: merged effects proximity activation skipped');
+    ok(true, 'no WebGL2: merged effects toggle-off skipped');
+    ok(true, 'no WebGL2: merged effects toggle-on skipped');
   }
   const stall = await page.evaluate(() => ({ ...window.__bs.worldView.stallProbe }));
   ok(stall && stall.phase === 'ready' && stall.worst >= 0,
