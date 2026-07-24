@@ -30,6 +30,7 @@ import * as modelsMod from './models.js';
 import * as catalogMod from './catalog.js';
 import * as animNamesMod from './anim-names.js';
 import * as meshNamesMod from './mesh-names.js';
+import * as effectsMod from './effects.js';
 
 
 // default JSON fetch for world data files (same contract as profile.js):
@@ -369,6 +370,34 @@ export async function extractWorld({
       });
     }
   }
+
+  // ---- recovered particle effect systems ------------------------------------
+  // Structural per-build detection over the replayed rows + value pool (see
+  // effects.js); stores room-local cells, so it needs nothing from stitch and
+  // nothing from the catalog. Stored as its own derived doc; its absence
+  // changes nothing. An EMPTY doc (zero systems) is stored deliberately: its
+  // audit stays inspectable, and the store probe gates effects UI on stored
+  // systems, so empty and absent docs gate identically. Unlike anim:names
+  // this call IS wrapped: it is a
+  // shape-detected stage shipping against builds it has never seen, and it
+  // must not be able to fail World extraction (the module is internally total
+  // already; the catch is belt-and-braces against module bugs, re-throwing
+  // only cancellation). Byte-identity of every existing output is untouched:
+  // the stage only reads shared state and writes one new key.
+  step('effects', 0, 1);
+  try {
+    const effects = effectsMod.extractWorldEffects(rows, pool.values, ab0, profile, {
+      charset: dt.charset, symbols: dt.symbols, strings: poolStrings, poolRegistryRefs,
+      textureSlots: assetMaps.textureSlots, roomIds: ctx.roomIds,
+      occupancy: (id) => ctx.occupancy(id), spawnActors: spawnActorsBySlot,
+      bail, onStep: (d, t) => step('effects', d, t),
+    });
+    await sink.derivedPut(versionId, 'world:effects', effects);
+  } catch (e) {
+    if (signal?.aborted || e?.message === 'cancelled') throw e;
+    // recovered effects are optional: no doc, nothing else changes
+  }
+  step('effects', 1, 1);
 
   // ---- door-graph world placement, calibrated by the jigsaw connectors ------
   step('stitch', 0, 1);

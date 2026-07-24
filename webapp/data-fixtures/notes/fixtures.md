@@ -21,6 +21,11 @@ test. Committed as-is; treat the files as the source of truth.
   terrain, a rotated model with a recolor, a component, an
   authored-empty placement, a spawn, and one water tile; the
   columns/enums tables must stay in sync with `src/extract/world/shards.ts`
+- `world/effects.json`: 4 invented particle effect systems (torch, fountain,
+  guard idle + timed guard attack) with 5 emitters and matching burst/shape
+  configs in the `world:effects` doc schema (`src/extract/world/effects.ts`);
+  the manifest `docs` list carries the `world_effects` flag the HTTP store
+  probes. All numbers invented, no real decoded values.
 
 Index rows carry deterministic `f1c0de…` content hashes (`h`) so
 hash-keyed features (names, overrides, Models, Scenes) work here.

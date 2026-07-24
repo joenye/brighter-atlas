@@ -31,6 +31,7 @@ const WORLD_STEPS: Record<string, string> = {
   rooms: 'World: reading rooms',
   stitch: 'World: placing rooms on the map',
   shards: 'World: packing room data',
+  effects: 'World: recovering effects',
   textures: 'World: scanning textures',
   catalog: 'World: recovering models + textures',
   package: 'World: packaging the model catalog',

@@ -2,6 +2,7 @@
 // decodes base64 little-endian buffers into typed arrays, reports fetch errors.
 
 import type { VersionRecord } from './storage.js';
+import type { WorldEffectsDoc } from './extract/world/effects.js';
 
 // One row of a category index. `i` is the bundle ordinal (the public asset
 // identity), `h` the stable 16-hex content hash when known. Category-specific
@@ -38,6 +39,13 @@ export interface AppStore extends EventTarget {
    *  call). Callers must pass BOUNDED id batches: fetching every shard at
    *  once spikes the heap by hundreds of MB on a full world. */
   worldRooms?(ids: (number | string)[]): Promise<Map<number, any>>;
+  /** Recovered particle-effect systems ('world:effects', written by World
+   *  extraction). Optional and multi-MB: callers defer this until an effects
+   *  surface first needs it; null means the version has no doc. */
+  worldEffects?(): Promise<WorldEffectsDoc | null>;
+  /** Cheap effects-doc probe (manifest flag / key existence, never the doc
+   *  itself), for gating effects UI without pulling the payload. */
+  hasWorldEffects?(): Promise<boolean>;
   json(rel: string): Promise<any>;
   payload(rel: string): Promise<any>;
   arrayBuffer(rel: string): Promise<ArrayBuffer>;
@@ -152,6 +160,25 @@ export class Store extends EventTarget implements AppStore {
   async worldRoom(id: number | string): Promise<any> {
     if (!this.manifest?.categories?.world?.exported) return null;
     return this.json(`world/rooms/${String(id).padStart(5, '0')}.json`);
+  }
+
+  // Recovered particle-effect systems: world/effects.json exists only in
+  // trees whose exporter stamped the world_effects docs flag, so the flag
+  // gates the fetch (older trees never see a request). The doc is multi-MB;
+  // callers defer this call until an effects surface first needs it.
+  worldEffects(): Promise<WorldEffectsDoc | null> {
+    if (!this.manifest?.categories?.world?.exported) return Promise.resolve(null);
+    if (!(this.manifest?.docs as any[] | undefined)?.includes?.('world_effects')) return Promise.resolve(null);
+    if (!this._indexes.has('world:effects')) {
+      this._indexes.set('world:effects', this.fetchJSON('world/effects.json')
+        .catch((e) => { this._indexes.delete('world:effects'); throw e; }));
+    }
+    return this._indexes.get('world:effects')!;
+  }
+
+  async hasWorldEffects(): Promise<boolean> {
+    return !!this.manifest?.categories?.world?.exported
+      && !!(this.manifest?.docs as any[] | undefined)?.includes?.('world_effects');
   }
 
   // HTTP mode keeps per-room fetches. This is just their parallel form, so

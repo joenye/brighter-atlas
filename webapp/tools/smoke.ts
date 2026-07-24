@@ -625,6 +625,41 @@ async function worldSuite(browser: any, base: string) {
   });
   await sleep(300);
 
+  // ---- recovered particle effects doc: accessors + shape --------------------
+  const fx = await page.evaluate(async () => {
+    const store = window.__bs.app.store;
+    const has = await store.hasWorldEffects?.();
+    const doc = await store.worldEffects?.();
+    if (!doc) return { has, missing: true };
+    const doc2 = await store.worldEffects();
+    return {
+      has,
+      format: doc.format,
+      slots: doc.systems.map((s) => s.slot),
+      emitters: doc.systems.reduce((n, s) => n + s.emitters.length, 0),
+      configs: Object.keys(doc.configs).length,
+      configKeysSorted: Object.keys(doc.configs).every((k, i, a) => i === 0 || Number(a[i - 1]) < Number(k)),
+      names: doc.systems.map((s) => s.names[0]?.name || null),
+      tick: doc.tick_rate,
+      roomAtt: doc.attachments.rooms.length,
+      actorAtt: doc.attachments.actors.length,
+      cached: doc === doc2,
+    };
+  });
+  ok(fx.has === true, 'hasWorldEffects() probes true off the fixture manifest flag');
+  ok(!fx.missing && fx.format === 1, 'worldEffects() resolves a format-1 doc');
+  ok(fx.slots.length === 4 && fx.slots.every((s, i, a) => i === 0 || a[i - 1] < s),
+    `effects doc carries 4 systems in ascending slot order (${JSON.stringify(fx.slots)})`);
+  ok(fx.emitters === 5 && fx.configs === 8 && fx.configKeysSorted,
+    `effects doc counts: 5 emitters, 8 configs, ascending keys (${fx.emitters}/${fx.configs})`);
+  ok(fx.names.join(',') === 'fixture_torch_idle,fixture_fountain_loop,fixture_guard_idle,fixture_guard_attack',
+    `effects systems carry their fixture names (${fx.names.join(',')})`);
+  ok(fx.tick && fx.tick.value === 600 && fx.tick.via === 'default' && fx.tick.votes === 0,
+    `effects doc stores its tick rate with provenance (${JSON.stringify(fx.tick)})`);
+  ok(fx.roomAtt === 2 && fx.actorAtt === 2,
+    `effects doc attachments: 2 room + 2 actor (${fx.roomAtt}/${fx.actorAtt})`);
+  ok(fx.cached === true, 'worldEffects() is cached (second read returns the same doc)');
+
   // ---- single room: renders + counts --------------------------------------
   await page.goto(u('#/world/1'), { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 30000 });

@@ -136,6 +136,39 @@ export class ClientStore extends EventTarget implements AppStore {
     return (await derivedGet(this.versionId, `world:room:${id}`)) || null;
   }
 
+  // Recovered particle-effect systems ('world:effects', written by World
+  // extraction), cached like world:index. Older extractions have no doc;
+  // null, and every effects surface stays dormant.
+  worldEffects(): Promise<any> {
+    if (!this._indexes.has('world:effects')) {
+      this._indexes.set('world:effects', derivedGet(this.versionId, 'world:effects')
+        .then((doc) => doc || null)
+        .catch((e) => { this._indexes.delete('world:effects'); throw e; }));
+    }
+    return this._indexes.get('world:effects')!;
+  }
+
+  // Effects gate for the UI. An empty doc (the stage ran and recovered
+  // nothing, audit kept for inspection) must gate exactly like an absent
+  // one, so the probe checks stored systems, not bare key existence. The
+  // getKey fast path keeps the common no-doc case (older extractions) free
+  // of value materialization; only when the key exists is the doc pulled,
+  // through the same cached promise every effects surface shares.
+  async hasWorldEffects(): Promise<boolean> {
+    try {
+      const db = await idbOpen();
+      const exists = await new Promise<boolean>((resolve) => {
+        const t = db.transaction('derived', 'readonly');
+        const req = t.objectStore('derived').getKey(`${this.versionId}:world:effects`);
+        req.onsuccess = () => resolve(req.result !== undefined);
+        req.onerror = () => resolve(false);
+      });
+      if (!exists) return false;
+      const doc = await this.worldEffects().catch(() => null);
+      return !!(doc && Array.isArray(doc.systems) && doc.systems.length);
+    } catch { return false; }
+  }
+
   // Bulk shard read for the all-rooms world view: every world:room:* doc in
   // ONE readonly transaction (getAll over a key range) instead of ~450
   // sequential gets. getAll returns keys in LEXICOGRAPHIC order (room 100

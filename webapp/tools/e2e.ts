@@ -420,6 +420,82 @@ ok(bearSpawns.length >= 1 && bearSpawns.every((s) => (s.origin === 1 || s.origin
   && Number.isFinite(s.sz) && s.sz >= 1536 && s.sz <= 4096),
   `Bear Clearing carries grounded roster bear spawns (${JSON.stringify(bearSpawns)})`);
 
+// ---- 7d. recovered particle effect systems ------------------------------------
+// The world:effects doc rode in with the World extraction. Thresholds are
+// plain counts; the spot checks anchor by NAME (recovered animatic names and
+// room names are extracted data), never by ordinal, and never assert decoded
+// numeric game values.
+const fxProbe = await page.evaluate(async () => {
+  const store = window.__bs.app.store;
+  return { has: await store.hasWorldEffects?.(), doc: !!(await store.worldEffects?.()) };
+});
+ok(fxProbe.has === true && fxProbe.doc === true, 'effects doc stored (hasWorldEffects + worldEffects)');
+const fx = await page.evaluate(async () => {
+  const doc = await window.__bs.app.store.worldEffects();
+  if (!doc) return null;
+  // effective blend: the emitter's own override, else the system's
+  const blendOf = (sys, e) => e.blend || sys.blend;
+  const isAddCont = (sys) => sys.emitters.some((e) => blendOf(sys, e) === 'add'
+    && e.burst != null && doc.configs[String(e.burst)]?.kind === 'burst_continuous');
+  const lantern = doc.systems.find((s) => s.names.some((n) => n.name.includes('hanging_street_lantern_idle'))) || null;
+  return {
+    systems: doc.systems.length,
+    named: doc.systems.filter((s) => s.names.length > 0).length,
+    roomAtt: doc.attachments.rooms.length,
+    actorAtt: doc.attachments.actors.length,
+    additiveContinuous: doc.systems.filter(isAddCont).length,
+    lantern: lantern && {
+      loop: lantern.loop,
+      emitters: lantern.emitters.length,
+      addContinuous: isAddCont(lantern),
+    },
+  };
+});
+if (!fx) {
+  // absent doc: fail through ok() and skip the dependent assertions instead
+  // of crashing the suite dereferencing null
+  ok(false, 'effects doc stored (worldEffects() resolved null, dependent effects checks skipped)');
+} else {
+  ok(fx.systems > 1000, `effect systems recovered (${fx.systems} > 1000)`);
+  // named counts systems carrying at least one recovered name entry (from
+  // the controller name join or a referencing row's own strings), never a
+  // plain system count; the row-string path names nearly every system on
+  // current builds, so this legitimately tracks close to the systems count
+  ok(fx.named > 500, `named effect systems (${fx.named} > 500)`);
+  ok(fx.roomAtt > 100, `room-attached effects (${fx.roomAtt} > 100)`);
+  ok(fx.actorAtt > 50, `actor-attached effects (${fx.actorAtt} > 50)`);
+  // structural additive-continuous check: ambient effects are overwhelmingly
+  // additive looping emitters feeding a continuous burst config
+  ok(fx.additiveContinuous > 100,
+    `systems with an additive continuous emitter (${fx.additiveContinuous} > 100)`);
+  ok(fx.lantern != null && fx.lantern.loop === true && fx.lantern.emitters >= 2 && fx.lantern.addContinuous,
+    `hanging street lantern system: loop, >= 2 emitters, additive continuous (${JSON.stringify(fx.lantern)})`);
+  // the room named Town Square hosts a dense looping system; resolved by NAME
+  // (room names partly come from the cross-build fill, so a rename skips with
+  // a warning instead of failing the suite)
+  const squareId = rooms.find((r) => r.name === 'Town Square')?.id ?? null;
+  if (squareId == null) {
+    console.log('  WARN: no room named "Town Square" in this build, skipping the effects room anchor');
+    ok(true, 'Town Square effects anchor skipped (room name absent)');
+  } else {
+    const square = await page.evaluate(async (roomId) => {
+      const doc = await window.__bs.app.store.worldEffects();
+      const systems = new Set(doc.attachments.rooms.filter((a) => a.room === roomId).map((a) => a.system));
+      const bySlot = new Map(doc.systems.map((s) => [s.slot, s]));
+      let best = null;
+      for (const slot of systems) {
+        const sys: any = bySlot.get(slot);
+        if (sys && (!best || sys.emitters.length > best.emitters)) {
+          best = { slot: sys.slot, emitters: sys.emitters.length, loop: sys.loop };
+        }
+      }
+      return best;
+    }, squareId);
+    ok(square != null && square.emitters >= 8 && square.loop === true,
+      `Town Square hosts a dense looping effect system (${JSON.stringify(square)})`);
+  }
+}
+
 // ---- 8. Models list: the system catalog arrived with the World extraction -----
 await page.goto(`${base}/index.html#/models`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('#list-host .vrow', { timeout: 30000 });

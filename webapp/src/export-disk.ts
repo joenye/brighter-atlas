@@ -145,12 +145,30 @@ export function openExportDialog(app: any): void {
         if (c === 'world') continue;   // rooms live under world/, not index/
         indexes[c] = await app.store.index(c);
       }
+      // The world_effects manifest flag and the world/effects.json write must
+      // decide together (a stamped flag with a missing file makes the HTTP
+      // store's read reject instead of resolving null): resolve the doc ONCE,
+      // stamp the flag only when this same doc will be written, and drop any
+      // stale flag carried in from the source manifest. An empty doc (zero
+      // systems) exports nothing: the flag gates effects UI, and empty must
+      // gate like absent.
+      let effectsDoc: any = null;
+      if (!asGlb && chosen.includes('world')) {
+        effectsDoc = await app.store.worldEffects?.().catch(() => null);
+        if (effectsDoc && !(Array.isArray(effectsDoc.systems) && effectsDoc.systems.length)) effectsDoc = null;
+      }
       if (!asGlb) {
         // indexes + datatable + manifest first (cheap, makes the tree valid
-        // early); the GLB output isn't a servable tree, so it skips these
+        // early); the GLB output isn't a servable tree, so it skips these.
+        // The docs list mixes descriptive {title, file} entries with bare
+        // flag strings; includes('world_effects') is the exact probe the
+        // HTTP store runs, so the bare string is the shape to keep.
+        const docs = [...(manifest.docs || [])].filter((d: any) => d !== 'world_effects');
+        if (effectsDoc) docs.push('world_effects');
         await sink.write('manifest.json', JSON.stringify({
           ...manifest,
           categories: Object.fromEntries(chosen.map((c) => [c, manifest.categories[c]])),
+          docs,
         }, null, 1));
         for (const c of chosen) await sink.write(`index/${c}.json`, JSON.stringify(indexes[c]));
         for (const rel of ['datatable/symbols.json', 'datatable/strings.json']) {
@@ -179,6 +197,10 @@ export function openExportDialog(app: any): void {
           // form); the exported world/ dir is exactly what the HTTP store
           // reads back via ?data=<dir>.
           if (asGlb) continue;
+          // recovered particle effects ride the same tree, written from the
+          // exact doc the manifest flag was stamped from (never re-resolved:
+          // flag and file must agree even if a second read would fail)
+          if (effectsDoc) await sink.write('world/effects.json', JSON.stringify(effectsDoc));
           const wi = await app.store.worldIndex();
           if (!wi) continue;
           await sink.write('world/index.json', JSON.stringify(wi));
