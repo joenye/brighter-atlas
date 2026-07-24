@@ -389,7 +389,8 @@ export async function extractWorld({
     const effects = effectsMod.extractWorldEffects(rows, pool.values, ab0, profile, {
       charset: dt.charset, symbols: dt.symbols, strings: poolStrings, poolRegistryRefs,
       textureSlots: assetMaps.textureSlots, roomIds: ctx.roomIds,
-      occupancy: (id) => ctx.occupancy(id), spawnActors: spawnActorsBySlot,
+      occupancy: (id) => ctx.occupancy(id), bounds3f: (slot) => ctx.graph.bounds3f(slot),
+      spawnActors: spawnActorsBySlot,
       bail, onStep: (d, t) => step('effects', d, t),
     });
     await sink.derivedPut(versionId, 'world:effects', effects);

@@ -146,7 +146,8 @@ export interface WorldEffectsDoc {
   attachments: {
     rooms: { room: number; cell: [number, number, number]; occurrence: number;
              resource: number; rot: number; via: 'resource' | 'secondary';
-             system: number; controller: number | null }[]; // sorted (room, occurrence, system, controller)
+             system: number; controller: number | null;
+             anchor: [number, number, number] }[]; // sorted (room, occurrence, system, controller)
     actors: { actor: number; label: string | null; system: number;
               controller: number | null }[];                // sorted (actor, system)
     owners: { owner: number; system: number; controller: number | null }[]; // sorted (owner, system)
@@ -159,6 +160,7 @@ export interface WorldEffectsShared {
   textureSlots: Map<number, number[]>;        // material slot -> ab3 ids
   roomIds: number[];
   occupancy: (roomId: number) => { occurrences: RoomOccurrence[] }; // read-only cached
+  bounds3f: (ownerSlot: number) => number[] | null; // owner's native-unit model envelope, read-only cached
   spawnActors: Map<number, { owner_slot: number; label: string | null }>;
   bail: () => void;                           // cancellation check, throws on cancel
   onStep?: (done: number, total: number) => void;
@@ -482,6 +484,35 @@ function windowsOf(e: EffectExtra): [number, number][] | null {
     out.push(...w);
   }
   return out.length ? out : null;
+}
+
+// ------------------------------------------------------ room-attachment anchor
+
+// The middle of a sorted sample (even counts average the two middle values);
+// null on an empty sample.
+function medianOf(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Native-unit offset from a room occurrence's placement pivot (tile centre,
+// floor layer) to a system's world origin: XY at the owning occurrence's own
+// bounding-box centre (its real centroid, not the tile corner), Z at the
+// bounding-box top for a hanging system or the base for a grounded one (a
+// hanging chandelier's glow belongs near its housing, not the floor it is
+// nominally placed on; a grounded emitter's spray belongs at the object's
+// foot, not its model-space midpoint). Absent bounds degrade to the pivot
+// itself (an all-zero offset), so an occurrence with no resolvable envelope
+// keeps today's tile-corner / floor placement rather than guessing.
+function roomSystemAnchor(bbox: number[] | null, hanging: boolean): [number, number, number] {
+  if (!bbox) return [0, 0, 0];
+  return [
+    Math.round((bbox[0] + bbox[3]) / 2),
+    Math.round((bbox[1] + bbox[4]) / 2),
+    Math.round(hanging ? bbox[5] : bbox[2]),
+  ];
 }
 
 // ------------------------------------------------------------ empty document
@@ -1035,6 +1066,23 @@ function extractEffects(
   audit.systems = systemDocs.length;
   audit.emitters = emitterTotal;
 
+  // A system "hangs" when its emitters' own spawn-shape origins sit, on the
+  // median, below their attach point (negative local Z: the room-attachment
+  // anchor below picks the owning occurrence's bounding-box top for these,
+  // its base otherwise). Systems with no shape-classified emitter default to
+  // grounded (their emitters have no local origin to vote hanging with).
+  const hangingBySystem = new Map<number, boolean>();
+  for (const sys of systemDocs) {
+    const originZ: number[] = [];
+    for (const emitter of sys.emitters) {
+      if (emitter.shape == null) continue;
+      const info = configInfo.get(emitter.shape);
+      if (info && info.kind === 'shape' && info.center) originZ.push(info.center[2]);
+    }
+    const median = medianOf(originZ);
+    hangingBySystem.set(sys.slot, median !== null && median < 0);
+  }
+
   // configs record: every classified reference target of a shipped emitter
   const configs: Record<string, EffectConfig> = {};
   for (const slot of [...shippedConfigs].sort((a, b) => a - b)) {
@@ -1094,6 +1142,12 @@ function extractEffects(
     const { occurrences } = shared.occupancy(roomId);
     for (let index = 0; index < occurrences.length; index++) {
       const hit = occurrences[index];
+      // the owning occurrence's native-unit model envelope: read once per
+      // occurrence (bounds3f is itself memoized by owner slot), never per
+      // attachment. An inverted-bounds throw on a malformed owner degrades to
+      // "no envelope" like every other absence here, never fails the room.
+      let bbox: number[] | null = null;
+      try { bbox = shared.bounds3f(hit.resource); } catch { bbox = null; }
       // deterministic tie order: resource-derived pairs first; secondary pairs
       // only when they add a (system, controller) pair the occurrence lacks
       const emitted = new Set<string>();
@@ -1110,6 +1164,7 @@ function extractEffects(
             resource: slot,
             rot: hit.rotationQuarters ?? 0,
             via, system, controller,
+            anchor: roomSystemAnchor(bbox, hangingBySystem.get(system) === true),
           });
         }
       };
