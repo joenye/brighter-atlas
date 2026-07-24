@@ -1168,6 +1168,29 @@ async function worldSuite(browser: any, base: string) {
   ok(await page.evaluate(() => window.__bs.worldView.hud.state.collapsed
     && document.querySelector('.world-hud .wh-body').hidden), 'HUD collapses to its fps chip');
 
+  // ---- inspector: multi-mesh group with no catalog Model -> per-mesh links ---
+  // Room 1's models placements #1 (mesh 3) and #2 (mesh 0) share occurrence 6;
+  // the fixtures carry no system.models manifest, so the group never resolves
+  // to a catalog Model. The Parts row must link each distinct member mesh
+  // instead of leaving the count unlinked (same #/mesh/<n> idiom as the Mesh
+  // row above it).
+  ok(await page.evaluate((ref) => window.__bs.worldView.pinPlacement(ref),
+    { room: 1, category: 'models', sourceKind: 'occurrence', placementIndex: 1 }),
+  'pinPlacement pins a multi-mesh models occurrence with no catalog Model');
+  await page.waitForFunction(() => window.__bs.worldView.inspectInfo().group?.parts === 2, { timeout: 10000 });
+  const partsLinks = await page.evaluate(() => {
+    const dt = [...document.querySelectorAll('.world-panel .wp-readout dt')].find((n) => n.textContent === 'Parts');
+    const dd = dt?.nextElementSibling;
+    return [...(dd?.querySelectorAll('a') || [])].map((a) => ({ href: a.getAttribute('href'), text: a.textContent }));
+  });
+  const partsHrefs = partsLinks.map((l) => l.href);
+  ok(partsLinks.length === 2 && partsHrefs.every((h) => /^#\/mesh\/\d+$/.test(h))
+    && new Set(partsHrefs).size === partsHrefs.length,
+  `Parts row links each distinct member mesh, deduped (${JSON.stringify(partsLinks)})`);
+  ok([...partsHrefs].sort().join(',') === '#/mesh/0,#/mesh/3',
+    `Parts links resolve the two member meshes by ordinal (${partsHrefs.join(',')})`);
+  await page.evaluate(() => window.__bs.worldView.unpinInspect());
+
   // ---- inspector effects readout: pinned occurrence -> attached system -------
   // Room 1's terrain tile (0.5, 0.5) is occurrence 0, exactly the fixture
   // doc's room-1/occurrence-0 attachment (system 101, "fixture_torch_idle"),

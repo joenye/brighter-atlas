@@ -1900,6 +1900,23 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     el('a', allMode ? { href, text, target: '_blank', rel: 'noopener' } : { href, text });
   const compact = (value: any): string => (Number.isFinite(Number(value)) ? String(Number(Number(value).toFixed(3))) : '?');
 
+  const MESH_LINKS_CAP = 8;   // "Parts" row: individual mesh links shown before collapsing to "+N more"
+  // A group with no resolved catalog Model still has per-mesh identity: link
+  // each member mesh (deduped, capped) via the same #/mesh/<n> idiom as the
+  // Mesh row above, so there is always something to click through to.
+  function meshLinksCell(members: any[]): HTMLElement {
+    const meshIds = [...new Set(
+      members.map((member) => Number(member.info.mesh)).filter((id) => Number.isFinite(id) && id >= 0),
+    )];
+    const cell = el('span', {});
+    meshIds.slice(0, MESH_LINKS_CAP).forEach((meshId, i) => {
+      if (i > 0) append(cell, ', ');
+      append(cell, readoutLink(`#/mesh/${meshId}`, identifier(meshId)));
+    });
+    if (meshIds.length > MESH_LINKS_CAP) append(cell, ` +${meshIds.length - MESH_LINKS_CAP} more`);
+    return cell;
+  }
+
   // --- inspector tie-in: pinned occurrence -> attached particle systems -----
   // Reuses the effectsDoc the room view's own ambient effects layer already
   // fetches lazily (ensureEffectsDoc/applyEffects above): no second fetch
@@ -1977,7 +1994,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         modelCell = label || 'resolving…';
       }
       rows.push(['Model', modelCell]);
-      rows.push(['Parts', `${group.members.length} mesh${group.members.length === 1 ? '' : 'es'} (moved & animated together)`]);
+      const partsCountText = `${group.members.length} mesh${group.members.length === 1 ? '' : 'es'} (moved & animated together)`;
+      // No single catalog Model to click through to: link each mesh that
+      // makes up the group instead of leaving the count unlinked.
+      rows.push(['Parts', group.model === null && group.__resolved
+        ? el('span', {}, `${partsCountText}: `, meshLinksCell(group.members))
+        : partsCountText]);
       if (isSpawn) rows.push(['Spawn', `${identifier(info.record)} · row ${identifier(info.spawnIndex)}`]);
       if (isSpawn && SPAWN_ORIGIN_NOTES[info.origin]) rows.push(['Position', SPAWN_ORIGIN_NOTES[info.origin]]);
       rows.push(['Tile', tileCell]);
