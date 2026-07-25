@@ -3315,7 +3315,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   function clearEffectInspection(force = false): void {
-    if (effectPinned && !force) return;
+    // Symmetric with clearInspection: the readout is shared, so this must not
+    // clear it out from under a pinned PLACEMENT either.
+    if (!force && (effectPinned || inspectPinned)) return;
     if (fxHoverKey) {
       effectsLayer?.setInstanceHighlighted(fxHoverKey, false);
       fxHoverKey = null;
@@ -3478,7 +3480,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   function clearInspection(force = false): void {
-    if (inspectPinned && !force) return;
+    // The readout pane is SHARED with the effect pin, so an unforced clear
+    // must stand down while EITHER pin owns it, not just this one: otherwise
+    // merely moving the pointer off the canvas (towards that very pane, to
+    // reach its controls) fires onPointerLeave -> clearInspection() and wipes
+    // a pinned effect's readout. Forced clears still release, which is how
+    // the two pins stay mutually exclusive.
+    if (!force && (inspectPinned || effectPinned)) return;
     inspectPoint = null;
     inspectPinned = false;
     inspectedKey = '';

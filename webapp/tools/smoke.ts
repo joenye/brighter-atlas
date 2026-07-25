@@ -1108,6 +1108,26 @@ async function worldSuite(browser: any, base: string) {
   ok(fxPinnedInfo?.live === 8,
     `pinned effect readout's live count matches the exact frozen-clock analytic count (${fxPinnedInfo?.live})`);
 
+  // Regression: the readout pane is shared by the placement pin and the
+  // effect pin, so an unforced clear must stand down while EITHER owns it.
+  // Moving the pointer off the canvas is the everyday way to hit this: the
+  // user is heading for the readout's own controls, and pointerleave used to
+  // clear the pane out from under them.
+  await page.mouse.move(torchPt.x, torchPt.y + 8);
+  await sleep(80);
+  await page.mouse.move(4, 4);   // out of the 3D canvas, over the sidebar
+  await sleep(200);
+  const fxAfterLeave = await page.evaluate(() => {
+    const n = document.querySelector('.world-panel .wp-readout');
+    return {
+      hidden: n.hidden,
+      pinned: n.classList.contains('pinned'),
+      stillPinned: !!window.__bs.worldView.effectsApi.pinnedInstanceInfo(),
+    };
+  });
+  ok(!fxAfterLeave.hidden && fxAfterLeave.pinned && fxAfterLeave.stillPinned,
+    `pointer leaving the canvas keeps a pinned effect (${JSON.stringify(fxAfterLeave)})`);
+
   // nudge +X moves the instance's ANCHOR by exactly one step (0.5 tiles =
   // 512 native units, the same default step + unit the placement nudge above
   // uses) while the sim keeps simulating in its own local frame -- the live
