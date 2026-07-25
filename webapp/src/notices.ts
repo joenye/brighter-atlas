@@ -40,18 +40,35 @@ async function oldStringsExtraction(app: any): Promise<boolean> {
   } catch { return false; }
 }
 
-// -> true when this browser's ACTIVE version was extracted by a pre-0.4.0
-// engine (fresh 0.4.0 extractions stamp `engine` on the version record)
-async function pre040Extraction(app: any): Promise<boolean> {
+// -> true when this browser's ACTIVE version was extracted by an engine
+// older than `generation` (every fresh extraction stamps `engine` on the
+// version record; pre-0.4.0 records have none and count as 0).
+async function engineOlderThan(app: any, generation: number): Promise<boolean> {
   if (!app.store.versionId) return false;   // classic HTTP mode: nothing to re-extract
   try {
     const { getVersion } = await import('./storage.js');
     const rec = await getVersion(app.store.versionId);
-    return !!rec && (rec.engine ?? 0) < 1;
+    return !!rec && (rec.engine ?? 0) < generation;
   } catch { return false; }
 }
 
+const pre040Extraction = (app: any) => engineOlderThan(app, 1);
+
 const NOTICES: Notice[] = [
+  {
+    id: 'extraction-engine-2-effects',
+    title: 'Particle effects: time for a fresh extraction',
+    paras: [
+      'Effects now sit where the game puts them, at the size and colour it draws them, and effects that were being shown on the wrong objects are gone.',
+      'Most of that is decided when your game files are read, so your stored data still has the old version. To pick it up, click the version chip in the top-right, choose "Add build", and drop in your assetBundle files.',
+      'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
+    ],
+    // Only for data the 0.4.0 notice does NOT already cover: someone still on
+    // pre-0.4.0 data is being told to re-extract by that notice already, and
+    // two stacked prompts saying the same thing is worse than one.
+    when: async (app: any) => (await engineOlderThan(app, 2))
+      && !(await engineOlderThan(app, 1)),
+  },
   {
     id: 'extraction-engine-0.4.0',
     title: 'Brighter Atlas 0.4.0: time for a fresh extraction',

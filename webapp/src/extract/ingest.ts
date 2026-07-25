@@ -497,7 +497,11 @@ async function ingest({
     // any stored data with no `engine` (pre-0.4.0) is prompted to re-extract.
     // Releases after 0.4.0 stay backwards-compatible; only bump this AND the
     // notices.ts check together if a future release again invalidates old data.
-    engine: 1,
+    // 2: particle effects. Where an effect sits, what size and colour it
+    // draws at, which of them are real, and which emit at all are all decided
+    // during extraction, so stored data from engine 1 keeps the old answers
+    // however new the app is, with nothing on screen to say so.
+    engine: 2,
     label: label || (buildDate ? `build ${buildDate}` : `build ${versionId.slice(0, 8)}`),
     created: new Date().toISOString(), bundles: {}, cats: {},
   };
