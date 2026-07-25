@@ -25,10 +25,11 @@ import * as THREE from '../../../vendor/three.module.js';
 import {
   EmitterSim, EffectsClock, planStrides,
 } from './effects-sim.js';
-import { SPRITE_SCALE_UNITS } from './effects-layer.js';
+import {
+  BILLBOARD_VERTEX, BILLBOARD_FRAGMENT, DEFAULT_SPRITE_DRAW,
+  spriteDrawOf, spriteUniforms, spriteColorSpace, type SpriteDraw,
+} from './effects-sprite.js';
 import type { WorldEffectsDoc, EffectSystem } from '../../extract/world/effects.js';
-
-export { SPRITE_SCALE_UNITS };
 
 // Per-view alive budget. A model page shows at most a handful of systems on
 // one small subject, nowhere near a room's scale, so this is far below the
@@ -39,40 +40,6 @@ const RENDER_ORDER = 3;
 const MIX_SORT_CAP = 2048;
 
 const pad5 = (value: number | string): string => String(value).padStart(5, '0');
-
-// Duplicated from effects-layer.ts (see file header): view-space billboard
-// corner offset, additive/normal blend, unlit (decoded RGBA x sprite texel).
-const BILLBOARD_VERTEX = `
-attribute vec4 aPosSize;
-attribute vec4 aColor;
-attribute float aRot;
-varying vec2 vUv;
-varying vec4 vColor;
-#include <common>
-#include <fog_pars_vertex>
-void main() {
-  vUv = uv;
-  vColor = aColor;
-  vec4 mvPosition = modelViewMatrix * vec4( aPosSize.xyz, 1.0 );
-  float c = cos( aRot );
-  float s = sin( aRot );
-  vec2 corner = vec2( position.x * c - position.y * s, position.x * s + position.y * c );
-  mvPosition.xy += corner * aPosSize.w;
-  gl_Position = projectionMatrix * mvPosition;
-  #include <fog_vertex>
-}`;
-
-const BILLBOARD_FRAGMENT = `
-uniform sampler2D map;
-varying vec2 vUv;
-varying vec4 vColor;
-#include <common>
-#include <fog_pars_fragment>
-void main() {
-  gl_FragColor = texture2D( map, vUv ) * vColor;
-  #include <colorspace_fragment>
-  #include <fog_fragment>
-}`;
 
 export type EffectsPlayerMode = 'loop' | 'timed';
 
@@ -92,6 +59,7 @@ interface Instance {
 interface Batch {
   key: string;
   texId: number;
+  draw: SpriteDraw;      // sub-image, native dimensions, channel layout
   blend: 'add' | 'mix';
   members: { sim: EmitterSim; instance: Instance }[];
   capacity: number;
@@ -113,7 +81,6 @@ export interface EffectsPlayerOptions {
   root: THREE.Object3D;                    // anchor group: added at (0,0,0) in its local space
   doc: WorldEffectsDoc;
   url: (rel: string) => string;
-  textures?: Record<string, any>;          // world index texture routing table; defaults to sub-image 0
   anisotropy?: number;
   aliveBudget?: number;
 }
@@ -123,8 +90,10 @@ export class EffectsPlayer {
   doc: WorldEffectsDoc;
   clock: EffectsClock;
   private _url: (rel: string) => string;
-  private _textures: Record<string, any>;
   private _anisotropy: number;
+  // texId -> draw metrics from the doc, recorded as systems are attached so
+  // the batch and texture created for that texId agree (see effects-sprite).
+  private _draws = new Map<number, SpriteDraw>();
   private _budget: number;
   private _systemsBySlot: Map<number, EffectSystem>;
   private _instances = new Map<number, Instance>();
@@ -138,13 +107,12 @@ export class EffectsPlayer {
   private _disposed = false;
 
   constructor({
-    root, doc, url, textures, anisotropy = 8, aliveBudget = MODEL_VIEW_ALIVE_BUDGET,
+    root, doc, url, anisotropy = 8, aliveBudget = MODEL_VIEW_ALIVE_BUDGET,
   }: EffectsPlayerOptions) {
     this.root = root;
     this.doc = doc;
     this.clock = new EffectsClock(Number(doc?.tick_rate?.value));
     this._url = url;
-    this._textures = textures || {};
     this._anisotropy = anisotropy;
     this._budget = aliveBudget;
     this._systemsBySlot = new Map((doc?.systems || []).map((s) => [s.slot, s]));
@@ -172,6 +140,7 @@ export class EffectsPlayer {
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
         const texId = emitter.sprite?.images?.length ? Number(emitter.sprite.images[0]) : -1;
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
+        this._draws.set(texId, spriteDrawOf(emitter.sprite));
         return { sim, batchKey: `${texId}|${blend}` };
       }),
     };
@@ -297,12 +266,14 @@ export class EffectsPlayer {
     const [texPart, blendPart] = key.split('|');
     const texId = Number(texPart);
     const blend = blendPart === 'add' ? 'add' : 'mix';
+    const draw = this._draws.get(texId) ?? DEFAULT_SPRITE_DRAW;
     const material = new THREE.ShaderMaterial({
       name: `effects-player-${key}`,
       vertexShader: BILLBOARD_VERTEX,
       fragmentShader: BILLBOARD_FRAGMENT,
       uniforms: {
         ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
+        ...spriteUniforms(draw),
         map: { value: this._textureFor(texId) },
       },
       fog: true,
@@ -340,7 +311,7 @@ export class EffectsPlayer {
     mesh.visible = false;
     this.root.add(mesh);
     batch = {
-      key, texId, blend, members: [], capacity: 0, count: 0,
+      key, texId, draw, blend, members: [], capacity: 0, count: 0,
       geometry, material, mesh,
       posSize: new Float32Array(0), color: new Uint8Array(0), rot: new Float32Array(0),
       aPosSize: null as any, aColor: null as any, aRot: null as any,
@@ -385,15 +356,15 @@ export class EffectsPlayer {
     if (!(texId >= 0)) return this._fallback();
     let texture = this._textureCache.get(texId);
     if (texture) return texture;
-    const meta = this._textures[String(texId)];
-    const sub = Number.isFinite(Number(meta?.albedo)) ? Number(meta.albedo) : 0;
+    const draw = this._draws.get(texId) ?? DEFAULT_SPRITE_DRAW;
+    const sub = draw.sub;
     texture = this._fallback().clone();
     texture.needsUpdate = true;
     this._textureCache.set(texId, texture);
     this._loader.loadAsync(this._url(`images/${pad5(texId)}_e${sub}.png`))
       .then((loaded) => {
         if (this._disposed) { loaded.dispose(); return; }
-        loaded.colorSpace = THREE.SRGBColorSpace;
+        loaded.colorSpace = spriteColorSpace(draw);
         loaded.anisotropy = this._anisotropy;
         const previous = this._textureCache.get(texId);
         this._textureCache.set(texId, loaded);
@@ -456,7 +427,7 @@ export class EffectsPlayer {
           posSize[at4] = x;
           posSize[at4 + 1] = y;
           posSize[at4 + 2] = z;
-          posSize[at4 + 3] = scale * SPRITE_SCALE_UNITS;
+          posSize[at4 + 3] = scale;
           color[at4] = Math.round(clamp01(r) * 255);
           color[at4 + 1] = Math.round(clamp01(g) * 255);
           color[at4 + 2] = Math.round(clamp01(b) * 255);

@@ -16,6 +16,7 @@ import { VList } from '../../virtual-list.js';
 import { Scene3D } from '../three-common.js';
 import { EffectsPlayer } from './effects-player.js';
 import type { EffectsPlayerMode } from './effects-player.js';
+import { spriteDrawOf } from './effects-sprite.js';
 import type {
   WorldEffectsDoc, EffectSystem, EffectConfig, EffectEmitter,
 } from '../../extract/world/effects.js';
@@ -347,7 +348,7 @@ export function createEffectsBrowserView(app: any): { root: HTMLElement; destroy
     resetGround(radius);
     scene!.frameBox([-radius, -radius, -radius], [radius, radius, radius]);
     const p = new EffectsPlayer({
-      root: scene!.scene, doc, url: (rel: string) => app.store.url(rel), textures, anisotropy: 8,
+      root: scene!.scene, doc, url: (rel: string) => app.store.url(rel), anisotropy: 8,
     });
     const mode = p.addSystem(row.system.slot);
     player = p;
@@ -439,8 +440,8 @@ export function createEffectsBrowserView(app: any): { root: HTMLElement; destroy
     for (const e of s.emitters) {
       const imgId = e.sprite?.images?.[0];
       if (imgId == null) continue;
-      const meta = textures[String(imgId)];
-      const sub = Number.isFinite(Number(meta?.albedo)) ? Number(meta.albedo) : 0;
+      // the drawable image, same rule the renderers use (effects-sprite.js)
+      const { sub } = spriteDrawOf(e.sprite);
       thumbs.appendChild(el('img', { class: 'we-thumb', loading: 'lazy', src: app.store.url(`images/${pad5(imgId)}_e${sub}.png`) }));
     }
     detailsHost.appendChild(kvTable([

@@ -93,3 +93,51 @@ export function resolveRoles(
     parameters,
   };
 }
+
+// ------------------------------------------------------------------- sprites
+
+// A sprite (a particle image) is a plain single mip chain, not a material:
+// resolveRoles above answers "which plane is the colour/normal/parameter of
+// this material", which a sprite has no answer for. These two facts are what
+// a sprite consumer needs instead, and they are deliberately independent of
+// the material roles.
+export interface SpriteMeta {
+  sub: number;        // sub-image ordinal to draw: the LARGEST of the first chain
+  w: number; h: number;
+  // True when the source format carries an intensity mask and no authored
+  // alpha. The decoder replicates such a mask across RGB and leaves alpha
+  // opaque, so a consumer that reads it as colour draws a solid rectangle:
+  // the mask is COVERAGE and belongs in the alpha channel.
+  mask: boolean;
+}
+
+const MASK_FORMATS = new Set<string | number>(['BC4', 'bc4', 0x22]);
+
+// entries: [{fmt,w,h}, ...] -> how to draw this container as a single sprite,
+// or null when it carries no usable sub-image. Mip chains are stored smallest
+// first, so the drawable image is the LARGEST sub-image: taking the
+// container's first one yields a thumbnail.
+//
+// Largest of the whole container, deliberately not largest-of-chain-0: a
+// sprite container IS one mip chain, and detectChains only exists to separate
+// a material's planes. Its step-ratio window is calibrated for square mips
+// and can split a legitimate chain whose two dimensions halve unevenly (a
+// 40x20 -> 72x32 step lands just outside it), which would silently pick the
+// half-size mip.
+export function resolveSpriteMeta(
+  entries: TextureEntry[] | null | undefined,
+): SpriteMeta | null {
+  if (!entries || !entries.length) return null;
+  let index: number | null = null;
+  for (let k = 0; k < entries.length; k++) {
+    const entry = entries[k];
+    if (!(Number(entry?.w) > 0 && Number(entry?.h) > 0)) continue;
+    if (index == null || entry.w * entry.h > entries[index].w * entries[index].h) index = k;
+  }
+  if (index == null) return null;
+  const entry = entries[index];
+  return {
+    sub: index, w: Number(entry.w), h: Number(entry.h),
+    mask: MASK_FORMATS.has(entry.fmt),
+  };
+}

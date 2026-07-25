@@ -641,6 +641,12 @@ async function worldSuite(browser: any, base: string) {
       configs: Object.keys(doc.configs).length,
       configKeysSorted: Object.keys(doc.configs).every((k, i, a) => i === 0 || Number(a[i - 1]) < Number(k)),
       names: doc.systems.map((s) => s.names[0]?.name || null),
+      // every sprite-bearing emitter resolves its own draw metrics: which
+      // sub-image to load, the sprite's native size and its channel layout
+      draws: doc.systems.flatMap((s) => s.emitters
+        .filter((e) => e.sprite)
+        .map((e) => [e.slot, e.sprite.draw?.sub, e.sprite.draw?.w, e.sprite.draw?.h,
+          e.sprite.draw?.mask].join(':'))),
       tick: doc.tick_rate,
       roomAtt: doc.attachments.rooms.length,
       actorAtt: doc.attachments.actors.length,
@@ -648,7 +654,9 @@ async function worldSuite(browser: any, base: string) {
     };
   });
   ok(fx.has === true, 'hasWorldEffects() probes true off the fixture manifest flag');
-  ok(!fx.missing && fx.format === 1, 'worldEffects() resolves a format-1 doc');
+  ok(!fx.missing && fx.format === 2, 'worldEffects() resolves a format-2 doc');
+  ok(String(fx.draws) === '105:1:32:32:false,205:0:64:64:true,206:0:64:64:true',
+    `emitter sprites carry draw metrics: sub-image, native size, mask (${JSON.stringify(fx.draws)})`);
   ok(fx.slots.length === 4 && fx.slots.every((s, i, a) => i === 0 || a[i - 1] < s),
     `effects doc carries 4 systems in ascending slot order (${JSON.stringify(fx.slots)})`);
   ok(fx.emitters === 5 && fx.configs === 8 && fx.configKeysSorted,
@@ -874,6 +882,11 @@ async function worldSuite(browser: any, base: string) {
   }));
   const callsOn = await lastFrameCalls();
   const memFxOn = await page.evaluate(() => ({ ...window.__bs.worldView.scene3d.renderer.info.memory }));
+  // Effects contribute one draw per sprite x blend batch (3) PLUS one draw
+  // per pickable proxy (2: the room's torch + fountain instances) -- the
+  // tiny pickable marker (world/effects-layer.ts) each instance gets is its
+  // own Mesh, not folded into the instanced batches.
+  const pickableCount = await page.evaluate(() => window.__bs.worldView.effectsApi.pickableCount());
   await panelCheck('Effects');
   await sleep(150);
   const fxOff = await page.evaluate(() => window.__bs.worldView.effectsApi.info());
@@ -881,8 +894,8 @@ async function worldSuite(browser: any, base: string) {
     `unticking Effects disposes the layer (${JSON.stringify(fxOff)})`);
   const callsOff = await lastFrameCalls();
   const memFxOff = await page.evaluate(() => ({ ...window.__bs.worldView.scene3d.renderer.info.memory }));
-  ok(Number(callsOn) - Number(callsOff) === 3,
-    `effects contribute exactly their 3 batch draw calls (${callsOn} -> ${callsOff})`);
+  ok(pickableCount === 2 && Number(callsOn) - Number(callsOff) === 3 + pickableCount,
+    `effects contribute their 3 batch draws + ${pickableCount} pickable-proxy draws (${callsOn} -> ${callsOff})`);
   ok(memFxOff.geometries < memFxOn.geometries && memFxOff.textures <= memFxOn.textures,
     `effects GL objects release on toggle-off (geometries ${memFxOn.geometries} -> ${memFxOff.geometries}, `
     + `textures ${memFxOn.textures} -> ${memFxOff.textures})`);
@@ -1054,6 +1067,92 @@ async function worldSuite(browser: any, base: string) {
     'Reset edits restores the original instance matrix exactly');
   ok(await page.$eval('.world-panel .wp-reset-edits', (n) => n.hidden),
     'Reset edits hides once no edits remain');
+
+  // ---- pinned effect instance: readout + session edits (nudge/hide/reset) ---
+  // A real proxy click (not pinPlacement): proves the actual picking
+  // mechanism (effects-layer.ts's tiny pickable proxy per instance) works
+  // end to end, not just the debug-hook pin path used elsewhere in this
+  // suite. screenPointOf reuses the live camera/effectsRoot transform inside
+  // the app itself rather than the test re-deriving native-to-screen space
+  // by hand. Freeze the clock first so the readout's Live count and every
+  // anchor read below are exact and reproducible: system 101
+  // (fixture_torch_idle) is the SAME room-1/occurrence-0 torch pinned via
+  // pinPlacement earlier, whose analytic count at clock 2000 is the proven 8
+  // (torch density-boost note, above).
+  await page.evaluate(() => {
+    const fx = window.__bs.worldView.effectsApi;
+    fx.setRunning(false);
+    fx.setClock(2000);
+  });
+  const torchPt = await page.evaluate(() => window.__bs.worldView.effectsApi.screenPointOf(101));
+  ok(torchPt && Number.isFinite(torchPt.x) && Number.isFinite(torchPt.y),
+    `effectsApi.screenPointOf resolves the torch instance's screen position (${JSON.stringify(torchPt)})`);
+  await page.mouse.move(torchPt.x, torchPt.y);
+  await sleep(150);
+  await page.mouse.down();
+  await page.mouse.up();
+  await sleep(250);
+  const fxReadout = await page.evaluate(() => {
+    const n = document.querySelector('.world-panel .wp-readout');
+    return { hidden: n.hidden, pinned: n.classList.contains('pinned'), text: n.textContent };
+  });
+  ok(!fxReadout.hidden && fxReadout.pinned, 'clicking the torch effect proxy pins the inspector readout');
+  ok(/fixture_torch_idle/.test(fxReadout.text) && /add/.test(fxReadout.text)
+    && /loop \(ambient\)/.test(fxReadout.text) && /Emitters/.test(fxReadout.text) && /Fixture Meadow/.test(fxReadout.text),
+  `pinned effect readout shows its name and knobs (${JSON.stringify(fxReadout.text.slice(0, 400))})`);
+  ok(await page.$$eval('.wp-readout .we-swatch', (els) => els.length === 2),
+    'pinned effect readout shows colour swatches for its emitter (color0 + color1)');
+  ok(await page.$eval('.wp-readout', (n) => !!n.querySelector('.we-thumb')),
+    'pinned effect readout shows a sprite thumbnail for its emitter');
+  const fxPinnedInfo = await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo());
+  ok(fxPinnedInfo?.live === 8,
+    `pinned effect readout's live count matches the exact frozen-clock analytic count (${fxPinnedInfo?.live})`);
+
+  // nudge +X moves the instance's ANCHOR by exactly one step (0.5 tiles =
+  // 512 native units, the same default step + unit the placement nudge above
+  // uses) while the sim keeps simulating in its own local frame -- the live
+  // count must be unaffected.
+  const fxAnchorBefore = await page.evaluate(() => window.__bs.worldView.effectsApi.anchorOf(101));
+  await page.$$eval('.wp-readout .wp-edit button', (btns) => btns.find((b) => b.title === 'Nudge effect +X')?.click());
+  const fxAnchorNudged = await page.evaluate(() => window.__bs.worldView.effectsApi.anchorOf(101));
+  ok(fxAnchorBefore && fxAnchorNudged && Math.abs((fxAnchorNudged.x - fxAnchorBefore.x) - 512) < 1e-3
+    && Math.abs(fxAnchorNudged.y - fxAnchorBefore.y) < 1e-3 && Math.abs(fxAnchorNudged.z - fxAnchorBefore.z) < 1e-3,
+  `+X nudge moves the pinned effect instance's anchor half a tile, Y/Z unchanged (${fxAnchorBefore?.x} -> ${fxAnchorNudged?.x})`);
+  ok(/Delta/.test(await page.$eval('.world-panel .wp-readout', (n) => n.textContent)),
+    'nudged effect readout surfaces a Delta row');
+  ok((await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo())).live === 8,
+    'the nudge does not disturb the instance live count (sim stays in its own local frame)');
+
+  // hide/show toggle: live drops to exactly zero while hidden (frozen clock,
+  // so this is exact, not a race), and returns to the same exact count shown
+  await page.$$eval('.wp-readout .wp-edit-actions .wp-fx-hide', (btns) => btns[0]?.click());
+  const fxHiddenInfo = await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo());
+  ok(fxHiddenInfo?.edit.hidden === true && fxHiddenInfo?.live === 0,
+    `Hide drops the instance to zero live particles (${JSON.stringify(fxHiddenInfo?.edit)})`);
+  await page.$$eval('.wp-readout .wp-edit-actions .wp-fx-hide', (btns) => btns[0]?.click());
+  const fxShownInfo = await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo());
+  ok(fxShownInfo?.edit.hidden === false && fxShownInfo?.live === 8,
+    `Show restores the exact frozen-clock live count (${fxShownInfo?.live})`);
+
+  // RESET restores the authored anchor exactly and drops every edit
+  await page.$$eval('.wp-readout .wp-edit-actions .wp-fx-reset', (btns) => btns[0]?.click());
+  const fxAnchorReset = await page.evaluate(() => window.__bs.worldView.effectsApi.anchorOf(101));
+  ok(fxAnchorReset && fxAnchorBefore
+    && Math.abs(fxAnchorReset.x - fxAnchorBefore.x) < 1e-3
+    && Math.abs(fxAnchorReset.y - fxAnchorBefore.y) < 1e-3
+    && Math.abs(fxAnchorReset.z - fxAnchorBefore.z) < 1e-3,
+  `Reset restores the effect instance's authored anchor exactly (${fxAnchorBefore?.x} -> ${fxAnchorReset?.x})`);
+  ok(!/Delta/.test(await page.$eval('.world-panel .wp-readout', (n) => n.textContent)),
+    'reset effect readout no longer shows a Delta row');
+  ok((await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo())).live === 8,
+    'live count returns to the exact frozen-clock analytic value after reset');
+
+  // unpin (releases the readout) and restore the running clock for the
+  // sections that follow
+  await page.evaluate(() => window.__bs.worldView.effectsApi.unpinInstance());
+  ok(await page.$eval('.world-panel .wp-readout', (n) => n.hidden),
+    'unpinInstance releases the effect pin and hides the readout');
+  await page.evaluate(() => window.__bs.worldView.effectsApi.setRunning(true));
 
   // ---- skinned playback on a pinned spawn (single room) -----------------------
   // The fixture guard spawn's part is the skinned tube (mesh 1, skeleton 0, one

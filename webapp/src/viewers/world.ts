@@ -27,7 +27,9 @@
 // room stream, the asset fetches and the merged bake, and frees every GL
 // resource the view created; the renderer itself is shared and survives.
 
-import { el, clear, append, kvTable, fmtInt, placeholderCard } from '../ui.js';
+import {
+  el, clear, append, kvTable, fmtInt, fmtNum, pad5, placeholderCard,
+} from '../ui.js';
 import { getPref, setPref } from '../prefs.js';
 import { Scene3D, getRenderer, mountImmersiveControls } from './three-common.js';
 import * as THREE from '../../vendor/three.module.js';
@@ -53,9 +55,11 @@ import { Rig, PlaybackBar } from './rig.js';
 import {
   resolveSpawnAnim, SpawnAnimComposite, resolveShardRecolors,
 } from './world/spawn-anim.js';
-import { WorldEffectsLayer } from './world/effects-layer.js';
+import { WorldEffectsLayer, effectInstanceKey } from './world/effects-layer.js';
+import type { EffectInstanceEdit } from './world/effects-layer.js';
 import { MERGED_VIEW_ALIVE_BUDGET } from './world/effects-sim.js';
 import { createEffectsBrowserView } from './world/effects-browser.js';
+import { spriteDrawOf } from './world/effects-sprite.js';
 import type { AppStore, IndexEntry } from '../store.js';
 
 // What the world views need from the app shell (main.ts owns the full shape).
@@ -716,7 +720,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     state.inspect = !!on;
     inspectBtn.classList.toggle('active', state.inspect);
     inspectBtn.setAttribute('aria-pressed', state.inspect ? 'true' : 'false');
-    if (!state.inspect) clearInspection(true);
+    if (!state.inspect) { clearInspection(true); clearEffectInspection(true); }
   }
   inspectBtn.addEventListener('click', () => {
     if (!inspectBtn.disabled) setInspect(!state.inspect);
@@ -974,6 +978,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   function effectsRoomUnloaded(roomId: number): void {
     effectsRooms.delete(Number(roomId));
     effectsLayer?.removeRoom(Number(roomId));
+    // A pinned effect belonging to this room just went away underneath the
+    // pin: release it rather than leave a stale readout (refreshEffectReadout
+    // would also catch this reactively, but clearing proactively here avoids
+    // a frame of showing knobs for an instance that no longer exists).
+    if (effectPinned && Number(effectPinned.key.split('|')[0]) === Number(roomId)) clearEffectInspection(true);
   }
   function ensureEffectsDoc(): void {
     if (effectsDocRequested || !effectsSupported()) return;
@@ -991,6 +1000,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       effectsLayer?.dispose();
       effectsLayer = null;
       activeEffectRooms.clear();
+      if (effectPinned) clearEffectInspection(true);   // the pinned instance just got disposed
       return;
     }
     ensureEffectsDoc();
@@ -1067,6 +1077,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (nextActive.has(id)) continue;
       activeEffectRooms.delete(id);
       effectsLayer!.removeRoom(id);
+      // proximity deactivated the pinned instance's room: release the pin
+      // (merged mode cycles rooms in/out every re-rank, unlike single-room
+      // unload which only happens on navigation).
+      if (effectPinned && Number(effectPinned.key.split('|')[0]) === id) clearEffectInspection(true);
     }
     for (const id of nextActive) {
       if (activeEffectRooms.has(id)) continue;
@@ -1869,6 +1883,17 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const editScratch = new THREE.Matrix4();
   const zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
 
+  // --- pinned effect instance (mirrors pinnedCtx/inspectPinned above, but
+  // for a particle-effect InstanceRec rather than a placement): the two pins
+  // are mutually exclusive (pinning one clears the other) and share the same
+  // `readout` element, so at most one of showReadout/showEffectReadout is
+  // ever the current content. All the knob/edit state itself lives on
+  // effectsLayer, keyed by effectInstanceKey(); this holds only WHICH
+  // instance is currently shown. -----------------------------------------
+  let effectPinned: { key: string } | null = null;
+  let fxHoverKey: string | null = null;   // proxy currently swapped to the highlight material
+  let fxEditStep = 0.5;                   // tiles for X/Y, height layers for Z (mirrors editStep)
+
   function pickInstance(clientX: number, clientY: number): any {
     if (!world.rooms.size || mergedActive()) return null;
     const rect = renderer.domElement.getBoundingClientRect();
@@ -2552,7 +2577,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // Reset clears nudges/deletes AND every applied variant (both persist for
   // the session), so it surfaces for either. The count reflects both.
   function syncEditsUi(): void {
-    const n = edits.size + (variantOverlay ? 1 : 0) + persistentVariants.size;
+    const n = edits.size + (variantOverlay ? 1 : 0) + persistentVariants.size
+      + (effectsLayer ? effectsLayer.instanceEditCount() : 0);
     resetEditsBtn.hidden = n === 0;
     resetEditsBtn.textContent = `↺ Reset (${n})`;
   }
@@ -2719,7 +2745,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   function resetAllEdits(): void {
     const hasVariants = variantOverlay || persistentVariants.size;
     const hasAnims = spawnAnim || persistentAnims.size;
-    if (destroyed || (!edits.size && !hasVariants && !hasAnims)) {
+    const hasFxEdits = !!effectsLayer && effectsLayer.instanceEditCount() > 0;
+    if (destroyed || (!edits.size && !hasVariants && !hasAnims && !hasFxEdits)) {
       syncEditsUi();
       return;
     }
@@ -2740,7 +2767,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     edits.clear();
     for (const key of bucketKeys) queueMergedRebake(key);
     if (bucketKeys.size) flushRebakeNow();
+    effectsLayer?.resetAllInstanceEdits();
     clearInspection(true);         // unpin (parks the active variant/anim)…
+    clearEffectInspection(true);   // …release a pinned effect instance too…
     clearAllVariantOverlays();     // …then hard-revert every variant…
     // …and every animation (active + parked): restore statics, drop composites.
     spawnAnimToken++;
@@ -3002,6 +3031,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (pinned && pinnedCtx && modelKeyOf(pinnedCtx.info) !== modelKeyOf(info)) {
       parkVariantOverlay();
     }
+    // A pinned effect instance and a pinned placement share one readout and
+    // are mutually exclusive: pinning a placement releases any pinned effect.
+    if (pinned && effectPinned) clearEffectInspection(true);
     inspectPinned = !!pinned;
     pinnedCtx = pinned
       ? { mode: 'index', entryIndex: hit.entryIndex, ref: hit.ref, info, geometry: hit.geometry, shard, group: null }
@@ -3072,6 +3104,292 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return best?.overlay || null;
   }
 
+  // Effect-instance picking: the particle batches themselves are instanced
+  // billboards sharing one geometry across every emitter in a texture x
+  // blend pair, so a raycast hit on a batch could never identify WHICH
+  // instance/system was struck. effects-layer.ts instead gives every
+  // instance its own tiny proxy Mesh at its anchor (see the picking note
+  // atop effects-layer.ts); this raycasts exactly those, so effect picking
+  // works identically in single-room and merged mode (both share the same
+  // camera/scene graph -- there is no index/graph split here the way
+  // placement picking has). Returns null with no cost when the layer is off
+  // (no proxies exist -- toggling Effects off is what makes them
+  // unpickable, satisfying "only pickable when the layer is on").
+  function pickEffectProxy(clientX: number, clientY: number): { key: string } | null {
+    if (!effectsLayer) return null;
+    const items: { object: THREE.Object3D; key: string }[] = effectsLayer.pickables();
+    if (!items.length) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    pointerNdc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    scene3d.camera.updateMatrixWorld();
+    raycaster.setFromCamera(pointerNdc, scene3d.camera);
+    const hits = raycaster.intersectObjects(items.map((it) => it.object), false);
+    if (!hits.length) return null;
+    const hit = items.find((it) => it.object === hits[0].object);
+    return hit ? { key: hit.key } : null;
+  }
+
+  // --- pinned effect instance: readout + session edits ------------------
+  // Per-emitter summary rows for the pinned/hovered instance's system: rate
+  // (from its burst config), life, colour swatches and a sprite thumbnail --
+  // the same facts effects-browser.ts's kvTable shows, but one row per
+  // EMITTER rather than aggregated, since a system's emitters can differ.
+  function buildEmitterSummary(system: any): HTMLElement {
+    const wrap = el('div', { class: 'wp-fx-emitters' });
+    for (let i = 0; i < (system.emitters || []).length; i++) {
+      const emitter = system.emitters[i];
+      const cfg = emitter.burst != null ? effectsDoc?.configs?.[String(emitter.burst)] : null;
+      const rate = cfg && cfg.per_second != null ? `${fmtNum(cfg.per_second, 1)}/s` : 'no burst';
+      const life = emitter.life?.ticks != null ? `${fmtInt(emitter.life.ticks)}t life` : 'no life';
+      const row = el('div', { class: 'wp-fx-emitter' });
+      row.appendChild(el('span', { class: 'wp-fx-emitter-text', text: `#${i + 1} · ${rate} · ${life}` }));
+      const swatches = el('span', { class: 'we-swatches' });
+      for (const c of [emitter.color0, emitter.color1]) {
+        if (!c) continue;
+        const [r, g, b, a] = c.rgba;
+        swatches.appendChild(el('span', {
+          class: 'we-swatch',
+          title: `rgba(${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)}, ${a.toFixed(2)})`,
+          style: `background: rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`,
+        }));
+      }
+      if (swatches.children.length) row.appendChild(swatches);
+      const imgId = emitter.sprite?.images?.[0];
+      if (imgId != null) {
+        const { sub } = spriteDrawOf(emitter.sprite);
+        row.appendChild(el('img', {
+          class: 'we-thumb', loading: 'lazy', src: app.store.url(`images/${pad5(imgId)}_e${sub}.png`),
+        }));
+      }
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }
+
+  // System name/room/occurrence/blend/timing/per-emitter knobs + the live
+  // particle count for THIS instance, following readoutRows' exact shape
+  // ([term, value][] -> a dl). `key` = effectInstanceKey(room, occurrence,
+  // system); the System row follows the SAME readout-link + reveal-handoff
+  // idiom as effectsReadoutRow above (a pinned PLACEMENT linking out to its
+  // attached system), just in the other direction.
+  function effectReadoutRows(key: string, pinned: boolean): [string, any][] {
+    const [roomStr, occStr, sysStr] = key.split('|');
+    const roomId = Number(roomStr);
+    const occurrence = Number(occStr);
+    const sysSlot = Number(sysStr);
+    const system = effectsDoc?.systems?.find((s: any) => Number(s.slot) === sysSlot) || null;
+    const info = effectsLayer ? effectsLayer.instanceInfo(key) : null;
+    const name = system?.names?.[0]?.name || `system #${sysSlot}`;
+    const attachment = effectsDoc?.attachments?.rooms?.find((a: any) => Number(a.room) === roomId
+      && Number(a.occurrence) === occurrence && Number(a.system) === sysSlot) || null;
+    const sysLinkAttrs: any = allMode
+      ? { href: '#/world/effects', text: name, target: '_blank', rel: 'noopener' }
+      : { href: '#/world/effects', text: name };
+    sysLinkAttrs.onclick = () => {
+      try {
+        sessionStorage.setItem('bs.effects.reveal',
+          JSON.stringify({ system: sysSlot, controller: attachment?.controller ?? null }));
+      } catch { /* storage unavailable: navigation still works, just no reveal handoff */ }
+    };
+    const roomCell = `${identifier(roomId)}${world.roomMeta(roomId)?.name ? ` · ${world.roomMeta(roomId).name}` : ''}`;
+    const rows: [string, any][] = [
+      ['System', el('a', sysLinkAttrs)],
+      ['Room', `${roomCell} · occurrence ${identifier(occurrence)}`],
+      ['Emitters', String(system?.emitters?.length ?? 0)],
+      ['Blend', system?.blend || 'none'],
+      ['Timing', system?.loop ? 'loop (ambient)' : 'timed (one-shot)'],
+    ];
+    if (system?.emitters?.length) rows.push(['Detail', buildEmitterSummary(system)]);
+    rows.push(['Live', info ? fmtInt(info.live) : '-']);
+    if (pinned && info?.edit) {
+      const parts: string[] = [];
+      if (info.edit.dx || info.edit.dy || info.edit.dz) {
+        parts.push(`Δ ${compact(info.edit.dx)}, ${compact(info.edit.dy)} tiles · ${compact(info.edit.dz)} layers`);
+      }
+      if (info.edit.scaleMult !== 1) parts.push(`scale ×${compact(info.edit.scaleMult)}`);
+      if (info.edit.hidden) parts.push('hidden (session only)');
+      if (info.edit.paused) parts.push('paused');
+      if (info.edit.clockOffset) parts.push(`time Δ ${compact(info.edit.clockOffset)} ticks`);
+      if (parts.length) rows.push(['Delta', parts.join(' · ')]);
+    }
+    rows.push(['Inspect', pinned ? 'pinned (click again to release)' : 'hover · click to pin']);
+    return rows;
+  }
+
+  // Session-edit tools for the pinned effect instance: SAME grid/classes as
+  // buildEditTools() above (X/Y/Z nudge + shared step selector), plus a
+  // Scale nudge pair reusing the identical grid row shape, a Time nudge pair
+  // scrubbing the instance's own clock (step derived from the doc's tick
+  // rate, never a hardcoded literal), and wp-edit-actions buttons for
+  // pause/resume, hide/show and reset -- resetting THIS instance only
+  // (the panel's global "Reset edits" button covers every placement AND
+  // effect edit at once via resetAllEdits below).
+  function buildEffectEditTools(key: string): HTMLElement {
+    const info = effectsLayer ? effectsLayer.instanceInfo(key) : null;
+    const edit: EffectInstanceEdit | null = info?.edit ?? null;
+    const tools = el('div', { class: 'wp-edit' });
+    const row = (label: string, axis: 'dx' | 'dy' | 'dz', minusTitle: string, plusTitle: string) => {
+      const minus = el('button', { type: 'button', text: '−', title: minusTitle });
+      const plus = el('button', { type: 'button', text: '+', title: plusTitle });
+      minus.addEventListener('click', () => nudgeEffectPinned(axis, -fxEditStep));
+      plus.addEventListener('click', () => nudgeEffectPinned(axis, fxEditStep));
+      append(tools, el('span', { class: 'axis', text: label }), minus, plus);
+    };
+    row('X', 'dx', 'Nudge effect −X', 'Nudge effect +X');
+    row('Y', 'dy', 'Nudge effect −Y', 'Nudge effect +Y');
+    row('Z', 'dz', 'Nudge effect down in game Z layers', 'Nudge effect up in game Z layers');
+    const step = el('select', { title: 'X/Y use tiles; Z uses game height layers' });
+    for (const value of [0.25, 0.5, 1, 2]) {
+      step.appendChild(el('option', { value: String(value), text: `${value} tiles · layers` }));
+    }
+    step.value = String(fxEditStep);
+    step.addEventListener('change', () => { fxEditStep = Number(step.value); });
+    append(tools, el('span', { class: 'axis', text: 'Step' }), step);
+
+    const scaleMinus = el('button', { type: 'button', text: '−', title: 'Shrink this effect' });
+    const scalePlus = el('button', { type: 'button', text: '+', title: 'Enlarge this effect' });
+    scaleMinus.addEventListener('click', () => nudgeEffectScalePinned(1 / 1.1));
+    scalePlus.addEventListener('click', () => nudgeEffectScalePinned(1.1));
+    append(tools, el('span', { class: 'axis', text: 'Scale' }), scaleMinus, scalePlus);
+
+    // Step derived from the LAYER's own tick rate (from the doc, guarded
+    // default inside effects-sim.js) -- never the literal tick-rate value
+    // itself, matching THE BOUNDARY's ban on hardcoding it.
+    const clockStep = Math.max(1, Math.round((effectsLayer?.clock?.tickRate || 1) * 0.25));
+    const timeMinus = el('button', { type: 'button', text: '−', title: 'Scrub this effect back in time' });
+    const timePlus = el('button', { type: 'button', text: '+', title: 'Scrub this effect forward in time' });
+    timeMinus.addEventListener('click', () => nudgeEffectClockPinned(-clockStep));
+    timePlus.addEventListener('click', () => nudgeEffectClockPinned(clockStep));
+    append(tools, el('span', { class: 'axis', text: 'Time' }), timeMinus, timePlus);
+
+    const pauseBtn = el('button', {
+      class: `wp-fx-pause${edit?.paused ? ' active' : ''}`, type: 'button', text: edit?.paused ? '▶' : '❚❚',
+      title: edit?.paused ? 'Resume this effect' : 'Pause this effect',
+    });
+    pauseBtn.addEventListener('click', () => toggleEffectPausedPinned());
+    const hideBtn = el('button', {
+      class: `wp-fx-hide${edit?.hidden ? ' active' : ''}`, type: 'button', text: edit?.hidden ? 'Show' : 'Hide',
+      title: edit?.hidden ? 'Show this effect again' : 'Hide this effect for this session',
+    });
+    hideBtn.addEventListener('click', () => toggleEffectHiddenPinned());
+    const resetBtn = el('button', {
+      class: 'wp-fx-reset', type: 'button', text: '↺ Reset',
+      title: 'Restore this effect to its authored position, size and state',
+    });
+    resetBtn.addEventListener('click', () => resetEffectPinned());
+    return el('div', { class: 'wp-edit-wrap' }, tools,
+      el('div', { class: 'wp-edit-actions' }, pauseBtn, hideBtn, resetBtn));
+  }
+
+  function showEffectReadout(key: string, pinned: boolean): void {
+    const list = el('dl', {});
+    for (const [term, value] of effectReadoutRows(key, pinned)) {
+      append(list, el('dt', { text: term }),
+        typeof value === 'string' ? el('dd', { text: value }) : el('dd', {}, value));
+    }
+    clear(readout);
+    readout.appendChild(list);
+    if (pinned) readout.appendChild(buildEffectEditTools(key));
+    readout.classList.toggle('pinned', pinned);
+    readout.hidden = false;
+  }
+
+  // Pin/hover an effect instance: mirrors showInspection/showIndexInspection
+  // for placements, but there is only ONE shape here (no graph/index split --
+  // see the pickEffectProxy comment), so one function covers both views.
+  // Pinning a NEW effect clears any pinned PLACEMENT first (the two pins are
+  // mutually exclusive, sharing one readout); the reverse direction is
+  // wired into showInspection/showIndexInspection below.
+  function showEffectInspection(key: string, pinned: boolean): void {
+    if (pinned && inspectPinned) clearInspection(true);
+    if (fxHoverKey && fxHoverKey !== key) effectsLayer?.setInstanceHighlighted(fxHoverKey, false);
+    fxHoverKey = key;
+    effectsLayer?.setInstanceHighlighted(key, true);
+    effectPinned = pinned ? { key } : null;
+    showEffectReadout(key, pinned);
+    renderer.domElement.style.cursor = 'crosshair';
+  }
+
+  function clearEffectInspection(force = false): void {
+    if (effectPinned && !force) return;
+    if (fxHoverKey) {
+      effectsLayer?.setInstanceHighlighted(fxHoverKey, false);
+      fxHoverKey = null;
+    }
+    effectPinned = null;
+    readout.hidden = true;
+    readout.classList.remove('pinned');
+    clear(readout);
+    renderer.domElement.style.cursor = '';
+  }
+
+  // Re-render the pinned effect's readout after an edit; gracefully releases
+  // the pin if the instance's room went away underneath it (single-room
+  // unload / merged proximity deactivation already try to clear the pin
+  // proactively -- see effectsRoomUnloaded/updateMergedEffectsActivation --
+  // this is the belt-and-braces fallback for any path that doesn't).
+  function refreshEffectReadout(): void {
+    if (!effectPinned) return;
+    if (!effectsLayer || !effectsLayer.instanceInfo(effectPinned.key)) { clearEffectInspection(true); return; }
+    showEffectReadout(effectPinned.key, true);
+  }
+
+  function nudgeEffectPinned(axis: 'dx' | 'dy' | 'dz', delta: number): void {
+    if (!effectPinned || !effectsLayer) return;
+    effectsLayer.nudgeInstance(effectPinned.key, axis, delta);
+    refreshEffectReadout();
+    syncEditsUi();
+  }
+  function nudgeEffectScalePinned(factor: number): void {
+    if (!effectPinned || !effectsLayer) return;
+    effectsLayer.nudgeInstanceScale(effectPinned.key, factor);
+    refreshEffectReadout();
+    syncEditsUi();
+  }
+  function toggleEffectHiddenPinned(): void {
+    if (!effectPinned || !effectsLayer) return;
+    const info = effectsLayer.instanceInfo(effectPinned.key);
+    if (!info) return;
+    effectsLayer.setInstanceHidden(effectPinned.key, !info.edit.hidden);
+    refreshEffectReadout();
+    syncEditsUi();
+  }
+  function toggleEffectPausedPinned(): void {
+    if (!effectPinned || !effectsLayer) return;
+    const info = effectsLayer.instanceInfo(effectPinned.key);
+    if (!info) return;
+    effectsLayer.setInstancePaused(effectPinned.key, !info.edit.paused);
+    refreshEffectReadout();
+    syncEditsUi();
+  }
+  function nudgeEffectClockPinned(deltaTicks: number): void {
+    if (!effectPinned || !effectsLayer) return;
+    effectsLayer.nudgeInstanceClock(effectPinned.key, deltaTicks);
+    refreshEffectReadout();
+    syncEditsUi();
+  }
+  function resetEffectPinned(): void {
+    if (!effectPinned || !effectsLayer) return;
+    effectsLayer.resetInstanceEdit(effectPinned.key);
+    refreshEffectReadout();
+    syncEditsUi();
+  }
+
+  // Pin an effect instance by reference (room/occurrence/system), the same
+  // idiom as pinByRef for placements: used by the effectsApi test hook and
+  // available to any future non-pointer entry point.
+  function pinEffectByRef(ref: { room: number | string; occurrence: number | string; system: number | string }): boolean {
+    if (destroyed || !ref || !effectsLayer) return false;
+    const key = effectInstanceKey(ref.room, ref.occurrence, ref.system);
+    if (!effectsLayer.instanceInfo(key)) return false;
+    showEffectInspection(key, true);
+    return true;
+  }
+
   // Pin a placement by reference (not a screen ray): the test hook path AND how
   // a click on a parked variant overlay re-pins its (statics-hidden) model.
   async function pinByRef(ref: any): Promise<boolean> {
@@ -3121,6 +3439,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (pinned && pinnedCtx && modelKeyOf(pinnedCtx.info) !== modelKeyOf(info)) {
       parkVariantOverlay();
     }
+    // See the identical note in showIndexInspection: the two pin kinds share
+    // one readout and are mutually exclusive.
+    if (pinned && effectPinned) clearEffectInspection(true);
     inspectPinned = !!pinned;
     pinnedCtx = pinned
       ? { mode: 'graph', object: hit.object, instanceId: hit.instanceId, info, group: null }
@@ -3178,7 +3499,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     inspectFrame = 0;
     const point = inspectPoint;
     inspectPoint = null;
-    if (!point || !state.inspect) { clearInspection(); return; }
+    if (!point || !state.inspect) { clearInspection(); clearEffectInspection(); return; }
+    // Effect proxies are checked first and uniformly across both view modes
+    // (see pickEffectProxy): a hit here shows the hover readout and stops,
+    // same precedence pickVariantOverlay gets in onPointerUp below.
+    const fxHit = pickEffectProxy(point[0], point[1]);
+    if (fxHit) { showEffectInspection(fxHit.key, false); return; }
+    clearEffectInspection();   // moved off a proxy: drop the effect hover (no-op while nothing is pinned, which is guaranteed here -- see onPointerMove's gate)
     if (mergedActive()) {
       const token = ++pickToken;
       (async () => {
@@ -3196,16 +3523,16 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   const onPointerMove = (event: PointerEvent) => {
-    if (!state.inspect || inspectPinned || event.buttons) {
-      if (event.buttons) clearInspection();
+    if (!state.inspect || inspectPinned || effectPinned || event.buttons) {
+      if (event.buttons) { clearInspection(); clearEffectInspection(); }
       return;
     }
     inspectPoint = [event.clientX, event.clientY];
     if (!inspectFrame) inspectFrame = requestAnimationFrame(inspectAtPendingPoint);
   };
-  const onPointerLeave = () => clearInspection();
+  const onPointerLeave = () => { clearInspection(); clearEffectInspection(); };
   const onPointerDown = (event: PointerEvent) => {
-    if (!inspectPinned) clearInspection();
+    if (!inspectPinned && !effectPinned) { clearInspection(); clearEffectInspection(); }
     if (event.button === 0) pointerDown = [event.clientX, event.clientY];
   };
   // Click-without-drag picks (the movement threshold keeps the fly camera's
@@ -3228,6 +3555,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       else pinByRef(hitOverlay.pinRef).catch(() => { /* best-effort */ });
       return;
     }
+    // Effect proxies next: clicking the pinned instance's own proxy unpins
+    // it, clicking a different one re-pins (both cases release any pinned
+    // placement first, inside showEffectInspection).
+    const fxHit = pickEffectProxy(event.clientX, event.clientY);
+    if (fxHit) {
+      if (effectPinned && fxHit.key === effectPinned.key) clearEffectInspection(true);
+      else showEffectInspection(fxHit.key, true);
+      return;
+    }
     if (mergedActive()) {
       const token = ++pickToken;
       (async () => {
@@ -3235,6 +3571,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         if (hit === undefined || destroyed || token !== pickToken || !state.inspect) return;
         if (!hit) {
           if (inspectPinned) clearInspection(true);
+          if (effectPinned) clearEffectInspection(true);
           return;
         }
         if (inspectPinned && `pick:${hit.entryIndex}` === inspectedKey) {
@@ -3251,6 +3588,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       else showInspection(hit, true);
     } else if (inspectPinned) {
       clearInspection(true);
+    } else if (effectPinned) {
+      clearEffectInspection(true);
     }
   };
   // Delete key deletes the pinned placement (both views).
@@ -4377,6 +4716,53 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         return true;
       },
       buffers: () => (effectsLayer ? effectsLayer.snapshot() : []),
+      // Test/diagnostics: how many pickable proxies currently exist (one per
+      // loaded effect instance), independent of DOM/readout state.
+      pickableCount: () => (effectsLayer ? effectsLayer.pickables().length : 0),
+      // Raw findAnchor passthrough (native units), for asserting a nudge
+      // actually moved an instance without scraping the DOM.
+      anchorOf: (nameOrSlot: any) => effectsLayer?.findAnchor(nameOrSlot) ?? null,
+      // Screen-space point (CSS pixels) of a named/slotted instance's CURRENT
+      // anchor, projected through the live camera/effectsRoot transform --
+      // reuses the real render pipeline instead of a test re-deriving the
+      // native-to-screen conversion by hand. Drives a real synthetic click at
+      // the returned point to exercise the actual proxy-picking path.
+      screenPointOf(nameOrSlot: any) {
+        const anchor = effectsLayer?.findAnchor(nameOrSlot);
+        if (!anchor) return null;
+        const v = new THREE.Vector3(anchor.x, anchor.y, anchor.z);
+        effectsRoot.updateMatrixWorld();
+        v.applyMatrix4(effectsRoot.matrixWorld);
+        v.project(scene3d.camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        return { x: rect.left + ((v.x + 1) / 2) * rect.width, y: rect.top + ((1 - v.y) / 2) * rect.height };
+      },
+      // Pin/inspect/edit an effect instance by reference, the same "pin by
+      // reference" idiom pinPlacement gives placements: a screen-space ray
+      // onto a proxy is exactly as impractical for a test harness as it is
+      // for the fixture's tiny spawns (pinPlacement's own precedent).
+      pinInstance: (ref: any) => pinEffectByRef(ref),
+      unpinInstance() { clearEffectInspection(true); },
+      pinnedInstanceInfo() {
+        if (!effectPinned) return null;
+        return effectsLayer ? effectsLayer.instanceInfo(effectPinned.key) : null;
+      },
+      nudgeInstance(axis: 'dx' | 'dy' | 'dz', delta: number) { nudgeEffectPinned(axis, Number(delta) || 0); },
+      nudgeInstanceScale(factor: number) { nudgeEffectScalePinned(Number(factor) || 1); },
+      setInstanceHidden(on: boolean) {
+        if (!effectPinned || !effectsLayer) return;
+        effectsLayer.setInstanceHidden(effectPinned.key, !!on);
+        refreshEffectReadout();
+        syncEditsUi();
+      },
+      setInstancePaused(on: boolean) {
+        if (!effectPinned || !effectsLayer) return;
+        effectsLayer.setInstancePaused(effectPinned.key, !!on);
+        refreshEffectReadout();
+        syncEditsUi();
+      },
+      nudgeInstanceClock(deltaTicks: number) { nudgeEffectClockPinned(Number(deltaTicks) || 0); },
+      resetInstance() { resetEffectPinned(); },
     },
     destroy() {
       if (destroyed) return;

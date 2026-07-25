@@ -418,6 +418,7 @@ export async function extractWorld({
     const effects = effectsMod.extractWorldEffects(rows, pool.values, ab0, profile, {
       charset: dt.charset, symbols: dt.symbols, strings: poolStrings, poolRegistryRefs,
       textureSlots: assetMaps.textureSlots, roomIds: ctx.roomIds,
+      spriteMeta: (texId) => texMeta.get(texId)?.sprite ?? null,
       occupancy: (id) => ctx.occupancy(id),
       spawnActors: spawnActorsBySlot,
       meshSkeletonRef: (meshId) => (dt.meshDir[meshId]?.sref ?? 0),

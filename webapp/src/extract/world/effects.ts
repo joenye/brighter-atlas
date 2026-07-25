@@ -36,7 +36,8 @@ import type { FillRow } from './replay.js';
 import type { PoolStrings } from './models.js';
 import type { RoomOccurrence } from './room.js';
 
-export const WORLD_EFFECTS_FORMAT = 1;
+// 2: emitter sprites carry their `draw` metrics (sub-image, dimensions, mask).
+export const WORLD_EFFECTS_FORMAT = 2;
 
 const MIN_VOTERS = 8;           // family acceptance quorum; below it the exhaustive rule applies
 const VOTER_CAP = 256;          // sampled voters per family
@@ -107,7 +108,15 @@ export interface EffectEmitter {
   // attachments.rooms[].bones); a symbol (tag 0x0f) or the field's absence
   // both mean "no bone, use the object/mesh root", so both decode to null.
   bone: number | null;
-  sprite: { material: number; images: number[] } | null;  // ab3 container ordinals
+  // `images` are ab3 container ordinals; `draw` is how to render the first of
+  // them, resolved once here so no renderer needs image metadata or pixel
+  // access (the model page has neither). Null when the container carries no
+  // readable image metadata; a renderer must then fall back to its own
+  // defaults rather than assume a size.
+  sprite: {
+    material: number; images: number[];
+    draw: { sub: number; w: number; h: number; mask: boolean } | null;
+  } | null;
   blend: 'add' | 'mix' | null;                 // emitter override, else system's
   life: { ticks: number; op: number } | null;
   fade_in: { ticks: number; op: number } | null;
@@ -176,6 +185,12 @@ export interface WorldEffectsShared {
   charset: ArrayLike<string>; symbols: string[];
   strings: PoolStrings; poolRegistryRefs: (i: number) => number[];
   textureSlots: Map<number, number[]>;        // material slot -> ab3 ids
+  // ab3 id -> how to draw that container as a sprite (texture-roles.js
+  // resolveSpriteMeta, decided in the texture stage), or null when it has no
+  // readable image metadata. Sprites are mask chains far more often than not,
+  // which have no material role at all, so this must NOT be derived from the
+  // container's albedo/normal/parameter routing.
+  spriteMeta: (texId: number) => { sub: number; w: number; h: number; mask: boolean } | null;
   roomIds: number[];
   occupancy: (roomId: number) => { occurrences: RoomOccurrence[] }; // read-only cached
   spawnActors: Map<number, { owner_slot: number; label: string | null }>;
@@ -1032,7 +1047,7 @@ function extractEffects(
         seen.add(ref);
         emitters.push(buildEmitter(rows[ref], decoded.get(ref)!, sysSlot,
           roleTemplates.get(rows[ref].runtime) ?? { fades: 'none', confidence: 'order' },
-          classifyConfig, shippedConfigs, shared.textureSlots));
+          classifyConfig, shippedConfigs, shared.textureSlots, shared.spriteMeta));
       }
     }
     emitterTotal += emitters.length;
@@ -1264,6 +1279,7 @@ function buildEmitter(
   classifyConfig: (slot: number) => { kind: EffectConfig['kind'] } | null,
   shippedConfigs: Set<number>,
   textureSlots: Map<number, number[]>,
+  spriteMeta: (texId: number) => { sub: number; w: number; h: number; mask: boolean } | null,
 ): EffectEmitter {
   const consumed = new Set<number>();
   const durations: { ticks: number; op: number; i: number }[] = [];
@@ -1285,7 +1301,11 @@ function buildEmitter(
       blend = 'add';   // the emitter's own blend override; other symbols stay data
       consumed.add(i);
     } else if (e.kind === 'scalar' && e.tag === 0x02 && sprite === null) {
-      sprite = { material: e.value, images: textureSlots.get(e.value) ?? [] };
+      const images = textureSlots.get(e.value) ?? [];
+      sprite = {
+        material: e.value, images,
+        draw: images.length ? spriteMeta(images[0]) : null,
+      };
       consumed.add(i);
     } else if (e.kind === 'scalar' && e.tag === -85 && e.op === 0 && e.value === ownerSlot) {
       consumed.add(i);   // the op-0 owner backpointer (negated letter code), consumed by detection

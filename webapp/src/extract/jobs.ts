@@ -13,7 +13,9 @@ import {
   parseImageMeta, decodeSubImage, applyMaterialCutout,
   type ImageMeta,
 } from './image.js';
-import { resolveRoles, type TextureRoles } from '../texture-roles.js';
+import {
+  resolveRoles, resolveSpriteMeta, type TextureRoles, type SpriteMeta,
+} from '../texture-roles.js';
 import { classifyWaterRgba } from '../water-metrics.js';
 import { encodePng, SERVED_PNG_LEVEL, DECODED_CACHE, DECODED_CACHE_MAX_BYTES } from './png.js';
 
@@ -125,10 +127,12 @@ export const INDEX_JOBS: Record<string,
       i: number; kind: string; alpha: boolean; spreadMax: number | null;
       paramMin: number[] | null; paramMax: number[] | null; water: string | null;
       albedo: number | null; normal: number | null; parameter: number | null;
+      sprite: SpriteMeta | null;
     } = {
       i, kind: 'other', alpha: false, spreadMax: null,
       paramMin: null, paramMax: null, water: null,
       albedo: null, normal: null, parameter: null,
+      sprite: null,
     };
     const { tail, subs } = decodeObject(3, raw);
     decode: {
@@ -139,6 +143,12 @@ export const INDEX_JOBS: Record<string,
       if (tail.length !== 13 * subs.length) break decode;
       let entries: ImageMeta[];
       try { entries = parseImageMeta(tail); } catch { break decode; }
+      // Sprite metrics are recorded for EVERY container with readable image
+      // metadata, before the material-role gate below: a particle sprite is
+      // typically a single-channel mask chain, which has no albedo role at
+      // all, so anything derived after that gate is unreachable for exactly
+      // the containers the effect renderers need (see resolveSpriteMeta).
+      out.sprite = resolveSpriteMeta(entries);
       const roles = resolveRoles({ entries });
       if (roles.albedo == null) break decode;
       const albedoMeta = entries[roles.albedo];

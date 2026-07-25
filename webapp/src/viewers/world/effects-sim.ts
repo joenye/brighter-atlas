@@ -46,6 +46,11 @@ const finite = (value: any, fallback: number): number => (
   Number.isFinite(Number(value)) ? Number(value) : fallback);
 const clamp = (value: number, lo: number, hi: number): number => (
   value < lo ? lo : value > hi ? hi : value);
+// One envelope window's progress, saturated. A zero-length window is passed
+// instantly (nothing to ramp through), which is what makes a missing fade
+// mean "already opaque" rather than "never visible".
+const ramp = (elapsed: number, span: number): number => (
+  span > 0 ? clamp(elapsed / span, 0, 1) : (elapsed > 0 ? 1 : 0));
 
 /** Deterministic 32-bit combine of two integers (seed material). */
 export function hash32(a: number, b: number): number {
@@ -184,7 +189,6 @@ export class EmitterSim {
   birth!: Float64Array;
   px!: Float32Array; py!: Float32Array; pz!: Float32Array;
   vx!: Float32Array; vy!: Float32Array; vz!: Float32Array;
-  rot0!: Float32Array;
   tail = 0;
   head = 0;
   private _lastT = NaN;
@@ -313,7 +317,6 @@ export class EmitterSim {
     this.vx = new Float32Array(capacity);
     this.vy = new Float32Array(capacity);
     this.vz = new Float32Array(capacity);
-    this.rot0 = new Float32Array(capacity);
     this.tail = 0;
     this.head = 0;
     this._dirty = true;
@@ -375,14 +378,13 @@ export class EmitterSim {
   }
 
   // Sample the j-th kept spawn's constants into its ring slot. Fixed draw
-  // count and order (three draws) keeps the counter-based stream stable
-  // across shape kinds.
+  // count and order (two draws) keeps the counter-based stream stable across
+  // shape kinds.
   private _spawn(j: number): void {
     const slot = j % this.capacity;
     const rng = mulberry32(hash32(this.seed, (j * this.k) | 0));
     const r0 = rng();
     const r1 = rng();
-    const r2 = rng();
     const tick = this.spawnTick(j);
     const s = this.shape;
     let x = s.center[0]; let y = s.center[1]; let z = s.center[2];
@@ -421,7 +423,6 @@ export class EmitterSim {
     this.vx[slot] = dx * this.speed;
     this.vy[slot] = dy * this.speed;
     this.vz[slot] = dz * this.speed;
-    this.rot0[slot] = this.spin !== 0 ? r2 * TWO_PI : 0;
   }
 
   /** Bring the ring up to clock T: incremental for small forward steps,
@@ -449,9 +450,8 @@ export class EmitterSim {
 
   /**
    * Closed-form evaluation of every alive particle at T:
-   *   p = p0 + v0 age + 0.5 accel age^2, roll = rot0 + spin age,
-   *   color/scale lerp by age/life, alpha shaped by the fade envelopes
-   *   (each clamping to 1 when absent).
+   *   p = p0 + v0 age + 0.5 accel age^2, roll = spin age, scale lerped by
+   *   age/life, colour and alpha shaped by the three-phase envelope below.
    */
   evaluate(T: number, emit: (x: number, y: number, z: number, scale: number,
     r: number, g: number, b: number, a: number, rot: number) => void): void {
@@ -460,6 +460,11 @@ export class EmitterSim {
     const [ax, ay, az] = this.accel;
     const [r0c, g0c, b0c, a0c] = this.color0;
     const [r1c, g1c, b1c, a1c] = this.color1;
+    // A lifetime is three consecutive windows: fade in, hold, fade out. The
+    // colour pair crosses over during the HOLD window alone, so a particle
+    // reaches its second colour before it starts fading rather than over the
+    // whole span; the two fades each act on one end's own alpha.
+    const hold = Math.max(0, life - this.fadeIn - this.fadeOut);
     for (let j = this.tail; j < this.head; j++) {
       const slot = j % cap;
       const age = T - this.birth[slot];
@@ -469,16 +474,25 @@ export class EmitterSim {
       const x = this.px[slot] + this.vx[slot] * age + ax * half;
       const y = this.py[slot] + this.vy[slot] * age + ay * half;
       const z = this.pz[slot] + this.vz[slot] * age + az * half;
-      let env = 1;
-      if (this.fadeIn > 0) env *= Math.min(age / this.fadeIn, 1);
-      if (this.fadeOut > 0) env *= Math.min((life - age) / this.fadeOut, 1);
+      const k0 = ramp(age, this.fadeIn);
+      const k1 = ramp(age - this.fadeIn, hold);
+      const k2 = ramp(age - this.fadeIn - hold, this.fadeOut);
+      // Composed in PREMULTIPLIED space (a colour fading out must not drag
+      // the surviving colour's hue with it), then converted back: the render
+      // attribute and both blend modes want straight alpha.
+      const pa0 = a0c * k0;
+      const pa1 = a1c * (1 - k2);
+      const alpha = pa0 + (pa1 - pa0) * k1;
+      let r = r1c; let g = g1c; let b = b1c;
+      if (alpha > 1e-6) {
+        r = (r0c * pa0 + (r1c * pa1 - r0c * pa0) * k1) / alpha;
+        g = (g0c * pa0 + (g1c * pa1 - g0c * pa0) * k1) / alpha;
+        b = (b0c * pa0 + (b1c * pa1 - b0c * pa0) * k1) / alpha;
+      }
       emit(x, y, z,
         clamp(this.scale0 + (this.scale1 - this.scale0) * u, 0.01, 100),
-        r0c + (r1c - r0c) * u,
-        g0c + (g1c - g0c) * u,
-        b0c + (b1c - b0c) * u,
-        (a0c + (a1c - a0c) * u) * env * this.densityScale,
-        this.rot0[slot] + this.spin * age);
+        r, g, b, alpha * this.densityScale,
+        this.spin * age);
     }
   }
 }
