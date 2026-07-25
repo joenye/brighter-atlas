@@ -349,25 +349,29 @@ export class WorldEffectsLayer {
       if (!isEffectEditNoop(edit)) this._applyAnchorEdit(rec);
       rec.proxy = this._createProxy(rec);
       this.root.add(rec.proxy);
-      // Rigged bone binding: attachments.rooms[].bones (rest-WORLD bone
-      // translations for the owning RIGGED occurrence) plus each emitter's
-      // own `bone` (an integer bone index, or null -> root). Neither side
-      // present -> [0,0,0], i.e. root-anchored exactly like a static object.
-      const bones = Array.isArray(att.bones) ? att.bones : null;
+      // Every emitter of a system draws in its owning mesh instance's frame,
+      // with NO per-emitter offset.
+      //
+      // Emitters do carry an attachment field (doc `emitter.bone`), and it
+      // used to be resolved against the owning rig's rest-world bone
+      // translations and added here. That is wrong, and the way it fails is
+      // instructive: within ONE system the emitters that carry the field got
+      // shifted while their siblings stayed put, so a brazier's flame split
+      // into a correct part sitting in its bowl and a second part metres
+      // away. Authored effects are co-located by construction, so any rule
+      // that separates one system's emitters is refuted by that alone.
+      //
+      // The field is a "$additional_transform" slot, not a rig bone index,
+      // so indexing bone translations with it was reading an unrelated
+      // table. It stays decoded in the doc as provenance for whenever the
+      // additional-transform table itself is recovered; until then nothing
+      // consumes it, and every emitter anchors at the mesh root.
       system.emitters.forEach((emitter, index) => {
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
         const texId = emitter.sprite?.images?.length ? Number(emitter.sprite.images[0]) : -1;
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
         this._draws.set(texId, spriteDrawOf(emitter.sprite));
-        let boneOffset: [number, number, number] = [0, 0, 0];
-        const boneIndex = emitter.bone;
-        if (bones && Number.isInteger(boneIndex) && boneIndex! >= 0 && boneIndex! < bones.length) {
-          const b = bones[boneIndex!];
-          if (Array.isArray(b) && b.length === 3) {
-            boneOffset = [Number(b[0]) || 0, Number(b[1]) || 0, Number(b[2]) || 0];
-          }
-        }
-        rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, boneOffset });
+        rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, boneOffset: [0, 0, 0] });
       });
       recs.push(rec);
     }

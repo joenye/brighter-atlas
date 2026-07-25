@@ -1357,19 +1357,59 @@ function buildEmitter(
   } else if (template.fades === 'two' && durations.length >= 2) {
     fadeOut = take(durations[1]);
   }
-  const color0 = take(colors[0]);
-  const color1 = take(colors[1]) ?? color0;
-  const speed = take(rates[0]);
-  const angularSpeed = take(rates[1]);
-  const rate = take(rates[2]);
-  const scale0 = take(floats[0]);
-  const scale1 = take(floats[1]);
+  // Property pairs. Every animatable emitter property occupies TWO adjacent
+  // slots, (value0, value1), interpolated across the particle's life. When
+  // value1 is not authored separately the slot instead holds a SYMBOL naming
+  // value0 ("$scale0", "$color0", ...), which means "value1 equals value0",
+  // i.e. the property is CONSTANT. Binding purely by order within tag type
+  // reads those two slots as an unrelated pair of values, which silently
+  // turns every constant property into a ramp: a steady flame then grows
+  // from nothing to full size on every particle, which is what made flames
+  // read as wrong. The marker is matched by its shipped name as a value (the
+  // same way blend/facing/loop already are), never by op position, and its
+  // absence falls back to the positional reading so builds that do not carry
+  // these markers decode exactly as before.
+  const markerFor = (suffix: string): number => {
+    for (let i = 0; i < ops.length; i++) {
+      const e = ops[i];
+      if (e.kind === 'symbol' && e.name !== null && e.name.endsWith(suffix) && !consumed.has(i)) return i;
+    }
+    return -1;
+  };
+  // The marked value0 is the entry occupying the slot immediately before the
+  // marker; consuming both leaves neither in `extra`.
+  const boundValue = <T extends { i: number }>(entries: T[], suffix: string): T | null => {
+    const at = markerFor(suffix);
+    if (at < 0) return null;
+    const value = entries.find((entry) => entry.i === at - 1);
+    if (!value) return null;
+    consumed.add(at);
+    return take(value);
+  };
+
+  const boundColor = boundValue(colors, 'color0');
+  const color0 = boundColor ?? take(colors[0]);
+  const color1 = boundColor ? boundColor : (take(colors[1]) ?? color0);
+  const boundSpeed = boundValue(rates, 'speed0');
+  const speed = boundSpeed ?? take(rates[0]);
+  const remainingRates = rates.filter((entry) => !consumed.has(entry.i));
+  const angularSpeed = take(remainingRates[0]);
+  const rate = take(remainingRates[1]);
+  const boundScale = boundValue(floats, 'scale0');
+  const scale0 = boundScale ?? take(floats[0]);
+  const scale1 = boundScale ? boundScale : take(floats[1]);
+  const boundAccel = boundValue(vec3s, 'acceleration0');
   let direction: { v: [number, number, number]; op: number } | null = null;
-  let acceleration: { v: [number, number, number]; op: number } | null = null;
-  if (vec3s.length === 1) acceleration = take(vec3s[0]);
-  else if (vec3s.length >= 2) {
-    direction = take(vec3s[0]);
-    acceleration = take(vec3s[vec3s.length - 1]);
+  let acceleration: { v: [number, number, number]; op: number } | null = boundAccel;
+  const remainingVec3s = vec3s.filter((entry) => !consumed.has(entry.i));
+  if (acceleration) {
+    // the marker already claimed acceleration, so any other vec3 is direction
+    direction = take(remainingVec3s[0]);
+  } else if (remainingVec3s.length === 1) {
+    acceleration = take(remainingVec3s[0]);
+  } else if (remainingVec3s.length >= 2) {
+    direction = take(remainingVec3s[0]);
+    acceleration = take(remainingVec3s[remainingVec3s.length - 1]);
   }
   // rig bone binding: detected by TAG and SHAPE, never a fixed op index. The
   // attachment field sits in a two-slot pattern next to a marker symbol

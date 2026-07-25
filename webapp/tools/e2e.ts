@@ -629,6 +629,10 @@ for (const probe of [
   // review screenshot instead. The dense fountain keeps a hard delta.
   { room: 'Twiddle Corner', focus: 'hanging_street_lantern_idle', extent: 3, aimParticles: true, clock: 5000, minLive: 0, channelMin: 8, minDiff: 0, minSum: 0, shot: 'e2e_effects_lantern.png' },
   { room: 'Town Square', focus: null, extent: 10, aimParticles: false, clock: 1750, minLive: 200, channelMin: 12, minDiff: 200, minSum: 5000, shot: 'e2e_effects_fountain.png' },
+  // The monument's braziers are the co-location case: one system's emitters
+  // must all sit in their own bowl, never split between the bowl and a point
+  // metres away (see the attachment note in effects-layer.ts addRoom).
+  { room: 'Fallen Monument', focus: null, extent: 8, aimParticles: false, clock: 3000, minLive: 0, channelMin: 8, minDiff: 0, minSum: 0, shot: 'e2e_effects_monument.png' },
 ]) {
   const fxRoomId = rooms.find((r) => r.name === probe.room)?.id ?? null;
   if (fxRoomId == null) {
