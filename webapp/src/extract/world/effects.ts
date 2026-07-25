@@ -736,12 +736,20 @@ function extractEffects(
       else if (e.kind === 'fixed' && e.floats) for (const value of e.floats) topFloats.push({ value, i });
       else if (e.kind === 'rate') topRates.push({ value: e.value, den: e.den, i });
     }
-    if (topInts.length === 1 && topInts[0].value >= 0
+    if (topInts.length >= 1 && topInts.length <= 2 && topInts[topInts.length - 1].value >= 0
       && !windows.length && vec3Count === 0 && fixedLaneCount === 0) {
-      // exactly one non-negative top-level int, nothing window or shape typed
+      // One or two non-negative top-level ints, nothing window or shape typed.
+      // The rate is the LAST of them. A second, leading int belongs to a
+      // continuous family whose configs all repeat the same value for it
+      // (measured: identical across all 276 of that family's configs, while
+      // the trailing int spans 1 to 60), so it is a family constant and not
+      // the per-config rate. Binding the first int instead read the constant
+      // as the rate; refusing to classify at all, which is what happened
+      // before, left those emitters with no burst and permanently silent:
+      // the shoreline wave effects never emitted a single particle.
       info.kind = 'burst_continuous';
-      info.perSecond = topInts[0].value;
-      consumed.add(topInts[0].i);
+      info.perSecond = topInts[topInts.length - 1].value;
+      for (const entry of topInts) consumed.add(entry.i);
     } else if (topInts.length >= 1 && windows.length) {
       info.kind = 'burst_windowed';
       // bind and consume the SAME selection: the first top-level int
