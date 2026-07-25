@@ -155,11 +155,37 @@ interface InstanceRec {
   // Null only in the impossible case _createProxy is skipped; kept nullable
   // rather than asserted so a future guard can't NPE.
   proxy: THREE.Mesh | null;
+  // mean emitter spawn centre in the owner's local frame (see positionProxy)
+  localCenter?: [number, number, number];
   // boneOffset: the emitter's bound rig bone's rest-world translation
   // (native units, in the SAME local frame as the emitter's own origin),
   // added to the simulated position before `anchor` transforms it to world;
   // [0,0,0] for a root-anchored (unrigged, or no bone attachment) emitter.
   emitters: { sim: EmitterSim; batchKey: string; boneOffset: [number, number, number] }[];
+}
+
+/** Mean of an instance's emitter spawn centres, in the owner's local frame.
+ *  Emitters of one system are co-located by construction, so the mean is a
+ *  fair representative of where the effect actually appears. */
+function meanSpawnCenter(rec: InstanceRec): [number, number, number] {
+  let x = 0; let y = 0; let z = 0; let n = 0;
+  for (const { sim } of rec.emitters) {
+    const c = sim.shape?.center;
+    if (!Array.isArray(c) || c.length !== 3) continue;
+    x += Number(c[0]) || 0; y += Number(c[1]) || 0; z += Number(c[2]) || 0; n++;
+  }
+  return n ? [x / n, y / n, z / n] : [0, 0, 0];
+}
+
+/** Put a pick proxy at anchor . localCenter (world/display space). */
+function positionProxy(proxy: THREE.Mesh, rec: InstanceRec): void {
+  const m = rec.anchor.m;
+  const [lx, ly, lz] = rec.localCenter ?? [0, 0, 0];
+  proxy.position.set(
+    m[0] * lx + m[4] * ly + m[8] * lz + m[12],
+    m[1] * lx + m[5] * ly + m[9] * lz + m[13],
+    m[2] * lx + m[6] * ly + m[10] * lz + m[14],
+  );
 }
 
 interface Batch {
@@ -344,8 +370,6 @@ export class WorldEffectsLayer {
       // `anchor.m` exactly the authored matrix, so an untouched instance
       // never runs the recompute at all.
       if (!isEffectEditNoop(edit)) this._applyAnchorEdit(rec);
-      rec.proxy = this._createProxy(rec);
-      this.root.add(rec.proxy);
       // Every emitter of a system draws in its owning mesh instance's frame,
       // with NO per-emitter offset.
       //
@@ -370,6 +394,16 @@ export class WorldEffectsLayer {
         this._draws.set(texId, spriteDrawOf(emitter.sprite));
         rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, boneOffset: [0, 0, 0] });
       });
+      // The pick target has to sit ON the particles, so it is built after the
+      // emitters exist and placed at their mean spawn centre rather than at
+      // the instance's anchor origin. Those are the same point only for an
+      // effect authored at its owner's base; anything authored up in a bowl
+      // or on a rooftop left the marker at ground level, usually buried
+      // inside the owner's own geometry, so the effect could be seen but not
+      // clicked.
+      rec.localCenter = meanSpawnCenter(rec);
+      rec.proxy = this._createProxy(rec);
+      this.root.add(rec.proxy);
       recs.push(rec);
     }
     this._rooms.set(id, recs);
@@ -451,8 +485,11 @@ export class WorldEffectsLayer {
     return n;
   }
 
-  /** Native-space anchor of the first instance matching a system slot or a
-   *  recovered name fragment (camera-focus helper for tests/debugging). */
+  /** Native-space position of the first instance matching a system slot or a
+   *  recovered name fragment (camera-focus helper for tests/debugging).
+   *  Reports where the effect actually appears, i.e. the same point its pick
+   *  proxy sits at, so aiming a camera or a click at this lands on the
+   *  particles rather than on the owner's base. */
   findAnchor(nameOrSlot: number | string): { x: number; y: number; z: number } | null {
     const slot = Number(nameOrSlot);
     const text = typeof nameOrSlot === 'string' ? nameOrSlot : null;
@@ -463,7 +500,12 @@ export class WorldEffectsLayer {
           && rec.system.names.some((n) => n.name.includes(text));
         if (bySlot || byName) {
           const m = rec.anchor.m;
-          return { x: m[12], y: m[13], z: m[14] };
+          const [lx, ly, lz] = rec.localCenter ?? [0, 0, 0];
+          return {
+            x: m[0] * lx + m[4] * ly + m[8] * lz + m[12],
+            y: m[1] * lx + m[5] * ly + m[9] * lz + m[13],
+            z: m[2] * lx + m[6] * ly + m[10] * lz + m[14],
+          };
         }
       }
     }
@@ -672,7 +714,7 @@ export class WorldEffectsLayer {
   private _createProxy(rec: InstanceRec): THREE.Mesh {
     const proxy = new THREE.Mesh(this._proxyGeometry, this._proxyMaterial);
     proxy.name = `effects-pick-${rec.key}`;
-    proxy.position.set(rec.anchor.m[12], rec.anchor.m[13], rec.anchor.m[14]);
+    positionProxy(proxy, rec);
     proxy.matrixAutoUpdate = true;
     proxy.userData.effectKey = rec.key;
     return proxy;
@@ -692,7 +734,7 @@ export class WorldEffectsLayer {
     _scratchEditM.fromArray(rec.anchorOriginal);
     _scratchEditT.multiply(_scratchEditM);
     rec.anchor.m.set(_scratchEditT.elements);
-    rec.proxy?.position.set(rec.anchor.m[12], rec.anchor.m[13], rec.anchor.m[14]);
+    if (rec.proxy) positionProxy(rec.proxy, rec);
   }
 
   // Every emitter runs at FULL density, in both the single-room and merged
