@@ -579,6 +579,36 @@ function makeEmptyDoc(rowCount: number, error: string | null): WorldEffectsDoc {
 // orchestrator's memoized derivations plus cancellation/progress. Internally
 // total: detection failure returns an empty doc + audit, never throws except
 // on cancellation.
+/** A reusable single-row re-decoder over the SAME fill grammar the effect
+ *  recovery uses, so a second consumer (room ambience) needs no parallel
+ *  implementation that could drift. Returns null when the row's selector is
+ *  unknown or the re-decode does not land byte-exactly on the row's end. */
+export function makeRowDecoder(
+  rows: FillRow[], pool: PoolNode[], ab0: Uint8Array, profile: WorldProfile,
+  charset: ArrayLike<string>, symbols: string[],
+): (slot: number) => EffectExtra[] | null {
+  const arities = (obj: Record<string, number>) => {
+    const map = new Map<number, number>();
+    for (const key in obj) map.set(+key, obj[key]);
+    return map;
+  };
+  const dec = new FillValueDecoder(ab0, arities(profile.class_fields), arities(profile.tag6_fields));
+  const builder: ExtraBuilder = {
+    pool, glyphs: charset, symbols,
+    view: new DataView(ab0.buffer, ab0.byteOffset, ab0.byteLength),
+    base: ab0.byteOffset,
+  };
+  const quiet: ParseAudit = { parse_failures: 0, parse_mismatches: 0 };
+  return (slot: number) => {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= rows.length) return null;
+    const row = rows[slot];
+    const sel = profile.selectors[String(row.selector)];
+    if (!sel) return null;
+    const ops = reparseRow(dec, sel, row, quiet);
+    return ops ? opsToExtras(builder, ops) : null;
+  };
+}
+
 export function extractWorldEffects(
   rows: FillRow[], pool: PoolNode[], ab0: Uint8Array, profile: WorldProfile,
   shared: WorldEffectsShared,

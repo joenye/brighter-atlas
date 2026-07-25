@@ -14,6 +14,7 @@
 
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
+import { deriveRoomAmbience } from './room-ambience.js';
 import { replayGraph } from './replay.js';
 import { decodePool } from './value-pool.js';
 import { decodeObject, makeSlabReader } from '../bundles.js';
@@ -154,6 +155,7 @@ export async function extractWorld({
   const rooms: {
     idx: number; exits: any[]; name: string | null;
     w: number | null; h: number | null; gridW: number; gridH: number;
+    ambience?: { level: string | null; colors: number[][] } | null;
   }[] = [];
   const layersById = new Map<number, any>();     // ab2 idx -> roomLayers() result (decodable rooms)
   const contentHashes = new Map<number, string>(); // ab2 idx -> sha256/16 of decoded bytes
@@ -194,6 +196,22 @@ export async function extractWorld({
     if (doc?.overrides) roomMod.applyRoomNameOverrides(names, doc.overrides, contentHashes);
   } catch { /* no shipped overrides: derived names only */ }
   for (const r of rooms) r.name = names.get(r.idx) ?? null;
+
+  // Per-room ambience. The game multiplies every particle by a global
+  // half-range modulation fed from the ROOM, which is why effects authored
+  // with no colour of their own still read as coloured in game and plain
+  // white for us (see room-ambience.js). Derived here so the room records
+  // carry it; a failure just leaves rooms without ambience.
+  let ambienceByRoom = new Map<number, any>();
+  try {
+    const decodeRow = effectsMod.makeRowDecoder(
+      rows, pool.values, ab0, profile, dt.charset, dt.symbols,
+    );
+    ambienceByRoom = deriveRoomAmbience({
+      rows, ab0, roomIds: rooms.map((r) => r.idx), decodeRow,
+    }) as any;
+  } catch { /* no ambience: rooms simply carry none */ }
+  for (const r of rooms) r.ambience = ambienceByRoom.get(r.idx) ?? null;
 
   // World placement runs AFTER the shard loop: the jigsaw connector meshes
   // that calibrate room joins (stitch.js CONNECTOR_MESH_HASHES) are only
@@ -441,6 +459,9 @@ export async function extractWorld({
   const placement = stitchMod.stitchWorld(rooms, connectorTiles.size ? connectorTiles : null);
   step('stitch', 1, 1);
   for (const entry of shardsMeta) {
+    // per-room ambience rides the index record, next to the room's own name
+    const ambience = ambienceByRoom.get(entry.id);
+    if (ambience) entry.ambience = ambience;
     const pos = placement.positions.get(entry.id) || null;
     entry.world = {
       x: pos ? pos[0] : null,
