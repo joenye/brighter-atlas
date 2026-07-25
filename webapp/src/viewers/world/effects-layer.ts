@@ -43,7 +43,7 @@
 
 import * as THREE from '../../../vendor/three.module.js';
 import {
-  EmitterSim, EffectsClock, planStrides, SINGLE_VIEW_ALIVE_BUDGET,
+  EmitterSim, EffectsClock,
 } from './effects-sim.js';
 import { composePlacementMatrix, DEFAULT_MESH_FORWARD_QUARTER_TURNS } from './scene.js';
 import {
@@ -201,7 +201,6 @@ export interface WorldEffectsLayerOptions {
   // real value still gets a self-consistent frame.
   meshForwardQuarterTurns?: number;
   anisotropy?: number;
-  aliveBudget?: number;
 }
 
 export class WorldEffectsLayer {
@@ -214,7 +213,6 @@ export class WorldEffectsLayer {
   private _layerUnits: number;
   private _meshForwardQuarterTurns: number;
   private _anisotropy: number;
-  private _budget: number;
   private _systemsBySlot: Map<number, EffectSystem>;
   private _rooms = new Map<number, InstanceRec[]>();
   private _batches = new Map<string, Batch>();
@@ -255,7 +253,7 @@ export class WorldEffectsLayer {
   constructor({
     root, doc, url, textures, tileUnits, layerUnits,
     meshForwardQuarterTurns = DEFAULT_MESH_FORWARD_QUARTER_TURNS,
-    anisotropy = 8, aliveBudget = SINGLE_VIEW_ALIVE_BUDGET,
+    anisotropy = 8,
   }: WorldEffectsLayerOptions) {
     this.root = root;
     this.doc = doc;
@@ -266,7 +264,6 @@ export class WorldEffectsLayer {
     this._layerUnits = layerUnits;
     this._meshForwardQuarterTurns = meshForwardQuarterTurns;
     this._anisotropy = anisotropy;
-    this._budget = aliveBudget;
     this._systemsBySlot = new Map((doc?.systems || []).map((s) => [s.slot, s]));
     this._proxyGeometry = new THREE.SphereGeometry(1, 6, 4);
     const proxyRadius = Math.max(12, tileUnits * 0.05);
@@ -698,10 +695,17 @@ export class WorldEffectsLayer {
     rec.proxy?.position.set(rec.anchor.m[12], rec.anchor.m[13], rec.anchor.m[14]);
   }
 
+  // Every emitter runs at FULL density, in both the single-room and merged
+  // views. There is deliberately no per-view alive budget: thinning made an
+  // effect's density depend on how much else happened to be loaded, so the
+  // same brazier read full in its own room and sparse in the merged view.
+  // What bounds cost instead is proximity activation (only nearby rooms are
+  // instantiated at all) plus PER_EMITTER_CAP, which is the engine's own
+  // per-emitter maximum rather than a display limit.
   private _rebalance(): void {
-    const all: EmitterSim[] = [];
-    for (const batch of this._batches.values()) for (const m of batch.members) all.push(m.sim);
-    planStrides(all, this._budget);
+    for (const batch of this._batches.values()) {
+      for (const m of batch.members) m.sim.setStride(1);
+    }
     for (const batch of this._batches.values()) {
       const capacity = Math.max(4, batch.members.reduce((sum, m) => sum + m.sim.capacity, 0));
       if (capacity !== batch.capacity) this._allocBatchArrays(batch, capacity);

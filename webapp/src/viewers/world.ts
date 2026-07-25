@@ -57,7 +57,6 @@ import {
 } from './world/spawn-anim.js';
 import { WorldEffectsLayer, effectInstanceKey } from './world/effects-layer.js';
 import type { EffectInstanceEdit } from './world/effects-layer.js';
-import { MERGED_VIEW_ALIVE_BUDGET } from './world/effects-sim.js';
 import { createEffectsBrowserView } from './world/effects-browser.js';
 import { spriteDrawOf } from './world/effects-sprite.js';
 import type { AppStore, IndexEntry } from '../store.js';
@@ -1018,7 +1017,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         // Merged mode activates far more room effect sets than a lone room
         // ever holds at once, and the alive budget must thin proportionally
         // across all of them, not per room.
-        ...(allMode ? { aliveBudget: MERGED_VIEW_ALIVE_BUDGET } : {}),
       });
     }
     if (allMode) {

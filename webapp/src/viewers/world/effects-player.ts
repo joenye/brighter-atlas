@@ -23,7 +23,7 @@
 
 import * as THREE from '../../../vendor/three.module.js';
 import {
-  EmitterSim, EffectsClock, planStrides,
+  EmitterSim, EffectsClock, planStrides, MODEL_PREVIEW_ALIVE_BUDGET,
 } from './effects-sim.js';
 import {
   BILLBOARD_VERTEX, BILLBOARD_FRAGMENT, DEFAULT_SPRITE_DRAW,
@@ -34,7 +34,7 @@ import type { WorldEffectsDoc, EffectSystem } from '../../extract/world/effects.
 // Per-view alive budget. A model page shows at most a handful of systems on
 // one small subject, nowhere near a room's scale, so this is far below the
 // room layer's per-view budgets.
-export const MODEL_VIEW_ALIVE_BUDGET = 8192;
+export { MODEL_PREVIEW_ALIVE_BUDGET };
 
 const RENDER_ORDER = 3;
 const MIX_SORT_CAP = 2048;
@@ -107,7 +107,7 @@ export class EffectsPlayer {
   private _disposed = false;
 
   constructor({
-    root, doc, url, anisotropy = 8, aliveBudget = MODEL_VIEW_ALIVE_BUDGET,
+    root, doc, url, anisotropy = 8, aliveBudget = MODEL_PREVIEW_ALIVE_BUDGET,
   }: EffectsPlayerOptions) {
     this.root = root;
     this.doc = doc;

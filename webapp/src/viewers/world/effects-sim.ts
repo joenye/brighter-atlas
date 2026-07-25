@@ -21,20 +21,24 @@ import type {
   EffectConfig, EffectEmitter, EffectSystem,
 } from '../../extract/world/effects.js';
 
-/** Hard alive cap per emitter instance. Deliberately per emitter, not per
- *  system: a dense multi-emitter system (a fountain's jets plus sheets) must
- *  keep every member alive, with only the densest members thinned. */
-export const PER_EMITTER_CAP = 2048;
+/** Hard alive ceiling per emitter instance. Set to the game engine's OWN
+ *  documented maximum ("max_particles must be >0 and <=16383"), so an emitter
+ *  can reach any population the engine itself could produce. This is a
+ *  runaway guard against malformed data, not a display budget: nothing thins
+ *  an emitter that stays under it. */
+export const PER_EMITTER_CAP = 16383;
 /** Clock jumps beyond this many ticks rebuild the ring from the closed form
  *  instead of advancing it incrementally. */
 export const MAX_CATCHUP_TICKS = 250;
-/** Per-view alive budget for the single-room layer (see planStrides). */
-export const SINGLE_VIEW_ALIVE_BUDGET = 16384;
-/** Per-view alive budget for the merged all-rooms layer: proximity activation
- *  already bounds the number of simultaneously active room effect sets, so
- *  this budget only needs to thin an unlucky worst-case cluster of dense
- *  systems, not the whole world (see planStrides). */
-export const MERGED_VIEW_ALIVE_BUDGET = 24576;
+/** Per-view alive budget for the model-page player, which previews ONE
+ *  system on a small subject and has no reason to run unbounded.
+ *
+ *  The world views deliberately have no such budget: an effect's density is a
+ *  property of the effect, not of how much else happens to be on screen, and
+ *  a shared budget made the same brazier look full in its own room and thin
+ *  in the merged view. Proximity activation already bounds how many rooms are
+ *  live at once, and PER_EMITTER_CAP still guards against malformed data. */
+export const MODEL_PREVIEW_ALIVE_BUDGET = 8192;
 
 const TWO_PI = Math.PI * 2;
 const DEG = Math.PI / 180;
