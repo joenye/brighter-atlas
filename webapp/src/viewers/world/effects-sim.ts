@@ -196,7 +196,6 @@ export class EmitterSim {
   cycleCount: number;     // spawns per cycle (windowed)
   period: number | null;  // cycle length in ticks (looping windowed)
   totalCount: number;     // finite spawn count for one-shot schedules
-  densityScale: number;   // per-particle alpha correction for the steady-population boost below
   // thinning + ring state
   k: number;
   capacity: number;
@@ -280,27 +279,17 @@ export class EmitterSim {
     // truncate to a single cycle. Only windowed one-shots (handled above)
     // bound totalCount.
 
-    // Minimum-steady-population boost: a sparse continuous stream (few
-    // particles alive at once) shows the raw fade-in/full/fade-out/death of
-    // its lone alive particle as a visible pulse instead of a steady glow.
-    // Sub-dividing the spawn interval densifies the schedule so ages
-    // [0, life) are always well covered, and densityScale corrects each
-    // particle's alpha down by the same factor so additive brightness is
-    // unchanged (many faint, age-staggered copies sum to the same steady
-    // glow). This only ever applies to genuinely continuous streams (never
-    // windowed/one-shot bursts, which must keep their exact per-burst
-    // counts), and it only changes `step`: the schedule stays a pure
-    // function of spawn index, so seek/determinism/frozen-clock
-    // byte-identity is preserved.
-    const MIN_STEADY = 8;
-    const nativeAlive = (this.rate * this.life) / this.tickRate;
-    this.densityScale = 1;
-    if (this.windows == null && this.totalCount === Infinity && this.rate > 0 && nativeAlive < MIN_STEADY) {
-      const boost = MIN_STEADY / nativeAlive;
-      this.step = this.tickRate / (this.rate * boost);
-      this.densityScale = 1 / boost;
-    }
-
+    // Emission is exactly what the data authors: `rate` particles per second
+    // for `life` ticks, so the steady population is rate * life / tickRate
+    // and nothing else. A sparse stream used to be densified up to a floor of
+    // eight, with alpha scaled down to hide the extra bodies. That was a
+    // workaround for a lone particle visibly pulsing through fade-in, full,
+    // fade-out and death, and the pulse was really the colour envelope being
+    // read as a ramp across the whole lifetime rather than the three windows
+    // the game uses. With the envelope right, one particle holds steady on
+    // its own, and the boost only survived as a lie about the count: three
+    // per second showed as eight alive, spawning a third faster than the
+    // game.
     this.k = 1;
     this.capacity = 4;
     this.setStride(1);
@@ -520,7 +509,7 @@ export class EmitterSim {
       }
       emit(x, y, z,
         clamp(this.scale0 + (this.scale1 - this.scale0) * u, 0.01, 100),
-        r, g, b, alpha * this.densityScale,
+        r, g, b, alpha,
         this.spin * age);
     }
   }

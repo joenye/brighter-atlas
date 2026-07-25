@@ -846,11 +846,9 @@ async function worldSuite(browser: any, base: string) {
   ok(fxLayer.systems === 2 && fxLayer.emitters === 3,
     `effects layer builds the room's 2 systems / 3 emitters (${JSON.stringify(fxLayer)})`);
   // Frozen clock: the alive set is a pure function of the clock, so the
-  // count is exactly analytic against the fixture doc's tick rate: jet 40/s
-  // x 300 = 20, ring 30/s x 200 = 10. The torch's native overlap (20/s x 120
-  // ticks = 4) is below MIN_STEADY, so the continuous-emission density boost
-  // sub-divides its schedule up to a steady 8 (densityScale corrects alpha
-  // so total brightness is unchanged); total 20 + 10 + 8 = 38.
+  // count is exactly analytic against the fixture doc's tick rate, and it is
+  // exactly what the data authors with nothing added: jet 40/s x 300 = 20,
+  // ring 30/s x 200 = 10, torch 20/s x 120 = 4; total 34.
   const fxFrozen = await page.evaluate(() => {
     const fx = window.__bs.worldView.effectsApi;
     fx.setRunning(false);
@@ -865,8 +863,8 @@ async function worldSuite(browser: any, base: string) {
       identical: snapA === snapB, bytes: snapA.length,
     };
   });
-  ok(fxFrozen.liveA === 38 && fxFrozen.liveB === 38,
-    `frozen clock 2000 gives the exact analytic alive count incl. the torch density boost (${fxFrozen.liveA}/${fxFrozen.liveB} = 38)`);
+  ok(fxFrozen.liveA === 34 && fxFrozen.liveB === 34,
+    `frozen clock 2000 gives the authored alive count, rate x life, nothing added (${fxFrozen.liveA}/${fxFrozen.liveB} = 34)`);
   ok(fxFrozen.draws === 3, `one draw per sprite x blend batch (${fxFrozen.draws} = 3)`);
   ok(fxFrozen.identical === true,
     `same clock twice -> byte-identical particle attribute buffers (${fxFrozen.bytes} chars compared)`);
@@ -908,7 +906,7 @@ async function worldSuite(browser: any, base: string) {
     fx.setClock(2000);
     return fx.info();
   });
-  ok(fxRestored.live === 38 && fxRestored.draws === 3,
+  ok(fxRestored.live === 34 && fxRestored.draws === 3,
     `re-ticking Effects rebuilds the exact frozen state (${fxRestored.live} live, ${fxRestored.draws} draws)`);
   await page.evaluate(() => window.__bs.worldView.effectsApi.setRunning(true));
 
@@ -947,14 +945,14 @@ async function worldSuite(browser: any, base: string) {
   await page.evaluate(() => { const inp = document.querySelector('.we-search'); inp.value = ''; inp.dispatchEvent(new Event('input')); });
   await sleep(300);
 
-  // ---- continuous-emission density boost: sparse torch no longer pulses ------
-  // The torch fixture emitter has native overlap 4 (20/s x 120 ticks),
-  // below MIN_STEADY, so its schedule is sub-divided to a steady population
-  // instead of the raw ~4 whose fade-in/full/fade-out/death would otherwise
-  // read as a "clumsy repeat" pulse. Scrub to two different developed clocks
-  // (both well past life, so the ring is fully ramped) and confirm the alive
-  // count holds steady at a MIN_STEADY-ish population at both, rather than
-  // swinging with the raw fade envelope.
+  // ---- sparse emitters hold their authored population -----------------------
+  // The torch fixture emitter's population is 4 (20/s x 120 ticks). It used
+  // to be inflated to a floor of eight, with alpha scaled down to hide the
+  // extra bodies, to stop a lone particle visibly pulsing. The pulse was
+  // really the colour envelope being read as a ramp across the whole
+  // lifetime; with the three-window envelope the game uses, one particle
+  // holds steady on its own and the count is the authored one. Scrub to two
+  // different developed clocks and confirm it stays exactly 4 at both.
   ok(await page.evaluate(() => window.__bs.effectsView.select('fixture_torch_idle')),
     'effectsView.select() finds the sparse torch fixture system');
   await sleep(500);
@@ -968,11 +966,11 @@ async function worldSuite(browser: any, base: string) {
     const liveB = window.__bs.effectsView.previewInfo().live;
     return { liveA, liveB };
   });
-  ok(torchSteady.liveA >= 7 && torchSteady.liveB >= 7,
-    `sparse torch emitter (native overlap 4) holds a boosted, near-MIN_STEADY population `
+  ok(torchSteady.liveA === 4 && torchSteady.liveB === 4,
+    `sparse torch emitter holds its authored population of 4 `
     + `at a developed clock (${JSON.stringify(torchSteady)})`);
   ok(torchSteady.liveA === torchSteady.liveB,
-    `boosted population is identical across two different frozen clocks `
+    `population is identical across two different frozen clocks `
     + `(${torchSteady.liveA} === ${torchSteady.liveB}) -> the clumsy-repeat throb is gone`);
 
   // select + preview a specific system by name (debug API), then the transport
@@ -1105,7 +1103,7 @@ async function worldSuite(browser: any, base: string) {
   ok(await page.$eval('.wp-readout', (n) => !!n.querySelector('.we-thumb')),
     'pinned effect readout shows a sprite thumbnail for its emitter');
   const fxPinnedInfo = await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo());
-  ok(fxPinnedInfo?.live === 8,
+  ok(fxPinnedInfo?.live === 4,
     `pinned effect readout's live count matches the exact frozen-clock analytic count (${fxPinnedInfo?.live})`);
 
   // Regression: the readout pane is shared by the placement pin and the
@@ -1140,7 +1138,7 @@ async function worldSuite(browser: any, base: string) {
   `+X nudge moves the pinned effect instance's anchor half a tile, Y/Z unchanged (${fxAnchorBefore?.x} -> ${fxAnchorNudged?.x})`);
   ok(/Delta/.test(await page.$eval('.world-panel .wp-readout', (n) => n.textContent)),
     'nudged effect readout surfaces a Delta row');
-  ok((await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo())).live === 8,
+  ok((await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo())).live === 4,
     'the nudge does not disturb the instance live count (sim stays in its own local frame)');
 
   // hide/show toggle: live drops to exactly zero while hidden (frozen clock,
@@ -1151,7 +1149,7 @@ async function worldSuite(browser: any, base: string) {
     `Hide drops the instance to zero live particles (${JSON.stringify(fxHiddenInfo?.edit)})`);
   await page.$$eval('.wp-readout .wp-edit-actions .wp-fx-hide', (btns) => btns[0]?.click());
   const fxShownInfo = await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo());
-  ok(fxShownInfo?.edit.hidden === false && fxShownInfo?.live === 8,
+  ok(fxShownInfo?.edit.hidden === false && fxShownInfo?.live === 4,
     `Show restores the exact frozen-clock live count (${fxShownInfo?.live})`);
 
   // RESET restores the authored anchor exactly and drops every edit
@@ -1164,7 +1162,7 @@ async function worldSuite(browser: any, base: string) {
   `Reset restores the effect instance's authored anchor exactly (${fxAnchorBefore?.x} -> ${fxAnchorReset?.x})`);
   ok(!/Delta/.test(await page.$eval('.world-panel .wp-readout', (n) => n.textContent)),
     'reset effect readout no longer shows a Delta row');
-  ok((await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo())).live === 8,
+  ok((await page.evaluate(() => window.__bs.worldView.effectsApi.pinnedInstanceInfo())).live === 4,
     'live count returns to the exact frozen-clock analytic value after reset');
 
   // unpin (releases the readout) and restore the running clock for the
