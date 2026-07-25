@@ -145,6 +145,13 @@ export interface EffectSystem {
   slot: number;                                // the system's registry slot in this version
   blend: 'add' | 'mix'; facing: 'screen' | 'other';
   loop: boolean; cycle_ticks: number | null;
+  // True when this system waits to be TRIGGERED (a chest being looted, a node
+  // being dug) rather than running by itself. Such an effect is authored
+  // around the actor that triggers it, so drawing it permanently puts it in a
+  // place that only makes sense mid-action. `loop` does NOT separate these:
+  // plenty of triggered systems are flagged looping. See the marker count in
+  // the extractor.
+  triggered: boolean;
   emitters: EffectEmitter[];                   // series order
   names: { name: string; source: 'controller' | 'row'; controller: number }[]; // sorted (name, controller)
   controllers: number[]; clips: number[];      // sorted asc
@@ -158,6 +165,7 @@ export interface WorldEffectsDoc {
     rows: number; candidate_systems: number; systems: number; emitters: number;
     rejected_children: number; parse_failures: number; parse_mismatches: number;
     hub_systems: number; hub_attachments: number; shape_center_reordered: number;
+    triggered_systems: number;
     families: Record<string, { members: number; via: 'vote' | 'exhaustive' | 'rejected';
       burst_fraction: number; origin_fraction: number; image_fraction: number }>;
     config_kinds: Record<string, number>;
@@ -549,7 +557,7 @@ function makeEmptyDoc(rowCount: number, error: string | null): WorldEffectsDoc {
   const audit: WorldEffectsDoc['audit'] = {
     rows: rowCount, candidate_systems: 0, systems: 0, emitters: 0,
     rejected_children: 0, parse_failures: 0, parse_mismatches: 0,
-    hub_systems: 0, hub_attachments: 0, shape_center_reordered: 0,
+    hub_systems: 0, hub_attachments: 0, shape_center_reordered: 0, triggered_systems: 0,
     families: {}, config_kinds: {}, named_systems: 0, attached_rooms: 0, attached_actors: 0,
   };
   if (error) audit.error = error;
@@ -597,7 +605,7 @@ function extractEffects(
   const audit: WorldEffectsDoc['audit'] = {
     rows: rows.length, candidate_systems: 0, systems: 0, emitters: 0,
     rejected_children: 0, parse_failures: 0, parse_mismatches: 0,
-    hub_systems: 0, hub_attachments: 0, shape_center_reordered: 0,
+    hub_systems: 0, hub_attachments: 0, shape_center_reordered: 0, triggered_systems: 0,
     families: {}, config_kinds: {}, named_systems: 0, attached_rooms: 0, attached_actors: 0,
   };
 
@@ -997,8 +1005,9 @@ function extractEffects(
       let text: string | null = null;
       if (tag === 0x0e && typeof value === 'string') text = value;
       else if (tag === 0 && isInt(value)) text = shared.strings.poolString(value);
-      if (text !== null && text.includes('animatic')) { name = text; break; }
+      if (text !== null && text.includes('animatic') && name === null) name = text;
     }
+
     if (name === null) continue;
     const controller = ownerOf(row);
     if (controller === null) continue;
@@ -1050,6 +1059,36 @@ function extractEffects(
     }
   }
   for (const list of controllersOf.values()) list.sort((a, b) => a - b);
+
+  // Randomised-start markers per controller. An animatic that starts an
+  // effect ON ITS OWN randomises its phase, so copies of it do not run in
+  // lockstep (a street of lanterns does not flash in unison); one that waits
+  // to be triggered starts deterministically when the trigger fires. Two
+  // markers means self-starting, exactly one means triggered.
+  //
+  // This has to come from a re-decode of the controller's own bytes: the
+  // symbol never reaches the replayed row events, which prune fixed-width
+  // payloads, so reading it from those silently counted zero everywhere.
+  // Matched by the symbol's shipped NAME, never its per-build index.
+  const randomMarks = new Map<number, number>();
+  {
+    const controllerSlots = new Set<number>();
+    for (const list of controllersOf.values()) for (const c of list) controllerSlots.add(c);
+    const quiet: ParseAudit = { parse_failures: 0, parse_mismatches: 0 };
+    for (const slot of [...controllerSlots].sort((a, b) => a - b)) {
+      bail();
+      const row = rows[slot];
+      const sel = profile.selectors[String(row.selector)];
+      if (!sel) continue;
+      const ops = reparseRow(dec, sel, row, quiet);
+      if (!ops) continue;
+      let marks = 0;
+      for (const e of opsToExtras(builder, ops)) {
+        walkExtra(e, (n) => { if (n.kind === 'symbol' && n.name === '$random') marks++; });
+      }
+      if (marks) randomMarks.set(slot, marks);
+    }
+  }
 
   // clip records + the depth-bounded fan-out-capped walk (anim-names.js)
   const clipOfRecord = new Map<number, number>();
@@ -1169,8 +1208,19 @@ function extractEffects(
     }
     const extra: EffectExtra[] = [];
     if (sysOps) for (let i = 0; i < sysOps.length; i++) if (!consumed.has(i)) extra.push(sysOps[i]);
+    // A self-starting effect randomises its phase, so copies of it do not run
+    // in lockstep; a triggered one starts deterministically when fired. Two
+    // markers means ambient, exactly one means triggered. Verified against
+    // known systems on both sides (street lantern and brazier ambient with
+    // two, loot chest triggered with one). No marker at all leaves it
+    // UNKNOWN, and unknown stays visible: hiding an ambient effect by mistake
+    // is worse than showing a triggered one.
+    let maxMarks = 0;
+    for (const controller of controllers) maxMarks = Math.max(maxMarks, randomMarks.get(controller) || 0);
+    const triggered = maxMarks === 1;
+    if (triggered) audit.triggered_systems++;
     systemDocs.push({
-      slot: sysSlot, blend, facing, loop, cycle_ticks: cycleTicks,
+      slot: sysSlot, blend, facing, loop, cycle_ticks: cycleTicks, triggered,
       emitters, names, controllers, clips: [...clipSet].sort((a, b) => a - b), extra,
     });
   }
