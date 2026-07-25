@@ -140,6 +140,8 @@ export function effectInstanceKey(
 
 interface InstanceRec {
   key: string;
+  // the owning room's ambience colour, or null (see addRoom)
+  modulation: number[] | null;
   system: EffectSystem;
   anchor: Anchor;
   // The authored anchor, captured once before any edit is ever applied:
@@ -196,6 +198,7 @@ interface Batch {
   members: {
     sim: EmitterSim; anchor: Anchor; boneOffset: [number, number, number];
     edit: EffectInstanceEdit;   // shared reference with the owning InstanceRec
+    modulation: number[] | null;
   }[];
   capacity: number;
   count: number;
@@ -322,7 +325,13 @@ export class WorldEffectsLayer {
    *  including them would either sit permanently dark after their one-shot
    *  window passes or, worse, replay a stale burst every time proximity
    *  reactivates the room. Ambient (looping) systems are unaffected. */
-  addRoom(roomId: number, offset: [number, number], opts: { loopOnly?: boolean } = {}): void {
+  // `modulation` is the room's ambience colour. The game multiplies every
+  // particle by a global half-range modulation fed from the room, which is
+  // what gives an effect its colour when the effect itself authors none: a
+  // candle glow is a single-channel mask with nothing of its own to tint.
+  // Omitted or absent leaves particles at their authored colour.
+  addRoom(roomId: number, offset: [number, number],
+    opts: { loopOnly?: boolean; modulation?: number[] | null } = {}): void {
     const id = Number(roomId);
     if (this._disposed || this._rooms.has(id)) return;
     const recs: InstanceRec[] = [];
@@ -369,8 +378,12 @@ export class WorldEffectsLayer {
       const anchor: Anchor = { m: Float32Array.from(anchorOriginal) };
       const recKey = effectInstanceKey(id, att.occurrence, att.system);
       const edit = this._editFor(recKey);
+      const mod = Array.isArray(opts.modulation) && opts.modulation.length >= 3
+        ? [Number(opts.modulation[0]), Number(opts.modulation[1]), Number(opts.modulation[2])]
+        : null;
       const rec: InstanceRec = {
-        key: recKey, system, anchor, anchorOriginal, edit, proxy: null, emitters: [],
+        key: recKey, system, anchor, anchorOriginal, edit, proxy: null,
+        modulation: mod, emitters: [],
       };
       // A persisted edit (surviving a prior instantiation of this SAME
       // instance) is folded back in immediately; a fresh/no-op edit leaves
@@ -423,7 +436,9 @@ export class WorldEffectsLayer {
     this._rooms.set(id, recs);
     for (const rec of recs) {
       for (const { sim, batchKey, boneOffset } of rec.emitters) {
-        this._batchFor(batchKey).members.push({ sim, anchor: rec.anchor, boneOffset, edit: rec.edit });
+        this._batchFor(batchKey).members.push({
+          sim, anchor: rec.anchor, boneOffset, edit: rec.edit, modulation: rec.modulation,
+        });
       }
     }
     this._rebalance();
@@ -976,7 +991,13 @@ export class WorldEffectsLayer {
       let idx = 0;
       const sortable = batch.blend === 'mix' && rootMatrix != null;
       for (const member of batch.members) {
-        const { sim, anchor, boneOffset, edit } = member;
+        const { sim, anchor, boneOffset, edit, modulation } = member;
+        // The room's ambience, applied the way the game applies it: a
+        // half-range colour whose rgb is DOUBLED, so 0.5 is neutral. Hoisted
+        // out of the per-particle loop.
+        const mr = modulation ? modulation[0] * 2 : 1;
+        const mg = modulation ? modulation[1] * 2 : 1;
+        const mb = modulation ? modulation[2] * 2 : 1;
         // Session-edit hook, exact no-op when untouched: a hidden instance
         // contributes nothing; otherwise the instance's own effective time
         // (paused freeze or a running offset off the ONE shared clock,
@@ -1007,9 +1028,9 @@ export class WorldEffectsLayer {
           posSize[at4 + 1] = wy;
           posSize[at4 + 2] = wz;
           posSize[at4 + 3] = scale * sizeScale * edit.scaleMult;
-          color[at4] = Math.round(clamp01(r) * 255);
-          color[at4 + 1] = Math.round(clamp01(g) * 255);
-          color[at4 + 2] = Math.round(clamp01(b) * 255);
+          color[at4] = Math.round(clamp01(r * mr) * 255);
+          color[at4 + 1] = Math.round(clamp01(g * mg) * 255);
+          color[at4 + 2] = Math.round(clamp01(b * mb) * 255);
           color[at4 + 3] = Math.round(clamp01(a) * 255);
           rot[idx] = roll;
           if (sortable) {

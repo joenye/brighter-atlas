@@ -1022,7 +1022,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (allMode) {
       updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick
     } else {
-      for (const id of effectsRooms) effectsLayer.addRoom(id, spawnRoomOffset(id));
+      for (const id of effectsRooms) {
+        effectsLayer.addRoom(id, spawnRoomOffset(id), { modulation: ambienceOf(id) });
+      }
     }
   }
 
@@ -1083,14 +1085,49 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     for (const id of nextActive) {
       if (activeEffectRooms.has(id)) continue;
       activeEffectRooms.add(id);
-      effectsLayer!.addRoom(id, spawnRoomOffset(id), { loopOnly: true });
+      effectsLayer!.addRoom(id, spawnRoomOffset(id),
+        { loopOnly: true, modulation: ambienceOf(id) });
     }
   }
 
   // lighting ---------------------------------------------------------------------
+  // The room's own ambience colour, or null when the room has none (or more
+  // than one room is loaded, where a single hemisphere light cannot speak for
+  // all of them).
+  // The ambience colour of ONE room by id, for the per-room particle
+  // modulation (merged mode has many rooms at once, so this is per instance
+  // rather than a single scene value).
+  function ambienceOf(roomId: number): number[] | null {
+    const rec = (world.index?.rooms || []).find((r: any) => Number(r.i ?? r.id ?? r.idx) === Number(roomId));
+    const first = rec?.ambience?.colors?.[0];
+    return Array.isArray(first) && first.length >= 3 ? first.map(Number) : null;
+  }
+
+  function roomAmbience(): number[] | null {
+    if (mergedActive()) return null;
+    const ids = [...world.rooms.keys()];
+    if (ids.length !== 1) return null;
+    const rec = (world.index?.rooms || []).find((r: any) => Number(r.i ?? r.id ?? r.idx) === Number(ids[0]));
+    const first = rec?.ambience?.colors?.[0];
+    return Array.isArray(first) && first.length >= 3 ? first.map(Number) : null;
+  }
+
   function applyLights(): void {
     hemi.intensity = state.ambient;
     sun.intensity = state.sun;
+    // Tint the sky light with the room's authored ambience. Its HUE only: the
+    // authored values are dark (0.16 to 0.59), and multiplying them into an
+    // intensity tuned for white light would just make every room dim. Scaling
+    // each colour so its brightest channel is 1 keeps the room's cast while
+    // leaving overall brightness to the Ambient slider, which is what a
+    // viewer wants to stay in control of.
+    const amb = roomAmbience();
+    if (amb) {
+      const peak = Math.max(amb[0], amb[1], amb[2], 1e-4);
+      hemi.color.setRGB(amb[0] / peak, amb[1] / peak, amb[2] / peak);
+    } else {
+      hemi.color.set(0xcfe0ff);
+    }
   }
   function applyShadows(): void {
     renderer.shadowMap.enabled = !!state.shadows;
