@@ -810,9 +810,30 @@ function extractEffects(
         consumed.add(fixedLanes[0].i); consumed.add(fixedLanes[1].i);
         consumed.add(topRates[0].i); consumed.add(topRates[1].i);
       } else {
-        const sweepAt = topFloats.findIndex((f) => f.value >= 270 && f.value <= 450);
-        const radiusAt = topFloats.findIndex((f, at) => at !== sweepAt && f.value > 0);
-        if (sweepAt >= 0 && radiusAt >= 0) {
+        // FOUR floats that are all plausible angles are two (min, max) ANGLE
+        // ranges, azimuth then polar: a cone about the axis, emitting from a
+        // point. They are not a radius and a sweep. The glow on a candle
+        // reads (0, 360, 0, 45), i.e. all the way round and up to 45 degrees
+        // off axis; taking the 360 as a sweep and the 45 as a radius spread
+        // it around a 45 unit circle, so each particle appeared somewhere
+        // else and a glow that should sit still jittered. A real radius is a
+        // distance in native units and runs to the hundreds, well clear of
+        // the 360 an angle can reach.
+        const angleRanges = topFloats.length >= 4
+          && topFloats.every((f) => f.value >= 0 && f.value <= 360);
+        const sweepAt = angleRanges ? -1
+          : topFloats.findIndex((f) => f.value >= 270 && f.value <= 450);
+        const radiusAt = angleRanges ? -1
+          : topFloats.findIndex((f, at) => at !== sweepAt && f.value > 0);
+        if (angleRanges) {
+          info.shapeKind = 'point';
+          // spread is the WIDTH of each range, which is what the sampler
+          // takes; a range starting away from zero is rare and its offset is
+          // not modelled, so the width alone is the honest reading.
+          info.spreadYaw = Math.abs(topFloats[1].value - topFloats[0].value);
+          info.spreadPitch = Math.abs(topFloats[3].value - topFloats[2].value);
+          for (let k = 0; k < 4; k++) consumed.add(topFloats[k].i);
+        } else if (sweepAt >= 0 && radiusAt >= 0) {
           // a positive radius paired with a roughly full-turn sweep
           info.shapeKind = 'ring';
           info.radius = topFloats[radiusAt].value;
