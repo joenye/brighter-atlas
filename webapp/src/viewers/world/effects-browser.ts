@@ -167,7 +167,12 @@ function buildIndex(doc: WorldEffectsDoc, roomNames: Map<number, string>,
     if (!s) { s = new Set(); ownersBySystem.set(a.system, s); }
     s.add(a.owner);
   }
-  return doc.systems.map((system) => {
+  // A system whose emitters all lack a material cannot draw anything: the
+  // game's particle shaders all sample a texture, so these are invisible by
+  // construction rather than by accident. Listing them filled the browser
+  // with entries whose preview can only ever be an empty stage.
+  const drawable = (system: EffectSystem) => system.emitters.some((e) => !!e.sprite?.images?.length);
+  return doc.systems.filter(drawable).map((system) => {
     const label = system.names[0]?.name || `system #${system.slot}`;
     const roomMap = roomsBySystem.get(system.slot);
     const rooms = roomMap

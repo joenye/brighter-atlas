@@ -913,11 +913,14 @@ async function worldSuite(browser: any, base: string) {
   // ---- effects browser: #/world/effects --------------------------------------
   await page.evaluate(() => { location.hash = '#/world/effects'; });
   await page.waitForFunction(() => typeof window.__bs.effectsView?.count === 'function'
-    && window.__bs.effectsView.count() === 4, { timeout: 15000 });
+    && window.__bs.effectsView.count() === 2, { timeout: 15000 });
   const browserRows = await page.evaluate(() =>
     [...document.querySelectorAll('.we-left .vlist .vrow')].map((r) => r.querySelector('.r-main')?.textContent));
-  ok(browserRows.length === 4 && browserRows.every((t) => !!t),
-    `effects browser lists all 4 fixture systems (${JSON.stringify(browserRows)})`);
+  // Two of the four fixture systems carry no material on any emitter, so
+  // they cannot draw anything and are not listed: a browser entry whose
+  // preview can only ever be an empty stage is noise.
+  ok(browserRows.length === 2 && browserRows.every((t) => !!t),
+    `effects browser lists the 2 drawable fixture systems (${JSON.stringify(browserRows)})`);
   await sleep(500);   // the first system's preview mounts async
   const covBrowse0 = await paintCoverage(page, '.we-canvas canvas');
   ok(covBrowse0 > 0.02, `effects browser preview paints on load (coverage ${(covBrowse0 * 100).toFixed(1)}% > 2%)`);
@@ -929,7 +932,7 @@ async function worldSuite(browser: any, base: string) {
     shown: document.querySelectorAll('.we-left .vlist .vrow').length,
     label: document.querySelector('.we-left .vlist .vrow .r-main')?.textContent || '',
   }));
-  ok(searchByName.total === 4 && searchByName.shown === 1 && searchByName.label === 'fixture_fountain_loop',
+  ok(searchByName.total === 2 && searchByName.shown === 1 && searchByName.label === 'fixture_fountain_loop',
     `typing "fountain" filters the list to 1 match (${JSON.stringify(searchByName)})`);
 
   // the killer feature: search by the NAME of an attached room, not just the
