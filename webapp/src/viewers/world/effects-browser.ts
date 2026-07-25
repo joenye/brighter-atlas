@@ -59,6 +59,16 @@ function estimateSystemRadius(system: EffectSystem, configs: Record<string, Effe
     const accelMag = Array.isArray(av)
       ? Math.hypot(Number(av[0]) || 0, Number(av[1]) || 0, Number(av[2]) || 0) / (rate * rate) : 0;
     let reach = speed * life + 0.5 * accelMag * life * life;
+    // A particle's own quad counts towards the reach: an emitter that never
+    // moves (no speed, no acceleration, origin at the centre) still occupies
+    // scale x sprite size, and framing the camera without that puts it
+    // INSIDE the quad, which reads as a blank or washed-out preview.
+    const draw = spriteDrawOf(emitter.sprite);
+    const maxScale = Math.max(
+      Math.abs(Number(emitter.scale0?.value) || 0),
+      Math.abs(Number(emitter.scale1?.value) || 0),
+    );
+    reach += 0.5 * maxScale * Math.max(draw.w, draw.h);
     const cfg = emitter.shape != null ? configs[String(emitter.shape)] : null;
     if (cfg) {
       const center = cfg.center;
@@ -352,6 +362,12 @@ export function createEffectsBrowserView(app: any): { root: HTMLElement; destroy
     });
     const mode = p.addSystem(row.system.slot);
     player = p;
+    // A timed system is inert until triggered, so selecting one used to show
+    // an empty stage until the viewer noticed the Play control and pressed
+    // it. Most systems in this list are timed, which made the preview look
+    // broken rather than idle. Selecting a system IS the request to see it,
+    // so fire it once on mount; the transport still replays and scrubs.
+    if (mode === 'timed') p.play(row.system.slot);
     buildTransport(row, mode);
     syncDetails(row);
   }

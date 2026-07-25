@@ -45,6 +45,10 @@ const ACCEPT_FRACTION = 0.9;    // burst fraction a voted family must reach
 const ROLE_FRACTION = 0.9;      // duration-count agreement needed for fade roles
 const FADE_DEMOTION = 0.1;      // voters violating fade_in + fade_out <= life
 const FANOUT_CAP = 8;           // clip-walk hub cutoff (same rule as anim-names.js)
+// Per-room attachment fan-out a single system may claim before it is treated
+// as a shared-constant artifact rather than a real per-object attachment (see
+// the hub-rejection block in the room attachment loop).
+const ROOM_ATTACH_CAP = 64;
 const WALK_DEPTH = 2;           // controller -> clip record reference distance
 const TYPED_DEPTH_CAP = 6;      // typed/container recursion depth in retained extras
 const EXTRA_CHILD_CAP = 512;    // per-row cap on nested retained entries (pooled containers re-expand)
@@ -150,6 +154,7 @@ export interface WorldEffectsDoc {
   audit: {
     rows: number; candidate_systems: number; systems: number; emitters: number;
     rejected_children: number; parse_failures: number; parse_mismatches: number;
+    hub_systems: number; hub_attachments: number; shape_center_reordered: number;
     families: Record<string, { members: number; via: 'vote' | 'exhaustive' | 'rejected';
       burst_fraction: number; origin_fraction: number; image_fraction: number }>;
     config_kinds: Record<string, number>;
@@ -541,6 +546,7 @@ function makeEmptyDoc(rowCount: number, error: string | null): WorldEffectsDoc {
   const audit: WorldEffectsDoc['audit'] = {
     rows: rowCount, candidate_systems: 0, systems: 0, emitters: 0,
     rejected_children: 0, parse_failures: 0, parse_mismatches: 0,
+    hub_systems: 0, hub_attachments: 0, shape_center_reordered: 0,
     families: {}, config_kinds: {}, named_systems: 0, attached_rooms: 0, attached_actors: 0,
   };
   if (error) audit.error = error;
@@ -588,6 +594,7 @@ function extractEffects(
   const audit: WorldEffectsDoc['audit'] = {
     rows: rows.length, candidate_systems: 0, systems: 0, emitters: 0,
     rejected_children: 0, parse_failures: 0, parse_mismatches: 0,
+    hub_systems: 0, hub_attachments: 0, shape_center_reordered: 0,
     families: {}, config_kinds: {}, named_systems: 0, attached_rooms: 0, attached_actors: 0,
   };
 
@@ -689,10 +696,16 @@ function extractEffects(
     // top-level decoded generic ints ONLY (direct or pooled): counted
     // program varints and program scalar ops are framing, never a burst
     // configuration value
+    // A 3-component vector reaches a config in EITHER encoding: a tagged
+    // vec3, or a fixed-width float triple. Counting the fixed form as three
+    // loose floats loses it entirely, which is how a spawn centre stored that
+    // way went missing and left the emitter sitting at the config's axis
+    // instead of its bowl.
+    const isVecFixed = (n: EffectExtra) => n.kind === 'fixed' && !!n.floats && n.floats.length === 3;
     let vec3Count = 0; let fixedLaneCount = 0; let floatCount = 0;
     for (const e of ops) {
       walkExtra(e, (n) => {
-        if (n.kind === 'vec3') vec3Count++;
+        if (n.kind === 'vec3' || isVecFixed(n)) vec3Count++;
         else if (n.kind === 'float') floatCount++;
         else if (n.kind === 'fixed' && n.floats) { fixedLaneCount += n.floats.length; floatCount += n.floats.length; }
       });
@@ -711,13 +724,14 @@ function extractEffects(
       spreadYaw: null, spreadPitch: null, spiral: null, extra: [],
     };
     const topInts: { value: number; i: number }[] = [];
-    const topVec3: { v: [number, number, number]; i: number }[] = [];
+    const topVec3: { v: [number, number, number]; i: number; fixed?: boolean }[] = [];
     const topFloats: { value: number; i: number }[] = [];
     const topRates: { value: number; den: number; i: number }[] = [];
     for (let i = 0; i < ops.length; i++) {
       const e = ops[i];
       if (e.kind === 'int') topInts.push({ value: e.value, i });
       else if (e.kind === 'vec3') topVec3.push({ v: e.v, i });
+      else if (isVecFixed(e)) topVec3.push({ v: (e as any).floats.slice(0, 3) as [number, number, number], i, fixed: true });
       else if (e.kind === 'float') topFloats.push({ value: e.value, i });
       else if (e.kind === 'fixed' && e.floats) for (const value of e.floats) topFloats.push({ value, i });
       else if (e.kind === 'rate') topRates.push({ value: e.value, den: e.den, i });
@@ -737,8 +751,27 @@ function extractEffects(
       consumed.add(topInts[0].i);
     } else if (vec3Count >= 1 || floatCount >= 2) {
       info.kind = 'shape';
-      if (topVec3.length) { info.center = topVec3[0].v; consumed.add(topVec3[0].i); }
-      if (topVec3.length >= 2) { info.axis = topVec3[1].v; consumed.add(topVec3[1].i); }
+      // Centre and axis are told apart by MAGNITUDE, not by order: the axis is
+      // a unit direction while a centre is an offset in native units (hundreds
+      // of them). Order is not reliable, since a config may store its centre
+      // either before or after its axis depending on which encoding it uses,
+      // and picking the wrong one drops the emitter onto its owner's origin
+      // instead of the point it was authored at.
+      const unitish = (v: [number, number, number]) => {
+        const len = Math.hypot(Number(v[0]) || 0, Number(v[1]) || 0, Number(v[2]) || 0);
+        return len > 0.99 && len < 1.01;
+      };
+      const axisAt = topVec3.findIndex((entry) => unitish(entry.v));
+      const centerAt = topVec3.findIndex((entry, at) => at !== axisAt);
+      if (centerAt >= 0) {
+        info.center = topVec3[centerAt].v;
+        consumed.add(topVec3[centerAt].i);
+        // Coverage signal: a config whose centre is NOT its first vector is
+        // one that positional binding got wrong, dropping its emitter onto
+        // the owner's origin instead of its authored point.
+        if (centerAt !== 0) audit.shape_center_reordered++;
+      }
+      if (axisAt >= 0) { info.axis = topVec3[axisAt].v; consumed.add(topVec3[axisAt].i); }
       const fixedLanes = topFloats.filter((f) => ops[f.i].kind === 'fixed');
       if (topVec3.length >= 2 && topRates.length >= 2 && fixedLanes.length >= 2) {
         // spiral arrangement: two vectors, two rates, two fixed float lanes
@@ -1142,6 +1175,7 @@ function extractEffects(
     bail();
     onStep(progressBase + r, progressTotal);
     const roomId = roomIds[r];
+    const roomStart = roomAtt.length;
     const { occurrences } = shared.occupancy(roomId);
     // Every rendered mesh part for this room, joined back to its owning
     // occurrence: the SAME join buildRoomShard uses to fill placement rows
@@ -1224,6 +1258,37 @@ function extractEffects(
       };
       emit(hit.resource, 'resource');
       emit(hit.secondary, 'secondary');
+    }
+    // Hub rejection, the same rule the clip walk already applies to
+    // controllers ("hub controllers contribute nothing", FANOUT_CAP above).
+    // Systems are reachable through interned pool constants, which is what
+    // makes most of them findable at all, but a constant shared by hundreds
+    // of unrelated resources then makes ONE system look attached to nearly
+    // every occurrence in the room. Observed: a single monument-upgrade
+    // animatic claiming 483 of one room's 986 attachment rows, and a second
+    // system 404 more, so 90% of that room's attachments were an artifact of
+    // two shared constants. Rendering that puts a stray copy of one effect on
+    // essentially every object in the room.
+    //
+    // A genuine attachment is per-object: an effect belongs to the handful of
+    // placements that carry it (four braziers, one monument). Real fan-outs
+    // observed sit at or below 15 per room, hub artifacts start in the
+    // hundreds, so the cap only has to separate two well-clustered
+    // populations rather than pick a precise boundary. Applied per room, and
+    // counted in the audit so the drop is visible rather than silent.
+    const perSystem = new Map<number, number>();
+    for (let i = roomStart; i < roomAtt.length; i++) {
+      const system = roomAtt[i].system;
+      perSystem.set(system, (perSystem.get(system) || 0) + 1);
+    }
+    const hubs = new Set<number>();
+    for (const [system, count] of perSystem) if (count > ROOM_ATTACH_CAP) hubs.add(system);
+    if (hubs.size) {
+      const kept = roomAtt.slice(roomStart).filter((entry) => !hubs.has(entry.system));
+      audit.hub_systems += hubs.size;
+      audit.hub_attachments += (roomAtt.length - roomStart) - kept.length;
+      roomAtt.length = roomStart;
+      for (const entry of kept) roomAtt.push(entry);
     }
   }
   progressBase += roomIds.length;
