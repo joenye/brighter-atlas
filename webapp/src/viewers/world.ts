@@ -2234,6 +2234,17 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (pinnedCtx.group) {
       return `${Number(pinnedCtx.info.room)}|models|occ${pinnedCtx.group.occurrenceIndex}`;
     }
+    // A LONE placement animates on its own account. It never becomes a
+    // "model" (that needs a catalog match, and most ambient props have none),
+    // but being a model and being rigged are different things: plenty of
+    // single-mesh props carry their own clips, and gating the picker on
+    // model-hood hid every one of them. Offering it costs nothing when the
+    // mesh has no rig, since resolveSpawnAnim answers 'norig' and the picker
+    // never mounts.
+    const info = pinnedCtx.info;
+    if (info && info.category && Number.isInteger(Number(info.placementIndex))) {
+      return `${Number(info.room)}|${info.category}|part${Number(info.placementIndex)}`;
+    }
     return null;
   }
 
@@ -2250,6 +2261,16 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         })),
         category: 'models',
         members: pinnedCtx.group.members,
+      };
+    }
+    // the lone-placement case (see currentSpawnKey): its one part, in its own
+    // category, so the static-hide and re-bake paths address the right row
+    const info = pinnedCtx.info;
+    if (info && info.category && Number.isInteger(Number(info.placementIndex))) {
+      return {
+        parts: [{ ...info, rowIndex: Number(info.placementIndex) }],
+        category: info.category,
+        members: null,
       };
     }
     return null;
