@@ -388,8 +388,15 @@ export class WorldEffectsLayer {
       // additional-transform table itself is recovered; until then nothing
       // consumes it, and every emitter anchors at the mesh root.
       system.emitters.forEach((emitter, index) => {
+        // An emitter with no material cannot be drawn: every one of the
+        // game's particle pixel shaders samples a texture, so a material of
+        // `$none` means this emitter contributes nothing visible. Whole
+        // emitter families are authored that way. Drawing them with the
+        // built-in fallback dot is what put uncoloured white-grey blobs on
+        // forager nodes and elsewhere, so they are skipped outright.
+        if (!emitter.sprite?.images?.length) return;
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
-        const texId = emitter.sprite?.images?.length ? Number(emitter.sprite.images[0]) : -1;
+        const texId = Number(emitter.sprite.images[0]);
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
         this._draws.set(texId, spriteDrawOf(emitter.sprite));
         rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, boneOffset: [0, 0, 0] });

@@ -136,9 +136,11 @@ export class EffectsPlayer {
       startTick: mode === 'loop' ? 0 : null,
       slaved: false,
       slavedTick: 0,
-      emitters: system.emitters.map((emitter, index) => {
+      // Same rule as the room layer: an emitter with no material draws
+      // nothing in the game, so it must not draw a fallback dot here.
+      emitters: system.emitters.filter((e: any) => e.sprite?.images?.length).map((emitter, index) => {
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
-        const texId = emitter.sprite?.images?.length ? Number(emitter.sprite.images[0]) : -1;
+        const texId = Number(emitter.sprite!.images[0]);
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
         this._draws.set(texId, spriteDrawOf(emitter.sprite));
         return { sim, batchKey: `${texId}|${blend}` };
