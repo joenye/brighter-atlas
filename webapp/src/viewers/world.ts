@@ -2263,14 +2263,19 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         members: pinnedCtx.group.members,
       };
     }
-    // the lone-placement case (see currentSpawnKey): its one part, in its own
-    // category, so the static-hide and re-bake paths address the right row
+    // The lone-placement case (see currentSpawnKey): its one part, in its own
+    // category, so the static-hide and re-bake paths address the right row.
+    // It carries a one-entry `members` list rather than null, because null is
+    // what marks a SPAWN: the composite would then be positioned by the spawn
+    // matrix, which has no meaning for a placed occurrence, and the animation
+    // would play somewhere the camera never looks.
     const info = pinnedCtx.info;
-    if (info && info.category && Number.isInteger(Number(info.placementIndex))) {
+    const member = primaryMember();
+    if (member && info && info.category && Number.isInteger(Number(info.placementIndex))) {
       return {
         parts: [{ ...info, rowIndex: Number(info.placementIndex) }],
         category: info.category,
-        members: null,
+        members: [member],
       };
     }
     return null;

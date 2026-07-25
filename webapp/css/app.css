@@ -912,7 +912,12 @@ kbd {
 .world-panel .wp-anim-title { color: var(--fg2); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
 .world-panel .wp-anim-hint { padding: 3px 0; overflow-wrap: anywhere; }
 .world-panel .wp-anim .anim-bar { margin: 0; padding: 0; border: 0; }
-.world-panel .wp-anim .anim-bar.pb { height: 172px; }
+/* The clip listbox asks for up to 7 rows; 172px left it barely one after the
+   transport controls took their share. Taller by default, and draggable so a
+   long clip list can be opened up without leaving the panel. */
+.world-panel .wp-anim .anim-bar.pb {
+  height: 240px; min-height: 140px; max-height: 60vh; resize: vertical;
+}
 .world-panel .wp-anim .anim-bar select { max-width: 100%; }
 .world-panel .wp-anim .anim-bar input[type="range"] { min-width: 80px; }
 /* Advanced accordion (Water / Lighting / Performance / Height levels) */
