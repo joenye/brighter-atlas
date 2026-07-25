@@ -93,13 +93,16 @@ export interface EffectConfig {
   kind: 'burst_continuous' | 'burst_windowed' | 'shape' | 'unknown';
   per_second?: number | null;                  // burst kinds
   windows?: [number, number][] | null;         // tick ranges, burst_windowed
-  shape_kind?: 'point' | 'ring' | 'spiral' | 'other';
+  shape_kind?: 'point' | 'ring' | 'spiral' | 'segment' | 'other';
   center?: [number, number, number] | null;    // first vec3
   axis?: [number, number, number] | null;
   radius?: number | null; sweep?: number | null;
   spread_yaw?: number | null; spread_pitch?: number | null;
   spiral?: { axis: [number, number, number]; start_radius: number; radius_rate: number;
              start_angle: number; angle_rate: number } | null;
+  // 'segment': spawn spread evenly along a line, given as its two endpoints in
+  // the owner's local frame. A shoreline wave uses one a full tile wide.
+  segment?: { from: [number, number, number]; to: [number, number, number] } | null;
   extra: EffectExtra[];
 }
 
@@ -679,12 +682,13 @@ function extractEffects(
     kind: EffectConfig['kind'];
     perSecond: number | null;
     windows: [number, number][] | null;
-    shapeKind: 'point' | 'ring' | 'spiral' | 'other' | null;
+    shapeKind: 'point' | 'ring' | 'spiral' | 'segment' | 'other' | null;
     center: [number, number, number] | null;
     axis: [number, number, number] | null;
     radius: number | null; sweep: number | null;
     spreadYaw: number | null; spreadPitch: number | null;
     spiral: EffectConfig['spiral'];
+    segment: EffectConfig['segment'];
     extra: EffectExtra[];
   }
   const configInfo = new Map<number, ConfigInfo | null>();
@@ -721,7 +725,7 @@ function extractEffects(
       slot, family: rows[slot].runtime,
       kind: 'unknown', perSecond: null, windows: null, shapeKind: null,
       center: null, axis: null, radius: null, sweep: null,
-      spreadYaw: null, spreadPitch: null, spiral: null, extra: [],
+      spreadYaw: null, spreadPitch: null, spiral: null, segment: null, extra: [],
     };
     const topInts: { value: number; i: number }[] = [];
     const topVec3: { v: [number, number, number]; i: number; fixed?: boolean }[] = [];
@@ -780,8 +784,22 @@ function extractEffects(
         if (centerAt !== 0) audit.shape_center_reordered++;
       }
       if (axisAt >= 0) { info.axis = topVec3[axisAt].v; consumed.add(topVec3[axisAt].i); }
+      // TWO non-axis vectors are the endpoints of a spawn LINE, not a centre
+      // plus something else. Reading only the first put every particle at one
+      // end, so a shoreline wave spawned in the corner of its tile instead of
+      // spreading across the full width the game gives it.
+      const secondAt = topVec3.findIndex((entry, at) => at !== axisAt && at !== centerAt);
+      if (centerAt >= 0 && secondAt >= 0) {
+        const from = topVec3[centerAt].v;
+        const to = topVec3[secondAt].v;
+        consumed.add(topVec3[secondAt].i);
+        info.segment = { from, to };
+        info.center = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2];
+      }
       const fixedLanes = topFloats.filter((f) => ops[f.i].kind === 'fixed');
-      if (topVec3.length >= 2 && topRates.length >= 2 && fixedLanes.length >= 2) {
+      if (info.segment) {
+        info.shapeKind = 'segment';
+      } else if (topVec3.length >= 2 && topRates.length >= 2 && fixedLanes.length >= 2) {
         // spiral arrangement: two vectors, two rates, two fixed float lanes
         info.shapeKind = 'spiral';
         info.spiral = {
@@ -1145,6 +1163,7 @@ function extractEffects(
       cfg.spread_yaw = info.spreadYaw;
       cfg.spread_pitch = info.spreadPitch;
       cfg.spiral = info.spiral;
+      cfg.segment = info.segment;
     }
     cfg.extra = info.extra;   // assigned last so the retained-extras key lands last
     configs[String(slot)] = cfg;

@@ -80,7 +80,7 @@ export function mulberry32(seed: number): () => number {
 type Vec3 = [number, number, number];
 
 interface ShapeSpec {
-  kind: 'point' | 'ring' | 'spiral' | 'other';
+  kind: 'point' | 'ring' | 'spiral' | 'segment' | 'other';
   center: Vec3;
   // orthonormal frame: w = emission axis, u/v span its perpendicular plane
   w: Vec3; u: Vec3; v: Vec3;
@@ -89,6 +89,8 @@ interface ShapeSpec {
   radius: number;         // ring radius (native units)
   sweep: number;          // ring arc (rad)
   spiral: { r0: number; rRate: number; a0: number; aRate: number } | null;
+  // 'segment': spawn spread evenly between these two local-frame endpoints
+  segment: { from: Vec3; to: Vec3 } | null;
 }
 
 interface WindowSpec { start: number; step: number; count: number }
@@ -132,7 +134,8 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
   const axis = vec3Of(config?.spiral?.axis ?? config?.axis, fallbackAxis);
   const frame = axisFrame(axis);
   const spec: ShapeSpec = {
-    kind: kind === 'point' || kind === 'ring' || kind === 'spiral' ? kind : 'other',
+    kind: kind === 'point' || kind === 'ring' || kind === 'spiral' || kind === 'segment'
+      ? kind : 'other',
     center,
     ...frame,
     yaw: clamp(finite(config?.spread_yaw, 360), 0, 360) * DEG,
@@ -140,7 +143,14 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
     radius: Math.max(0, finite(config?.radius, 0)),
     sweep: clamp(finite(config?.sweep, 360), 0, 360) * DEG,
     spiral: null,
+    segment: null,
   };
+  if (spec.kind === 'segment') {
+    const from = vec3Of(config?.segment?.from, null as any);
+    const to = vec3Of(config?.segment?.to, null as any);
+    if (from && to) spec.segment = { from, to };
+    else { spec.kind = 'other'; spec.yaw = TWO_PI; spec.pitch = 30 * DEG; }
+  }
   if (spec.kind === 'other') {
     spec.yaw = TWO_PI;
     spec.pitch = 30 * DEG;
@@ -382,18 +392,33 @@ export class EmitterSim {
   }
 
   // Sample the j-th kept spawn's constants into its ring slot. Fixed draw
-  // count and order (two draws) keeps the counter-based stream stable across
-  // shape kinds.
+  // count and order (three draws) keeps the counter-based stream stable
+  // across shape kinds.
   private _spawn(j: number): void {
     const slot = j % this.capacity;
     const rng = mulberry32(hash32(this.seed, (j * this.k) | 0));
     const r0 = rng();
     const r1 = rng();
+    const r2 = rng();
     const tick = this.spawnTick(j);
     const s = this.shape;
     let x = s.center[0]; let y = s.center[1]; let z = s.center[2];
     let dx = s.w[0]; let dy = s.w[1]; let dz = s.w[2];
-    if (s.kind === 'ring') {
+    if (s.kind === 'segment' && s.segment) {
+      // Uniform along the authored line, so a shoreline wave breaks across the
+      // whole width the game gives it rather than jetting from one end.
+      const { from, to } = s.segment;
+      x = from[0] + (to[0] - from[0]) * r0;
+      y = from[1] + (to[1] - from[1]) * r0;
+      z = from[2] + (to[2] - from[2]) * r0;
+      const yaw = r1 * s.yaw;
+      const pitch = r2 * s.pitch;
+      const cp = Math.cos(pitch); const sp = Math.sin(pitch);
+      const cy = Math.cos(yaw); const sy = Math.sin(yaw);
+      dx = cp * s.w[0] + sp * (cy * s.u[0] + sy * s.v[0]);
+      dy = cp * s.w[1] + sp * (cy * s.u[1] + sy * s.v[1]);
+      dz = cp * s.w[2] + sp * (cy * s.u[2] + sy * s.v[2]);
+    } else if (s.kind === 'ring') {
       const theta = r0 * s.sweep;
       const ct = Math.cos(theta); const st = Math.sin(theta);
       x += s.radius * (ct * s.u[0] + st * s.v[0]);
