@@ -1088,7 +1088,18 @@ function extractEffects(
     if (sysOps) {
       for (let i = 0; i < sysOps.length; i++) {
         const e = sysOps[i];
-        if (e.kind === 'duration' && cycleTicks === null) { cycleTicks = e.ticks; consumed.add(i); }
+        // The system's cycle is the LONGEST duration it carries, not the
+        // first. A system row leads with a zero (a start offset) and a small
+        // shared constant before the real period, so binding the first one
+        // read every cycle as 0 and left the schedule falling back to an
+        // invented `maxEnd + life`. That invented period is what put looping
+        // effects on a sequence the game never authored. Measured: the street
+        // lantern authors 5400 ticks (9s), the brazier 3600 (6s), the shore
+        // wave 720 (1.2s), all of which were being read as 0.
+        if (e.kind === 'duration') {
+          if (cycleTicks === null || e.ticks > cycleTicks) cycleTicks = e.ticks;
+          consumed.add(i);
+        }
         else if (e.kind === 'symbol' && e.name !== null) {
           // symbol strings are shipped data, matched as values only
           if (e.name.endsWith('additive')) { blend = 'add'; consumed.add(i); }
