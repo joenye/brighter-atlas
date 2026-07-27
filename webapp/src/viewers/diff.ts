@@ -7,11 +7,15 @@ import { el, clear, fmtInt, badge, idLabel, versionDateLabel, versionLabel } fro
 import { getVersion, derivedGet } from '../storage.js';
 import { diffBundles, diffVersions, diffRoomPair } from '../diff.js';
 import { effectiveName, setLocalName } from '../names.js';
+import { systemModelDiffHash } from '../models.js';
 import { carryOverride } from '../texmap.js';
 import type { IndexEntry } from '../store.js';
 import type { ChangedPair } from '../diff.js';
 
-const ROUTE: Record<string, string> = { meshes: 'mesh', images: 'image', audio: 'audio', anims: 'anim', rigs: 'rig', strings: 'string', world: 'world' };
+const ROUTE: Record<string, string> = { meshes: 'mesh', images: 'image', audio: 'audio', anims: 'anim', rigs: 'rig', strings: 'string', world: 'world', models: 'model' };
+// Categories addressed by a string id rather than a bundle ordinal, so their
+// rows link by `id` instead of `i`.
+const ID_ROUTED = new Set(['models']);
 
 // World rooms diff through their index entries (world:index rooms carry the
 // ordinal-free content hash `h`); the pinned "All rooms" view is derived and
@@ -24,8 +28,29 @@ export async function loadWorldDiffIndex(versionId: string): Promise<IndexEntry[
   return rooms.map((r) => ({ ...r, i: r.id }));
 }
 
+// Models diff through the per-version SYSTEM catalog, never the user's saved
+// models: those live outside any version, so both sides would always hold the
+// identical set. The catalog has no `h` of its own, so one is derived per model
+// (systemModelDiffHash) from the content hashes of its parts, which is what
+// makes it survive a game update renumbering every ordinal. A version extracted
+// without World support has no catalog and returns null, so the category skips
+// honestly rather than reporting every model as removed.
+export async function loadModelsDiffIndex(versionId: string): Promise<IndexEntry[] | null> {
+  const models = await derivedGet(versionId, 'system:models');
+  if (!Array.isArray(models) || !models.length) return null;
+  // A constant `i` keeps diff.ts's moved check (which compares first instances)
+  // inert by construction: models have no bundle ordinal, and a per-position
+  // index would emit bogus "moved" rows whenever the catalog happens to be
+  // emitted in a different order.
+  const out = models
+    .map((model: any) => ({ ...model, i: -1, h: systemModelDiffHash(model) }))
+    .filter((model: any) => model.h);
+  return out.length ? (out as IndexEntry[]) : null;
+}
+
 async function loadIndex(versionId: string, cat: string): Promise<IndexEntry[] | null> {
   if (cat === 'world') return loadWorldDiffIndex(versionId);
+  if (cat === 'models') return loadModelsDiffIndex(versionId);
   const idx = await derivedGet(versionId, `index:${cat}`);
   return idx ? idx.filter(Boolean) : null;
 }
@@ -91,6 +116,14 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
             el('span', { class: 'dim small', text: `+${fmtInt(d.added.length)} added · −${fmtInt(d.removed.length)} removed · ~${fmtInt(d.changed.length)} changed · ${fmtInt(d.moved.length)} moved · ${fmtInt(d.unchanged)} unchanged` })),
           jump));
 
+      // Saved models are kept on the device rather than inside a game version,
+      // so both sides always hold the same set. Say so, rather than leaving
+      // someone to wonder why their own models never appear here.
+      if (cat === 'models') {
+        sec.appendChild(el('p', { class: 'dim small', text:
+          'Only the game\'s own built-in models are compared. Models you saved yourself are stored on this device rather than inside a game version, so they are the same in both.' }));
+      }
+
       const list = (title: string, entries: any[], cls: string, rowFn: (e: any) => HTMLElement) => {
         if (!entries.length) return;
         sec.appendChild(el('h4', { text: `${title} (${fmtInt(entries.length)})` }));
@@ -104,8 +137,22 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
       const label = (e: IndexEntry) => {
         if (cat === 'strings') return e.text.length > 60 ? `${e.text.slice(0, 60)}…` : e.text;
         if (cat === 'world') return `${e.name || 'room'} #${e.i}`;
+        // a system model carries the name recovered from the game, and has no
+        // ordinal to fall back on
+        if (cat === 'models') return (e as any).name || (e as any).id || 'model';
         return effectiveName(e, cat) || idLabel(e);
       };
+
+      // Ordinal-addressed categories link by `i`; the id-addressed ones have no
+      // ordinal at all, so linking by it would produce #/model/undefined.
+      const hrefOf = (e: any) => (ROUTE[cat]
+        ? `#/${ROUTE[cat]}/${ID_ROUTED.has(cat) ? e.id : e.i}`
+        : '#');
+
+      // The mono column shows the identity the rest of the UI shows. A model's
+      // diff hash is internal, appearing neither in its details nor its URL, so
+      // printing it would give the reader nothing to match it against.
+      const idText = (e: any) => (cat === 'models' ? e.id || '' : e.h || '');
 
       // image rows get an inline thumbnail via the service worker's cs/
       // namespace: removed images decode from the BASE version's raw bundles
@@ -115,19 +162,19 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
 
       list('added', d.added, 'add', (e: IndexEntry) => el('a', {
         class: 'diff-row add',
-        href: ROUTE[cat] ? `#/${ROUTE[cat]}/${e.i}` : '#',
-      }, badge('+', 'b-good'), thumb(activeId, e.i), el('span', { text: label(e) }), el('span', { class: 'dim small mono', text: e.h || '' })));
+        href: hrefOf(e),
+      }, badge('+', 'b-good'), thumb(activeId, e.i), el('span', { text: label(e) }), el('span', { class: 'dim small mono', text: idText(e) })));
 
       list('removed', d.removed, 'del', (e: IndexEntry) => el('div', { class: 'diff-row del' },
         badge('−', 'b-accent'), thumb(baseId, e.i), el('span', { text: label(e) }),
-        el('span', { class: 'dim small mono', text: e.h || '' })));
+        el('span', { class: 'dim small mono', text: idText(e) })));
 
       list('changed', d.changed, 'chg', (pair: ChangedPair) => {
         const row = el('div', { class: 'diff-row chg' },
           badge('~', 'b-ghost'),
           thumb(baseId, pair.base.i), cat === 'images' ? el('span', { class: 'dim', text: '→' }) : null, thumb(activeId, pair.active.i),
           el('span', {}, `${label(pair.base)} → `,
-            ROUTE[cat] ? el('a', { href: `#/${ROUTE[cat]}/${pair.active.i}`, text: label(pair.active) }) : el('span', { text: label(pair.active) })),
+            ROUTE[cat] ? el('a', { href: hrefOf(pair.active), text: label(pair.active) }) : el('span', { text: label(pair.active) })),
           el('span', { class: 'dim small', text: `${pair.confidence} confidence` }));
         if (cat === 'world') {
           // rooms aren't hash-named assets: instead of carry, an on-demand
@@ -135,6 +182,9 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
           row.appendChild(roomChangeButton(baseId, activeId, pair));
           return row;
         }
+        // a system model is read-only catalog data with no name or texture
+        // annotation of its own, so there is nothing to carry across
+        if (cat === 'models') return row;
         // carry annotation: copy name/texture from base.h to active.h
         const carry = el('button', { class: 'btn btn-mini', text: 'carry over my edits →', title: 'Copy this asset\'s name (and texture for meshes) from the before version to the after version' });
         carry.addEventListener('click', () => {

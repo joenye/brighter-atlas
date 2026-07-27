@@ -10,6 +10,7 @@
 //           img: <imageHash|null> }], created: <ISO> }
 
 import { userdataGet, userdataPut } from './storage.js';
+import { hashText } from './extract/hash.js';
 
 // one drawable part of a Variant (system-catalog terminology)
 export interface ModelPart {
@@ -86,6 +87,67 @@ export function listModels(): ModelRecord[] {
 }
 export function getModel(id: string): ModelRecord | null { return cur.models[id] || null; }
 export function modelCount(): number { return Object.keys(cur.models).length; }
+
+// The content identity a SYSTEM model is compared by across two game versions:
+// sha256/16 over its skeleton content hash and a per-variant signature of its
+// parts' (mesh, texture) content hashes. Synthesised the same way a string's
+// `h` is, and for the same reason: it unifies a derived entity with the
+// hash-keyed machinery everything else already uses.
+//
+// Deliberately NOT the model's own `sys-` id. Most of those ids are built from
+// content, but three paths are not: models merged by name fold in the recovered
+// display name, unlabeled lineage groups fold in a registry slot, and mixed-rig
+// models fold in skeleton ORDINALS. A game update renumbers all three, so an
+// untouched model would be reported as removed and added again, which is worse
+// than not diffing it at all. Every input used here is a content hash the
+// catalog attach step has already proven against the freshly decoded indexes,
+// and sorting makes the result independent of the order variants and parts are
+// emitted in.
+//
+// The recovered NAME is deliberately absent: `h` is a content identity, so a
+// pure rename reads as unchanged exactly as a renamed mesh does, and a model
+// that really changed re-pairs by name through PAIR_KEYS. Known limit: recolour
+// data is not folded in, so a tint-only change reads as unchanged.
+//
+// Null when a model has no usable part hash: the diff then skips it exactly as
+// it skips any other entry with no `h`, rather than inventing an identity.
+// USER models never get one. They live outside any version (see the header),
+// so both sides of a comparison hold the same set and "added" is meaningless.
+export function systemModelDiffHash(model: ModelRecord | null | undefined): string | null {
+  if (!model) return null;
+  // One variant's drawable identity: its (mesh, texture) pairs. The texture
+  // belongs in the key because a retexture is one of the commonest things a
+  // game update does to a model, and a mesh-only key would call it unchanged.
+  // Sorted but NOT de-duplicated: a part that appears twice is not the same
+  // model as a part that appears once.
+  const signature = (parts: unknown): string | null => {
+    const pairs: string[] = [];
+    for (const part of Array.isArray(parts) ? parts : []) {
+      const mesh = (part as ModelPart)?.mesh_hash;
+      if (typeof mesh !== 'string' || !mesh) continue;
+      const image = (part as ModelPart)?.image_hash;
+      pairs.push(`${mesh}>${typeof image === 'string' ? image : ''}`);
+    }
+    return pairs.length ? pairs.sort().join(',') : null;
+  };
+  // Variants are kept apart rather than merged into one pool, so losing a
+  // colour variant stays visible. A model's own `parts` is its first variant's,
+  // so only a catalog carrying no variants at all needs the fallback.
+  //
+  // The list is de-duplicated, unlike the parts within a variant. Name recovery
+  // can fold a second same-named member into a model, which repeats every
+  // variant verbatim and doubles its multiplicity while the game's model has
+  // not changed at all. Counting those repeats would turn OUR merge decision
+  // into a content difference: measured across one update it invented four
+  // changes, and dropping them lost none of the real ones.
+  const variants = modelVariants(model);
+  const signatures = [...new Set(
+    (variants.length ? variants.map((v) => signature(v?.parts)) : [signature(model.parts)])
+      .filter((s): s is string => !!s),
+  )].sort();
+  if (!signatures.length) return null;
+  return hashText(JSON.stringify({ skel: model.skel || null, variants: signatures }));
+}
 
 // System models are supplied by the active version's static catalog; user
 // models remain in this store. Keep the combination pure so switching game

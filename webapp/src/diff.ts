@@ -79,6 +79,18 @@ const PAIR_KEYS: Record<string, { key: (e: any) => string; confidence: string }>
     key: (e) => (e.name ? `n:${e.name}` : `s:${(e.size || []).join('x')}m${(e.map_size || []).join('x')}l${e.layers ?? ''}`),
     confidence: 'medium',
   },
+  // system models: the recovered game name is the strongest stable key, the same
+  // choice rooms make above. Auto-generated "Recovered model <slot>" names embed
+  // a registry slot that a game update renumbers, so those fall back to rig
+  // identity plus part count. The part count is deliberately absent from the
+  // NAMED key: gaining or losing a part is exactly the change we want paired and
+  // reported as "changed", not split into a removal plus an add.
+  models: {
+    key: (e) => (e.name && !/^Recovered model /.test(e.name)
+      ? `n:${e.name}|r:${e.rig || ''}`
+      : `s:${e.skel || ''}|r:${e.rig || ''}|p:${(e.parts || []).length}`),
+    confidence: 'medium',
+  },
 };
 
 // idxA = base version's category index, idxB = active. Entries need `h`.
@@ -140,7 +152,10 @@ export async function diffVersions(
 ): Promise<{ cats: Record<string, IndexDiff>; skipped: { cat: string; reason: string }[] }> {
   const cats: Record<string, IndexDiff> = {};
   const skipped: { cat: string; reason: string }[] = [];
-  for (const cat of ['meshes', 'images', 'audio', 'anims', 'rigs', 'strings', 'world']) {
+  // 'models' covers the SYSTEM catalog only. User models are not per-version
+  // (see systemModelDiffHash), so the loader returns them to nobody and the
+  // category skips honestly on a version extracted without one.
+  for (const cat of ['meshes', 'images', 'audio', 'anims', 'rigs', 'strings', 'world', 'models']) {
     const [ia, ib] = await Promise.all([loadIndex(recA.versionId, cat), loadIndex(recB.versionId, cat)]);
     if (!ia || !ib) {
       skipped.push({ cat, reason: !ia && !ib ? 'not extracted in either version' : `not extracted in ${!ia ? 'the base' : 'the active'} version` });
