@@ -54,17 +54,31 @@ import { PoolStrings, makePoolRegistryRefs } from './models.js';
 import { normaliseModelName } from './catalog.js';
 import type { RegistryRow } from './graph.js';
 
-export const MESH_NAMES_FORMAT = 2;
+// 3: families are discovered per build instead of pinned. The pinned ids only
+// ever matched ONE build (checked against four archived builds, all of which
+// matched zero rows), so every other build's doc was missing every cosmetic and
+// gear name and gains them now. The output changes, so the format moves with it
+// rather than leaving those builds on a stale cached doc.
+export const MESH_NAMES_FORMAT = 3;
 const WALK_DEPTH = 3;
 const COSMETIC_CAP = 8;   // pooled+typed walk: reject the rare shared hub
 const GEAR_CAP = 24;      // typed-only walk: an item's own M/F + dye/tier set
 
+// Reader families are per-build ids: a game update renumbers them wholesale
+// (measured across one update: the equip-slot enum moved 2503/11349 ->
+// 2527/11578, the cosmetic family 6851/18963 -> 6944/19309). Pinning them
+// silently strips every cosmetic and gear name from a new build while capes,
+// which are recognised by their label shape instead, keep working. So the
+// families below are DETECTED from the data (detectFamilies), and these sets
+// are only the fallback for a build where detection finds nothing, which
+// keeps older builds decoding exactly as before.
+//
 // Cosmetic/transmog item-definition families: name duplicated at field ops 2/4.
-const COSMETIC_FAMILIES = new Set(['6851/18963', '10801/18962']);
+const COSMETIC_FAMILIES_FALLBACK = new Set(['6851/18963', '10801/18962']);
 const COSMETIC_NAME_OP = 2;
 const COSMETIC_NAME_OP_DUP = 4;
 // Gear (profession armour / guard equipment): name inline at field op 26.
-const GEAR_FAMILIES = new Set(['10317/16063']);
+const GEAR_FAMILIES_FALLBACK = new Set(['10317/16063']);
 const GEAR_NAME_OP = 26;
 // Capes: name at field op 27, always ending "Cape"; each profession/region/
 // combat cape is its own reader family, so they are recognised by the label
@@ -89,7 +103,17 @@ const CAPE_HUB_DEGREE = 12;
 const CAPE_TIER = /^(?:journeyman|adept|expert|champion|ultimate|master|grandmaster)\s+/i;
 const CAPE_RANK = /^(?:i{1,3}|iv|vi{0,3}|ix|x)\s+/i;
 // Equip-slot enum rows (a paper-doll slot each) live in this reader family.
-const SLOT_FAMILY = '2503/11349';
+const SLOT_FAMILY_FALLBACK = '2503/11349';
+// The equip-slot enum declares its words at field op 1; a family must show at
+// least this many DISTINCT ones to be taken as the enum (a decoy family
+// carrying a single 'shield' exists in every build examined).
+const SLOT_LABEL_OP = 1;
+const SLOT_MIN_LABELS = 4;
+// The op-2/op-4 duplicated name is unique to the cosmetic families, so one row
+// proves it, and one of the two real families has exactly one row.
+const COSMETIC_MIN_ROWS = 1;
+// An op-26 label is common; gear also resolves exactly one equip slot.
+const GEAR_MIN_ROWS = 4;
 const EQUIP_SLOTS = new Set([
   'head', 'amulet', 'torso', 'cape', 'hands', 'shield', 'legs', 'feet', 'ring', 'ammo',
 ]);
@@ -144,6 +168,9 @@ export interface MeshNameSource {
 
 export interface MeshNamesDoc {
   format: number;
+  // the reader families this build was read with (detected, see detectFamilies):
+  // worth surfacing because a wrong pick here silently empties the whole doc
+  families: { slot: string; cosmetic: string[]; gear: string[] };
   cosmetic_rows: number;  // cosmetic item-def rows resolved to a display name
   gear_rows: number;      // gear item-def rows resolved to a display name
   cape_rows: number;      // cape item-def rows resolved to a display name
@@ -252,10 +279,73 @@ export function extractMeshNames(
     return out;
   };
 
-  // equip-slot enum: registry slot of a 2503/11349 row -> its slot label
+  // Which families ARE the equip-slot enum, the cosmetics and the gear on THIS
+  // build, decided by the shape of their rows rather than by id:
+  //   slot enum  - rows whose op-1 string is one of the equip-slot words
+  //   cosmetic   - rows carrying the same name at BOTH ops 2 and 4
+  //   gear       - rows carrying an inline label at op 26 AND one equip slot
+  // Each role has its own row threshold below, tuned to the decoys that share
+  // its shape. A role that detects nothing falls back to its pinned id, so a
+  // build this cannot read decodes exactly as it did before.
+  //
+  // Part 1 is ONE walk collecting all three shapes: the gear test needs
+  // equipSlot(), which needs slotByRow, which needs the slot family, so the
+  // decision is finished in stages after this scan. Keeping the walk free of
+  // the per-family extractors below is deliberate: calling one of those consts
+  // from here would read it before its declaration and throw at runtime.
+  const familyScan = () => {
+    const slotLabels = new Map<string, Set<string>>();
+    const cosmeticHits = new Map<string, number>();
+    const gearCandidates: { family: string; row: RegistryRow }[] = [];
+    for (const row of rows) {
+      const family = `${row.selector}/${row.runtime}`;
+      let atName: string | null = null;
+      let atNameDup: string | null = null;
+      let gearLabel = false;
+      for (const event of strings.directStrings(row)) {
+        const text = event.text;
+        if (typeof text !== 'string') continue;
+        if (event.field_op === SLOT_LABEL_OP && EQUIP_SLOTS.has(text)) {
+          let seen = slotLabels.get(family);
+          if (!seen) { seen = new Set(); slotLabels.set(family, seen); }
+          seen.add(text);
+        }
+        if (!isLabelString(text)) continue;
+        if (event.field_op === COSMETIC_NAME_OP && atName === null) atName = text;
+        else if (event.field_op === COSMETIC_NAME_OP_DUP && atNameDup === null) atNameDup = text;
+        else if (event.field_op === GEAR_NAME_OP) gearLabel = true;
+      }
+      if (atName !== null && atName === atNameDup) {
+        cosmeticHits.set(family, (cosmeticHits.get(family) || 0) + 1);
+      }
+      if (gearLabel) gearCandidates.push({ family, row });
+    }
+    // The enum family is the one declaring the most DISTINCT slot words. The
+    // threshold is not ceremony: a decoy family carrying a lone 'shield' sits
+    // alongside it in every build examined, and would win a ">= 1" test.
+    let slotFamily = SLOT_FAMILY_FALLBACK;
+    let best = SLOT_MIN_LABELS - 1;
+    for (const [family, seen] of slotLabels) {
+      if (seen.size > best) { best = seen.size; slotFamily = family; }
+    }
+    return { slotFamily, cosmeticHits, gearCandidates };
+  };
+  const { slotFamily, cosmeticHits, gearCandidates } = familyScan();
+
+  // Cosmetic families: a name repeated at BOTH ops 2 and 4 is a shape nothing
+  // else in the registry shows, so a single row is proof. Counting higher would
+  // be worse than useless here: one of the two real families has exactly one
+  // row, and a threshold of 3 silently drops it.
+  const cosmeticFamilies = (() => {
+    const out = new Set<string>();
+    for (const [family, n] of cosmeticHits) if (n >= COSMETIC_MIN_ROWS) out.add(family);
+    return out.size ? out : COSMETIC_FAMILIES_FALLBACK;
+  })();
+
+  // equip-slot enum: registry slot of an enum row -> its slot label
   const slotByRow = new Map<number, string>();
   for (const row of rows) {
-    if (`${row.selector}/${row.runtime}` !== SLOT_FAMILY) continue;
+    if (`${row.selector}/${row.runtime}` !== slotFamily) continue;
     for (const event of strings.directStrings(row)) {
       if (typeof event.text === 'string' && EQUIP_SLOTS.has(event.text)) { slotByRow.set(row.slot, event.text); break; }
     }
@@ -271,6 +361,21 @@ export function extractMeshNames(
     }
     return found.size === 1 ? [...found][0] : null;
   };
+
+  // Gear families, decided last because the test needs equipSlot. An op-26
+  // label on its own is NOT enough: around eight other families carry one and
+  // are recipe/upgrade/description rows ("Trim", "Cabbage", quest sentences).
+  // Requiring the row to also resolve exactly one equip slot separates them
+  // cleanly, and the count keeps a stray match from claiming a family.
+  const gearFamilies = (() => {
+    const counts = new Map<string, number>();
+    for (const { family, row } of gearCandidates) {
+      if (equipSlot(row) !== null) counts.set(family, (counts.get(family) || 0) + 1);
+    }
+    const out = new Set<string>();
+    for (const [family, n] of counts) if (n >= GEAR_MIN_ROWS) out.add(family);
+    return out.size ? out : GEAR_FAMILIES_FALLBACK;
+  })();
 
   // The cosmetic item name: the label present at BOTH field ops 2 and 4. The
   // duplication distinguishes the real name from the season/collection tag
@@ -338,7 +443,7 @@ export function extractMeshNames(
 
   for (const row of rows) {
     const family = `${row.selector}/${row.runtime}`;
-    if (COSMETIC_FAMILIES.has(family)) {
+    if (cosmeticFamilies.has(family)) {
       const label = cosmeticName(row);
       if (label === null) { ambiguousRows++; continue; }
       cosmeticRows++;
@@ -347,7 +452,7 @@ export function extractMeshNames(
       if (meshes.size > COSMETIC_CAP) { cappedRows++; continue; }
       resolvedRows++;
       assign(row, label, baseName(label), 'cosmetic', equipSlot(row), meshes);
-    } else if (GEAR_FAMILIES.has(family)) {
+    } else if (gearFamilies.has(family)) {
       const label = gearName(row);
       if (label === null) continue;
       gearRows++;
@@ -401,6 +506,11 @@ export function extractMeshNames(
 
   return {
     format: MESH_NAMES_FORMAT,
+    families: {
+      slot: slotFamily,
+      cosmetic: [...cosmeticFamilies].sort(),
+      gear: [...gearFamilies].sort(),
+    },
     cosmetic_rows: cosmeticRows,
     gear_rows: gearRows,
     cape_rows: capeRows,
