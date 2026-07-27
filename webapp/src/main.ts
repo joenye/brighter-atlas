@@ -19,7 +19,7 @@ import { buildOverridesFile, replaceOverrides, effectiveTex, effectiveVariants,
   overrideStatus, systemTextureStatus, hydrateOverrides } from './texmap.js';
 import { hydrateModels, listModels, getModel, modelCount, combineModels,
   modelVariant, modelVariants, modelParts, modelMeshCount, buildModelsSection, replaceModels,
-  renameModel, deleteModel } from './models.js';
+  renameModel, deleteModel, systemModelDiffHash } from './models.js';
 import { createMeshView } from './viewers/mesh.js';
 import { createSkeletonView } from './viewers/skeleton.js';
 import { createModelView } from './viewers/model.js';
@@ -863,21 +863,41 @@ class App {
     // row is derived and never enters the diff.
     this._diffFacets = [];
     const baseId = this.diffBaseId();
-    if (baseId && this.store.versionId && (ASSET_CATS.has(cat) || cat === 'world')) {
+    if (baseId && this.store.versionId && (ASSET_CATS.has(cat) || cat === 'world' || cat === 'models')) {
       try {
         const baseIdx = cat === 'world'
           ? await import('./viewers/diff.js').then(({ loadWorldDiffIndex }) => loadWorldDiffIndex(baseId))
-          : (await derivedGet(baseId, `index:${cat}`))?.filter(Boolean);
-        if (baseIdx?.length && this.items.some((e) => e.h)) {
-          const d = diffIndexes(baseIdx, this.items, cat);
+          : cat === 'models'
+            ? await import('./viewers/diff.js').then(({ loadModelsDiffIndex }) => loadModelsDiffIndex(baseId))
+            : (await derivedGet(baseId, `index:${cat}`))?.filter(Boolean);
+        // A model's compare identity is DERIVED rather than stored
+        // (systemModelDiffHash), and only a system model has one: a user model
+        // is not part of any version, so a game update can neither add nor
+        // remove it and it simply reads as unchanged. Resolve it through a map
+        // keyed by model ID rather than stamping `h` onto the records (names,
+        // search and exports all key off `h`), and rather than by object
+        // identity: the models list is rebuilt wholesale on delete and on an
+        // overrides import, which would leave an identity map pointing at
+        // nothing and silently report every model as unchanged. For every other
+        // category hOf is exactly `e.h`, so their facets are unchanged.
+        const modelIdx = cat === 'models'
+          ? this._systemModels
+            .map((m: any) => ({ ...m, i: -1, h: systemModelDiffHash(m) }))
+            .filter((m: any) => m.h)
+          : null;
+        const modelH = modelIdx ? new Map<string, string>(modelIdx.map((m: any) => [m.id, m.h])) : null;
+        const hOf = (e: any) => (modelH ? modelH.get(e.id) : e.h);
+        const items = modelIdx || this.items;
+        if (baseIdx?.length && items.some((e: any) => e.h)) {
+          const d = diffIndexes(baseIdx, items, cat);
           const addedH = new Set(d.added.map((e) => e.h));
           const changedH = new Set(d.changed.map((c) => c.active.h));
           const movedH = new Set(d.moved.map((m) => m.b.h));
           this._diffFacets = [
-            [`diff: +added (${d.added.length})`, (e) => addedH.has(e.h)],
-            [`diff: ~changed (${d.changed.length})`, (e) => changedH.has(e.h)],
-            [`diff: moved (${d.moved.length})`, (e) => movedH.has(e.h)],
-            ['diff: =unchanged', (e) => !addedH.has(e.h) && !changedH.has(e.h)],
+            [`diff: +added (${d.added.length})`, (e) => addedH.has(hOf(e))],
+            [`diff: ~changed (${d.changed.length})`, (e) => changedH.has(hOf(e))],
+            [`diff: moved (${d.moved.length})`, (e) => movedH.has(hOf(e))],
+            ['diff: =unchanged', (e) => !addedH.has(hOf(e)) && !changedH.has(hOf(e))],
           ];
           if (d.removed.length) {
             this.setStatus3(`${d.removed.length} removed vs base (see the diff view)`);
