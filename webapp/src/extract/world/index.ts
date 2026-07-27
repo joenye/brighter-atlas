@@ -40,7 +40,12 @@ import { decodeSkeleton, restWorldTranslations } from '../skeleton.js';
 // site origin, 'defaults/…' for files shipped with the app.
 const defaultFetchJson: FetchJson = async (rel) => {
   const url = new URL(`../../../${rel}`, import.meta.url);
-  const res = await fetch(url);
+  // Revalidate, for the same reason profile.ts does: a host that answers a
+  // missing path with index.html returns HTML as a 200, which a cache may keep
+  // like any other success and then serve under this URL long after the real
+  // file ships. These two files are fetched on every extraction, so a poisoned
+  // entry here costs room names and the room reference, not just world data.
+  const res = await fetch(url, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`fetch ${rel}: HTTP ${res.status}`);
   return res.json();
 };
