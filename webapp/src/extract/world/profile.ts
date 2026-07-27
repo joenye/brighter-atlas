@@ -76,7 +76,15 @@ export function validateWorldProfile(profile: any, rawSha256: string): WorldProf
 // (js/main.js and js/extract/worker.js), so the same code works everywhere.
 const defaultFetchJson: FetchJson = async (rel) => {
   const url = new URL(`../../../${rel}`, import.meta.url);
-  const res = await fetch(url);
+  // Always revalidate. A host that rewrites missing paths to index.html serves
+  // a MISSING build as 200 text/html, which the HTTP cache is entitled to keep
+  // like any other success. Anyone who opens a build before its decode data
+  // ships then caches that page under the build's own URL, and keeps being
+  // told the build is unsupported long after the data is live: seen in the
+  // wild as one browser working and another not, on the same machine and the
+  // same build. 'no-cache' revalidates rather than refetching, so an unchanged
+  // profile still costs a 304 and the poisoned entry heals itself.
+  const res = await fetch(url, { cache: 'no-cache' });
   if (!res.ok) throw new Error(`fetch ${rel}: HTTP ${res.status}`);
   return res.json();
 };
