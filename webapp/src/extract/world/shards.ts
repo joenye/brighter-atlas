@@ -704,6 +704,9 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   const placementZ = new Map<number, number>();
   const terrainZ = new Map<number, number>();
   const terrainSurfaceParts = new Map<string, [OccurrenceHit, PartRecord][]>(); // "x,y" -> [hit, part][]
+  // Ground only: the terrain top faces, without block tops or model parts. The
+  // roaming-enemy block below grounds on this narrower set, see the comment there.
+  const groundSurfaceParts = new Map<string, [OccurrenceHit, PartRecord][]>();
   const cellLayers = new Map<string, Set<number>>(); // "x,y" -> Set(z)  (occupancy span)
   for (const hit of occurrences) {
     const key = `${hit.cell[0]},${hit.cell[1]}`;
@@ -808,6 +811,10 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       const key = `${hit.cell[0]},${hit.cell[1]}`;
       const list = terrainSurfaceParts.get(key);
       if (list) list.push([hit, part]); else terrainSurfaceParts.set(key, [[hit, part]]);
+      if (part.kind === 'terrain_face') {
+        const ground = groundSurfaceParts.get(key);
+        if (ground) ground.push([hit, part]); else groundSurfaceParts.set(key, [[hit, part]]);
+      }
     }
   }
 
@@ -897,8 +904,16 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   // resolve their appearance through the enemy definition's tier owners.
   const rosters = ctx.rostersByRoom.get(roomId) || [];
   if (rosters.length && ctx.rosterAssets) {
-    const occupied = new Set<string>();
-    for (const hit of occurrences) occupied.add(`${hit.cell[0]},${hit.cell[1]}`);
+    // A tile an enemy can stand on: it has ground, and no enemy has taken it
+    // yet. Tiles are NOT excluded for carrying room content, which is what the
+    // room-centre fallback used to require: since every floor tile carries
+    // terrain, that test could only ever succeed out in the void beyond the
+    // floor, and those rows then found no ground at all and sank to the world
+    // base plane.
+    const taken = new Set<string>();
+    const standable = (x: number, y: number): boolean =>
+      x >= 0 && y >= 0 && x < mapSize[0] && y < mapSize[1]
+      && (groundSurfaceParts.get(`${x},${y}`)?.length ?? 0) > 0;
     const claimTiles = (centerX: number, centerY: number, wanted: number): [number, number][] => {
       const out: [number, number][] = [];
       const maxRadius = Math.max(mapSize[0], mapSize[1]);
@@ -908,10 +923,9 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
             if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
             const x = centerX + dx;
             const y = centerY + dy;
-            if (x < 0 || y < 0 || x >= mapSize[0] || y >= mapSize[1]) continue;
             const key = `${x},${y}`;
-            if (occupied.has(key)) continue;
-            occupied.add(key);
+            if (taken.has(key) || !standable(x, y)) continue;
+            taken.add(key);
             out.push([x, y]);
           }
         }
@@ -919,6 +933,81 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       while (out.length < wanted) out.push([centerX, centerY]);   // pathological rooms
       return out;
     };
+    const ANCHOR_SNAP_RADIUS = 3;
+    // The tile's ground level, cheaply: the highest terrain face resting on it.
+    const groundLayer = (x: number, y: number): number | null => {
+      const parts = groundSurfaceParts.get(`${x},${y}`);
+      if (!parts?.length) return null;
+      let top = -Infinity;
+      for (const [hit] of parts) if (hit.cell[2] > top) top = hit.cell[2];
+      return Number.isFinite(top) ? top : null;
+    };
+    // An authored anchor landing on a tile with no ground moves to a nearby one
+    // that has some. Nearest alone is the wrong rule: taking the first tile the
+    // scan reaches picks by scan order, and on a stepped slope that is the
+    // bottom step, which drops an enemy several levels below the floor it was
+    // standing beside. Prefer the candidate whose ground sits at the level
+    // typical of the neighbourhood, and keep the radius small so an anchor
+    // nowhere near a floor is left alone rather than given an invented home.
+    const snapToGround = (x: number, y: number): [number, number] => {
+      if (standable(x, y)) return [x, y];
+      const candidates: { x: number; y: number; layer: number; distance: number }[] = [];
+      for (let dy = -ANCHOR_SNAP_RADIUS; dy <= ANCHOR_SNAP_RADIUS; dy++) {
+        for (let dx = -ANCHOR_SNAP_RADIUS; dx <= ANCHOR_SNAP_RADIUS; dx++) {
+          if (!standable(x + dx, y + dy)) continue;
+          const layer = groundLayer(x + dx, y + dy);
+          if (layer === null) continue;
+          candidates.push({
+            x: x + dx, y: y + dy, layer, distance: Math.max(Math.abs(dx), Math.abs(dy)),
+          });
+        }
+      }
+      if (!candidates.length) return [x, y];
+      const levels = candidates.map((candidate) => candidate.layer).sort((a, b) => a - b);
+      const median = levels[(levels.length - 1) >> 1];
+      let best = candidates[0];
+      for (const candidate of candidates) {
+        const gap = Math.abs(candidate.layer - median) - Math.abs(best.layer - median);
+        if (gap < 0 || (gap === 0 && candidate.distance < best.distance)) best = candidate;
+      }
+      return [best.x, best.y];
+    };
+    // Which tile frame the authored markers speak. They were read in the
+    // minimap/display frame (y-down) and reflected into the occupancy frame
+    // (y-up), but a marker also carries a layer value, and that value should be
+    // one of the layers actually present at the tile it names. Scoring both
+    // readings against that gives the frame from the data rather than assuming
+    // it. The reflected reading stays the default, so a build whose markers do
+    // not decide the question keeps its previous interpretation.
+    const frameScore = (reflect: boolean): number => {
+      let hits = 0;
+      for (const roster of rosters) {
+        for (const position of roster.positions) {
+          const x = Math.floor(position.x);
+          const raw = Math.floor(position.y);
+          const y = reflect ? mapSize[1] - 1 - raw : raw;
+          if (!(x >= 0 && x < mapSize[0] && y >= 0 && y < mapSize[1])) continue;
+          const layer = Math.floor(Number(position.raw?.[2]));
+          if (!Number.isFinite(layer)) continue;
+          if (cellLayers.get(`${x},${y}`)?.has(layer)) hits++;
+        }
+      }
+      return hits;
+    };
+    const markerCount = rosters.reduce((n, roster) => n + roster.positions.length, 0);
+    let reflectMarkers = true;
+    if (markerCount) {
+      const rawHits = frameScore(false);
+      const reflectedHits = frameScore(true);
+      // The raw reading wins ties. Where both readings explain every marker the
+      // room cannot decide between them, but across a whole build the raw one
+      // explains every marker and the reflected one barely beats picking a tile
+      // at random, so a local tie is not evidence for reflecting. The majority
+      // gate is what keeps this honest: a build whose markers carry no layer
+      // evidence at all scores zero either way and keeps the previous reading
+      // rather than flipping on a vacuous tie.
+      if (rawHits >= reflectedHits && rawHits >= Math.ceil(markerCount * 0.6)) reflectMarkers = false;
+    }
     for (const roster of rosters) {
       let parts: Record<string, any>[] = [];
       for (const owner of roster.owners) {
@@ -927,28 +1016,38 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       }
       const placements: { x: number; y: number; origin: number }[] = [];
       for (const position of roster.positions) {
-        // Roster markers speak the minimap/display frame (y-down), like the
-        // roster rows' other minimap fields; occupancy is y-up: reflect.
+        const rawY = Math.floor(position.y);
         const x = Math.floor(position.x);
-        const y = mapSize[1] - 1 - Math.floor(position.y);
+        const y = reflectMarkers ? mapSize[1] - 1 - rawY : rawY;
         if (!(x >= 0 && x < mapSize[0] && y >= 0 && y < mapSize[1])) continue;
-        placements.push({ x, y, origin: SPAWN_ORIGIN.roster });
-        occupied.add(`${x},${y}`);
-        for (const [ax, ay] of claimTiles(x, y, Math.max(0, position.count - 1))) {
-          placements.push({ x: ax, y: ay, origin: SPAWN_ORIGIN.roster });
+        const [ax, ay] = snapToGround(x, y);
+        placements.push({ x: ax, y: ay, origin: SPAWN_ORIGIN.roster });
+        taken.add(`${ax},${ay}`);
+        for (const [cx, cy] of claimTiles(ax, ay, Math.max(0, position.count - 1))) {
+          placements.push({ x: cx, y: cy, origin: SPAWN_ORIGIN.roster });
         }
       }
       if (!placements.length) {
-        const wanted = Math.max(1, roster.marker_count);
+        // One approximate row per roster. marker_count counts every float
+        // record on the roster, and most of those are not positions at all, so
+        // using it invented several enemies per roster that the room does not
+        // contain.
+        const wanted = 1;
         for (const [x, y] of claimTiles(Math.floor(mapSize[0] / 2), Math.floor(mapSize[1] / 2), wanted)) {
           placements.push({ x, y, origin: SPAWN_ORIGIN.roster_center });
         }
       }
       for (const place of placements) {
         const spawnIndex = spawnRows.length;
+        // Ground on the terrain only, NOT on the tallest surface of the tile.
+        // The wider set the authored actors use is calibrated on actors, who
+        // stand on piers and monument slabs. A roaming enemy is authored on
+        // open ground that scenery sits on top of, so taking the tallest
+        // surface puts it in the tree canopy: in one clearing that is 9182
+        // units where the floor is 2560.
         const surfaceZ = terrainSurfaceZ(
           ctx, [place.x, place.y],
-          terrainSurfaceParts.get(`${place.x},${place.y}`) || [],
+          groundSurfaceParts.get(`${place.x},${place.y}`) || [],
           0, cellLayers.get(`${place.x},${place.y}`) || null,
         );
         inc(counts, place.origin === SPAWN_ORIGIN.roster ? 'spawn_roster' : 'spawn_roster_approx');
