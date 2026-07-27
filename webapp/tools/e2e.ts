@@ -27,7 +27,10 @@ if (!CHROME || !existsSync(CHROME)) {
 }
 
 const roomArg = process.argv.find((a) => a.startsWith('--room='))?.slice(7);
-const DEFAULT_ROOM = 8564;   // Hopeport Garrison: dense, present in the supported builds
+// Anchored by NAME, not id: room ids are ab2 object indices and a game update
+// renumbers them (one update moved 450 of 451 rooms, and this room's old id
+// stopped being a room at all). Absent by name, the densest room stands in.
+const DEFAULT_ROOM_NAME = 'Hopeport Garrison';
 const SHOTS = path.join(WEBAPP, 'screenshots');
 
 let pass = 0, fail = 0;
@@ -156,15 +159,26 @@ for (const [cat, min] of [['meshes', 100], ['images', 100], ['audio', 100], ['st
 }
 
 // Recovered animatic names rode in with the World extraction and are merged
-// onto the anims index (client-store `sn`): the player one-handed blunt
-// attack family names clip 567.
-const clip567Names = await page.evaluate(async () => {
+// onto the anims index (client-store `sn`). Find the player one-handed blunt
+// attack family BY NAME, never by ordinal: bundle ordinals are renumbered by
+// every game update, so pinning one tests the build rather than the recovery.
+// (The mesh checks below already resolve by content hash for the same reason.)
+// Anchored on the clip's CONTENT HASH, the same stable id the mesh checks
+// below use, never its ordinal: ordinals are renumbered by every game update
+// (this clip moved 567 -> 572). Matching by name instead would be weaker than
+// the ordinal was, since it would still pass if the join attached names to the
+// wrong clips, which is the regression this anchor exists to catch.
+const animNames = await page.evaluate(async () => {
   const idx = await window.__bs.app.store.index('anims');
-  return idx.find((c) => c.i === 567)?.sn || null;
+  const named = idx.filter((c) => Array.isArray(c.sn) && c.sn.length).length;
+  const clip = idx.find((c) => c.h === 'f372d08278da8f6f');
+  return { named, total: idx.length, i: clip?.i ?? null, sn: clip?.sn ?? null };
 });
-ok(Array.isArray(clip567Names)
-  && clip567Names.some((n) => n.includes('player_male_one_handed_blunt_attack')),
-`clip 567 carries its recovered animatic name (${JSON.stringify(clip567Names)})`);
+ok(Array.isArray(animNames.sn)
+  && animNames.sn.some((n) => n.includes('player_male_one_handed_blunt_attack')),
+`the one-handed blunt attack clip carries its recovered animatic name `
++ `(clip ${animNames.i ?? 'NOT FOUND BY HASH'}, ${animNames.named}/${animNames.total} clips named, `
++ `${JSON.stringify(animNames.sn)})`);
 
 // Recovered wearable-item mesh names rode in with the World extraction and are
 // merged onto the meshes index (client-store `sn`). Resolve the stable Easter
@@ -335,12 +349,17 @@ ok(true, `image #${imageI} decodes + paints (SW-served PNG)`);
 const warmCheck = await page.evaluate(async () => {
   const store = window.__bs.app.store;
   const wi = await store.worldIndex();
-  const roomEntry = (wi?.rooms || []).find((r) => Number(r.id) === 8564);
+  // Pick the sample room from the DATA, never a fixed id: room ids are ab2
+  // object indices and a game update renumbers them wholesale (one update moved
+  // 450 of 451 rooms), which silently left this comparing zero files.
+  const roomEntry = (wi?.rooms || [])
+    .filter((r) => (r.textures || []).filter((id: number) => id >= 500).length >= 3)
+    .sort((a, b) => (b.textures || []).length - (a.textures || []).length)[0];
   const texIds = (roomEntry?.textures || []).filter((id) => id >= 500).slice(0, 3);
   const idx = await store.index('images');
   const byI = new Map(idx.map((e) => [e.i, e]));
   const cache = await caches.open('bs-decoded-v6');
-  const out = { compared: 0, mismatches: [] };
+  const out = { compared: 0, mismatches: [], room: roomEntry ? roomEntry.id : null };
   for (const id of texIds) {
     for (const rel of (byI.get(id) as any)?.f || []) {
       const abs = new URL(store.url(rel), location.href).href;
@@ -354,13 +373,15 @@ const warmCheck = await page.evaluate(async () => {
   return out;
 });
 ok(warmCheck.compared >= 3 && warmCheck.mismatches.length === 0,
-  `pre-warmed PNGs byte-equal fresh SW decodes (${warmCheck.compared} compared${warmCheck.mismatches.length ? `, MISMATCH: ${warmCheck.mismatches.join(', ')}` : ''})`);
+  `pre-warmed PNGs byte-equal fresh SW decodes (${warmCheck.compared} compared`
+  + `${warmCheck.room == null ? ', NO ROOM with >= 3 world textures found' : ` from room ${warmCheck.room}`}`
+  + `${warmCheck.mismatches.length ? `, MISMATCH: ${warmCheck.mismatches.join(', ')}` : ''})`);
 
 // ---- 7. world room: renders with real paint coverage --------------------------
 if (!rooms.length) { console.log('\nFAILED: no rooms in the world index, cannot run the world checks'); process.exit(1); }
 const ROOM = Number(roomArg)
-  || (rooms.some((r) => r.id === DEFAULT_ROOM) ? DEFAULT_ROOM
-    : rooms.reduce((a, b) => (b.meshes > a.meshes ? b : a)).id);   // densest room fallback
+  || rooms.find((r) => r.name === DEFAULT_ROOM_NAME)?.id
+  || rooms.reduce((a, b) => (b.meshes > a.meshes ? b : a)).id;   // densest room fallback
 t0 = Date.now();
 await page.goto(`${base}/index.html#/world/${ROOM}`, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 300000 });
@@ -448,21 +469,26 @@ if (process.env.BS_E2E_ALL_ROOMS === '1') {
 }
 
 // ---- 7c. roaming-enemy roster spawns: Bear Clearing renders bears -------------
-// (room 78 has no positioned actor records for bears; the roster markers
+// (the room has no positioned actor records for bears; the roster markers
 // carry authored tiles -> origin=roster; approximate fallbacks are flagged 2)
-const bearSpawns = await page.evaluate(async () => {
+// Resolved BY NAME, like the effects probes: the room id is an ab2 object index
+// and every game update renumbers it (this room moved 78 -> 79, and 78 stopped
+// being a room at all), which made the check silently read an empty shard.
+const bearRoomId = rooms.find((r) => r.name === 'Bear Clearing')?.id ?? null;
+const bearSpawns = bearRoomId == null ? null : await page.evaluate(async (roomId) => {
   const store = window.__bs.app.store;
-  const [index, shard] = await Promise.all([store.worldIndex(), store.worldRoom(78)]);
+  const [index, shard] = await Promise.all([store.worldIndex(), store.worldRoom(roomId)]);
   const cols: Record<string, number> = {};
   (index?.columns?.spawn || []).forEach((name: string, i: number) => { cols[name] = i; });
   const rows = (shard?.spawns || []).filter((r) => r[cols.label] === 'Bear');
   return rows.map((r) => ({ x: r[cols.x], y: r[cols.y], origin: r[cols.origin], sz: r[cols.surface_z] }));
-});
+}, bearRoomId);
 // grounded like the room's actor spawns (floor ~2560 native units): the
 // minimap-frame y-flip regression put bears on treetops 9+ layers up
-ok(bearSpawns.length >= 1 && bearSpawns.every((s) => (s.origin === 1 || s.origin === 2)
+ok(bearSpawns !== null && bearSpawns.length >= 1 && bearSpawns.every((s) => (s.origin === 1 || s.origin === 2)
   && Number.isFinite(s.sz) && s.sz >= 1536 && s.sz <= 4096),
-  `Bear Clearing carries grounded roster bear spawns (${JSON.stringify(bearSpawns)})`);
+  `Bear Clearing carries grounded roster bear spawns `
+  + `(room ${bearRoomId ?? 'NOT FOUND BY NAME'}: ${JSON.stringify(bearSpawns)})`);
 
 // ---- 7d. recovered particle effect systems ------------------------------------
 // The world:effects doc rode in with the World extraction. Thresholds are
