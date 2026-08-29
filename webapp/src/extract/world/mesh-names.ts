@@ -17,19 +17,23 @@
 //     Bunny Hood" -> "Easter Bunny Hood").
 //
 //  2. GEAR: profession armour, guard gear, etc. (family 10317/16063): the name
-//     is a single inline label at field op 26; the item references a per-variant
-//     series of visual rows (numbered dye/tiers) whose worn owners hold the
-//     mesh. Its pooled refs fan out to a big shared hub, so the walk is
-//     restricted to TYPED (tag-0x26) edges only — that collapses each item onto
-//     its own meshes (e.g. Horned Helmet -> its 16 M/F+tier variant meshes)
-//     essentially collision-free.
+//     is a single inline label at one field op (26, then 27 after an update:
+//     detected per build by pickNameOp, as the op whose labels are near-unique
+//     per row, unlike the vendor and the "Equip" verb sharing the row). The item
+//     references a per-variant series of visual rows (numbered dye/tiers)
+//     whose worn owners hold the mesh. Its pooled refs fan out to a big shared
+//     hub, so the walk is restricted to TYPED (tag-0x26) edges only, which
+//     collapses each item onto its own meshes (e.g. Horned Helmet -> its 16
+//     M/F+tier variant meshes) essentially collision-free.
 //
 //  3. CAPES: per-profession / region / combat capes, each their own reader
-//     family, name at field op 27 ("Ultimate Fisher Cape", "Champion IV Combat
-//     Cape"). They do NOT tag the slot enum (they are always the cape slot), and
-//     the tier/level prefix (Journeyman/Adept/Expert/Champion/Ultimate + a roman
-//     numeral) plus a leading region emblem glyph are collapsed away, so the
-//     dozens of tier items that share a cape geometry land on ONE base name
+//     family, name at one field op (27 then 28, detected registry-wide as the
+//     op the "... Cape" labels concentrate at): "Ultimate Fisher Cape",
+//     "Champion IV Combat Cape". They do NOT tag the slot enum (they are always
+//     the cape slot), and the tier/level prefix (Journeyman/Adept/Expert/
+//     Champion/Ultimate + a roman numeral) plus a leading region emblem glyph
+//     are collapsed away, so the dozens of tier items that share a cape
+//     geometry land on ONE base name
 //     ("Fisher Cape", "Combat Cape") — verified 1 base per mesh, 0 cross-family
 //     sharing. Profession/combat capes carry typed (tag-0x26) edges to their
 //     visual rows, so the same typed-only walk as gear reaches them. The region
@@ -59,7 +63,11 @@ import type { RegistryRow } from './graph.js';
 // matched zero rows), so every other build's doc was missing every cosmetic and
 // gear name and gains them now. The output changes, so the format moves with it
 // rather than leaving those builds on a stale cached doc.
-export const MESH_NAMES_FORMAT = 3;
+// 4: the gear and cape NAME FIELD OPS are discovered per build too (see
+// pickNameOp). They were pinned at 26/27, which a game update shifted to
+// 27/28 -- silently emptying gear and capes (and with them the hands/feet/
+// shield/amulet equip slots) on every build after the shift.
+export const MESH_NAMES_FORMAT = 4;
 const WALK_DEPTH = 3;
 const COSMETIC_CAP = 8;   // pooled+typed walk: reject the rare shared hub
 const GEAR_CAP = 24;      // typed-only walk: an item's own M/F + dye/tier set
@@ -77,13 +85,17 @@ const GEAR_CAP = 24;      // typed-only walk: an item's own M/F + dye/tier set
 const COSMETIC_FAMILIES_FALLBACK = new Set(['6851/18963', '10801/18962']);
 const COSMETIC_NAME_OP = 2;
 const COSMETIC_NAME_OP_DUP = 4;
-// Gear (profession armour / guard equipment): name inline at field op 26.
+// Gear (profession armour / guard equipment): name inline at a single field op.
+// That op is DETECTED per build (pickNameOp) because a game update shifted
+// it 26 -> 27; the pin below is only the fallback for a build where detection
+// finds nothing.
 const GEAR_FAMILIES_FALLBACK = new Set(['10317/16063']);
-const GEAR_NAME_OP = 26;
-// Capes: name at field op 27, always ending "Cape"; each profession/region/
+const GEAR_NAME_OP_FALLBACK = 26;
+// Capes: name at one field op, always ending "Cape"; each profession/region/
 // combat cape is its own reader family, so they are recognised by the label
-// shape rather than a fixed family set. Always the cape equip slot.
-const CAPE_NAME_OP = 27;
+// shape rather than a fixed family set. Always the cape equip slot. The op
+// moved 27 -> 28 in the same update and is detected the same way.
+const CAPE_NAME_OP_FALLBACK = 27;
 const CAPE_CAP = 16;
 // Region capes carry a leading region-emblem glyph (a private-use icon char) in
 // their label ("Journeyman <glyph>Hopeport Cape"); profession/combat capes do
@@ -112,8 +124,17 @@ const SLOT_MIN_LABELS = 4;
 // The op-2/op-4 duplicated name is unique to the cosmetic families, so one row
 // proves it, and one of the two real families has exactly one row.
 const COSMETIC_MIN_ROWS = 1;
-// An op-26 label is common; gear also resolves exactly one equip slot.
+// A gear label is common; gear also resolves exactly one equip slot.
 const GEAR_MIN_ROWS = 4;
+// An item NAME is what tells one row of a family from the next, so the name op
+// is the one whose labels are near-unique across the family's rows. The other
+// label ops on a gear row are boilerplate that repeats: the vendor
+// ("Quartermaster"), the action verb ("Equip"). A description is near-unique
+// too, so among the ops that clear this ratio the SHORTEST labels win -- names
+// are a few words, descriptions are sentences ("Bears the heraldry of
+// Hopeport."). Most descriptions are already dropped by isLabelString (they end
+// in a full stop), which is why the ratio alone was enough until now.
+const NAME_OP_DISTINCT_RATIO = 0.8;
 const EQUIP_SLOTS = new Set([
   'head', 'amulet', 'torso', 'cape', 'hands', 'shield', 'legs', 'feet', 'ring', 'ammo',
 ]);
@@ -126,6 +147,29 @@ const COLOUR_WORDS = new Set([
 
 const isInt = (v: unknown): v is number => Number.isInteger(v);
 const isNode = (v: any) => v !== null && typeof v === 'object' && !Array.isArray(v);
+// A cape label always ends in the word: that shape, not a family id, is what
+// recognises capes (and nominates the cape name op).
+const CAPE_LABEL = /\bCape$/;
+
+// What one field op of one reader family holds, over that family's rows.
+interface OpLabels { rows: number; chars: number; labels: Set<string> }
+
+// The op an item family keeps its NAME at: near-unique across the family's rows
+// (NAME_OP_DISTINCT_RATIO), and the shortest such op. Null when no op qualifies.
+function pickNameOp(ops: Map<number, OpLabels>): number | null {
+  let best: number | null = null;
+  let bestLen = Infinity;
+  for (const [op, stat] of ops) {
+    if (stat.rows < GEAR_MIN_ROWS) continue;
+    if (stat.labels.size / stat.rows < NAME_OP_DISTINCT_RATIO) continue;
+    const meanLen = stat.chars / stat.rows;
+    if (meanLen < bestLen || (meanLen === bestLen && best !== null && op < best)) {
+      best = op;
+      bestLen = meanLen;
+    }
+  }
+  return best;
+}
 
 // A display label, not a description sentence (mirrors models.ts isLabelString).
 const wsStrip = (s: string): string => s.replace(/[\s\x1c-\x1f\x85]+$/u, '');
@@ -171,6 +215,10 @@ export interface MeshNamesDoc {
   // the reader families this build was read with (detected, see detectFamilies):
   // worth surfacing because a wrong pick here silently empties the whole doc
   families: { slot: string; cosmetic: string[]; gear: string[] };
+  // the detected name field ops (gear per family, capes registry-wide),
+  // surfaced for the same reason: a wrong op empties gear or capes with no
+  // other symptom
+  name_ops: { gear: Record<string, number>; cape: number };
   cosmetic_rows: number;  // cosmetic item-def rows resolved to a display name
   gear_rows: number;      // gear item-def rows resolved to a display name
   cape_rows: number;      // cape item-def rows resolved to a display name
@@ -296,12 +344,18 @@ export function extractMeshNames(
   const familyScan = () => {
     const slotLabels = new Map<string, Set<string>>();
     const cosmeticHits = new Map<string, number>();
-    const gearCandidates: { family: string; row: RegistryRow }[] = [];
+    // family -> field op -> label stats, the raw material pickNameOp picks
+    // the gear name op out of
+    const labelOps = new Map<string, Map<number, OpLabels>>();
+    // field op -> how many rows carry a "... Cape" label there (families are
+    // per cape, so this one is counted registry-wide)
+    const capeOps = new Map<number, number>();
     for (const row of rows) {
       const family = `${row.selector}/${row.runtime}`;
       let atName: string | null = null;
       let atNameDup: string | null = null;
-      let gearLabel = false;
+      let ops: Map<number, OpLabels> | undefined;
+      const capeSeen = new Set<number>();
       for (const event of strings.directStrings(row)) {
         const text = event.text;
         if (typeof text !== 'string') continue;
@@ -313,12 +367,25 @@ export function extractMeshNames(
         if (!isLabelString(text)) continue;
         if (event.field_op === COSMETIC_NAME_OP && atName === null) atName = text;
         else if (event.field_op === COSMETIC_NAME_OP_DUP && atNameDup === null) atNameDup = text;
-        else if (event.field_op === GEAR_NAME_OP) gearLabel = true;
+        const op = event.field_op;
+        if (op === null) continue;   // a heap string with no field op names nothing
+        if (!ops) {
+          ops = labelOps.get(family);
+          if (!ops) labelOps.set(family, ops = new Map());
+        }
+        let stat = ops.get(op);
+        if (!stat) ops.set(op, stat = { rows: 0, chars: 0, labels: new Set() });
+        stat.rows++;
+        stat.chars += text.length;
+        stat.labels.add(text);
+        if (!capeSeen.has(op) && CAPE_LABEL.test(stripEmblem(text))) {
+          capeSeen.add(op);
+          capeOps.set(op, (capeOps.get(op) || 0) + 1);
+        }
       }
       if (atName !== null && atName === atNameDup) {
         cosmeticHits.set(family, (cosmeticHits.get(family) || 0) + 1);
       }
-      if (gearLabel) gearCandidates.push({ family, row });
     }
     // The enum family is the one declaring the most DISTINCT slot words. The
     // threshold is not ceremony: a decoy family carrying a lone 'shield' sits
@@ -328,9 +395,20 @@ export function extractMeshNames(
     for (const [family, seen] of slotLabels) {
       if (seen.size > best) { best = seen.size; slotFamily = family; }
     }
-    return { slotFamily, cosmeticHits, gearCandidates };
+    return { slotFamily, cosmeticHits, labelOps, capeOps };
   };
-  const { slotFamily, cosmeticHits, gearCandidates } = familyScan();
+  const { slotFamily, cosmeticHits, labelOps, capeOps } = familyScan();
+
+  // The cape name op: the ONE op carrying "... Cape" labels. Each cape is its
+  // own family, so this is decided registry-wide rather than per family, and
+  // the label shape that already recognises capes is what nominates the op --
+  // a stray "Cape" elsewhere loses to the dozens of real cape rows.
+  const capeNameOp = (() => {
+    let op = CAPE_NAME_OP_FALLBACK;
+    let best = GEAR_MIN_ROWS - 1;
+    for (const [candidate, n] of capeOps) if (n > best) { best = n; op = candidate; }
+    return op;
+  })();
 
   // Cosmetic families: a name repeated at BOTH ops 2 and 4 is a shape nothing
   // else in the registry shows, so a single row is proof. Counting higher would
@@ -362,20 +440,38 @@ export function extractMeshNames(
     return found.size === 1 ? [...found][0] : null;
   };
 
-  // Gear families, decided last because the test needs equipSlot. An op-26
-  // label on its own is NOT enough: around eight other families carry one and
-  // are recipe/upgrade/description rows ("Trim", "Cabbage", quest sentences).
-  // Requiring the row to also resolve exactly one equip slot separates them
-  // cleanly, and the count keeps a stray match from claiming a family.
-  const gearFamilies = (() => {
-    const counts = new Map<string, number>();
-    for (const { family, row } of gearCandidates) {
-      if (equipSlot(row) !== null) counts.set(family, (counts.get(family) || 0) + 1);
+  // Gear families and the gear NAME OP, decided last because the test needs
+  // equipSlot. A display label on its own is NOT enough: around eight other
+  // families carry one and are recipe/upgrade/description rows ("Trim",
+  // "Cabbage", quest sentences). Requiring the rows to also resolve exactly one
+  // equip slot separates them cleanly, and the count keeps a stray match from
+  // claiming a family.
+  //
+  // Within a qualifying family the name op is then read off the labels
+  // themselves (NAME_OP_DISTINCT_RATIO): near-unique per row, and the shortest
+  // of the ops that manage it. Detecting it is what keeps this working across
+  // the update that shifted gear names from op 26 to op 27 -- and the op is
+  // decided per family, so two families are free to disagree.
+  const slottedRows = new Map<string, number>();
+  for (const row of rows) {
+    const family = `${row.selector}/${row.runtime}`;
+    if (!labelOps.has(family)) continue;
+    if (equipSlot(row) !== null) slottedRows.set(family, (slottedRows.get(family) || 0) + 1);
+  }
+  const gearNameOps = new Map<string, number>();
+  for (const [family, slotted] of slottedRows) {
+    if (slotted < GEAR_MIN_ROWS) continue;
+    const op = pickNameOp(labelOps.get(family)!);
+    if (op !== null) gearNameOps.set(family, op);
+  }
+  const gearFamilies = new Set(gearNameOps.keys());
+  if (!gearFamilies.size) {
+    // Nothing detected: read the build exactly as the pinned pair did.
+    for (const family of GEAR_FAMILIES_FALLBACK) {
+      gearFamilies.add(family);
+      gearNameOps.set(family, GEAR_NAME_OP_FALLBACK);
     }
-    const out = new Set<string>();
-    for (const [family, n] of counts) if (n >= GEAR_MIN_ROWS) out.add(family);
-    return out.size ? out : GEAR_FAMILIES_FALLBACK;
-  })();
+  }
 
   // The cosmetic item name: the label present at BOTH field ops 2 and 4. The
   // duplication distinguishes the real name from the season/collection tag
@@ -390,19 +486,21 @@ export function extractMeshNames(
     const primary = atOp.get(COSMETIC_NAME_OP);
     return primary && primary === atOp.get(COSMETIC_NAME_OP_DUP) ? primary : null;
   };
-  // The gear item name: a single inline display label at field op 26 (field op 2
-  // there is the vendor, field op 1 the description).
-  const gearName = (row: RegistryRow): string | null => {
+  // The gear item name: a single inline display label at the family's detected
+  // name op (the other label ops on the row are the vendor, the action verb and
+  // the description).
+  const gearName = (row: RegistryRow, nameOp: number): string | null => {
     for (const event of strings.directStrings(row)) {
-      if (event.field_op === GEAR_NAME_OP && isLabelString(event.text)) return event.text;
+      if (event.field_op === nameOp && isLabelString(event.text)) return event.text;
     }
     return null;
   };
-  // The cape item name: a field-op-27 display label ending "Cape" (any family).
+  // The cape item name: a display label ending "Cape" at the detected cape op
+  // (any family).
   const capeName = (row: RegistryRow): string | null => {
     for (const event of strings.directStrings(row)) {
-      if (event.field_op !== CAPE_NAME_OP || !isLabelString(event.text)) continue;
-      if (/\bCape$/.test(stripEmblem(event.text))) return event.text;
+      if (event.field_op !== capeNameOp || !isLabelString(event.text)) continue;
+      if (CAPE_LABEL.test(stripEmblem(event.text))) return event.text;
     }
     return null;
   };
@@ -453,7 +551,7 @@ export function extractMeshNames(
       resolvedRows++;
       assign(row, label, baseName(label), 'cosmetic', equipSlot(row), meshes);
     } else if (gearFamilies.has(family)) {
-      const label = gearName(row);
+      const label = gearName(row, gearNameOps.get(family)!);
       if (label === null) continue;
       gearRows++;
       const meshes = collectMeshes(row.slot, typedTargetsOf);
@@ -510,6 +608,10 @@ export function extractMeshNames(
       slot: slotFamily,
       cosmetic: [...cosmeticFamilies].sort(),
       gear: [...gearFamilies].sort(),
+    },
+    name_ops: {
+      gear: Object.fromEntries([...gearNameOps].sort((a, b) => (a[0] < b[0] ? -1 : 1))),
+      cape: capeNameOp,
     },
     cosmetic_rows: cosmeticRows,
     gear_rows: gearRows,
