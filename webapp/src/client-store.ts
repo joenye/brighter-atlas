@@ -68,7 +68,7 @@ export class ClientStore extends EventTarget implements AppStore {
         .then(async (idx) => {
           const arr = (idx || []).filter(Boolean);
           if (cat === 'anims') return this._annotateAnimNames(arr);
-          if (cat === 'meshes') return this._annotateMeshNames(arr);
+          if (cat === 'meshes') return this._annotateMeshes(arr);
           // fix sr/dur for audio indexes built before the bslpc 24 kHz change
           return cat === 'audio' ? arr.map(correctAudioRate) : arr;
         })
@@ -98,9 +98,9 @@ export class ClientStore extends EventTarget implements AppStore {
   // merged onto the meshes index entries as `sn`, the same display/search
   // layer as anims, distinct from the hash-keyed user names that outrank it.
   // The item's equip slot ('head'/'torso'/…) rides along as `slot`, marking the
-  // mesh player-equippable and feeding the slot facet. Older extractions have no
-  // doc; entries stay untouched.
-  private async _annotateMeshNames(arr: IndexEntry[]): Promise<IndexEntry[]> {
+  // mesh player-equippable. Inferred body slots ('mesh:slots') follow as
+  // `islot`. Older extractions have no docs; entries stay untouched.
+  private async _annotateMeshes(arr: IndexEntry[]): Promise<IndexEntry[]> {
     try {
       const doc = await derivedGet(this.versionId, 'mesh:names');
       const meshes = doc?.meshes;
@@ -112,6 +112,20 @@ export class ClientStore extends EventTarget implements AppStore {
         if (typeof rec.slot === 'string') (entry as any).slot = rec.slot;
       }
     } catch { /* recovered names are optional */ }
+    // Inferred body slots ('mesh:slots') ride along as `islot`, deliberately a
+    // FIELD OF ITS OWN: `slot` stays the item tables' word, the flag "player
+    // equipment" is grouped on, while `islot` is read off the skinning weights
+    // for the meshes no item names (extract/world/mesh-slots.js). Viewers that
+    // want body regions read `slot ?? islot` and mark the difference.
+    try {
+      const doc = await derivedGet(this.versionId, 'mesh:slots');
+      const slots = doc?.meshes;
+      if (!slots || typeof slots !== 'object') return arr;
+      for (const entry of arr) {
+        const slot = slots[String(entry.i)];
+        if (typeof slot === 'string' && !(entry as any).slot) (entry as any).islot = slot;
+      }
+    } catch { /* inferred slots are optional */ }
     return arr;
   }
 

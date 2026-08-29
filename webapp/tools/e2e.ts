@@ -210,6 +210,48 @@ const gearCount = await page.evaluate(async () => {
 });
 ok(gearCount > 300, `player-equippable meshes carry an equip slot (${gearCount} > 300)`);
 
+// Every mesh on the player rig lands in a body slot, not just the few hundred
+// an item definition names: the rest are inferred from the bone they are
+// skinned to (islot). The two never collide on one mesh.
+const rigSlots = await page.evaluate(async () => {
+  const idx = await window.__bs.app.store.index('meshes');
+  // the player rig = the rig carrying the item-slotted meshes
+  const slotted = new Map();
+  for (const m of idx) if (typeof m.slot === 'string' && m.skel >= 0) slotted.set(m.skel, (slotted.get(m.skel) || 0) + 1);
+  const rig = [...slotted.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? -1;
+  const bound = idx.filter((m) => m.skel === rig);
+  const slots = {};
+  for (const m of bound) {
+    const s = m.slot || m.islot;
+    if (s) slots[s] = (slots[s] || 0) + 1;
+  }
+  return {
+    rig,
+    bound: bound.length,
+    withSlot: bound.filter((m) => m.slot || m.islot).length,
+    inferred: bound.filter((m) => !m.slot && m.islot).length,
+    collisions: idx.filter((m) => m.slot && m.islot).length,
+    otherRigsInferred: idx.filter((m) => m.islot && m.skel !== rig).length,
+    slots,
+  };
+});
+ok(rigSlots.bound > 1000 && rigSlots.withSlot / rigSlots.bound > 0.95 && rigSlots.inferred > 500,
+  `player rig #${rigSlots.rig}: every mesh gets a body slot `
+  + `(${rigSlots.withSlot}/${rigSlots.bound}, ${rigSlots.inferred} inferred, ${JSON.stringify(rigSlots.slots)})`);
+ok(rigSlots.collisions === 0,
+  `an inferred slot never sits on a mesh the item data already slots (${rigSlots.collisions})`);
+ok(rigSlots.otherRigsInferred === 0,
+  `inference stays on rigs with item slots to learn from (${rigSlots.otherRigsInferred} elsewhere)`);
+
+// ...and the rig view's slot facet is built from all of them, which is the
+// point: filtering "head" shows the whole head wardrobe, not the named few.
+await page.goto(`${base}/index.html#/rig/${rigSlots.rig}`, { waitUntil: 'networkidle0' });
+await page.waitForSelector('.sm-slot option', { timeout: 30000 });
+const facet = await page.$eval('.sm-slot', (s) => [...s.options].slice(1).map((o) => o.text));
+const facetTotal = facet.reduce((sum, text) => sum + (Number(text.match(/\((\d+)\)$/)?.[1]) || 0), 0);
+ok(facet.length >= 4 && facetTotal === rigSlots.withSlot,
+  `rig view slot facet covers every slotted mesh (${facetTotal} across ${facet.length}: ${facet.join(', ')})`);
+
 // Profession/skill/region/combat capes are recovered too: dozens of tier items
 // share one cape geometry, so tiers collapse to a concise base name. The Fisher
 // Cape mesh (stable content hash) carries "Fisher Cape" in the cape slot.

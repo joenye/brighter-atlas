@@ -8,6 +8,7 @@
 import { decodeObject } from './bundles.js';
 import { hashObject } from './hash.js';
 import { audioIndexEntry } from './audio.js';
+import { skinSummary } from './mesh.js';
 import {
   categorize, parseDatafileRecords, decodeFontGlyphs,
   parseImageMeta, decodeSubImage, applyMaterialCutout,
@@ -76,8 +77,21 @@ async function warmWorldTexturePngs({ base, ord, entries, subs, roles, decodedRg
 // kind -> async (bundleIndex, i, raw, extra) -> per-object result
 export const INDEX_JOBS: Record<string,
   (n: number, i: number, raw: Uint8Array, extra?: any) => Promise<any>> = {
-  // meshes/anims: everything except h derives from ab0 on the coordinator
+  // anims: everything except h derives from ab0 on the coordinator
   hash: async (n, i, raw) => ({ i, h: await hashObject(decodeObject(n, raw)) }),
+
+  // meshes: the same hash, plus the skin summary (which bone the mesh hangs
+  // off and how many bones weight it) that the bone-to-slot inference reads.
+  // extra = this mesh's ab0 mesh_dir entry, the authoritative vertex/triangle
+  // counts the vertex records cannot be walked without. A summary failure is
+  // never fatal: the entry simply carries no bone and the inference skips it.
+  mesh: async (n, i, raw, extra) => {
+    const decoded = decodeObject(n, raw);
+    const h = await hashObject(decoded);
+    let skin = null;
+    try { skin = skinSummary(decoded, extra); } catch { /* index without it */ }
+    return skin ? { i, h, ...skin } : { i, h };
+  },
 
   audio: async (n, i, raw) => ({ ...audioIndexEntry(raw, i), h: await hashObject(raw) }),
 

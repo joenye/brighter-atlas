@@ -43,6 +43,49 @@ function snorm10(dw: number, shift: number): number {
   return c / 511.0;
 }
 
+// Stride is whichever of 24/28/36 makes v*stride + t*6 equal the object size
+// modulo the 0/2-byte index alignment pad. At most one stride can satisfy the
+// equation (differences are >2 bytes). 0 when the counts fit no stride.
+function meshStride(len: number, v: number, t: number): number {
+  for (const s of [24, 28, 36]) {
+    const used = v * s + t * 6;
+    if (used === len || used + 2 === len) return s;
+  }
+  return 0;
+}
+
+// Which bones a skinned mesh actually hangs off, as two numbers per mesh:
+//   bone  = the bone carrying the most weight over the whole mesh
+//   bones = how many bones carry any weight at all
+// Together they say WHERE on a rig a mesh sits (bone) and HOW it is attached:
+// bones === 1 is a prop rigidly parented to one bone (a held weapon, a helmet),
+// anything more is a garment deforming with the body. That is the whole input
+// to the bone-to-slot inference (extract/world/mesh-slots.js), which is why
+// this is computed during the mesh index pass (the object is decompressed
+// there anyway) rather than by re-reading every payload later.
+export interface SkinSummary { bone: number; bones: number }
+
+export function skinSummary(
+  u8: Uint8Array, { v, t }: { v: number; t: number },
+): SkinSummary | null {
+  const stride = meshStride(u8.length, v, t);
+  if (stride !== 36 || v <= 0) return null;   // only the skinned stride has weights
+  const weight = new Float64Array(256);       // bone indices are u8
+  for (let k = 0; k < v; k++) {
+    const src = k * 36 + 28;
+    for (let j = 0; j < 4; j++) weight[u8[src + j]] += u8[src + 4 + j];
+  }
+  let bone = -1;
+  let best = 0;
+  let bones = 0;
+  for (let b = 0; b < 256; b++) {
+    if (!weight[b]) continue;
+    bones++;
+    if (weight[b] > best) { best = weight[b]; bone = b; }
+  }
+  return bone < 0 ? null : { bone, bones };
+}
+
 // decodeMesh(u8, {i, v, t, sref, bbox}) -> meshes/NNNNN.json object.
 //   u8   = decompressed ab5 object bytes
 //   v/t  = vertex/triangle counts from ab0's mesh directory (authoritative)
@@ -55,14 +98,7 @@ export function decodeMesh(
   { i, v, t, sref, bbox = null }:
     { i: number; v: number; t: number; sref: number; bbox?: ArrayLike<number> | null },
 ): MeshPayload {
-  // Stride is whichever of 24/28/36 makes v*stride + t*6 equal the object
-  // size modulo the 0/2-byte index alignment pad. At most one stride can
-  // satisfy the equation (differences are >2 bytes).
-  let stride = 0;
-  for (const s of [24, 28, 36]) {
-    const used = v * s + t * 6;
-    if (used === u8.length || used + 2 === u8.length) { stride = s; break; }
-  }
+  const stride = meshStride(u8.length, v, t);
   if (!stride) {
     throw new Error(`mesh ${i}: directory counts (V=${v}, T=${t}) do not fit object size ${u8.length}`);
   }

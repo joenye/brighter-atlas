@@ -6,6 +6,7 @@
 
 import { el, clear, badge, fmtInt, idLabel } from '../ui.js';
 import { effectiveName } from '../names.js';
+import { bodySlot } from '../mesh-slot.js';
 import { effectiveTex, getVariants, getActiveIndex } from '../texmap.js';
 import { buildMeshGeometry } from './mesh-geometry.js';
 import { saveModel } from '../models.js';
@@ -72,7 +73,7 @@ export function openModelWizard({ app, entry, active, boundMeshes, imagesIdx }:
   for (const [v, l] of [['tex-verts', 'verts'], ['triangles', 'triangles'], ['name', 'name'], ['index', 'index']]) {
     sortSel.appendChild(el('option', { value: v, text: `sort: ${l}` }));
   }
-  const slots = [...new Set(boundMeshes.map((m) => m.slot).filter(Boolean))].sort();
+  const slots = [...new Set(boundMeshes.map(bodySlot).filter(Boolean))].sort() as string[];
   const slotSel = el('select', { class: 'btn-mini sm-slot', title: 'Filter by body slot', hidden: !slots.length });
   slotSel.appendChild(el('option', { value: 'all', text: 'all slots' }));
   for (const s of slots) slotSel.appendChild(el('option', { value: s, text: s }));
@@ -83,8 +84,8 @@ export function openModelWizard({ app, entry, active, boundMeshes, imagesIdx }:
 
   const matches = (): IndexEntry[] => {
     const q = filterEl.value.trim().toLowerCase();
-    let arr = slotFilter === 'all' ? boundMeshes : boundMeshes.filter((m) => m.slot === slotFilter);
-    if (q) arr = arr.filter((m) => `#${m.i} ${m.i} ${m.h || ''} ${m.slot || ''} ${(effectiveName(m, 'meshes') || '').toLowerCase()}`.includes(q));
+    let arr = slotFilter === 'all' ? boundMeshes : boundMeshes.filter((m) => bodySlot(m) === slotFilter);
+    if (q) arr = arr.filter((m) => `#${m.i} ${m.i} ${m.h || ''} ${bodySlot(m) || ''} ${(effectiveName(m, 'meshes') || '').toLowerCase()}`.includes(q));
     return [...arr].sort(SORTS[sort] || SORTS['tex-verts']);
   };
 

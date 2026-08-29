@@ -15,6 +15,7 @@ import { GlobalSearch } from './search.js';
 import { el, clear, append, badge, kvTable, rawJson, fmtInt, fmtDur, fmtBytes, fmtNum, debounce, placeholderCard, idLabel, makeResizable, versionLabel, platformIcon } from './ui.js';
 import { initPanels, expandPanelForContent } from './panels.js';
 import { effectiveName, setLocalName, buildNamesFile, replaceNames, hydrateNames } from './names.js';
+import { bodySlot, bodySlotLabel, bodySlotTitle } from './mesh-slot.js';
 import { buildOverridesFile, replaceOverrides, effectiveTex, effectiveVariants,
   overrideStatus, systemTextureStatus, hydrateOverrides } from './texmap.js';
 import { hydrateModels, listModels, getModel, modelCount, combineModels,
@@ -1051,7 +1052,7 @@ class App {
   hay(cat: string | undefined, it: any): string {
     const extra = `${it.h || ''} ${(effectiveName(it, cat!) || '').toLowerCase()}`;
     switch (cat) {
-      case 'meshes': return `${it.i} ${it.sk ? 'skinned' : 'static'} ${it.slot || ''} ${((it.sn || []) as string[]).join(' ')} ${extra}`.toLowerCase();
+      case 'meshes': return `${it.i} ${it.sk ? 'skinned' : 'static'} ${bodySlot(it) || ''} ${((it.sn || []) as string[]).join(' ')} ${extra}`.toLowerCase();
       case 'audio': return `${it.i} ${it.codec} ${extra}`;
       case 'images': return `${it.i} ${it.cat || ''} ${extra}`;
       case 'anims': return `${it.i} skel ${it.skel} ${((it.sn || []) as string[]).join(' ').toLowerCase()} ${extra}`;
@@ -1389,7 +1390,7 @@ class App {
         ['skinned', e.sk ? 'yes' : 'no'],
         ['rig', e.skel >= 0 ? el('a', { href: `#/rig/${e.skel}`, text: `#${e.skel}` }) : (e.skel === -2 ? 'rigid (single bone)' : 'static')],
         ['group', isCreature(e) ? 'creature (its own rig)' : isPart(e) ? 'part (shared rig)' : e.sk ? 'skinned' : 'static'],
-        ['slot', e.slot ? el('span', { text: e.slot, title: 'Which body part this piece covers (armour and clothing meshes).' }) : null],
+        ['slot', bodySlot(e) ? el('span', { text: bodySlotLabel(e)!, title: bodySlotTitle(e)! }) : null],
         ['item name', e.sn?.length ? el('span', {
           title: 'Name recovered from the game data by the World extraction; your own names still override it in lists and pickers.',
           text: e.sn.join(' · '),

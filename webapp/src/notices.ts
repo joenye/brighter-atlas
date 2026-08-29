@@ -56,6 +56,19 @@ const pre040Extraction = (app: any) => engineOlderThan(app, 1);
 
 const NOTICES: Notice[] = [
   {
+    id: 'extraction-engine-3-equipment',
+    title: 'Equipment names and body slots: time for a fresh extraction',
+    paras: [
+      'Armour, boots, gloves and capes get their in-game names back (a recent game update moved where those names are kept), and every piece on the player now says which part of the body it belongs to, so you can browse a rig a slot at a time.',
+      'That is worked out when your game files are read, so your stored data still has the old version. To pick it up, click the version chip in the top-right, choose "Add build", and drop in your assetBundle files.',
+      'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
+    ],
+    // Same rule as the notice below: only for data no OLDER notice already
+    // sends to the same place.
+    when: async (app: any) => (await engineOlderThan(app, 3))
+      && !(await engineOlderThan(app, 2)),
+  },
+  {
     id: 'extraction-engine-2-effects',
     title: 'Particle effects: time for a fresh extraction',
     paras: [

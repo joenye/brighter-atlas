@@ -331,7 +331,7 @@ async function ingest({
     // after. ab2objs is still built strictly in bundle order: the bbox
     // alignment contract is untouched.
     onProgress({ stage: 'index', cat: 'meshes', done: 0, total: frames[5].count, note: 'metadata' });
-    const hsPromise = pooledPass(5, 'meshes', 'hash');
+    const hsPromise = pooledPass(5, 'meshes', 'mesh', (i) => dt.meshDir[i]);
     hsPromise.catch(() => {});   // a bbox-loop throw must not leave an unhandled rejection
     const ab2objs: Uint8Array[] = [];
     for (const e of frames[2].entries) ab2objs.push(decodeObject(2, await slabRead(2, e)));
@@ -357,6 +357,9 @@ async function ingest({
         share: skel >= 0 ? (share[skel] || 0) : 0,
         clips: skel >= 0 ? (clipCounts[skel] || 0) : 0,
         bbox: bb ? bb.map(pyRound2) : null,
+        // skin summary (skinned meshes only): the dominant bone and how many
+        // bones weight the mesh, read by the bone-to-slot inference
+        ...(r.bone === undefined ? {} : { bone: r.bone, bones: r.bones }),
         f: `meshes/${String(i).padStart(5, '0')}.json`, h: r.h,
       };
     });
@@ -501,7 +504,12 @@ async function ingest({
     // draws at, which of them are real, and which emit at all are all decided
     // during extraction, so stored data from engine 1 keeps the old answers
     // however new the app is, with nothing on screen to say so.
-    engine: 2,
+    // 3: equipment names and body slots. The item-name recovery had the game's
+    // name field pinned to a position the game moved, so armour, boots, gloves
+    // and capes lost their names on recent builds; and the body slot of every
+    // mesh an item does not name is now worked out from the rig. Both are read
+    // out of the game files at extraction time.
+    engine: 3,
     label: label || (buildDate ? `build ${buildDate}` : `build ${versionId.slice(0, 8)}`),
     created: new Date().toISOString(), bundles: {}, cats: {},
   };

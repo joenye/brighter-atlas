@@ -31,6 +31,7 @@ import * as modelsMod from './models.js';
 import * as catalogMod from './catalog.js';
 import * as animNamesMod from './anim-names.js';
 import * as meshNamesMod from './mesh-names.js';
+import { inferMeshSlots, type RigSkeleton } from './mesh-slots.js';
 import * as effectsMod from './effects.js';
 import { decodeSkeleton, restWorldTranslations } from '../skeleton.js';
 
@@ -418,7 +419,10 @@ export async function extractWorld({
   // recovery-only stage fail the extraction" discipline. A rig that fails to
   // decode (malformed skeleton) simply stays out of the map: effects.js
   // degrades any reference to it to bone:null (root) placement.
+  // The bone PARENTS come along for the ride: the body-slot inference below
+  // walks them to give an unlabelled bone its nearest labelled ancestor's slot.
   const rigBoneTranslations = new Map<number, number[][]>();
+  const rigSkeletons = new Map<number, RigSkeleton>();
   if (files[6] && frames[6]) {
     const rigIds = new Set<number>();
     for (const entry of dt.meshDir) if (entry.sref >= 2) rigIds.add(entry.sref - 2);
@@ -431,7 +435,9 @@ export async function extractWorld({
           try {
             const dec = decodeObject(6, ab6.subarray(e.offset, e.offset + e.length));
             const { bones } = decodeSkeleton(dec, { i: rigId });
-            rigBoneTranslations.set(rigId, restWorldTranslations(bones));
+            const rest = restWorldTranslations(bones);
+            rigBoneTranslations.set(rigId, rest);
+            rigSkeletons.set(rigId, { parents: bones.map((b) => b.parent), rest });
           } catch { /* malformed skeleton: this rig stays unresolved */ }
         }
       } catch { /* bundle 6 unreadable: every rig stays unresolved */ }
@@ -610,6 +616,20 @@ export async function extractWorld({
     strings: poolStrings, poolRegistryRefs,
   });
   await sink.derivedPut(versionId, 'mesh:names', meshNames);
+
+  // ---- inferred body slots for the meshes no item names --------------------
+  // The item slots above are the labels; the skinning weights (the mesh index's
+  // dominant bone, written by the mesh pass) spread them across the rest of the
+  // rig, so the slot facet covers a whole wardrobe instead of the few hundred
+  // meshes an item definition happens to reach (see mesh-slots.js). Its own
+  // doc, kept apart from the recovered names because it is inference, not
+  // recovery; a meshes-less ingest simply has nothing to infer from.
+  const itemSlots = new Map<number, string>();
+  for (const [ordinal, rec] of Object.entries<any>(meshNames.meshes)) {
+    if (rec?.slot) itemSlots.set(Number(ordinal), rec.slot);
+  }
+  const meshSlots = inferMeshSlots(indexes?.meshes || [], rigSkeletons, itemSlots);
+  await sink.derivedPut(versionId, 'mesh:slots', meshSlots);
 
   // ---- (h) recovered animation clip names -----------------------------------
   // The animatic name records join to AB1 clips through their op-0 scalar and

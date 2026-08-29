@@ -11,6 +11,7 @@ import { buildMeshGeometry } from './mesh-geometry.js';
 import { effectiveTex, effectiveVariants, resolveRoles, texFile, overrideStatus,
   systemTextureStatus } from '../texmap.js';
 import { effectiveName } from '../names.js';
+import { bodySlot, bodySlotLabel, bodySlotTitle } from '../mesh-slot.js';
 import { el, clear, badge, fmtInt, notExported, debounce, idLabel } from '../ui.js';
 import { getPref, setPref } from '../prefs.js';
 import { SHOT_RES, captureTiledPng } from './capture-common.js';
@@ -231,13 +232,19 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
     let kbOn = false, cursor = -1, tempI: number | null = null, highlighted: number | null = null;
     let rowEls: HTMLElement[] = [];   // rendered rows, rowEls[k] <-> matches()[k]
 
-    // body-slot filter (player rig: head/neck/torso/hand_l/hand_r/… from
-    // skinning-weight classification; hidden on rigs without slot data)
-    const slotSel = el('select', { class: 'btn-mini sm-slot', title: 'Filter by body slot (from skinning weights)', hidden: true });
+    // body-slot filter (player rig: head/torso/legs/hands/…; hidden on rigs
+    // with no slot data). Covers every mesh on the rig, not just the ones an
+    // item definition names: an unnamed mesh carries the slot inferred from the
+    // bone it is skinned to (islot), which is why the counts here are whole
+    // wardrobes rather than the handful of items with recovered names.
+    const slotSel = el('select', { class: 'btn-mini sm-slot', title: 'Filter by body slot (from the item data, or the bone the mesh is skinned to)', hidden: true });
     let slotFilter = 'all';
     {
       const counts = new Map<string, number>();
-      for (const m of boundMeshes) if (m.slot) counts.set(m.slot, (counts.get(m.slot) || 0) + 1);
+      for (const m of boundMeshes) {
+        const slot = bodySlot(m);
+        if (slot) counts.set(slot, (counts.get(slot) || 0) + 1);
+      }
       if (counts.size) {
         slotSel.hidden = false;
         slotSel.appendChild(el('option', { value: 'all', text: 'slot: all' }));
@@ -270,8 +277,8 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
 
     const matches = (): IndexEntry[] => {
       const q = filterEl.value.trim().toLowerCase();
-      let arr = slotFilter === 'all' ? boundMeshes : boundMeshes.filter((m) => m.slot === slotFilter);
-      if (q) arr = arr.filter((m) => `#${m.i} ${m.i} ${m.h || ''} ${m.slot || ''} ${(meshLabel(m) || '').toLowerCase()}`.includes(q));
+      let arr = slotFilter === 'all' ? boundMeshes : boundMeshes.filter((m) => bodySlot(m) === slotFilter);
+      if (q) arr = arr.filter((m) => `#${m.i} ${m.i} ${m.h || ''} ${bodySlot(m) || ''} ${(meshLabel(m) || '').toLowerCase()}`.includes(q));
       return [...arr].sort(SM_SORTS[smSort] || SM_SORTS['tex-verts']);
     };
 
@@ -379,10 +386,10 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
         const sysTex = systemTextureStatus(m);
         const row = el('div', { class: `sm-row${k === cursor ? ' sel' : ''}` },
           cb,
-          el('a', { href: `#/mesh/${m.i}`, text: name || idLabel(m), title: `#${m.i}${m.h ? ` · ${m.h}` : ''}${m.slot ? ` · ${m.slot}` : ''} (open in mesh view)`, class: name ? '' : 'mono' }),
+          el('a', { href: `#/mesh/${m.i}`, text: name || idLabel(m), title: `#${m.i}${m.h ? ` · ${m.h}` : ''}${bodySlotLabel(m) ? ` · ${bodySlotLabel(m)}` : ''} (open in mesh view)`, class: name ? '' : 'mono' }),
           sysTex === 'image' ? badge('Tˢ', 'b-good b-ghost', `${m.sys.variants.length} built-in texture variant${m.sys.variants.length === 1 ? '' : 's'}`) : null,
           texState === 'image' ? badge('T', 'b-good b-ghost', 'texture override set') : (texState === 'cleared' ? badge('T∅', 'b-ghost', 'override: no texture (cleared)') : null),
-          el('span', { class: 'dim', text: `${m.slot && slotFilter === 'all' ? `${m.slot} · ` : ''}${fmtInt(m.v)}v · #${m.i}${m.f ? '' : ' · ∅'}` }));
+          el('span', { class: 'dim', title: bodySlotTitle(m) || '', text: `${bodySlotLabel(m) && slotFilter === 'all' ? `${bodySlotLabel(m)} · ` : ''}${fmtInt(m.v)}v · #${m.i}${m.f ? '' : ' · ∅'}` }));
         // row click = take keyboard + spotlight (checkbox still toggles, link still navigates)
         row.addEventListener('click', (ev) => {
           if (ev.target === cb || (ev.target as HTMLElement).tagName === 'A') return;
