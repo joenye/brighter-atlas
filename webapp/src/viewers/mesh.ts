@@ -22,6 +22,8 @@ import { addExportButton } from '../asset-export.js';
 import { effectiveName } from '../names.js';
 import { saveModel } from '../models.js';
 import { applyPackedRecolor, clearPackedRecolor, partRecolor } from '../recolor.js';
+import { DYE_REGIONS, meshDye, setMeshDyeRegion, clearMeshDye, dyeRecolorInput,
+  dyeColorToHex, hexToDyeColor } from '../dyes.js';
 import type { IndexEntry } from '../store.js';
 
 export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement; destroy(): void } {
@@ -226,7 +228,12 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           const roles: any = img ? resolveRoles(img as any) : {};
           const albFile = texFile(img, roles.albedo);
           const nrmFile = texFile(img, roles.normal);
-          const recolor = st.src === 'system' ? partRecolor(st.variant) : null;
+          // A user dye outranks the recovered tints: it is the colour the
+          // player would have put on those same mask regions in game, and it
+          // is the only thing that makes a dyeable region anything but the
+          // flat grey the albedo authors it as.
+          const dye = dyeRecolorInput(meshDye(entry));
+          const recolor = dye || (st.src === 'system' ? partRecolor(st.variant) : null);
           const parameterFile = recolor ? texFile(img, roles.parameter) : null;
           let map: THREE.Texture | null = null, normalMap: THREE.Texture | null = null, parameterMap: THREE.Texture | null = null;
           try { if (albFile) map = await texLoader.loadAsync(app.store.url(albFile)); } catch { /* badge below */ }
@@ -248,9 +255,10 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           }
           if (recolor) {
             // the extraction-baked uniform-luminance verdict (grayscale
-            // albedo × equal tints): the same full-tint path as the room renderer
+            // albedo × equal tints): the same full-tint path as the room
+            // renderer. A dye is always per-region, never full-tint.
             applyPackedRecolor(texMat, map ? parameterMap : null, recolor, {
-              fullTint: (st.variant as any)?.uniform_luminance_tint === true,
+              fullTint: !dye && (st.variant as any)?.uniform_luminance_tint === true,
             });
             if (!map) parameterMap?.dispose();
           } else {
@@ -327,6 +335,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
         const none = el('span', { class: `tv-chip tv-none${active == null ? ' active' : ''}`, text: '∅', title: active == null ? 'no texture active' : 'show no texture (keeps the variants)' });
         none.addEventListener('click', () => { setActiveVariant(entry, null); applyTexState(); renderVariants(); });
         variantsEl.appendChild(none);
+        renderDyes();   // a different variant is a different mask (or none)
       }
 
       const texBtn = el('button', { class: 'btn btn-cta', text: '▦ Texture…', title: 'Add or change this mesh’s texture. You can assign several and click the swatches to switch between them.' });
@@ -352,12 +361,52 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           onBanner: (msg) => app.banner(msg, 'b-info'),
         });
       });
+      // ---- dyeable regions -------------------------------------------------
+      // The active texture's recolour mask marks up to two regions the game
+      // dyes; the albedo leaves them flat grey for exactly that reason. One
+      // colour input per region paints them, saved per mesh (dyes.js).
+      const dyeEl = el('span', { class: 'tex-dyes', hidden: true });
+      function renderDyes(): void {
+        dyeEl.replaceChildren();
+        const st = effectiveTex(entry, imagesIdx);
+        const img = st?.a != null ? entryByOrdinal(imagesIdx, st.a) : null;
+        const roles: any = img ? resolveRoles(img as any) : {};
+        // no mask plane on this texture: nothing here is dyeable
+        dyeEl.hidden = roles.parameter == null;
+        if (dyeEl.hidden) return;
+        const dye = meshDye(entry);
+        dyeEl.appendChild(el('span', { class: 'dim small', text: 'dye', title: 'The regions this piece can be dyed in, taken from the texture’s own recolour mask. Saved with this mesh, in this browser.' }));
+        for (let region = 0; region < DYE_REGIONS; region++) {
+          const on = !!dye?.[region];
+          const input = el('input', {
+            type: 'color', class: `dye-swatch${on ? ' active' : ''}`,
+            value: dyeColorToHex(dye?.[region] || null),
+            title: `Region ${region + 1}${on ? '' : ' (undyed: shows the texture as authored)'}`,
+          }) as HTMLInputElement;
+          // 'input' fires while the native picker is open, so the 3D updates as
+          // you drag; re-rendering this row here would close that picker, which
+          // is why the row is only rebuilt when the texture or the dye is
+          // cleared, not on every colour change.
+          input.addEventListener('input', () => {
+            setMeshDyeRegion(entry, region, hexToDyeColor(input.value));
+            input.classList.add('active');
+            applyTexState();
+          });
+          dyeEl.appendChild(input);
+        }
+        const clear = el('button', { class: 'btn-mini', text: '∅', title: 'Remove the dye and show the texture as authored' });
+        clear.addEventListener('click', () => { clearMeshDye(entry); applyTexState(); renderDyes(); });
+        dyeEl.appendChild(clear);
+      }
+
       toolbar.appendChild(texBtn);
       if (modeSel) toolbar.appendChild(modeSel);
       toolbar.appendChild(variantsEl);
+      toolbar.appendChild(dyeEl);
       toolbar.appendChild(texBadgeEl);
       toolbar.appendChild(el('span', { class: 'sep' }));
       renderVariants();
+      renderDyes();
     }
 
     const wireBtn = el('button', { class: 'btn', text: 'Wireframe' });
@@ -496,7 +545,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
     }
 
     // debug/test hook
-    if ((window as any).__bs) (window as any).__bs.meshView = { entry, rig, viz, mats, scene, bbox, get bar() { return bar; }, get tex() { return effectiveTex(entry, imagesIdx); } };
+    if ((window as any).__bs) (window as any).__bs.meshView = { entry, rig, viz, mats, scene, bbox, mesh, texMat, get bar() { return bar; }, get tex() { return effectiveTex(entry, imagesIdx); } };
 
     // ---- stats -------------------------------------------------------------
     statsRow.append(

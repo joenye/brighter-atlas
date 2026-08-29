@@ -34,6 +34,10 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
 - **One annotations file.** User overrides + names form a single
   `asset_overrides.json` (`{version:2, overrides, names}`), managed ONLY via
   the topbar "Manage Overrides" dialog. Don't scatter save/load UI.
+  Deliberately outside it: dye colours (`dyes.ts`), which say how you are
+  looking at a mesh rather than what it IS. They persist the same way
+  (IndexedDB `userdata`, keyed by mesh content hash) but are not part of the
+  portable file, and they add no save/load UI of their own.
 - **The runtime layout is a contract.** `index.html` loads `js/main.js`;
   workers are spawned by path (`js/extract/worker.js`, …); the service worker
   must stay at the webapp root (`sw.js`) so its scope covers the page, and it

@@ -335,6 +335,17 @@ button { font: inherit; color: inherit; }
 .tv-chip.tv-none.active { color: #fff; border-color: var(--accent); }
 /* a variant whose texture (by content hash) isn't present in the current bundle build */
 .tv-chip.tv-missing { border-color: var(--warn, #c8922e); border-style: dashed; color: var(--warn, #c8922e); }
+/* dyeable regions: one colour swatch per recolour-mask channel */
+.tex-dyes { display: inline-flex; gap: 3px; align-items: center; margin-left: 4px; }
+.tex-dyes[hidden] { display: none; }
+.dye-swatch {
+  width: 26px; height: 26px; padding: 0; flex: none; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--bg2);
+}
+.dye-swatch::-webkit-color-swatch-wrapper { padding: 2px; }
+.dye-swatch::-webkit-color-swatch { border: none; border-radius: 3px; }
+.dye-swatch::-moz-color-swatch { border: none; border-radius: 3px; }
+.dye-swatch.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .tv-chip.tv-missing .tv-id { font-size: 13px; color: var(--warn, #c8922e); }
 .viewer-title { font-weight: 650; font-size: 14px; margin-right: 6px; }
 .btn {

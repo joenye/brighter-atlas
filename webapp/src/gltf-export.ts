@@ -23,10 +23,14 @@ import { resolveRoles, texFile, effectiveTex, resolveVariantImage } from './texm
 import { effectiveName } from './names.js';
 import { modelParts } from './models.js';
 import { applyRecolorPreview, partRecolor } from './recolor.js';
+import { meshDye } from './dyes.js';
+import type { MeshDye } from './dyes.js';
 import type { PartRecolorState } from './recolor.js';
 
 export interface TextureCache {
   load(rel: string | null): Promise<THREE.Texture | null>;
+  /** albedo with the mesh's dye baked in (falls back to the plain albedo) */
+  dyed(albedoRel: string | null, maskRel: string | null, dye: MeshDye | null): Promise<THREE.Texture | null>;
   dispose(): void;
 }
 
@@ -52,31 +56,114 @@ function unskin(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   return geo;
 }
 
+// Bake a dye into a copy of the albedo, texel by texel, with the game's own
+// two-mask formula (recolor.js, and the same arithmetic its GLSL runs). glTF
+// cannot express "tint only the texels this mask selects", so the dye has to
+// be resolved into pixels BEFORE it leaves the app: that is what makes an
+// exported piece open in Blender the colour it is on screen here.
+//
+// The formula operates on gamma-encoded values, which is what a PNG's bytes
+// already are, so the bake reads and writes them directly with no colour-space
+// conversion (see dyes.js). The mask is drawn at the albedo's size because the
+// shader samples both with one set of UVs; the albedo's alpha is preserved so
+// cutouts survive.
+function bakeDye(albedo: THREE.Texture, mask: THREE.Texture, dye: MeshDye): THREE.Texture | null {
+  const src: any = albedo.image;
+  const maskSrc: any = mask.image;
+  const w = src?.width | 0;
+  const h = src?.height | 0;
+  if (!w || !h || !maskSrc?.width) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(src, 0, 0, w, h);
+  const pixels = ctx.getImageData(0, 0, w, h);
+
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = w;
+  maskCanvas.height = h;
+  const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
+  if (!maskCtx) return null;
+  maskCtx.drawImage(maskSrc, 0, 0, w, h);
+  const masks = maskCtx.getImageData(0, 0, w, h).data;
+
+  const tint = [dye[0] || [1, 1, 1], dye[1] || [1, 1, 1]];
+  const d = pixels.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const mR = masks[i] / 255;
+    const mG = masks[i + 1] / 255;
+    if (mR <= 0 && mG <= 0) continue;
+    const e = [d[i] / 255, d[i + 1] / 255, d[i + 2] / 255];
+    const q = (e[0] + e[1] + e[2]) * (2 / 3);
+    const hi = Math.max(q - 1, 0);
+    const mid = Math.min(q, 1) - hi;
+    const keep = Math.max(0, 1 - mR - mG);
+    for (let c = 0; c < 3; c++) {
+      const out = e[c] * keep + (hi + mid * tint[0][c]) * mR + (hi + mid * tint[1][c]) * mG;
+      d[i + c] = Math.max(0, Math.min(255, Math.round(out * 255)));
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+
+  const baked = new THREE.CanvasTexture(canvas);
+  baked.colorSpace = THREE.SRGBColorSpace;
+  baked.flipY = albedo.flipY;
+  baked.name = `${albedo.name || 'albedo'}_dyed`;
+  return baked;
+}
+
 // Shared THREE.Texture loader keyed by payload path: meshes sharing an albedo
 // reuse one Texture object (and bulk export re-decodes each PNG only once).
 export function makeTextureCache(store: any): TextureCache {
   const cache = new Map<string, Promise<THREE.Texture | null>>();
+  const baked = new Map<string, Promise<THREE.Texture | null>>();
   const loader = new THREE.TextureLoader();
-  return {
-    load(rel) {
-      if (!rel) return Promise.resolve(null);
-      if (!cache.has(rel)) {
-        cache.set(rel, loader.loadAsync(store.url(rel)).then((t) => {
-          t.colorSpace = THREE.SRGBColorSpace;
-          t.name = rel.split('/').pop()!.replace(/\.png$/i, '');
-          return t;
-        }).catch(() => null)); // untextured fallback: never fail the export over a texture
-      }
-      return cache.get(rel)!;
-    },
-    dispose() {
-      for (const p of cache.values()) p.then((t) => t?.dispose());
-      cache.clear();
-    },
-  };
+  const cached = { load, dyed, dispose };
+
+  function load(rel: string | null): Promise<THREE.Texture | null> {
+    if (!rel) return Promise.resolve(null);
+    if (!cache.has(rel)) {
+      cache.set(rel, loader.loadAsync(store.url(rel)).then((t) => {
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.name = rel.split('/').pop()!.replace(/\.png$/i, '');
+        return t;
+      }).catch(() => null)); // untextured fallback: never fail the export over a texture
+    }
+    return cache.get(rel)!;
+  }
+
+  // Keyed by the inputs, so one dyed texture serves every mesh sharing that
+  // albedo + mask + colours (a Model's parts routinely do).
+  function dyed(albedoRel: string | null, maskRel: string | null, dye: MeshDye | null): Promise<THREE.Texture | null> {
+    if (!albedoRel || !maskRel || !dye) return load(albedoRel);
+    const key = `${albedoRel}|${maskRel}|${JSON.stringify(dye)}`;
+    if (!baked.has(key)) {
+      baked.set(key, Promise.all([load(albedoRel), load(maskRel)]).then(([albedo, mask]) => {
+        if (!albedo || !mask) return albedo;
+        try { return bakeDye(albedo, mask, dye) || albedo; } catch { return albedo; }
+      }));
+    }
+    return baked.get(key)!;
+  }
+
+  function dispose(): void {
+    for (const p of cache.values()) p.then((t) => t?.dispose());
+    // a bake that fell back returns a cached albedo; disposing it twice is safe
+    for (const p of baked.values()) p.then((t) => t?.dispose());
+    cache.clear();
+    baked.clear();
+  }
+
+  return cached;
 }
 
-// same neutral material the viewers use; a texture upgrades it to albedo+cutout
+// same neutral material the viewers use; a texture upgrades it to albedo+cutout.
+// A dye reaches the file through the TEXTURE (bakeDye), never through `recolor`
+// here: applyRecolorPreview's fallback is a whole-material baseColorFactor,
+// which would paint an entire helmet the colour of one dyed strip.
 function exportMaterial(tex: THREE.Texture | null, recolor: PartRecolorState | null = null): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ color: 0xb9c2cf, metalness: 0.02, roughness: 0.88 });
   if (tex) {
@@ -89,22 +176,28 @@ function exportMaterial(tex: THREE.Texture | null, recolor: PartRecolorState | n
   return mat;
 }
 
-// the albedo payload path the viewer would show for this mesh (override-driven)
-function albedoFileFor(entry: any, imagesIdx: any): string | null {
+// the albedo payload path the viewer would show for this mesh (override-driven),
+// plus the recolour-mask plane beside it (null when the texture has none)
+function planeFilesFor(entry: any, imagesIdx: any): { albedo: string | null; mask: string | null } {
   const st = imagesIdx ? effectiveTex(entry, imagesIdx) : null;
   const img = st?.a != null ? entryByOrdinal(imagesIdx, st.a) : null;
-  return img ? texFile(img, resolveRoles(img as any).albedo) : null;
+  if (!img) return { albedo: null, mask: null };
+  const roles = resolveRoles(img as any);
+  return { albedo: texFile(img, roles.albedo), mask: texFile(img, roles.parameter) };
 }
 
-// a Model's pinned texture variant -> albedo path. System model ordinals are
-// profile-scoped; user model references remain strictly content-addressed.
-function pinnedAlbedoFile(row: any, imagesIdx: any): string | null {
-  if (!imagesIdx) return null;
+// a Model's pinned texture variant -> albedo + recolour-mask paths. System
+// model ordinals are profile-scoped; user model references remain strictly
+// content-addressed.
+function pinnedPlaneFiles(row: any, imagesIdx: any): { albedo: string | null; mask: string | null } {
+  if (!imagesIdx) return { albedo: null, mask: null };
   const a = row._system && Number.isInteger(row._imgOrdinal)
     ? row._imgOrdinal
     : row._img ? resolveVariantImage({ image_hash: row._img }, imagesIdx) : null;
   const img = a != null ? entryByOrdinal(imagesIdx, a) : null;
-  return img ? texFile(img, resolveRoles(img as any).albedo) : null;
+  if (!img) return { albedo: null, mask: null };
+  const roles = resolveRoles(img as any);
+  return { albedo: texFile(img, roles.albedo), mask: texFile(img, roles.parameter) };
 }
 
 function applyModelPartTransform(obj: THREE.Object3D, part: any): void {
@@ -173,7 +266,9 @@ async function meshAssetRoot(app: any, entry: any, { texCache }: { texCache?: Te
   let imagesIdx = null;
   try { imagesIdx = await app.store.index('images'); } catch { /* untextured */ }
   const tc = texCache || makeTextureCache(app.store);
-  const mat = exportMaterial(await tc.load(albedoFileFor(entry, imagesIdx)));
+  // the dye the user put on this mesh is baked into the exported albedo
+  const planes = planeFilesFor(entry, imagesIdx);
+  const mat = exportMaterial(await tc.dyed(planes.albedo, planes.mask, meshDye(entry)));
   if (skinned && entry.skel >= 0) {
     try {
       const se = await skeletonEntryByIndex(app, entry.skel);
@@ -263,8 +358,13 @@ export async function modelRoot(app: any, model: any, { clips = [], onProgress }
   for (const m of rows) {
     const payload = await app.store.payload(m.f);
     const { geo, skinned } = exportGeometry(payload);
+    // a dye is baked into the texture and REPLACES the recovered tint, the same
+    // precedence the viewers apply
+    const planes = pinnedPlaneFiles(m, imagesIdx);
+    const dye = meshDye(m);
     const mat = exportMaterial(
-      await tc.load(pinnedAlbedoFile(m, imagesIdx)), partRecolor(m._part),
+      await tc.dyed(planes.albedo, planes.mask, dye),
+      dye ? null : partRecolor(m._part),
     );
     if (rig && skinned) {
       const mesh = new THREE.SkinnedMesh(geo, mat);

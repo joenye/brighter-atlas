@@ -11,6 +11,8 @@ import { buildMeshGeometry } from './mesh-geometry.js';
 import { effectiveTex, effectiveVariants, resolveRoles, texFile, overrideStatus,
   systemTextureStatus } from '../texmap.js';
 import { effectiveName } from '../names.js';
+import { applyPackedRecolor, clearPackedRecolor } from '../recolor.js';
+import { meshDye, dyeRecolorInput } from '../dyes.js';
 import { bodySlot, bodySlotLabel, bodySlotTitle } from '../mesh-slot.js';
 import { el, clear, badge, fmtInt, notExported, debounce, idLabel } from '../ui.js';
 import { getPref, setPref } from '../prefs.js';
@@ -114,6 +116,20 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
             mat.color.set(0xffffff);
           }
         } catch { /* neutral lit fallback */ }
+        // A piece dyed in the mesh view is dyed here too: this is where a
+        // player looks at their equipment together. Only the mask plane a dye
+        // actually needs is fetched, so an undyed composite loads exactly what
+        // it always did.
+        const dye = mat.map ? dyeRecolorInput(meshDye(m)) : null;
+        const maskFile = dye ? texFile(img, roles.parameter) : null;
+        if (maskFile) {
+          try {
+            const parameterMap = await texLoader.loadAsync(app.store.url(maskFile));
+            parameterMap.colorSpace = THREE.NoColorSpace;
+            parameterMap.anisotropy = 8;
+            applyPackedRecolor(mat, parameterMap, dye);
+          } catch { /* undyed albedo is a fine fallback */ }
+        }
       }
       return mat;
     }
@@ -126,7 +142,7 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
         if (destroyed || !pending.has(m.i)) return;
         const { geo, skinned } = buildMeshGeometry(payload);
         const texMat = await makeTexMat(m);
-        if (destroyed || !pending.has(m.i)) { geo.dispose(); texMat.map?.dispose(); texMat.dispose(); return; }
+        if (destroyed || !pending.has(m.i)) { geo.dispose(); texMat.map?.dispose(); clearPackedRecolor(texMat)?.dispose(); texMat.dispose(); return; }
         const Cls = (skinned ? THREE.SkinnedMesh : THREE.Mesh) as any;
         const obj = new Cls(geo, mats.lit);
         const wire = new Cls(geo, wireMat);
@@ -168,6 +184,7 @@ export function createSkeletonView(app: any, entry: IndexEntry) {
       scene.scene.remove(obj, obj.userData.wire);
       obj.geometry.dispose();
       obj.userData.texMat.map?.dispose();
+      clearPackedRecolor(obj.userData.texMat)?.dispose();   // the dye mask, when one was bound
       obj.userData.texMat.dispose();
       meshCountLbl.textContent = fmtInt(active.size);
       refreshUv();

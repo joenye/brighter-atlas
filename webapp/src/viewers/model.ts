@@ -30,6 +30,7 @@ import type { ModelPart, ModelRecord } from '../models.js';
 import { entryByOrdinal } from '../store.js';
 import type { IndexEntry } from '../store.js';
 import { applyPackedRecolor, partRecolor } from '../recolor.js';
+import { meshDye, dyeRecolorInput } from '../dyes.js';
 import { EffectsPlayer } from './world/effects-player.js';
 import type { EffectSystem, WorldEffectsDoc } from '../extract/world/effects.js';
 
@@ -76,7 +77,11 @@ async function applyPartAppearance(mat: any, row: any, imagesIdx: IndexEntry[] |
       return map;
     } catch { return null; }
   };
-  const recolor = partRecolor(row._part);
+  // A dye the user put on this mesh outranks the recovered tints, exactly as
+  // in the mesh view: the row spreads the mesh index entry, so it carries the
+  // content hash the dye is keyed by.
+  const dye = dyeRecolorInput(meshDye(row));
+  const recolor = dye || partRecolor(row._part);
   const [map, packed] = await Promise.all([
     load(texFile(img, roles.albedo), THREE.SRGBColorSpace),
     recolor ? load(texFile(img, roles.parameter), THREE.NoColorSpace) : null,
@@ -88,7 +93,7 @@ async function applyPartAppearance(mat: any, row: any, imagesIdx: IndexEntry[] |
   // surfaces render as their raw white/gray albedo.
   if (recolor) {
     applyPackedRecolor(mat, map ? packed : null, recolor, {
-      fullTint: row._part?.uniform_luminance_tint === true,
+      fullTint: !dye && row._part?.uniform_luminance_tint === true,
     });
   }
   return mat;

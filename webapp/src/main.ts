@@ -16,6 +16,7 @@ import { el, clear, append, badge, kvTable, rawJson, fmtInt, fmtDur, fmtBytes, f
 import { initPanels, expandPanelForContent } from './panels.js';
 import { effectiveName, setLocalName, buildNamesFile, replaceNames, hydrateNames } from './names.js';
 import { bodySlot, bodySlotLabel, bodySlotTitle } from './mesh-slot.js';
+import { hydrateDyes } from './dyes.js';
 import { buildOverridesFile, replaceOverrides, effectiveTex, effectiveVariants,
   overrideStatus, systemTextureStatus, hydrateOverrides } from './texmap.js';
 import { hydrateModels, listModels, getModel, modelCount, combineModels,
@@ -1677,7 +1678,7 @@ export function parseHash(h: string | null | undefined): Route | null {
 // annotations hydrate from IndexedDB (authoritative) before first render;
 // a legacy localStorage set migrates transparently on first boot
 async function boot(): Promise<void> {
-  const [store] = await Promise.all([createStore(), hydrateOverrides(), hydrateNames(), hydrateModels()]);
+  const [store] = await Promise.all([createStore(), hydrateOverrides(), hydrateNames(), hydrateModels(), hydrateDyes()]);
   const app = new App(store);
   (window as any).__bs = { app };   // exposed for the smoke test
   app.start();

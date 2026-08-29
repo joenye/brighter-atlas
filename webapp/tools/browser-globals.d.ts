@@ -11,3 +11,4 @@ declare var caches: any;
 declare var KeyboardEvent: any;
 declare function getComputedStyle(elt: any): any;
 declare function requestAnimationFrame(callback: (time: number) => void): number;
+declare function createImageBitmap(source: any): Promise<any>;

@@ -330,6 +330,180 @@ if (clipVal != null) {
   ok(true, `mesh #${skinnedI} has no exported clip on this build: playback check skipped`);
 }
 
+// ---- 4c. dyeable regions on equipment -----------------------------------------
+// Equipment textures carry a recolour mask whose two channels are the regions
+// the game dyes at runtime; the albedo leaves them flat grey. The dye control
+// paints them, and the choice is stored per mesh (dyes.ts), so it must survive
+// a reload. Textures are shared, so a given mesh's UVs need not touch the
+// masked area at all: the scan below takes the first candidate that actually
+// repaints rather than assuming the first one does.
+const dyeCandidates = await page.evaluate(async () => {
+  const idx = await window.__bs.app.store.index('meshes');
+  return idx.filter((m) => m.f && (m.slot || m.islot) && m.sys?.variants?.length)
+    .slice(0, 12).map((m) => m.i);
+});
+// average canvas colour: the dye has to actually change what is on screen
+const avgColor = (): Promise<number[] | null> => page.evaluate(() => {
+  const c: any = document.querySelector('.canvas-host canvas');
+  if (!c || !c.width) return null;
+  const t = document.createElement('canvas');
+  const w = (t.width = Math.min(c.width, 400));
+  const h = (t.height = Math.min(c.height, 300));
+  const g: any = t.getContext('2d');
+  g.drawImage(c, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const sum = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 4) { sum[0] += d[i]; sum[1] += d[i + 1]; sum[2] += d[i + 2]; }
+  return sum.map((x) => x / (w * h));
+});
+const showTextured = async () => {
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('.viewer-toolbar button')].find((x: any) => x.textContent === 'Textured') as any;
+    b?.click();
+  });
+  await sleep(700);
+};
+const setDye = (hex: string) => page.evaluate((value: string) => {
+  const input: any = document.querySelector('.tex-dyes input.dye-swatch');
+  if (!input) return;
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}, hex);
+
+let dyeMesh: number | null = null;
+let dyeDelta = 0;
+let dyeState: any = null;
+let withControl = 0;
+for (const i of dyeCandidates) {
+  await page.goto(`${base}/index.html#/mesh/${i}`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
+  await sleep(700);
+  if (!(await page.$('.tex-dyes:not([hidden]) input.dye-swatch'))) continue;
+  withControl++;
+  await showTextured();
+  const before = await avgColor();
+  await setDye('#c81e78');
+  await sleep(1200);
+  const after = await avgColor();
+  const delta = before && after
+    ? before.map((x, k) => Math.abs(x - after[k])).reduce((a, b) => a + b, 0) : 0;
+  const state = await page.evaluate(() => {
+    const rec = window.__bs.meshView?.texMat?.userData?.exactRecolor;
+    return rec ? { applied: rec.applied, mode: rec.mode, field: rec.sourceField } : null;
+  });
+  if (delta > 3) { dyeMesh = i; dyeDelta = delta; dyeState = state; break; }
+  // this mesh does not sit on the masked part of its shared texture: undo and move on
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.tex-dyes button')].find((b: any) => b.textContent === '∅') as any;
+    btn?.click();
+  });
+}
+ok(withControl > 0, `equipment meshes offer the dye control (${withControl} of ${dyeCandidates.length} candidates)`);
+ok(dyeMesh != null, `a dyed region repaints the mesh (#${dyeMesh}, mean channel delta ${dyeDelta.toFixed(1)} > 3)`);
+ok(dyeState?.applied === true && dyeState.mode === 'two-mask' && dyeState.field === 'dye',
+  `the dye compiles into the native two-mask recolour (${JSON.stringify(dyeState)})`);
+if (dyeMesh != null) {
+  // a SECOND colour must take too: three.js reuses the compiled program, so the
+  // recolour uniforms have to be live (recolor.ts recolorUniforms)
+  const first = await avgColor();
+  await setDye('#19c8ff');
+  await sleep(1200);
+  const second = await avgColor();
+  const reDelta = first && second
+    ? first.map((x, k) => Math.abs(x - second[k])).reduce((a, b) => a + b, 0) : 0;
+  ok(reDelta > 1, `re-dyeing the same mesh takes effect (delta ${reDelta.toFixed(1)} > 1)`);
+
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('.tex-dyes input.dye-swatch', { timeout: 30000 });
+  await showTextured();
+  const kept = await page.$eval('.tex-dyes input.dye-swatch', (input: any) => input.value);
+  const keptState = await page.evaluate(() => window.__bs.meshView?.texMat?.userData?.exactRecolor?.sourceField ?? null);
+  ok(kept === '#19c8ff' && keptState === 'dye', `the dye survives a reload (${kept}, ${keptState})`);
+
+  // clearing puts the texture back as authored
+  const dyed = await avgColor();
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.tex-dyes button')].find((b: any) => b.textContent === '∅') as any;
+    btn.click();
+  });
+  await sleep(1200);
+  const undyed = await avgColor();
+  const clearDelta = dyed && undyed
+    ? dyed.map((x, k) => Math.abs(x - undyed[k])).reduce((a, b) => a + b, 0) : 0;
+  const clearedState = await page.evaluate(() => window.__bs.meshView?.texMat?.userData?.exactRecolor ?? null);
+  ok(clearDelta > 1 && (clearedState == null || clearedState.sourceField !== 'dye'),
+    `clearing the dye returns the mesh to its authored texture (delta ${clearDelta.toFixed(1)})`);
+
+  // ---- the dye reaches an exported GLB ---------------------------------------
+  // glTF cannot express "tint only these texels", so the dye is baked into the
+  // exported albedo (gltf-export.ts bakeDye). Export the same mesh undyed and
+  // dyed, decode the texture the GLB actually carries, and compare.
+  const exportStats = () => page.evaluate(() => new Promise<any>((resolve) => {
+    const w = window as any;
+    const captured: Blob[] = [];
+    const orig = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (obj: any) => { if (obj instanceof Blob) captured.push(obj); return orig(obj); };
+    const btn = document.querySelector('.viewer-toolbar .asset-export-btn') as any;
+    if (!btn) { URL.createObjectURL = orig; resolve(null); return; }
+    btn.click();
+    const deadline = Date.now() + 30000;
+    const poll = async () => {
+      const blob = captured.find((b) => b.size > 1000);
+      if (!blob) {
+        if (Date.now() > deadline) { URL.createObjectURL = orig; resolve(null); return; }
+        setTimeout(poll, 250);
+        return;
+      }
+      URL.createObjectURL = orig;
+      try {
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+        let off = 12; let json: any = null; let bin: Uint8Array | null = null;
+        while (off < buf.length) {
+          const len = dv.getUint32(off, true);
+          const type = dv.getUint32(off + 4, true);
+          const chunk = buf.subarray(off + 8, off + 8 + len);
+          if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(chunk));
+          else if (type === 0x004e4942) bin = chunk;
+          off += 8 + len;
+        }
+        const image = json?.images?.[0];
+        if (!image || !bin) { resolve({ material: json?.materials?.[0]?.name ?? null, mean: null }); return; }
+        const view = json.bufferViews[image.bufferView];
+        const bytes = bin.subarray(view.byteOffset || 0, (view.byteOffset || 0) + view.byteLength);
+        const bmp = await createImageBitmap(new Blob([bytes], { type: image.mimeType || 'image/png' }));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(bmp.width, 256);
+        canvas.height = Math.min(bmp.height, 256);
+        const ctx: any = canvas.getContext('2d');
+        ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+        const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const sum = [0, 0, 0];
+        for (let i = 0; i < d.length; i += 4) { sum[0] += d[i]; sum[1] += d[i + 1]; sum[2] += d[i + 2]; }
+        const n = canvas.width * canvas.height;
+        resolve({ material: json?.materials?.[0]?.name ?? null, mean: sum.map((x) => x / n) });
+      } catch (err: any) { resolve({ error: String(err?.message || err) }); }
+    };
+    poll();
+  }));
+
+  const plainGlb = await exportStats();
+  await setDye('#19c8ff');
+  await sleep(1200);
+  const dyedGlb = await exportStats();
+  const glbDelta = plainGlb?.mean && dyedGlb?.mean
+    ? plainGlb.mean.map((x: number, k: number) => Math.abs(x - dyedGlb.mean[k])).reduce((a: number, b: number) => a + b, 0) : 0;
+  ok(plainGlb?.mean != null && dyedGlb?.mean != null,
+    `GLB export embeds its texture (${JSON.stringify(plainGlb?.material)} -> ${JSON.stringify(dyedGlb?.material)})`);
+  ok(glbDelta > 3, `the exported GLB carries the dye, baked into its texture (mean delta ${glbDelta.toFixed(1)} > 3)`);
+  ok(/_dyed$/.test(dyedGlb?.material || '') && !/_dyed$/.test(plainGlb?.material || ''),
+    'only the dyed export names its texture as baked');
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('.tex-dyes button')].find((b: any) => b.textContent === '∅') as any;
+    btn?.click();
+  });
+}
+
 // ---- 5. audio route: decodes with a real duration -----------------------------
 const audioEntry = await page.evaluate(async () => {
   const idx = await window.__bs.app.store.index('audio');
