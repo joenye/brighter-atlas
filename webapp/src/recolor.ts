@@ -132,6 +132,33 @@ function materialState(recolors: number[][], {
   return { state, tint1, tint2, overallHalf };
 }
 
+// The recolour uniforms of ONE material: created on its first recolour and
+// then MUTATED for the rest of its life, never replaced.
+//
+// This is load-bearing, not tidiness. three.js caches a compiled program per
+// material per customProgramCacheKey, and ours is a constant, so the SECOND
+// recolour of a material reuses the first program and onBeforeCompile is never
+// called again. Fresh uniform objects made on that second call would never
+// reach the GPU: the material would go on rendering the FIRST recolour's
+// colours, silently. Re-tinting a live material is exactly what the dye picker
+// does (and what switching texture variants does), so every application writes
+// into the objects the compiled program already holds.
+function recolorUniforms(mat: any): Record<string, { value: any }> {
+  if (!mat.brighterRecolorUniforms) {
+    mat.brighterRecolorUniforms = {
+      brighterParameterMap: { value: null },
+      brighterTint1: { value: new THREE.Vector3(1, 1, 1) },
+      brighterTint2: { value: new THREE.Vector3(1, 1, 1) },
+      brighterOverallHalf: { value: new THREE.Vector3(0.5, 0.5, 0.5) },
+      brighterFullTint: { value: 0 },
+      brighterRecolorEnabled: { value: 1 },
+    };
+    // setPackedRecolorEnabled toggles through this same object
+    mat.brighterRecolorEnabled = mat.brighterRecolorUniforms.brighterRecolorEnabled;
+  }
+  return mat.brighterRecolorUniforms;
+}
+
 // Shared 1x1 black stand-in mask for uniform-luminance-tint materials whose
 // texture ships no packed plane (mask samples are ignored in that mode, but
 // the sampler must be bound). Module-owned; never disposed per material.
@@ -169,6 +196,10 @@ export function applyPackedRecolor(material: THREE.Material, parameterMap: THREE
     if (input?.field) state.sourceField = input.field;
     material.userData.exactRecolor = state;
     if (parameterMap) mat.brighterParameterMap = parameterMap;
+    // A material that recoloured before must stop: its program may still be
+    // the recolouring one (see recolorUniforms), and identity tints mean
+    // "show the albedo".
+    if (mat.brighterRecolorUniforms) mat.brighterRecolorUniforms.brighterRecolorEnabled.value = 0;
     return state;
   }
   // The uniform-luminance-tint mode never reads the packed masks, so a
@@ -190,14 +221,20 @@ export function applyPackedRecolor(material: THREE.Material, parameterMap: THREE
   // Texture object in userData (which glTF serializes as JSON extras). The
   // shared black stand-in is module-owned and never disposed with a material.
   if (parameterMap) mat.brighterParameterMap = parameterMap;
-  mat.brighterRecolorEnabled = { value: 1 };
+  const uniforms = recolorUniforms(mat);
+  uniforms.brighterParameterMap.value = effectiveMap;
+  uniforms.brighterTint1.value = tint1;
+  uniforms.brighterTint2.value = tint2;
+  uniforms.brighterOverallHalf.value = overallHalf;
+  uniforms.brighterFullTint.value = fullTint ? 1 : 0;
+  uniforms.brighterRecolorEnabled.value = 1;
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.brighterParameterMap = { value: effectiveMap };
-    shader.uniforms.brighterTint1 = { value: tint1 };
-    shader.uniforms.brighterTint2 = { value: tint2 };
-    shader.uniforms.brighterOverallHalf = { value: overallHalf };
-    shader.uniforms.brighterFullTint = { value: fullTint ? 1 : 0 };
-    shader.uniforms.brighterRecolorEnabled = mat.brighterRecolorEnabled;
+    shader.uniforms.brighterParameterMap = uniforms.brighterParameterMap;
+    shader.uniforms.brighterTint1 = uniforms.brighterTint1;
+    shader.uniforms.brighterTint2 = uniforms.brighterTint2;
+    shader.uniforms.brighterOverallHalf = uniforms.brighterOverallHalf;
+    shader.uniforms.brighterFullTint = uniforms.brighterFullTint;
+    shader.uniforms.brighterRecolorEnabled = uniforms.brighterRecolorEnabled;
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <map_pars_fragment>',
       `#include <map_pars_fragment>
@@ -250,7 +287,15 @@ export function clearPackedRecolor(material: THREE.Material | null): THREE.Textu
   const mat = material as any;
   const packed = mat.brighterParameterMap || null;
   delete mat.brighterParameterMap;
-  delete mat.brighterRecolorEnabled;
+  // The uniform bag deliberately SURVIVES: a program compiled earlier in this
+  // material's life still points at these objects, so switching the recolour
+  // off has to be a value written into them (a re-application later writes the
+  // new colours into the same objects, see recolorUniforms). Deleting the bag
+  // here is what would strand a stale tint on the GPU.
+  if (mat.brighterRecolorUniforms) {
+    mat.brighterRecolorUniforms.brighterRecolorEnabled.value = 0;
+    mat.brighterRecolorUniforms.brighterParameterMap.value = null;
+  }
   if (material.userData) delete material.userData.exactRecolor;
   material.onBeforeCompile = THREE.Material.prototype.onBeforeCompile;
   material.customProgramCacheKey = THREE.Material.prototype.customProgramCacheKey;
