@@ -1259,6 +1259,7 @@ export function buildSystemCatalog(
       'entity_visual_field_op', 'entity_variant_index',
       'entity_variant_index_field_op', 'entity_variant_name',
       'entity_predecessor_field_op', 'entity_predecessor_owner_slot',
+      'entity_successor_field_op', 'entity_successor_owner_slot',
       'material_inherited', 'material_source_owner_slot',
     ]) {
       if (field in sourceModel) source[field] = sourceModel[field];

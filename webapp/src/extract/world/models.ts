@@ -1389,6 +1389,15 @@ export function extractEntityVariantRecords(
   for (const familyRow of rows) {
     const seriesFields = new Map<number, number[]>();
     for (const [op, depth, tag, value] of familyRow.g || []) {
+      if (depth === 0 && tag === 0 && isInt(value)) {
+        const node = resolver.deref({tag: 0, value});
+        // An interned family list carries the same ordered references as a
+        // bare series. Do not flatten arbitrary nested containers into a list.
+        if (isNode(node) && node.tag === 0x20 && Array.isArray(node.values)
+          && node.values.every((v: any) => isNode(v) && v.tag === 0 && isInt(v.value))) {
+          seriesFields.set(op, node.values.map((v: any) => v.value));
+        }
+      }
       if (depth > 0 && tag === 0 && isInt(value)) {
         let list = seriesFields.get(op);
         if (!list) seriesFields.set(op, list = []);
@@ -1441,7 +1450,9 @@ export function extractEntityVariantRecords(
       if (seenFamilies.has(familyKey)) continue;
 
       const predecessorOp = predecessorOperation(entityRows, entitySlots);
-      if (predecessorOp === null) continue;
+      const successorOp = predecessorOp === null
+        ? predecessorOperation([...entityRows].reverse(), [...entitySlots].reverse()) : null;
+      if (predecessorOp === null && successorOp === null) continue;
 
       const decodedRows = visualRows.map((row) => decodeOwnerFields(row, pool, resolver));
 
@@ -1491,6 +1502,9 @@ export function extractEntityVariantRecords(
           const [meshes, meshField] = rowMeshSeries[rowIndex].get(operation)!;
           const materialField = decoded.get(operation + 1);
           if (materialField === undefined) {
+            // A forward tier link establishes order, not material inheritance.
+            // Such families require an explicit material for every member.
+            if (successorOp !== null) { closure = null; break; }
             closure.push([meshes, meshField, null]);
             continue;
           }
@@ -1589,7 +1603,7 @@ export function extractEntityVariantRecords(
             material_object_slot: material,
             ab3_textures: [...(materialTextures.get(material) || [])],
             rule: 'entity_variant',
-            confidence: 'exact_native_entity_predecessor',
+            confidence: predecessorOp !== null ? 'exact_native_entity_predecessor' : 'exact_entity_successor',
             entity_family_owner_slot: familyRow.slot,
             entity_family_field_op: familyOperation,
             entity_family_name: familyName,
@@ -1598,8 +1612,13 @@ export function extractEntityVariantRecords(
             entity_variant_index: index,
             entity_variant_index_field_op: catalogIndexOperation,
             entity_variant_name: entityNames[index],
-            entity_predecessor_field_op: predecessorOp,
-            entity_predecessor_owner_slot: index ? entitySlots[index - 1] : null,
+            ...(predecessorOp !== null ? {
+              entity_predecessor_field_op: predecessorOp,
+              entity_predecessor_owner_slot: index ? entitySlots[index - 1] : null,
+            } : {
+              entity_successor_field_op: successorOp,
+              entity_successor_owner_slot: index + 1 < entitySlots.length ? entitySlots[index + 1] : null,
+            }),
             material_inherited: materialInfo === null,
             material_source_owner_slot: activeMaterialOwner,
             source_name: displayName,
@@ -1790,6 +1809,7 @@ export function extractEntityFamilyAttachmentRecords(
           'entity_variant_index_field_op', 'entity_variant_name',
           'entity_predecessor_field_op',
           'entity_predecessor_owner_slot',
+          'entity_successor_field_op', 'entity_successor_owner_slot',
           'source_name', 'source_name_provenance',
         ]) {
           if (field in base) record[field] = base[field];
@@ -2414,6 +2434,7 @@ const MODEL_GROUP_FIELDS = [
   'entity_variant_index', 'entity_variant_index_field_op',
   'entity_variant_name', 'entity_predecessor_field_op',
   'entity_predecessor_owner_slot', 'material_inherited',
+  'entity_successor_field_op', 'entity_successor_owner_slot',
   'material_source_owner_slot', 'source_name',
   'source_name_provenance',
 ];
