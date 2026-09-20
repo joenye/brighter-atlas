@@ -19,10 +19,10 @@ export function createMapView(app:any,entry:IndexEntry|null) {
     el('label',{},labels,'Labels'),episode,roomSelect,el('label',{},'PNG long edge ',pixels,' px'),exportButton);
   const workspace=el('div',{class:'map-workspace'},host);root.append(bar,workspace,status);
   document.body.classList.add('map-active');
-  let renderer:MapRenderer|null=null,doc:MapDocument|null=null,dead=false,raf=0,cx=0,cy=0,scale=1;
+  let renderer:MapRenderer|null=null,doc:MapDocument|null=null,dead=false,exporting=false,raf=0,cx=0,cy=0,scale=1;
   const pointers=new Map<number,{x:number;y:number}>();
   const draw=()=>{
-    raf=0;if(dead||!renderer)return;
+    raf=0;if(dead||exporting||!renderer)return;
     const view={cx,cy,scale,width:host.clientWidth,height:host.clientHeight,dpr:devicePixelRatio,labels:labels.checked};
     renderer.draw({...view,markers:inspection.markers(view)});
     canvas.dataset.scale=String(scale);canvas.dataset.center=`${cx},${cy}`;
@@ -84,25 +84,42 @@ export function createMapView(app:any,entry:IndexEntry|null) {
   episode.addEventListener('change',selectRooms);
   roomSelect.addEventListener('change',()=>{location.hash=`#/map/${roomSelect.value}`;});
   async function exportPng() {
-    if(!renderer||dead)return;
+    if(!renderer||dead||exporting)return;
     const edge=Number(pixels.value),b=inspection.bounds(renderer.bounds(labels.checked)),factor=edge/Math.max(b.width,b.height);
     const width=Math.max(1,Math.round(b.width*factor)),height=Math.max(1,Math.round(b.height*factor));
-    const limits=renderer.gl.getParameter(renderer.gl.MAX_VIEWPORT_DIMS) as Int32Array;
-    if(!Number.isInteger(edge)||edge<128||edge>16384||width>limits[0]||height>limits[1]||width*height>64*1024*1024){
+    if(!Number.isInteger(edge)||edge<128||edge>16384||width*height>64*1024*1024){
       status.textContent='This PNG size exceeds the browser limit. Choose a smaller long edge.';return;
     }
-    exportButton.disabled=true;status.textContent=`Rendering ${width} x ${height} PNG...`;
+    exporting=true;exportButton.disabled=true;episode.disabled=true;status.textContent=`Rendering ${width} x ${height} PNG...`;
     try {
       if(raf){cancelAnimationFrame(raf);raf=0;}
       const view={cx:b.x+b.width/2,cy:b.y+b.height/2,scale:factor,width,height,dpr:1,labels:labels.checked};
-      const markers=inspection.markers(view,false);renderer.draw({...view,markers});root.dataset.exportMarkers=String(markers.length);
-      const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('PNG encoding failed')),'image/png'));
+      const markers=inspection.markers(view,false);root.dataset.exportMarkers=String(markers.length);
+      // A valid viewport size can still exceed the GPU's drawing-buffer
+      // budget. Small native renders avoid silently downscaled exports.
+      const output=el('canvas',{width,height}),context=output.getContext('2d');
+      if(!context)throw Error('PNG canvas is unavailable.');
+      const limits=renderer.gl.getParameter(renderer.gl.MAX_VIEWPORT_DIMS) as Int32Array;
+      const tile=Math.min(2048,limits[0],limits[1]);
+      if(tile<1)throw Error('PNG rendering is unavailable.');
+      for(let y=0;y<height;y+=tile)for(let x=0;x<width;x+=tile){
+        if(dead)return;
+        const w=Math.min(tile,width-x),h=Math.min(tile,height-y);
+        renderer.draw({...view,width:w,height:h,
+          cx:view.cx+(x+w/2-width/2)/factor,
+          cy:view.cy+(y+h/2-height/2)/factor,markers});
+        if(renderer.gl.drawingBufferWidth!==w||renderer.gl.drawingBufferHeight!==h)
+          throw Error('The browser could not render the requested PNG resolution. Choose a smaller size.');
+        context.drawImage(canvas,x,y);
+        await new Promise<void>(resolve=>setTimeout(resolve,0));
+      }
+      const blob=await new Promise<Blob>((resolve,reject)=>output.toBlob(b=>b?resolve(b):reject(Error('PNG encoding failed')),'image/png'));
       if(dead)return;
       const name=(entry?.name||'Full world').replace(/[^\p{L}\p{N}._-]+/gu,'-');
       download(blob,`${name}-${width}x${height}.png`);
       root.dataset.exportSize=`${width}x${height}`;status.textContent=`Downloaded ${width} x ${height} PNG.`;
     }catch(e){if(!dead)status.textContent=(e as Error).message;}
-    finally {if(!dead){exportButton.disabled=false;draw();}}
+    finally {exporting=false;if(!dead){exportButton.disabled=false;episode.disabled=false;draw();}}
   }
   void(async()=>{
     try {
