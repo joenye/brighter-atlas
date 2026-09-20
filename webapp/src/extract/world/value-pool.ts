@@ -57,6 +57,8 @@ export interface PoolNode {
   class?: number;
   guid?: Uint8Array;
   rows?: [number, Uint8Array, number, number][];
+  lookup?: (number | null)[][];
+  range?: [number, number];
   flag?: number;
   extra?: Uint8Array;
   raw0?: Uint8Array;

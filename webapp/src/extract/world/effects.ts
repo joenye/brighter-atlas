@@ -237,8 +237,8 @@ export interface WorldEffectsShared {
 // the two fill-only generic tags the pool never carries. Mirror the replay
 // branches EXACTLY: 0x85 is a tag followed by two varints (replay.js groups
 // it with 0x7d/0x37/0x33); 0x7e is the counted present-flag structure walked
-// exactly as replay.js walks it. Both are retained as opaque nodes
-// ({tag, start, end}); their payloads are framing, not renderer input. The
+// exactly as replay.js walks it. Retain the glyph lookup's range and nullable
+// variant slots so map fonts can use the same full row decoder. The
 // byte-exact postcondition in reparseRow is the proof of faithfulness.
 class FillValueDecoder extends PoolDecoder {
   value(depth = 0): PoolNode {
@@ -255,14 +255,15 @@ class FillValueDecoder extends PoolDecoder {
     if (tag === 0x7e) {
       this.pos = start + 1;
       const node: PoolNode = { tag, start };
-      this.varint();
-      this.varint();
+      node.range = [this.varint(), this.varint()];
       const rows = this.varint();
+      if (rows > this.data.length - this.pos) throw Error('glyph lookup overruns stream');
       const lengths = new Array(rows);
       for (let k = 0; k < rows; k++) lengths[k] = this.varint();
-      for (const length of lengths) {
-        for (let k = 0; k < length; k++) if (this.byte('tag 0x7e present flag')) this.varint();
-      }
+      node.lookup = lengths.map(length => {
+        if (length > this.data.length - this.pos) throw Error('glyph variants overrun stream');
+        return Array.from({length}, () => this.byte('tag 0x7e present flag') ? this.varint() : null);
+      });
       node.end = this.pos;
       return node;
     }
