@@ -1059,7 +1059,7 @@ class App {
       case 'rigs': return `${it.i} ${it.bones} ${extra}`;
       case 'strings': return `${it.i} ${it.src || ''} ${it.text} ${it.h || ''}`.toLowerCase();
       case 'models': return `${(it.name || '').toLowerCase()} ${it.id}`;
-      case 'world': return `${it.i} ${(it.name || '').toLowerCase()} ${(it.episode?.name || '').toLowerCase()}`;
+      case 'world': return `${it.i} ${(it.name || '').toLowerCase()} ${(it.episode?.name || '').toLowerCase()} ${(it.mapAnnotations || []).join(' ').toLowerCase()}`;
       default: return String(it.i ?? '');
     }
   }
@@ -1484,6 +1484,7 @@ class App {
       ['name', r.name || null],
       ['episode', r.episode?.name ?? null],
       ['map position', r.mapPosition?.join(', ') ?? null],
+      ['map annotations', r.mapAnnotations?.length ? r.mapAnnotations.join(' · ') : null],
       ['size', r.w && r.h ? `${r.w} × ${r.h} tiles` : null],
       ['plane', r.world?.plane ?? null],
       ['world position', r.world && Number.isFinite(r.world.x) ? `${r.world.x}, ${r.world.y}` : null],

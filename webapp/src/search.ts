@@ -23,6 +23,7 @@ const CAT_DEFS: [string, string, string, (e: any) => string][] = [
   ['images', 'Images', 'image', (im) => `${im.cat} ×${im.n}`],
   ['anims', 'Animations', 'anim', (a) => `Rig #${a.skel} · ${a.frames} frames`],
   ['rigs', 'Rigs', 'rig', (s) => `${s.bones} bones`],
+  ['world', 'Rooms', 'world', (r) => [r.episode?.name, ...(r.mapAnnotations || [])].filter(Boolean).join(' · ')],
 ];
 
 export class GlobalSearch {
@@ -64,7 +65,10 @@ export class GlobalSearch {
     this.ready = (async () => {
       const cats = Object.keys(store.manifest?.categories || {});
       const src: Record<string, IndexEntry[]> = {};
-      await Promise.all(cats.map(async (c) => { try { src[c] = await store.index(c); } catch { src[c] = []; } }));
+      await Promise.all(cats.map(async (c) => {
+        try { src[c] = c === 'world' ? ((await store.worldIndex())?.rooms || []).map((r: any) => ({...r, i:r.id})) : await store.index(c); }
+        catch { src[c] = []; }
+      }));
       return src;
     })();
     return this.ready;
@@ -103,13 +107,14 @@ export class GlobalSearch {
       const matches = (src[key] || []).filter((e) => {
         if (num && String(e.i).startsWith(qq)) return true;
         if (hex && e.h && e.h.startsWith(q)) return true;
-        const name = effectiveName(e, key);
+        const name = key === 'world' ? e.name : effectiveName(e, key);
+        if (key === 'world' && [e.episode?.name, ...(e.mapAnnotations || [])].filter(Boolean).join(' ').toLowerCase().includes(q)) return true;
         if (name && name.toLowerCase().includes(q)) return true;
         if (key === 'images' && e.cat && e.cat.toLowerCase().includes(q)) return true;
         return false;
       });
       push(title, matches.map((e) => ({
-        label: effectiveName(e, key) || `${route} ${idLabel(e)}`,
+        label: (key === 'world' ? e.name : effectiveName(e, key)) || `${route} ${idLabel(e)}`,
         meta: `#${e.i} · ${metaFn(e)}`,
         hash: `#/${route}/${e.i}`,
       })));

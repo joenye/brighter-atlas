@@ -15,6 +15,7 @@
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
+import { deriveMapRoomRecords } from '../maps/records.js';
 import { deriveRoomMetadata } from './room-metadata.js';
 import { replayGraph } from './replay.js';
 import { decodePool } from './value-pool.js';
@@ -195,6 +196,7 @@ export async function extractWorld({
   if (!layersById.size) throw new Error('no rooms found in assetBundle2. Mixed game versions?');
 
   const roomMetadata = deriveRoomMetadata(rows, pool.values, ab0, profile, dt.charset, rooms.map(r => r.idx));
+  const mapRecords = deriveMapRoomRecords(rows, pool.values, ab0, profile, dt.charset, dt.symbols, roomMetadata);
   // Historical naming remains a fallback for rooms without a complete header.
   // Direct titles always win over shipped or cross-build name suggestions.
   const names = roomMod.deriveRoomNames(ab0, dt.charset, rooms.filter(r => !roomMetadata.has(r.idx)).map(r => r.idx));
@@ -344,6 +346,11 @@ export async function extractWorld({
         mapPosition: metadata.mapPosition, mapSize: metadata.mapSize,
         roomOwner: metadata.owner, nameSource: 'room-record' };
       Object.assign(shard, extra); Object.assign(entry, extra);
+    }
+    const mapRecord = mapRecords.get(roomId);
+    if (mapRecord) {
+      Object.assign(shard, {mapLabels: mapRecord.labels});
+      Object.assign(entry, {mapAnnotations: mapRecord.labels.annotations.map(a => a.text)});
     }
     putBatch.push([`world:room:${roomId}`, shard]);
     if (putBatch.length >= 32) await flushShards();

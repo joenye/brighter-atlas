@@ -292,6 +292,20 @@ const roomMetadata = await page.evaluate(async () => {
 ok(roomMetadata.direct === roomMetadata.total && roomMetadata.complete === roomMetadata.total,
   `every room has a direct title, episode and map coordinates (${JSON.stringify(roomMetadata)})`);
 
+const roomLabels = await page.evaluate(async () => {
+  const store = window.__bs.app.store, rooms = (await store.worldIndex()).rooms;
+  let annotations = 0, layouts = 0;
+  for (const room of rooms) {
+    const shard = await store.worldRoom(room.id);
+    if (shard.mapLabels?.title === room.displayName) layouts++;
+    if (JSON.stringify(room.mapAnnotations) !== JSON.stringify(shard.mapLabels?.annotations.map(a => a.text))) throw Error('room annotation index differs from shard');
+    annotations += room.mapAnnotations.length;
+  }
+  return {annotations, layouts, rooms:rooms.length};
+});
+ok(roomLabels.layouts === roomLabels.rooms && roomLabels.annotations > 100,
+  `room indexes retain searchable annotations and source label layouts (${JSON.stringify(roomLabels)})`);
+
 // ---- 4. mesh route: a painted 3D canvas --------------------------------------
 // flagship mesh: the biggest exported one, via the UI's own triangles sort
 await page.goto(`${base}/index.html#/meshes`, { waitUntil: 'networkidle0' });

@@ -608,6 +608,14 @@ async function worldSuite(browser: any, base: string) {
   await page.click('.filter-dd summary'); await sleep(150);
   ok((await visibleRooms()).length === 2, 'clearing episode filters restores all rooms');
 
+  await page.type('#list-filter', 'Crystal Workshop'); await sleep(250);
+  ok(JSON.stringify(await visibleRooms()) === JSON.stringify(['Fixture Meadow']), 'room filter searches authored map annotations');
+  await page.$eval('#list-filter', (input: any) => {input.value='';input.dispatchEvent(new Event('input'));}); await sleep(200);
+  await page.type('#global-search', 'Crystal Workshop');
+  await page.waitForSelector('.search-item', {timeout:4000});
+  ok(await page.$$eval('.search-item', nodes => nodes.some(n => n.textContent.includes('Fixture Meadow'))), 'global search finds rooms by map annotation');
+  await page.keyboard.press('Escape');
+
   // ---- sidebar: pinned "All" + "Effects" rows above the rooms ---------------
   // The fixtures carry a world:effects doc (commit 1), so the C12-gated
   // Effects row rides pinned above the rooms right alongside All.
