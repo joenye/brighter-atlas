@@ -210,6 +210,19 @@ const gearCount = await page.evaluate(async () => {
 });
 ok(gearCount > 300, `player-equippable meshes carry an equip slot (${gearCount} > 300)`);
 
+const objectNames=await page.evaluate(async()=>{
+  const store=window.__bs.app.store,meshes=await store.index('meshes'),models=await store.json(store.manifest.system.models);
+  const contextual=models.filter(m=>m.object_labels?.length),variants=contextual.flatMap(m=>m.variants??[]);
+  return {models:contextual.length,named:contextual.filter(m=>!/^Recovered model /.test(m.name)).length,
+    variants:variants.filter(v=>v.object_labels?.length).length,
+    qualifiedTextures:meshes.flatMap(m=>m.sys?.variants??[]).filter(v=>v.name&&v.object_labels?.some(l=>l.qualifier)).length,
+    logs:meshes.filter(m=>m.sn?.includes('Rotting Log')).length,
+    boards:contextual.filter(m=>m.name==='Investigations Board').length};
+});
+ok(objectNames.named>0&&objectNames.variants>0&&objectNames.boards>0,
+  `object descriptors name complete models and their variants (${JSON.stringify(objectNames)})`);
+ok(objectNames.logs>0&&objectNames.qualifiedTextures>0,'object mesh context and qualified texture names survive ingestion');
+
 // Every mesh on the player rig lands in a body slot, not just the few hundred
 // an item definition names: the rest are inferred from the bone they are
 // skinned to (islot). The two never collide on one mesh.

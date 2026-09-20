@@ -270,7 +270,8 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           } else if (st.src === 'preview') {
             setBadge(`#${st.a} · preview`, 'b-warn', 'Previewing: Enter/✓ commits as an override, Esc reverts');
           } else if (st.src === 'system') {
-            setBadge(`#${st.a} · system`, 'b-good',
+            const label=getVariants(entry)[getActiveIndex(entry)??-1]?.name;
+            setBadge(`${label||'#'+st.a} · system`, 'b-good',
               `${st.systemVariants} built-in variant${st.systemVariants === 1 ? '' : 's'} recovered from owner-qualified asset data.`);
           } else {
             setBadge(`#${st.a} · override${st.local ? '' : ' (saved)'}`, 'b-accent',
@@ -321,7 +322,8 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
           const img = ai != null ? imagesIdx?.[ai] : null;
           const missing = v.image_hash && img == null;
           const source = v.alsoSystem ? 'user + system' : v.origin || 'user';
-          const chip = el('span', { class: `tv-chip tv-${v.origin || 'user'}${on ? ' active' : ''}${missing ? ' tv-missing' : ''}`, title: `${source} variant ${i + 1}${img ? ` · image #${ai}` : missing ? ' · not in your files' : ` · image #${v.image}`}${v.material != null ? ` · material ${v.material}` : ''}${on ? ' (active)' : ' (click to use)'}` });
+          const label=v.name||(Array.isArray(v.names)?v.names.join(' / '):'');
+          const chip = el('span', { class: `tv-chip tv-${v.origin || 'user'}${on ? ' active' : ''}${missing ? ' tv-missing' : ''}`, title: `${label?label+' · ':''}${source} variant ${i + 1}${img ? ` · image #${ai}` : missing ? ' · not in your files' : ` · image #${v.image}`}${v.material != null ? ` · material ${v.material}` : ''}${on ? ' (active)' : ' (click to use)'}` });
           chip.appendChild(img?.f?.length ? el('img', { src: app.store.url(img.f[0]), alt: `#${ai}` }) : el('span', { class: 'tv-id', text: missing ? '⃠' : `#${ai ?? v.image}` }));
           chip.appendChild(el('span', { class: 'tv-origin', text: v.origin === 'system' ? 'S' : 'U', title: source }));
           if (v._userIndex != null) {

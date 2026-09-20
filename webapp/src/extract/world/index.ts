@@ -33,6 +33,8 @@ import * as modelsMod from './models.js';
 import * as catalogMod from './catalog.js';
 import * as animNamesMod from './anim-names.js';
 import * as meshNamesMod from './mesh-names.js';
+import {objectDescriptionReader} from './object-descriptors.js';
+import {annotateObjectCatalog,appendObjectMeshNames} from './object-names.js';
 import { inferMeshSlots, type RigSkeleton } from './mesh-slots.js';
 import * as effectsMod from './effects.js';
 import { decodeSkeleton, restWorldTranslations } from '../skeleton.js';
@@ -596,6 +598,8 @@ export async function extractWorld({
     // per-tier qualifier labels ("Powerful") the annotation tiers pick up
     modelsMod.extractEnemyBaseNames(rows, pool.values, dt.charset, enemyDefs),
   );
+  const describeObject=objectDescriptionReader(rows,pool.values,ab0,profile,dt.charset);
+  annotateObjectCatalog(catalog,describeObject);
   // "Set catalog.profile to the checkedBundleProfile() result first" (catalog.js)
   catalog.profile = catalogMod.checkedBundleProfile(
     assetModels, bundleSignatures,
@@ -633,6 +637,7 @@ export async function extractWorld({
   const meshNames = meshNamesMod.extractMeshNames(rows, pool.values, dt.charset, meshOwnerPairs, {
     strings: poolStrings, poolRegistryRefs,
   });
+  appendObjectMeshNames(meshNames,meshOwnerPairs,describeObject);
   await sink.derivedPut(versionId, 'mesh:names', meshNames);
 
   // ---- inferred body slots for the meshes no item names --------------------
