@@ -114,8 +114,8 @@ const catState = await page.evaluate(() => Object.fromEntries(
     row.querySelector('b').textContent,
     { checked: row.querySelector('input').checked, disabled: row.querySelector('input').disabled },
   ])));
-ok(Object.values<any>(catState).every((s) => s.checked),
-  `every category selected (${Object.keys(catState).join(', ')})`);
+ok(Object.values<any>(catState).every((s) => s.checked || s.disabled),
+  `every available category selected (${Object.keys(catState).join(', ')})`);
 ok(catState.World && catState.World.checked && !catState.World.disabled,
   'World selectable: this build has decode data');
 // the recognized build's human label shows on the upload screen, before
@@ -307,6 +307,20 @@ ok(roomLabels.layouts === roomLabels.rooms && roomLabels.annotations > 100,
   `room indexes retain searchable annotations and source label layouts (${JSON.stringify(roomLabels)})`);
 
 // ---- 4. mesh route: a painted 3D canvas --------------------------------------
+if(catState['2D Maps']?.checked) {
+  const maps=await page.evaluate(async()=>{
+    const store=window.__bs.app.store,index=await store.index('maps'),doc=await store.json('maps/scene.json');
+    return {entries:index.length,rooms:doc?.scene.rooms.length,patches:doc?.scene.shingles.length,
+      glyphs:doc?.scene.labelFonts.title.glyphs.length,rgba:doc?.images.glyphs.rgba instanceof Uint8Array};
+  });
+  ok(maps.rooms===rooms.length && maps.entries===rooms.length+1 && maps.patches>1000 && maps.glyphs>20 && maps.rgba,
+    `2D map index, primitives and typed glyph pixels stored (${JSON.stringify(maps)})`);
+  await page.goto(`${base}/index.html#/map/0`,{waitUntil:'networkidle0'});
+  await page.waitForSelector('.map-view[data-ready="true"]',{timeout:120000});
+  ok(await page.$eval('.map-view',e=>Number(e.dataset.rooms)>100 && Number(e.dataset.tiles)>1000),'full world map renders from stored primitives');
+  ok(await page.$('[aria-label="PNG long edge in pixels"]')!==null,'map exposes resolution-selectable PNG export');
+}
+
 // flagship mesh: the biggest exported one, via the UI's own triangles sort
 await page.goto(`${base}/index.html#/meshes`, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__bs?.app && document.querySelector('#list-host .vrow'), { timeout: 30000 });

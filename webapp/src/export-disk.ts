@@ -192,6 +192,11 @@ export function openExportDialog(app: any): void {
       });
       const jobs: { out: string; load: () => Promise<SinkData> }[] = [];
       for (const c of chosen) {
+        if(c==='maps') {
+          jobs.push({out:'maps/scene.json',load:async()=>JSON.stringify(await app.store.json('maps/scene.json'),
+            (_,v)=>ArrayBuffer.isView(v)?Array.from(v as unknown as ArrayLike<number>):v)});
+          continue;
+        }
         if (c === 'world') {
           // world rooms only exist in the re-servable tree (there is no GLB
           // form); the exported world/ dir is exactly what the HTTP store
@@ -263,7 +268,7 @@ export function openExportDialog(app: any): void {
   overlay.appendChild(el('div', { class: 'modal card' },
     el('h2', { text: 'Export decoded assets to disk' }),
     el('div', { class: 'filter-panel', style: 'position:static;box-shadow:none' }, ...rows),
-    fmtRows, note, status,
+    fmtRows, ...(cats.includes('maps')?[el('p',{class:'dim small',text:'Maps are saved as reusable scene data. For a PNG, use the Maps viewer and choose its resolution.'})]:[]), note, status,
     el('div', { class: 'modal-actions' }, goBtn, el('span', { class: 'spacer' }), closeBtn)));
   document.body.appendChild(overlay);
   overlay.addEventListener('remove', () => { cancelled = true; });

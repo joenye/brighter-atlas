@@ -21,6 +21,7 @@ const CAT_INFO: Record<string, { label: string; desc: string; icon: string }> = 
   audio: { label: 'Audio', desc: 'music + sfx', icon: '♪' },
   strings: { label: 'Text', desc: 'dialogue, UI copy + identifiers', icon: '"' },
   world: { label: 'World', desc: '3D rooms + the System model catalog (includes Meshes, Images + Rigs)', icon: '⌂' },
+  maps: { label: '2D Maps', desc: 'World map, room names and labels', icon: 'M' },
 };
 
 // friendly labels for the world extraction's sub-stages (progress bars)
@@ -233,7 +234,7 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
           import('./extract/world/profile.js'),
         ]);
         const ab0 = zstdDecompress(new Uint8Array(await readRaw(picked[0], header.entries[0])));
-        const { entry } = await matchWorldProfileEntry(ab0);
+        const { entry, rawSha256 } = await matchWorldProfileEntry(ab0);
         if (entry?.label) {
           validate.appendChild(el('span', { text: ` · build ${profileLabelDate(entry.label)}` }));
         }
@@ -249,6 +250,19 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
           }));
           syncWorldLock();
           syncTotal();
+        }
+        const maps=rowParts.maps;
+        if(maps&&!doneCats.has('maps')) {
+          let supported=false;
+          if(entry)try {
+            const response=await fetch(new URL(`../builds/${rawSha256.slice(0,16)}.maps.json`,import.meta.url),{cache:'no-cache'});
+            const {validateMapDecodeData}=await import('./extract/maps/decode-data.js');
+            validateMapDecodeData(await response.json(),rawSha256);supported=true;
+          }catch{/* this build has no map support yet */}
+          if(!supported){
+            checks.maps.checked=false;checks.maps.disabled=true;maps.row.classList.add('missing');maps.est.textContent='unsupported';
+            maps.text.append(el('span',{class:'dim small',text:'. 2D maps are not supported for these game files yet.'}));syncTotal();
+          }
         }
       } catch { /* offline / unreadable ab0: leave the panel untouched */ }
     })();
@@ -376,7 +390,8 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
     // surface its actual error message instead of hiding it in the count.
     const worldErr = cats.includes('world')
       ? result.errors.find((e: any) => typeof e === 'string' && e.startsWith('world: ')) : null;
-    const otherErrors = result.errors.length - (worldErr ? 1 : 0);
+    const mapsErr=cats.includes('maps')?result.errors.find((e:any)=>typeof e==='string'&&e.startsWith('maps: ')):null;
+    const otherErrors = result.errors.length - (worldErr ? 1 : 0) - (mapsErr ? 1 : 0);
     root.append(
       el('h2', { text: 'Done: everything stays on this machine' }),
       el('div', { class: 'ob-done card' },
@@ -384,9 +399,10 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
         el('p', { class: 'dim small', text: `Game build ${result.versionId.slice(0, 8)} · using ${fmtBytes(est.usage || 0)} of local browser storage.` }),
         ...(worldErr ? [el('p', { class: 'small err',
           text: `World couldn't be extracted: ${worldErr.slice('world: '.length)}` })] : []),
+        ...(mapsErr?[el('p',{class:'small err',text:`2D Maps couldn't be extracted: ${mapsErr.slice('maps: '.length)}`} )]:[]),
         otherErrors
           ? el('p', { class: 'small err', text: `${otherErrors} item(s) couldn't be read and were skipped.` })
-          : worldErr ? null : el('p', { class: 'dim small', text: 'Everything decoded cleanly. Next time, it loads instantly from your device.' })),
+          : worldErr || mapsErr ? null : el('p', { class: 'dim small', text: 'Everything decoded cleanly. Next time, it loads instantly from your device.' })),
       el('div', { class: 'ob-actions' }, el('span', { class: 'spacer' }), goBtn));
     if (result.errors.length) console.warn('ingest errors:', result.errors);
     setTimeout(() => onDone?.(result), 2500);   // auto-continue; the button is for the impatient
@@ -394,4 +410,3 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
 
   render();
 }
-

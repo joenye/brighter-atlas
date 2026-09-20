@@ -47,6 +47,7 @@ export const CAT_BUNDLES: Record<string, number[]> = {
   rigs: [6],
   strings: [],
   world: [2, 3, 5, 6],
+  maps: [2, 3],
 };
 export const ALL_CATS = Object.keys(CAT_BUNDLES);
 
@@ -480,6 +481,18 @@ async function ingest({
     }
   }
 
+  let mapsOutcome = null, mapsError = null;
+  if (cats.includes('maps')) {
+    try {
+      const {extractMaps} = await import('./maps/index.js');
+      mapsOutcome = await extractMaps({ab0,dt,files,frames,fetchJson:fetchJson??undefined,onProgress,signal});
+      indexes.maps = mapsOutcome.index;
+    } catch (err) {
+      if (signal?.aborted || err?.message === 'cancelled') throw err;
+      mapsError = err?.message || String(err); errors.push(`maps: ${mapsError}`);
+    }
+  }
+
   // ---- 6. persist ------------------------------------------------------------
   onProgress({ stage: 'finalize', done: 0, total: 1 });
   // build date: the newest file mtime across the picked bundles. Steam stamps
@@ -533,7 +546,7 @@ async function ingest({
     };
   }
   for (const c of cats) {
-    if (c === 'world') continue;   // no index array: stamped from the outcome below
+    if (c === 'world' || c === 'maps') continue;
     rec.cats[c] = { state: 'ready', count: indexes[c]?.filter(Boolean).length ?? 0 };
   }
   if (cats.includes('world')) {
@@ -541,6 +554,8 @@ async function ingest({
       ? { state: 'ready', count: worldOutcome.roomsCount }
       : { state: 'error', error: worldError };
   }
+  if (cats.includes('maps')) rec.cats.maps = mapsOutcome
+    ? {state:'ready',count:mapsOutcome.index.length} : {state:'error',error:mapsError};
 
   // finalize writes batch into ONE transaction where the sink supports it
   // (same keys, same values, just not ~15 serial round-trips)
@@ -548,6 +563,7 @@ async function ingest({
   for (const n of need) derivedEntries.push([`frames:${n}`, frames[n].entries.map((e) => [e.offset, e.length])]);
   for (const [cat, idx] of Object.entries(indexes)) derivedEntries.push([`index:${cat}`, idx]);
   if (worldOutcome) derivedEntries.push(['world:index', worldOutcome.worldIndex]);
+  if (mapsOutcome) derivedEntries.push(['maps:scene', mapsOutcome.doc]);
   if (attachedSystem) {
     derivedEntries.push(['system:models', attachedSystem.models]);
     derivedEntries.push(['system:bindings', attachedSystem.bindings]);
@@ -564,6 +580,7 @@ async function ingest({
     meshes: dt.meshDir.length, images: dt.textureDir.length, audio: dt.audioDir.length,
     anims: dt.animDir.length, rigs: skelBones?.length ?? (rec.cats.rigs?.count || 0),
     strings: dt.strings.length,
+    maps: rec.cats.maps?.state === 'ready' ? rec.cats.maps.count : 0,
   };
   // world: room count only exists after extraction (0 = not/never extracted);
   // there is no index/world.json: the rooms list lives in derived world:index

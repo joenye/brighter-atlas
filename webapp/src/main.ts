@@ -62,6 +62,7 @@ const CATS: CatDef[] = [
   { key: 'anims', route: 'anim', label: 'Animations', single: 'Animation', icon: '∿', row: 34 },
   { key: 'images', route: 'image', label: 'Images', single: 'Image', icon: '▦', row: 48 },
   { key: 'meshes', route: 'mesh', label: 'Meshes', single: 'Mesh', icon: '◆', row: 34 },
+  { key: 'maps', route: 'map', label: '2D Maps', single: 'Map', icon: 'M', row: 34 },
   { key: 'models', route: 'model', label: 'Models', single: 'Model', icon: '❖', row: 40 },
   { key: 'rigs', route: 'rig', label: 'Rigs', single: 'Rig', icon: '⑃', row: 34 },
   { key: 'strings', route: 'text', label: 'Text', single: 'Text', icon: '“', row: 34 },
@@ -73,11 +74,12 @@ const ALIAS: Record<string, string> = {
   skel: 'rigs', rig: 'rigs', rigs: 'rigs', string: 'strings', strings: 'strings',
   text: 'strings', model: 'models', models: 'models',
   world: 'world', room: 'world',
+  map: 'maps', maps: 'maps',
 };
 // user-created categories (not in the manifest): hex-string ids, records in the
 // 'userdata' tier, bundled into asset_overrides.json
 const USER_CATS = new Set(['models']);
-const ASSET_CATS = new Set(['meshes', 'audio', 'images', 'anims', 'rigs', 'strings']);
+const ASSET_CATS = new Set(['meshes', 'audio', 'images', 'anims', 'rigs', 'strings', 'maps']);
 // world rooms are ordinal-addressed like assets (numeric route ids resolved
 // via it.i) but deliberately NOT an ASSET_CAT: no index/<cat>.json, no h-keyed
 // annotations/diff facets, no per-asset payload/GLB machinery.
@@ -270,6 +272,10 @@ const CAT_SORTS: Record<string, SortDef[]> = {
     ['skeleton', 'sort: rig', (a, b) => (a.skel - b.skel) || (a.i - b.i), 'asc'],
     ['name', 'sort: name', byName('anims'), 'asc'],
   ],
+  maps: [
+    ['name','sort: name',byName('maps'),'asc'],
+    ['episode','sort: episode',(a,b)=>(a.episode?.name||'').localeCompare(b.episode?.name||'')||(a.name||'').localeCompare(b.name||''),'asc'],
+  ],
   world: [
     ['index', 'sort: index', (a, b) => a.i - b.i, 'asc'],
     ['name', 'sort: name', (a, b) => {
@@ -299,7 +305,7 @@ const defaultDir = (cat: string | null | undefined, key: string): 'asc' | 'desc'
 
 // opinionated per-category default sorts (the most useful browse order);
 // a user-chosen sort persists per category in localStorage
-const DEFAULT_SORT: Record<string, string> = { meshes: 'triangles', rigs: 'bones', audio: 'duration', images: 'resolution', models: 'name', world: 'name', anims: 'named' };
+const DEFAULT_SORT: Record<string, string> = { meshes: 'triangles', rigs: 'bones', audio: 'duration', images: 'resolution', models: 'name', world: 'name', maps: 'name', anims: 'named' };
 const SORTS_KEY = 'bs.listSorts';
 function loadCatSort(cat: string): { sort?: string; dir?: 'asc' | 'desc' } | null {
   try { return (JSON.parse(localStorage.getItem(SORTS_KEY)!) || {})[cat] || null; } catch { return null; }
@@ -985,7 +991,7 @@ class App {
   // static per-category filters + dynamic facets (strings namespaces,
   // compare-mode diff states)
   catFilters(cat: string | undefined): FilterDef[] {
-    return [...(FILTERS[cat ?? ''] || []), ...(cat === 'world' ? episodeFilters(this.items) : []), ...(this._diffFacets || [])];
+    return [...(FILTERS[cat ?? ''] || []), ...(['world','maps'].includes(cat??'') ? episodeFilters(this.items) : []), ...(this._diffFacets || [])];
   }
 
   // checkbox-dropdown filter for the current category (multiple check = AND)
@@ -1046,6 +1052,10 @@ class App {
       if (this._hasWorldEffects) pinned.push(WORLD_EFFECTS_ROW);
       if (pinned.length) arr = [...pinned, ...arr];
     }
+    if(cat==='maps'){
+      const all=this.items.find(it=>it.room===null);
+      if(all)arr=[all,...arr.filter(it=>it!==all)];
+    }
     return arr;
   }
 
@@ -1059,7 +1069,7 @@ class App {
       case 'rigs': return `${it.i} ${it.bones} ${extra}`;
       case 'strings': return `${it.i} ${it.src || ''} ${it.text} ${it.h || ''}`.toLowerCase();
       case 'models': return `${(it.name || '').toLowerCase()} ${it.id}`;
-      case 'world': return `${it.i} ${(it.name || '').toLowerCase()} ${(it.episode?.name || '').toLowerCase()} ${(it.mapAnnotations || []).join(' ').toLowerCase()}`;
+      case 'world': case 'maps': return `${it.i} ${(it.name || '').toLowerCase()} ${(it.episode?.name || '').toLowerCase()} ${(it.mapAnnotations || []).join(' ').toLowerCase()}`;
       default: return String(it.i ?? '');
     }
   }
@@ -1202,6 +1212,11 @@ class App {
           main(`${item.bones} bones`),
           el('span', { class: 'r-meta', text: notEx ? '∅' : '' }));
         break;
+      case 'maps': {
+        append(row,el('span',{class:'r-id',text:item.room==null?'All':`#${item.room}`}),
+          el('span',{class:'r-main',text:effectiveName(item,'maps')||item.name}),el('span',{class:'r-meta',text:item.episode?.name||''}));
+        break;
+      }
       case 'world': {
         if (item.__worldAll) {   // pinned merged-world entry (see WORLD_ALL_ROW)
           row.classList.add('vrow-all');
@@ -1331,6 +1346,14 @@ class App {
         this.setEntryDetails(cat, entry);
         this.view = createStringView(this, entry);
         break;
+      case 'maps': {
+        if(entry)this.setEntryDetails(cat,entry);
+        import('./viewers/maps.js').then(({createMapView})=>{
+          if(token!==this._navToken)return;
+          this.view=createMapView(this,entry);this.viewerEl.appendChild(this.view.root);
+        });
+        return;
+      }
       case 'world': {
         // lazily loaded like diff: the room viewer (three.js) must not weigh
         // down the shell for users who never open the World tab
@@ -1457,6 +1480,8 @@ class App {
       extraNote = el('p', { class: 'small dim', text: 'Behaviour is worked out from how long the clip runs: a single-frame clip is a still pose, and 18 seconds or more is a long loop. Clips don\'t carry their in-game names.' });
     } else if (cat === 'rigs') {
       pairs = [['index', `#${e.i}`], ['bones', e.bones], ['file', e.f || 'not included']];
+    } else if (cat === 'maps') {
+      pairs=[['room',e.room??'Full world'],['episode',e.episode?.name],['room labels',(e.mapAnnotations||[]).join(', ')||null]];
     } else if (cat === 'strings') {
       pairs = [
         ['index', `#${e.i}`],

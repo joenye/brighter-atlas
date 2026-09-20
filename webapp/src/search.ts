@@ -24,6 +24,7 @@ const CAT_DEFS: [string, string, string, (e: any) => string][] = [
   ['anims', 'Animations', 'anim', (a) => `Rig #${a.skel} · ${a.frames} frames`],
   ['rigs', 'Rigs', 'rig', (s) => `${s.bones} bones`],
   ['world', 'Rooms', 'world', (r) => [r.episode?.name, ...(r.mapAnnotations || [])].filter(Boolean).join(' · ')],
+  ['maps', '2D Maps', 'map', (r) => [r.episode?.name, ...(r.mapAnnotations || [])].filter(Boolean).join(' · ')],
 ];
 
 export class GlobalSearch {

@@ -107,7 +107,7 @@ function renderHelp(root: HTMLElement): void {
 export function maybeMountMobileGate(boot: () => void): boolean {
   let bypassed = false;
   try { bypassed = sessionStorage.getItem(BYPASS_KEY) === '1'; } catch { /* no storage: gate normally */ }
-  if (bypassed || !isSmallTouchDevice()) {
+  if (bypassed || /^#\/maps?(?:\/|$)/.test(location.hash) || !isSmallTouchDevice()) {
     document.documentElement.classList.add('mgate-off');   // release the CSS anti-flash hold
     return false;
   }
