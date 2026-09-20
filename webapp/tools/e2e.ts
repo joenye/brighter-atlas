@@ -694,12 +694,8 @@ if (process.env.BS_E2E_ALL_ROOMS === '1') {
   }
 }
 
-// ---- 7c. roaming-enemy roster spawns: Bear Clearing renders bears -------------
-// (the room has no positioned actor records for bears; the roster markers
-// carry authored tiles -> origin=roster; approximate fallbacks are flagged 2)
-// Resolved BY NAME, like the effects probes: the room id is an ab2 object index
-// and every game update renumbers it (this room moved 78 -> 79, and 78 stopped
-// being a room at all), which made the check silently read an empty shard.
+// ---- 7c. enemies use explicit authored actor records ------------------------
+// Resolve by room name, never build-specific registry or bundle ordinals.
 const bearRoomId = rooms.find((r) => r.name === 'Bear Clearing')?.id ?? null;
 const bearSpawns = bearRoomId == null ? null : await page.evaluate(async (roomId) => {
   const store = window.__bs.app.store;
@@ -709,12 +705,43 @@ const bearSpawns = bearRoomId == null ? null : await page.evaluate(async (roomId
   const rows = (shard?.spawns || []).filter((r) => r[cols.label] === 'Bear');
   return rows.map((r) => ({ x: r[cols.x], y: r[cols.y], origin: r[cols.origin], sz: r[cols.surface_z] }));
 }, bearRoomId);
-// grounded like the room's actor spawns (floor ~2560 native units): the
-// minimap-frame y-flip regression put bears on treetops 9+ layers up
-ok(bearSpawns !== null && bearSpawns.length >= 1 && bearSpawns.every((s) => (s.origin === 1 || s.origin === 2)
+ok(bearSpawns !== null && bearSpawns.length >= 1 && bearSpawns.every((s) => s.origin === 0
   && Number.isFinite(s.sz) && s.sz >= 1536 && s.sz <= 4096),
-  `Bear Clearing carries grounded roster bear spawns `
+  `Bear Clearing carries authored, grounded bear actors `
   + `(room ${bearRoomId ?? 'NOT FOUND BY NAME'}: ${JSON.stringify(bearSpawns)})`);
+const actorAudit = await page.evaluate(async () => {
+  const store = window.__bs.app.store, world = window.__bs.worldView.world;
+  const index = await store.worldIndex();
+  const cols = Object.fromEntries(index.columns.spawn.map((name, i) => [name, i]));
+  const pc = Object.fromEntries(index.columns.spawn_part.map((name, i) => [name, i]));
+  const threePath = '/vendor/three.module.js';
+  const {Matrix4} = await import(threePath);
+  let actors = 0, defaults = 0, volumes = 0, largeActors = 0, transforms = 0;
+  const failures = [];
+  for (const room of index.rooms) {
+    const shard = await store.worldRoom(room.id);
+    volumes += shard.room_volumes?.length ?? 0;
+    for (let i = 0; i < shard.spawns.length; i++) {
+      const row = shard.spawns[i]; actors++;
+      if (row[cols.origin] !== 0 || row[cols.default_room_record] !== row[cols.room_record]
+        || !Number.isFinite(row[cols.centre_offset])) failures.push([room.id, i, 'provenance']);
+      if (shard.spawn_memberships.some(m => m[0] === i && m[1] === index.enums.spawn_membership_kind.default_room)) defaults++;
+      if (row[cols.centre_offset] > 0.5) {
+        largeActors++;
+        const part = shard.spawn_parts.find(p => p[pc.spawn] === i);
+        if (!part) continue;
+        const actual = world._spawnMatrix(shard, part, new Matrix4()).elements;
+        const expected = [cols.x, cols.y].map(c => Math.fround(Math.fround(row[c]) + row[cols.centre_offset]) * index.coordinate_system.tile_units);
+        if (actual[12] !== expected[0] || actual[13] !== expected[1]) failures.push([room.id, i, 'centre']);
+        transforms++;
+      }
+    }
+  }
+  return {actors, defaults, volumes, largeActors, transforms, failures};
+});
+ok(actorAudit.actors > 1000 && actorAudit.defaults === actorAudit.actors && actorAudit.volumes > 0
+  && actorAudit.largeActors > 0 && actorAudit.transforms > 0 && actorAudit.failures.length === 0,
+  `every actor retains default-room provenance; large actor matrices use authored centres (${JSON.stringify(actorAudit)})`);
 
 // ---- 7d. recovered particle effect systems ------------------------------------
 // The world:effects doc rode in with the World extraction. Thresholds are

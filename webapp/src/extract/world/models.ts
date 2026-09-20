@@ -3048,12 +3048,8 @@ export function extractEnemyBaseNames(
   return byOwner;
 }
 
-// One roaming-enemy roster: a per-room row (referenced by an enemy
-// definition, carrying exactly one depth-0 tag-0x13 room link) that lists the
-// room's enemy placements as INLINE typed float markers. The 6-float class
-// carries authored TILE positions ([x, y, radius?, 1, 1, count] — 188/188
-// in-bounds across the corpus); the short 2–4-float classes are not
-// positional (0/89 in-bounds raw) and only contribute a count hint.
+// An enemy-definition association with a room. This describes membership,
+// not a spawn count or position. Room volumes must not become actor points.
 export interface EnemyRosterEntry {
   room: number;
   def_slot: number;
@@ -3061,30 +3057,14 @@ export interface EnemyRosterEntry {
   name: string;
   plural: string;
   owners: number[];               // tier visual owners, definition order
-  positions: { x: number; y: number; count: number; raw: number[] }[];
-  marker_count: number;           // every float marker (count fallback hint)
 }
 
-// Roaming-enemy rosters per room. Same definition predicate as
-// extractEnemyBaseNames (both consume the shared scanEnemyDefinitions scan);
-// placement markers are read with the inline-marker treatment (the same
-// serialization that hid Thruntyx's location). `defs` optionally supplies
-// the precomputed scan.
+// Room associations from the shared enemy-definition scan.
 export function extractEnemyRosters(
   rows: RegistryRow[], pool: any[], charsetGlyphs: ArrayLike<string>,
   defs: EnemyDefinition[] | null = null,
 ): EnemyRosterEntry[] {
   const scanned = defs ?? scanEnemyDefinitions(rows, pool, charsetGlyphs);
-  const derefPool = (index: number): any => {
-    let node = pool[index];
-    const seen = new Set<number>();
-    while (isNode(node) && node.tag === 0 && isInt(node.value) && !seen.has(node.value)) {
-      seen.add(node.value);
-      node = pool[node.value];
-    }
-    return node;
-  };
-
   const rosters: EnemyRosterEntry[] = [];
   const seenRosters = new Set<string>();
   for (const def of scanned) {
@@ -3103,44 +3083,6 @@ export function extractEnemyRosters(
       const key = `${rosterSlot} ${def.slot}`;
       if (seenRosters.has(key)) continue;
       seenRosters.add(key);
-      // inline typed float markers on the roster row
-      const byOperation = new Map<number, any[]>();
-      for (const event of rows[rosterSlot].g) {
-        const list = byOperation.get(event[0]);
-        if (list) list.push(event); else byOperation.set(event[0], [event]);
-      }
-      const positions: EnemyRosterEntry['positions'] = [];
-      let markerCount = 0;
-      for (const [, events] of byOperation) {
-        for (let position = 0; position < events.length; position++) {
-          const [, depth, tag] = events[position];
-          if (tag !== 0x24) continue;
-          let boundary = -1;
-          for (let previous = position - 1; previous >= 0; previous--) {
-            if (events[previous][1] <= depth) { boundary = previous; break; }
-          }
-          const floats: number[] = [];
-          let clean = true;
-          for (let k = boundary + 1; k < position; k++) {
-            if (events[k][1] !== depth + 1) continue;
-            if (events[k][2] !== 0 || !isInt(events[k][3])) { clean = false; break; }
-            const node = derefPool(events[k][3]);
-            if (isNode(node) && node.tag === 0x0b
-                && Array.isArray(node.value) && node.value.length === 1) {
-              floats.push(node.value[0]);
-            } else { clean = false; break; }
-          }
-          if (!clean || floats.length < 2) continue;
-          markerCount++;
-          if (floats.length >= 5) {
-            // One marker = one spawn anchor at (f1, f2). The trailing floats
-            // are retained as undecoded provenance: they are NOT a count
-            // (early guess, retracted) — their shape is consistent with
-            // further waypoint pairs, unproven.
-            positions.push({ x: floats[0], y: floats[1], count: 1, raw: floats });
-          }
-        }
-      }
       rosters.push({
         room: links[0],
         def_slot: def.slot,
@@ -3148,15 +3090,13 @@ export function extractEnemyRosters(
         name: def.name,
         plural: def.plural,
         owners,
-        positions,
-        marker_count: markerCount,
       });
     }
   }
   return rosters;
 }
 
-// One style/visual owner's appearance parts for roster spawn synthesis: the
+// One style/visual owner's appearance parts: the
 // unique (mesh series, later material series) pair with no asset field
 // between (pooled or bare humanoid slot arrays), plus the two-tint actor
 // recolors — the same rules the actor rows use.

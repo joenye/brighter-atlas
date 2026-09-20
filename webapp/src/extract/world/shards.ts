@@ -20,8 +20,7 @@ import { roomOccupancy, roomIndividualAnchors } from './room.js';
 import { AssetGraph, type OccurrenceHit, type PartRecord, type PoolNode, type RegistryRow } from './graph.js';
 import { SpawnGraph, type RoomRowRef } from './spawns.js';
 import {
-  extractEnemyRosters, ownerAppearanceParts, traceAssetMaps, materialMap,
-  Resolver, type EnemyRosterEntry, type EnemyDefinition,
+  extractEnemyRosters, type EnemyRosterEntry, type EnemyDefinition,
 } from './models.js';
 
 export const TILE_UNITS = 1024;
@@ -69,13 +68,12 @@ export const SPAWN_CONFIDENCE: Record<string, number> = {
   exact_spawn_parallel_series: 1,
   exact_roster_owner_appearance: 2,
 };
-export const SPAWN_MEMBERSHIP_KIND: Record<string, number> = { generic: 0, direct: 1 };
+export const SPAWN_MEMBERSHIP_KIND: Record<string, number> = { generic: 0, direct: 1, default_room: 2 };
 export const SPAWN_RECOLOR_SCOPE: Record<string, number> = {
   parallel: 0, actor_scalar: 1, actor_pair: 2, actor_pair_scalar: 3,
 };
-// Where a spawn row came from: a positioned actor record, a roaming-enemy
-// roster marker (authored tile position), or the room-centre fallback for
-// roster enemies whose markers carry no position (honestly approximate).
+// New shards emit only authored actor placements. Legacy enum values remain
+// reserved so previously extracted versions can still be inspected.
 export const SPAWN_ORIGIN: Record<string, number> = {
   actor: 0, roster: 1, roster_center: 2,
 };
@@ -116,7 +114,8 @@ export const SPAWN_COLUMNS = [
   'record', 'room_record', 'x', 'y', 'z', 'surface_z', 'rotation_quarters',
   'direction_resource', 'label', 'label_field_op', 'location_field_op',
   'location_series_index', 'location_class', 'direction_field_op',
-  'room_field_op', 'origin',
+  'room_field_op', 'origin', 'centre_offset', 'centre_field_op',
+  'default_room_record', 'default_room_field_op', 'authored_label',
 ];
 export const SPAWN_PART_COLUMNS = [
   'spawn', 'mesh', 'material', 'texture', 'render_texture', 'flags',
@@ -138,7 +137,7 @@ export const COORDINATE_SYSTEM = {
   map_offset: 'source-space crop origin inside map_size; because occupancy and display rows have opposite Y directions, display_offset=[map_offset.x,map_size.y-size.y-map_offset.y]',
   viewer_conversion: 'game (x,y,z) -> three.js (x,z,y)',
   composition: 'viewer_conversion * cell_translation * rotation_z((occurrence.rotation_quarters + mesh_forward_quarter_turns) * 90deg) * optional_local_x_reflection(packed_flags & 0x4) * local_matrix_game',
-  spawn_translation: '((spawn.x+0.5)*tile_units,(spawn.y+0.5)*tile_units,spawn.surface_z); when surface_z is null consumers may retain the raw spawn.z compatibility placement',
+  spawn_translation: '((spawn.x+centre_offset)*tile_units,(spawn.y+centre_offset)*tile_units,spawn.surface_z); older shards without centre_offset use 0.5; when surface_z is null consumers may retain the raw spawn.z compatibility placement',
   packed_orientation: 'packed low two bits are rotation_quarters; bit 0x4 reflects local X; bits 3..4 and 5..6 select optional native owner-alignment offsets composed after reflection and the native quarter-turn; bit 0x800 is retained as provenance and does not change placement; class-101 local matrices follow',
   local_matrix_game: 'row-major 3x4 affine, interned without TRS reduction',
 };
@@ -188,10 +187,10 @@ export const SEMANTICS = {
   render_texture: 'render_texture=-1 has no decodable image; inspect placement flags to distinguish authored-empty from decode failure',
   terrain: 'class-351 occurrence with a secondary ground resource',
   models: 'exact root-occurrence appearance parts, whether rigid or skinned',
-  spawns: 'room-owned gameplay actor records with an exact typed integer XYZ/direction object and exact parallel mesh/material appearance where present',
-  spawn_coordinates: 'spawn x/y are already in full map_size coordinates and do not receive the class-351 map_offset; raw z is retained as actor/navigation provenance, while surface_z is the exact native game-unit height sampled from source terrain face-index 2 triangles at the tile centre (null where this room owns no intersecting top face)',
-  spawn_memberships: 'all native room-row generic/direct references are retained; repeated memberships of one registry actor slot produce one spawn row',
-  spawn_origin: 'origin=actor rows are positioned native actor records; origin=roster rows come from the roaming-enemy roster markers: authored tiles in the MINIMAP frame (y-down; the extractor reflects into the y-up occupancy frame) with no direction, grounded by the same terrain sampling as actor rows; the markers\' trailing floats stay undecoded provenance (shape suggests further waypoint pairs, unproven); origin=roster_center rows are the honest fallback for roster enemies whose markers carry no position, clustered on free tiles at the room centre and explicitly approximate',
+  spawns: 'gameplay actor records with an exact typed integer XYZ/direction object and exact parallel mesh/material appearance where present',
+  spawn_coordinates: 'spawn x/y are already in full map_size coordinates and do not receive the class-351 map_offset; raw z is retained as actor/navigation provenance, while surface_z is a display grounding height in game units sampled from source surface triangles at the authored actor centre (null where this room owns no intersecting top face)',
+  spawn_memberships: 'room-row generic/direct references and actor default-room references are retained; repeated memberships of one registry actor slot produce one spawn row',
+  spawn_origin: 'new rows use origin=actor and retain authored coordinates; legacy roster and roster_center values are reserved only for reading older extractions',
   spawn_recolors: 'two exact actor tint fields are paired by part index when serialized as series, or applied actor-wide when both fields are scalar; the actor schema has implicit neutral output modulation rather than a fabricated third stored colour',
   placement_recolors: 'three values are tint1/tint2/half-range output modulation; a two-value placement with uniform_luminance_tint stores the compact ground schema\'s exact tint/output-modulation pair because its unused second tint is absent rather than fabricated',
   skinned_is_not_spawn: 'AB5 skeleton metadata remains a placement flag only and is never used to identify gameplay actors',
@@ -229,8 +228,6 @@ export interface ShardContext {
   roomRows: Map<number, RoomRowRef>;
   roomIds: number[];
   rostersByRoom: Map<number, EnemyRosterEntry[]>;
-  rosterAssets: { meshSlots: Map<number, number>; materialTextures: Map<number, number[]> } | null;
-  rosterAppearance: (ownerSlot: number) => Record<string, any>[];
   names: Map<number, string> | null;
   meshDir: any;
   profile: any;
@@ -327,10 +324,10 @@ function surfaceHeightAtXY(
 // faces at the cell participate and the highest triangle hit wins.
 function terrainSurfaceZ(
   ctx: ShardContext, cell: number[], candidates: [OccurrenceHit, PartRecord][],
-  actorZ = 0, layers: Set<number> | null = null,
+  actorZ = 0, layers: Set<number> | null = null, centreOffset = 0.5,
 ): number | null {
-  const pointX = cell[0] + 0.5;
-  const pointY = cell[1] + 0.5;
+  const pointX = Math.fround(Math.fround(cell[0]) + centreOffset);
+  const pointY = Math.fround(Math.fround(cell[1]) + centreOffset);
   // Only surfaces in the tile's CONTIGUOUS occupancy span above the actor
   // ground it: Sewer Entrance's overhead arch (layers 0,1,7: a gap) must
   // not ground a floor actor, while Fallen Monument's slab (layers 0..8
@@ -549,7 +546,8 @@ export interface ShardContextOptions {
   names?: Map<number, string> | null;
   loadMeshBytes: (meshId: number) => Uint8Array;
   profile?: any;
-  // dt.charset: enables the roaming-enemy roster spawns (absent -> none)
+  bytes?: Uint8Array;
+  // dt.charset: decodes actor labels and enemy-definition associations.
   charset?: ArrayLike<string> | null;
   // Precomputed shared derivations from the orchestrator, each a pure
   // never-mutated function of the same rows/pool passed here: the
@@ -570,33 +568,21 @@ export interface ShardContextOptions {
 //   profile      : optional per-build decode data (provenance in the index)
 export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
-  charset = null, assetMaps = null, materialAssets = null, enemyDefs = null,
+  charset = null, bytes, enemyDefs = null,
 }: ShardContextOptions): ShardContext {
   const graph = new AssetGraph(rows, pool);
-  const spawnGraph = new SpawnGraph(rows, pool, graph);
+  const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs });
   const roomIds = Array.from(rooms.keys()).sort((a, b) => a - b);
   const roomRows = spawnGraph.discoverRoomRows(roomIds);
-  // Roaming-enemy rosters grouped per room, plus the maps the appearance
-  // resolver needs. Charset absent (older callers/fixtures) -> no rosters.
+  // A definition can associate an enemy with a room without specifying a
+  // starting position. Preserve that association separately from actors.
   const rostersByRoom = new Map<number, EnemyRosterEntry[]>();
-  let rosterAssets: {
-    meshSlots: Map<number, number>; materialTextures: Map<number, number[]>;
-  } | null = null;
   if (charset) {
     for (const roster of extractEnemyRosters(rows, pool, charset, enemyDefs)) {
-      const list = rostersByRoom.get(roster.room);
-      if (list) list.push(roster); else rostersByRoom.set(roster.room, [roster]);
-    }
-    if (rostersByRoom.size) {
-      const { meshSlots, textureSlots } = assetMaps ?? traceAssetMaps(rows);
-      const { materialTextures } = materialAssets
-        ?? materialMap(pool, new Resolver(pool, meshSlots), textureSlots);
-      const lookup = new Map(textureSlots);
-      for (const [handle, textures] of materialTextures) lookup.set(handle, textures);
-      rosterAssets = { meshSlots, materialTextures: lookup };
+      const list = rostersByRoom.get(roster.room) ?? [];
+      list.push(roster); rostersByRoom.set(roster.room, list);
     }
   }
-  const rosterAppearanceCache = new Map<number, Record<string, any>[]>();
   const texLookup = typeof texMeta === 'function' ? texMeta : (id: number) => texMeta.get(id);
   const surfaceMeshes = new Map<number, SurfaceMesh>();
   // roomOccupancy is deterministic per room and consumed read-only by both the
@@ -609,18 +595,6 @@ export function createShardContext({
     roomRows,
     roomIds,
     rostersByRoom,
-    rosterAssets,
-    rosterAppearance: (ownerSlot: number) => {
-      if (!rosterAssets) return [];
-      let parts = rosterAppearanceCache.get(ownerSlot);
-      if (parts === undefined) {
-        parts = ownerAppearanceParts(
-          rows, pool, ownerSlot, rosterAssets.meshSlots, rosterAssets.materialTextures,
-        );
-        rosterAppearanceCache.set(ownerSlot, parts);
-      }
-      return parts;
-    },
     names,
     meshDir,
     profile,
@@ -704,9 +678,6 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   const placementZ = new Map<number, number>();
   const terrainZ = new Map<number, number>();
   const terrainSurfaceParts = new Map<string, [OccurrenceHit, PartRecord][]>(); // "x,y" -> [hit, part][]
-  // Ground only: the terrain top faces, without block tops or model parts. The
-  // roaming-enemy block below grounds on this narrower set, see the comment there.
-  const groundSurfaceParts = new Map<string, [OccurrenceHit, PartRecord][]>();
   const cellLayers = new Map<string, Set<number>>(); // "x,y" -> Set(z)  (occupancy span)
   for (const hit of occurrences) {
     const key = `${hit.cell[0]},${hit.cell[1]}`;
@@ -811,10 +782,6 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       const key = `${hit.cell[0]},${hit.cell[1]}`;
       const list = terrainSurfaceParts.get(key);
       if (list) list.push([hit, part]); else terrainSurfaceParts.set(key, [[hit, part]]);
-      if (part.kind === 'terrain_face') {
-        const ground = groundSurfaceParts.get(key);
-        if (ground) ground.push([hit, part]); else groundSurfaceParts.set(key, [[hit, part]]);
-      }
     }
   }
 
@@ -836,11 +803,20 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     // Spawn positions are room-LOCAL (cropped) like occurrences: every spawn
     // in the corpus fits the cropped size, and subtracting the crop margin
     // instead mis-grounds spawns in exactly the offset rooms.
-    const localCell = [x, y];
-    const surfaceZ = terrainSurfaceZ(
-      ctx, localCell, terrainSurfaceParts.get(`${localCell[0]},${localCell[1]}`) || [],
-      z, cellLayers.get(`${localCell[0]},${localCell[1]}`) || null,
-    );
+    const centreOffset = actor.centre_offset ?? 0.5;
+    const centreX = Math.fround(Math.fround(x) + centreOffset);
+    const centreY = Math.fround(Math.fround(y) + centreOffset);
+    // A large actor can centre on another tile or exactly on its edge. Sample
+    // source triangles touching that point without moving the authored XY.
+    const sampleXs = new Set([Math.floor(centreX), Math.floor(centreX - 1e-7)]);
+    const sampleYs = new Set([Math.floor(centreY), Math.floor(centreY - 1e-7)]);
+    let surfaceZ: number | null = null;
+    for (const sx of sampleXs) for (const sy of sampleYs) {
+      const key = `${sx},${sy}`;
+      const sampled = terrainSurfaceZ(ctx, [x, y], terrainSurfaceParts.get(key) ?? [],
+        z, cellLayers.get(key) ?? null, centreOffset);
+      if (sampled !== null && (surfaceZ === null || sampled > surfaceZ)) surfaceZ = sampled;
+    }
     inc(counts, surfaceZ !== null ? 'spawn_grounded' : 'spawn_ungrounded');
     spawnRows.push([
       actor.record, actor.room_record, x, y, z, surfaceZ,
@@ -848,7 +824,8 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       actor.label, actor.label_field_op,
       actor.location_field_op, actor.location_series_index,
       actor.location_class, actor.direction_field_op,
-      actor.room_field_op, SPAWN_ORIGIN.actor,
+      actor.room_field_op, SPAWN_ORIGIN.actor, actor.centre_offset, actor.centre_field_op,
+      actor.default_room_record, actor.default_room_field_op, actor.authored_label,
     ]);
     for (const membership of actor.memberships) {
       spawnMembershipRows.push([
@@ -897,207 +874,6 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       bump(placementZ, z);
     }
   });
-  // ---- roaming-enemy roster spawns ----------------------------------------
-  // Authored 6-float roster markers carry tile positions (origin=roster);
-  // rosters whose markers carry no position fall back to free tiles clustered
-  // at the room centre (origin=roster_center, honestly approximate). Both
-  // resolve their appearance through the enemy definition's tier owners.
-  const rosters = ctx.rostersByRoom.get(roomId) || [];
-  if (rosters.length && ctx.rosterAssets) {
-    // A tile an enemy can stand on: it has ground, and no enemy has taken it
-    // yet. Tiles are NOT excluded for carrying room content, which is what the
-    // room-centre fallback used to require: since every floor tile carries
-    // terrain, that test could only ever succeed out in the void beyond the
-    // floor, and those rows then found no ground at all and sank to the world
-    // base plane.
-    const taken = new Set<string>();
-    const standable = (x: number, y: number): boolean =>
-      x >= 0 && y >= 0 && x < mapSize[0] && y < mapSize[1]
-      && (groundSurfaceParts.get(`${x},${y}`)?.length ?? 0) > 0;
-    const claimTiles = (centerX: number, centerY: number, wanted: number): [number, number][] => {
-      const out: [number, number][] = [];
-      const maxRadius = Math.max(mapSize[0], mapSize[1]);
-      for (let radius = 0; radius <= maxRadius && out.length < wanted; radius++) {
-        for (let dy = -radius; dy <= radius && out.length < wanted; dy++) {
-          for (let dx = -radius; dx <= radius && out.length < wanted; dx++) {
-            if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
-            const x = centerX + dx;
-            const y = centerY + dy;
-            const key = `${x},${y}`;
-            if (taken.has(key) || !standable(x, y)) continue;
-            taken.add(key);
-            out.push([x, y]);
-          }
-        }
-      }
-      while (out.length < wanted) out.push([centerX, centerY]);   // pathological rooms
-      return out;
-    };
-    const ANCHOR_SNAP_RADIUS = 3;
-    // The tile's ground level, cheaply: the highest terrain face resting on it.
-    const groundLayer = (x: number, y: number): number | null => {
-      const parts = groundSurfaceParts.get(`${x},${y}`);
-      if (!parts?.length) return null;
-      let top = -Infinity;
-      for (const [hit] of parts) if (hit.cell[2] > top) top = hit.cell[2];
-      return Number.isFinite(top) ? top : null;
-    };
-    // An authored anchor landing on a tile with no ground moves to a nearby one
-    // that has some. Nearest alone is the wrong rule: taking the first tile the
-    // scan reaches picks by scan order, and on a stepped slope that is the
-    // bottom step, which drops an enemy several levels below the floor it was
-    // standing beside. Prefer the candidate whose ground sits at the level
-    // typical of the neighbourhood, and keep the radius small so an anchor
-    // nowhere near a floor is left alone rather than given an invented home.
-    const snapToGround = (x: number, y: number): [number, number] => {
-      if (standable(x, y)) return [x, y];
-      const candidates: { x: number; y: number; layer: number; distance: number }[] = [];
-      for (let dy = -ANCHOR_SNAP_RADIUS; dy <= ANCHOR_SNAP_RADIUS; dy++) {
-        for (let dx = -ANCHOR_SNAP_RADIUS; dx <= ANCHOR_SNAP_RADIUS; dx++) {
-          if (!standable(x + dx, y + dy)) continue;
-          const layer = groundLayer(x + dx, y + dy);
-          if (layer === null) continue;
-          candidates.push({
-            x: x + dx, y: y + dy, layer, distance: Math.max(Math.abs(dx), Math.abs(dy)),
-          });
-        }
-      }
-      if (!candidates.length) return [x, y];
-      const levels = candidates.map((candidate) => candidate.layer).sort((a, b) => a - b);
-      const median = levels[(levels.length - 1) >> 1];
-      let best = candidates[0];
-      for (const candidate of candidates) {
-        const gap = Math.abs(candidate.layer - median) - Math.abs(best.layer - median);
-        if (gap < 0 || (gap === 0 && candidate.distance < best.distance)) best = candidate;
-      }
-      return [best.x, best.y];
-    };
-    // Which tile frame the authored markers speak. They were read in the
-    // minimap/display frame (y-down) and reflected into the occupancy frame
-    // (y-up), but a marker also carries a layer value, and that value should be
-    // one of the layers actually present at the tile it names. Scoring both
-    // readings against that gives the frame from the data rather than assuming
-    // it. The reflected reading stays the default, so a build whose markers do
-    // not decide the question keeps its previous interpretation.
-    const frameScore = (reflect: boolean): number => {
-      let hits = 0;
-      for (const roster of rosters) {
-        for (const position of roster.positions) {
-          const x = Math.floor(position.x);
-          const raw = Math.floor(position.y);
-          const y = reflect ? mapSize[1] - 1 - raw : raw;
-          if (!(x >= 0 && x < mapSize[0] && y >= 0 && y < mapSize[1])) continue;
-          const layer = Math.floor(Number(position.raw?.[2]));
-          if (!Number.isFinite(layer)) continue;
-          if (cellLayers.get(`${x},${y}`)?.has(layer)) hits++;
-        }
-      }
-      return hits;
-    };
-    const markerCount = rosters.reduce((n, roster) => n + roster.positions.length, 0);
-    let reflectMarkers = true;
-    if (markerCount) {
-      const rawHits = frameScore(false);
-      const reflectedHits = frameScore(true);
-      // The raw reading wins ties. Where both readings explain every marker the
-      // room cannot decide between them, but across a whole build the raw one
-      // explains every marker and the reflected one barely beats picking a tile
-      // at random, so a local tie is not evidence for reflecting. The majority
-      // gate is what keeps this honest: a build whose markers carry no layer
-      // evidence at all scores zero either way and keeps the previous reading
-      // rather than flipping on a vacuous tie.
-      if (rawHits >= reflectedHits && rawHits >= Math.ceil(markerCount * 0.6)) reflectMarkers = false;
-    }
-    for (const roster of rosters) {
-      let parts: Record<string, any>[] = [];
-      for (const owner of roster.owners) {
-        parts = ctx.rosterAppearance(owner);
-        if (parts.length) break;
-      }
-      const placements: { x: number; y: number; origin: number }[] = [];
-      for (const position of roster.positions) {
-        const rawY = Math.floor(position.y);
-        const x = Math.floor(position.x);
-        const y = reflectMarkers ? mapSize[1] - 1 - rawY : rawY;
-        if (!(x >= 0 && x < mapSize[0] && y >= 0 && y < mapSize[1])) continue;
-        const [ax, ay] = snapToGround(x, y);
-        placements.push({ x: ax, y: ay, origin: SPAWN_ORIGIN.roster });
-        taken.add(`${ax},${ay}`);
-        for (const [cx, cy] of claimTiles(ax, ay, Math.max(0, position.count - 1))) {
-          placements.push({ x: cx, y: cy, origin: SPAWN_ORIGIN.roster });
-        }
-      }
-      if (!placements.length) {
-        // One approximate row per roster. marker_count counts every float
-        // record on the roster, and most of those are not positions at all, so
-        // using it invented several enemies per roster that the room does not
-        // contain.
-        const wanted = 1;
-        for (const [x, y] of claimTiles(Math.floor(mapSize[0] / 2), Math.floor(mapSize[1] / 2), wanted)) {
-          placements.push({ x, y, origin: SPAWN_ORIGIN.roster_center });
-        }
-      }
-      for (const place of placements) {
-        const spawnIndex = spawnRows.length;
-        // Ground on the terrain only, NOT on the tallest surface of the tile.
-        // The wider set the authored actors use is calibrated on actors, who
-        // stand on piers and monument slabs. A roaming enemy is authored on
-        // open ground that scenery sits on top of, so taking the tallest
-        // surface puts it in the tree canopy: in one clearing that is 9182
-        // units where the floor is 2560.
-        const surfaceZ = terrainSurfaceZ(
-          ctx, [place.x, place.y],
-          groundSurfaceParts.get(`${place.x},${place.y}`) || [],
-          0, cellLayers.get(`${place.x},${place.y}`) || null,
-        );
-        inc(counts, place.origin === SPAWN_ORIGIN.roster ? 'spawn_roster' : 'spawn_roster_approx');
-        spawnRows.push([
-          roster.roster_slot, roomRow.record, place.x, place.y, 0, surfaceZ,
-          0, -1, roster.name, -1, -1, -1, -1, -1,
-          roomRow.room_field_op, place.origin,
-        ]);
-        if (!parts.length) inc(counts, 'spawn_unrendered');
-        for (const part of parts) {
-          const meshId = part.mesh;
-          roomMeshes.add(meshId);
-          const textureId = part.texture;
-          roomTextures.add(textureId);
-          let flags = ctx.meshIsSkinned(meshId) ? PF_SKINNED : 0;
-          let recolorIndex = -1;
-          if (part.recolors !== null && part.recolors !== undefined) {
-            const colors = part.recolors.map((row: any[]) => row.map(Number));
-            recolorIndex = intern(
-              recolors, recolorLookup, colors.map((row: number[]) => row.join(',')).join(';'), colors,
-            );
-          }
-          let renderTexture = -1;
-          const meta = ctx.texMeta(textureId);
-          if (meta.kind === 'image') {
-            renderTexture = textureId;
-            if (meta.alpha) flags |= PF_ALPHA;
-          } else if (meta.kind === 'empty') {
-            flags |= PF_AUTHORED_EMPTY;
-            inc(counts, 'authored_empty');
-          } else {
-            flags |= PF_UNRENDERABLE_TEXTURE;
-            inc(counts, 'unrenderable_texture');
-          }
-          spawnPartRows.push([
-            spawnIndex, meshId, part.material_slot, textureId,
-            renderTexture, flags, recolorIndex, part.part_index,
-            part.mesh_def_slot, part.mesh_field_op, part.material_field_op,
-            SPAWN_CONFIDENCE.exact_roster_owner_appearance,
-            part.recolor_field_ops?.[0] ?? -1, part.recolor_field_ops?.[1] ?? -1,
-            part.recolor_scope !== null && part.recolor_scope in SPAWN_RECOLOR_SCOPE
-              ? SPAWN_RECOLOR_SCOPE[part.recolor_scope] : -1,
-          ]);
-          inc(counts, 'spawn_parts');
-          bump(placementZ, 0);
-        }
-      }
-    }
-  }
-
   counts.spawns = spawnRows.length;
   counts.spawn_memberships = spawnMembershipRows.length;
 
@@ -1123,6 +899,9 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     spawns: spawnRows,
     spawn_parts: spawnPartRows,
     spawn_memberships: spawnMembershipRows,
+    enemy_associations: ctx.rostersByRoom.get(roomId) ?? [],
+    actor_definitions: actors.map(a => a.enemy_definitions),
+    room_volumes: ctx.spawnGraph.roomVolumes(roomRow.record),
     matrices,
     recolors,
     collision: collisions,
@@ -1220,7 +999,7 @@ export function roomContentSignature({ shard, meshHash, imageHash }: {
     ]);
   }
   const spawns = (shard.spawns || []).map((row: any[], index: number) => JSON.stringify([
-    row[2], row[3], row[4], row[5], row[6], row[8], partsBySpawn.get(index) || [],
+    row[2], row[3], row[4], row[5], row[6], row[8], row[16] ?? null, partsBySpawn.get(index) || [],
   ])).sort();
 
   return JSON.stringify({

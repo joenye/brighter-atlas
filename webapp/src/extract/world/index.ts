@@ -284,7 +284,8 @@ export async function extractWorld({
     names,
     loadMeshBytes,
     profile,
-    charset: dt.charset,   // enables roaming-enemy roster spawns
+    charset: dt.charset,
+    bytes: ab0,
     assetMaps,             // shared pure derivations (computed once above)
     materialAssets,
     enemyDefs,

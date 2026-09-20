@@ -1020,6 +1020,7 @@ export class WorldScene {
     if (!spawn) throw new Error(`spawn part references spawn ${spawnIndex}`);
     const quarterTurns = finite(spawn[sc.rotation_quarters], 0) & 3;
     const surfaceZ = optionalFinite(spawn[sc.surface_z]);
+    const centreOffset = optionalFinite(spawn[sc.centre_offset]) ?? 0.5;
 
     // Gameplay actor positions share the occurrences' raw room-local frame
     // (see the map_offset note near the top of this module), so like every
@@ -1027,8 +1028,8 @@ export class WorldScene {
     // sampled authored terrain height in native mesh units; the fallback
     // keeps raw actor Z.
     target.makeTranslation(
-      (finite(spawn[sc.x]) + 0.5) * this.tileUnits,
-      (finite(spawn[sc.y]) + 0.5) * this.tileUnits,
+      Math.fround(Math.fround(finite(spawn[sc.x])) + centreOffset) * this.tileUnits,
+      Math.fround(Math.fround(finite(spawn[sc.y])) + centreOffset) * this.tileUnits,
       surfaceZ ?? finite(spawn[sc.z]) * this.layerUnits,
     );
     // Actors carry a facing convention opposite the static mesh-forward one:
@@ -1594,10 +1595,10 @@ export class WorldScene {
         secondary: null,
         structuralAnchor: null,
         placementAnchor: Object.freeze({
-          source: 'spawn-tile-center',
+          source: 'spawn-authored-center',
           center: Object.freeze([
-            Number(spawn.position[0]) + 0.5,
-            Number(spawn.position[1]) + 0.5,
+            Math.fround(Math.fround(Number(spawn.position[0])) + spawn.centreOffset),
+            Math.fround(Math.fround(Number(spawn.position[1])) + spawn.centreOffset),
           ]),
           delta: Object.freeze([0, 0, 0]),
         }),
@@ -1704,11 +1705,14 @@ export class WorldScene {
       record: spawn[sc.record],
       roomRecord: spawn[sc.room_record],
       // spawn origin (optional column; older shards have none -> null):
-      // 0 actor record, 1 roster marker (authored tile), 2 roster centre
-      // fallback (approximate)
+      // 0 actor record; 1 and 2 are legacy inferred placements.
       origin: sc.origin !== undefined && Number.isInteger(spawn[sc.origin])
         ? Number(spawn[sc.origin]) : null,
       label: spawn[sc.label] ?? null,
+      authoredLabel: spawn[sc.authored_label] ?? spawn[sc.label] ?? null,
+      centreOffset: optionalFinite(spawn[sc.centre_offset]) ?? 0.5,
+      defaultRoomRecord: spawn[sc.default_room_record] ?? null,
+      enemyDefinitions: owner.shard.actor_definitions?.[index] ?? [],
       directionResource: spawn[sc.direction_resource],
       position: Object.freeze([spawn[sc.x], spawn[sc.y], spawn[sc.z]]),
       surfaceZ: optionalFinite(spawn[sc.surface_z]),

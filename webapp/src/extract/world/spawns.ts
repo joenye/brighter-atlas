@@ -5,6 +5,9 @@
 // position. Build-local ids are retained only as provenance in the returned
 // records.
 
+import { makeRegistryRowDecoder } from './effects.js';
+import type { FillRow } from './replay.js';
+import type { WorldProfile } from './profile.js';
 import type { AssetGraph, DecodedField, PoolNode, RegistryRow } from './graph.js';
 
 const POSITION_TAGS = [0x0A, 0x0A, 0x0A, 0x26];
@@ -50,6 +53,10 @@ interface SpawnAppearance {
 export interface SpawnRecord {
   record: number;
   position: [number, number, number];
+  default_room_record: number | null;
+  default_room_field_op: number;
+  centre_offset: number | null;
+  centre_field_op: number;
   direction_resource: number;
   rotation_quarters: number;
   angle_degrees: number;
@@ -58,13 +65,15 @@ export interface SpawnRecord {
   location_class: number;
   direction_field_op: number;
   label: string | null;
+  authored_label: string | null;
+  enemy_definitions: { record: number; name: string }[];
   label_field_op: number;
   parts: Record<string, any>[];
   appearance_confidence: string | null;
 }
 
 export interface SpawnMembership {
-  kind: 'generic' | 'direct';
+  kind: 'generic' | 'direct' | 'default_room';
   field_op: number;
   series_index: number;
   leaf_index: number;
@@ -82,6 +91,13 @@ export type RoomSpawn = SpawnRecord & {
   memberships: SpawnMembership[];
 };
 
+export interface SpawnDecodeOptions {
+  bytes?: Uint8Array;
+  profile?: WorldProfile;
+  charset?: ArrayLike<string> | null;
+  enemyDefs?: { slot: number; name: string; targets: number[] }[] | null;
+}
+
 // Pure structural resolver for room-owned gameplay actor instances.
 export class SpawnGraph {
   rows: RegistryRow[];
@@ -91,10 +107,24 @@ export class SpawnGraph {
   private _directionCache: Map<number, SpawnDirection | null>;
   private _spawnCache: Map<number, SpawnRecord | null>;
 
-  constructor(rows: RegistryRow[], pool: PoolNode[], assetGraph: AssetGraph) {
+  private _decode: ReturnType<typeof makeRegistryRowDecoder> | null;
+  private _charset: ArrayLike<string> | null;
+  private _enemyDefinitions = new Map<number, { record: number; name: string }[]>();
+  private _defaultActors = new Map<number, number[]>();
+
+  constructor(rows: RegistryRow[], pool: PoolNode[], assetGraph: AssetGraph, options: SpawnDecodeOptions = {}) {
     this.rows = rows;
     this.pool = pool;
     this.assets = assetGraph;
+    this._decode = options.bytes && options.profile
+      ? makeRegistryRowDecoder(rows as FillRow[], options.bytes, options.profile) : null;
+    this._charset = options.charset ?? null;
+    for (const def of options.enemyDefs ?? []) {
+      for (const target of def.targets) {
+        const list = this._enemyDefinitions.get(target) ?? [];
+        list.push({ record: def.slot, name: def.name }); this._enemyDefinitions.set(target, list);
+      }
+    }
     this._locationCache = new Map();
     this._directionCache = new Map();
     this._spawnCache = new Map();
@@ -150,6 +180,17 @@ export class SpawnGraph {
         direction_resource: values[3].value,
       });
     };
+    if (this._decode) {
+      for (const field of this._decode(ownerSlot) ?? []) {
+        if (field.kind !== 'G') continue;
+        const node = this.assets.deref(field.node);
+        if (node?.tag === 0x24) consider(field.op, 0, node.class,
+          (node.fields ?? []).map((v: any) => this.assets.deref(v)));
+      }
+      const result = matches.length === 1 ? matches[0] : null;
+      this._locationCache.set(ownerSlot, result);
+      return result;
+    }
     for (const [operation, field] of this.assets.fields(ownerSlot)) {
       for (let seriesIndex = 0; seriesIndex < field.elements.length; seriesIndex++) {
         for (const node of this._walk(field.elements[seriesIndex])) {
@@ -348,13 +389,15 @@ export class SpawnGraph {
     };
   }
 
-  static _decodeString(node: any): string | null {
+  static _decodeString(node: any, charset: ArrayLike<string> | null = null): string | null {
     const values = node.values;
     if (node.tag !== 0x0E || !Array.isArray(values)) return null;
     let value = '';
     for (const character of values) {
       if (!isInt(character) || character < 0 || character > 0x10FFFF) return null;
-      value += String.fromCodePoint(character);
+      const glyph = charset ? charset[character] : String.fromCodePoint(character);
+      if (typeof glyph !== 'string') return null;
+      value += glyph;
     }
     return normalizeSpaces(value);
   }
@@ -363,7 +406,7 @@ export class SpawnGraph {
     const strings: string[] = [];
     for (const element of field.elements) {
       for (const node of this._walk(element)) {
-        const string = SpawnGraph._decodeString(node);
+        const string = SpawnGraph._decodeString(node, this._charset);
         if (string !== null) strings.push(string);
       }
     }
@@ -378,7 +421,7 @@ export class SpawnGraph {
     const referenced: string[] = [];
     for (const ref of refs) {
       for (const [, , tag, value] of this.rows[ref].g) {
-        if (tag === 0x0E && typeof value === 'string' && value.trim()) referenced.push(value);
+        if (tag === 0x0E && typeof value === 'string' && value.trim()) referenced.push(this._charset ? Array.from(value, c => this._charset![c.codePointAt(0)!] ?? c).join('') : value);
       }
     }
     const distinctReferenced = unique(referenced);
@@ -387,6 +430,16 @@ export class SpawnGraph {
   }
 
   private _label(ownerSlot: number, beforeOp: number): [string | null, number] {
+    if (this._decode) {
+      const fields = (this._decode(ownerSlot) ?? []).filter(f => f.kind === 'G' && f.op < beforeOp);
+      for (const field of fields.reverse()) {
+        if (field.kind !== 'G') continue;
+        const node = this.assets.deref(field.node);
+        if (!node) continue;
+        const label = SpawnGraph._decodeString(node, this._charset);
+        if (label !== null) return [label, field.op];
+      }
+    }
     const fields = this.assets.fields(ownerSlot);
     const ops = Array.from(fields.keys()).filter((op) => op < beforeOp).sort((a, b) => b - a);
     for (const operation of ops) {
@@ -412,9 +465,31 @@ export class SpawnGraph {
     const appearance = this._appearance(ownerSlot, location.field_op);
     const nameBefore = appearance !== null ? appearance.mesh_field_op : location.field_op;
     const [label, labelOp] = this._label(ownerSlot, nameBefore);
+    // The default-placement group ends with a typed XYZ/direction value,
+    // preceded by its room reference and scalar centre offset. Discover it
+    // relative to the validated location rather than a build-specific index.
+    const scalar = (op: number): any => {
+      if (this._decode) {
+        const field = (this._decode(ownerSlot) ?? []).find(f => f.op === op && f.kind === 'G');
+        return field?.kind === 'G' ? this.assets.deref(field.node) : null;
+      }
+      const field = this.assets.fields(ownerSlot).get(op);
+      return field?.elements.length === 1 ? this.assets.deref(field.elements[0]) : null;
+    };
+    let roomOp = location.field_op - 1;
+    // Some schemas retain an additional integer between room and location.
+    if (scalar(roomOp)?.tag === 0x0a) roomOp--;
+    const centreOp = roomOp - 1;
+    const room = scalar(roomOp), centre = scalar(centreOp);
+    const hasDefault = room?.tag === 0x26 && isInt(room.value)
+      && centre?.tag === 0x0b && centre.value?.length === 1 && Number.isFinite(centre.value[0]);
     const result: SpawnRecord = {
       record: ownerSlot,
       position: location.position,
+      default_room_record: hasDefault ? room.value : null,
+      default_room_field_op: hasDefault ? roomOp : -1,
+      centre_offset: hasDefault ? centre.value[0] : null,
+      centre_field_op: hasDefault ? centreOp : -1,
       direction_resource: location.direction_resource,
       rotation_quarters: direction.rotation_quarters,
       angle_degrees: direction.angle_degrees,
@@ -422,7 +497,10 @@ export class SpawnGraph {
       location_series_index: location.series_index,
       location_class: location.typed_class,
       direction_field_op: direction.field_op,
-      label,
+      label: this._enemyDefinitions.has(ownerSlot)
+        ? unique(this._enemyDefinitions.get(ownerSlot)!.map(d => d.name)).join(' / ') : label,
+      authored_label: label,
+      enemy_definitions: this._enemyDefinitions.get(ownerSlot) ?? [],
       label_field_op: labelOp,
       parts: appearance === null ? [] : appearance.parts,
       appearance_confidence: appearance === null ? null : appearance.confidence,
@@ -454,6 +532,50 @@ export class SpawnGraph {
     for (const [roomId, rows] of matches) {
       result.set(roomId, { record: rows[0][0], room_field_op: rows[0][1] });
     }
+    this._defaultActors.clear();
+    const owners = new Set([...result.values()].map(r => r.record));
+    for (const row of this.rows) {
+      // Inspect only top-level room references. A definition's nested list of
+      // rooms is not an actor's own default placement.
+      const candidate = row.g.some(([, depth, tag, value]) => {
+        if (depth !== 0) return false;
+        const node = tag === 0 ? this.assets.deref({ tag, value }) : { tag, value };
+        return node?.tag === 0x26 && owners.has(node.value);
+      });
+      if (!candidate) continue;
+      const actor = this.spawn(row.slot);
+      if (actor?.default_room_record == null || !owners.has(actor.default_room_record)) continue;
+      const list = this._defaultActors.get(actor.default_room_record) ?? [];
+      list.push(row.slot); this._defaultActors.set(actor.default_room_record, list);
+    }
+    return result;
+  }
+
+  // Typed six-scalar boxes remain geometry metadata, never actor positions.
+  // Preserve source class and field identity; no gameplay purpose is inferred.
+  roomVolumes(roomSlot: number): { field_op: number; typed_class: number; path: (string | number)[];
+    origin: number[]; extent: number[] }[] {
+    const result: ReturnType<SpawnGraph['roomVolumes']> = [];
+    const walk = (value: any, op: number, path: (string | number)[], active = new Set<number>()) => {
+      if (!isNode(value)) return;
+      if (value.tag === 0) {
+        if (active.has(value.value)) return;
+        active.add(value.value); walk(this.pool[value.value], op, path, active); active.delete(value.value);
+        return;
+      }
+      if (value.tag === 0x24 && value.fields?.length === 6) {
+        const fields = value.fields.map((v: any) => this.assets.deref(v));
+        if (fields.every((v: any) => v?.tag === 0x0b && v.value?.length === 1 && Number.isFinite(v.value[0]))) {
+          const raw = fields.map((v: any) => v.value[0]);
+          result.push({ field_op: op, typed_class: value.class, path, origin: raw.slice(0, 3), extent: raw.slice(3) });
+          return;
+        }
+      }
+      for (const key of ['values', 'fields']) if (Array.isArray(value[key])) {
+        value[key].forEach((v: any, i: number) => walk(v, op, [...path, key, i], active));
+      }
+    };
+    for (const field of this._decode?.(roomSlot) ?? []) if (field.kind === 'G') walk(field.node, field.op, []);
     return result;
   }
 
@@ -486,10 +608,17 @@ export class SpawnGraph {
       });
     }
 
+    for (const target of this._defaultActors.get(roomSlot) ?? []) {
+      add(target, { kind: 'default_room', field_op: this.spawn(target)!.default_room_field_op,
+        series_index: -1, leaf_index: -1 });
+    }
     const result: RoomSpawn[] = [];
     for (const target of Array.from(memberships.keys()).sort((a, b) => a - b)) {
+      const actor = this.spawn(target)!;
+      // A cross-room reference is an association, not a placement here.
+      if (actor.default_room_record !== null && actor.default_room_record !== roomSlot) continue;
       result.push({
-        ...this.spawn(target)!,
+        ...actor,
         room: roomId,
         room_record: roomSlot,
         room_field_op: roomRow.room_field_op,
