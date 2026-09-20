@@ -15,6 +15,7 @@
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
+import { deriveRoomMetadata } from './room-metadata.js';
 import { replayGraph } from './replay.js';
 import { decodePool } from './value-pool.js';
 import { decodeObject, makeSlabReader } from '../bundles.js';
@@ -193,14 +194,16 @@ export async function extractWorld({
   }
   if (!layersById.size) throw new Error('no rooms found in assetBundle2. Mixed game versions?');
 
-  // room names straight from ab0, then the shipped content-hash overrides
-  // for the name-hash-gated rooms (a missing file just means no overrides).
-  const names = roomMod.deriveRoomNames(ab0, dt.charset, rooms.map((r) => r.idx));
+  const roomMetadata = deriveRoomMetadata(rows, pool.values, ab0, profile, dt.charset, rooms.map(r => r.idx));
+  // Historical naming remains a fallback for rooms without a complete header.
+  // Direct titles always win over shipped or cross-build name suggestions.
+  const names = roomMod.deriveRoomNames(ab0, dt.charset, rooms.filter(r => !roomMetadata.has(r.idx)).map(r => r.idx));
   try {
     // Ships with the app at defaults/room_name_overrides.json.
     const doc = await (fetchJson || defaultFetchJson)('defaults/room_name_overrides.json');
     if (doc?.overrides) roomMod.applyRoomNameOverrides(names, doc.overrides, contentHashes);
   } catch { /* no shipped overrides: derived names only */ }
+  for (const [id, metadata] of roomMetadata) names.set(id, metadata.name);
   for (const r of rooms) r.name = names.get(r.idx) ?? null;
 
   // Per-room ambience. The game multiplies every particle by a global
@@ -334,6 +337,13 @@ export async function extractWorld({
       throw new Error(`room ${roomId}: ${err.message}`);
     }
     const { shard, entry } = outcome;
+    const metadata = roomMetadata.get(roomId);
+    if (metadata) {
+      const extra = { displayName: metadata.displayName, episode: metadata.episode,
+        mapPosition: metadata.mapPosition, mapSize: metadata.mapSize,
+        roomOwner: metadata.owner, nameSource: 'room-record' };
+      Object.assign(shard, extra); Object.assign(entry, extra);
+    }
     putBatch.push([`world:room:${roomId}`, shard]);
     if (putBatch.length >= 32) await flushShards();
     // ordinal-free room content hash: the diff identity for this room, so

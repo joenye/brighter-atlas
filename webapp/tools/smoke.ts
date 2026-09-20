@@ -591,6 +591,23 @@ async function worldSuite(browser: any, base: string) {
   ok(await page.$eval('.card', (n) => !!n.querySelector('a[href="#/world/all"]')),
     'world landing links to the all-rooms view');
 
+  await page.click('.filter-dd summary');
+  const toggleEpisode = async (name: string) => page.evaluate((name) => {
+    const label = [...document.querySelectorAll('.filter-opt')].find(n => n.textContent === `Episode: ${name}`);
+    if (!label) throw new Error(`missing episode filter ${name}`);
+    (label.querySelector('input') as any).click();
+  }, name);
+  const visibleRooms = () => page.$$eval('.vlist .vrow:not(.vrow-all) .r-main', nodes => nodes.map(n => n.textContent));
+  await toggleEpisode('Fixture Outdoors'); await sleep(150);
+  ok(JSON.stringify(await visibleRooms()) === JSON.stringify(['Fixture Meadow']), 'episode filter selects its rooms');
+  await toggleEpisode('Fixture Underground'); await sleep(150);
+  ok((await visibleRooms()).length === 2, 'multiple episode filters include either episode');
+  await page.reload({waitUntil:'networkidle0'}); await sleep(300);
+  ok(await page.$$eval('.filter-opt input:checked', nodes => nodes.length) === 2, 'episode selection survives reload');
+  await page.click('.filter-dd summary'); await page.click('.filter-clear');
+  await page.click('.filter-dd summary'); await sleep(150);
+  ok((await visibleRooms()).length === 2, 'clearing episode filters restores all rooms');
+
   // ---- sidebar: pinned "All" + "Effects" rows above the rooms ---------------
   // The fixtures carry a world:effects doc (commit 1), so the C12-gated
   // Effects row rides pinned above the rooms right alongside All.

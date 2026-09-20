@@ -270,7 +270,7 @@ class FillValueDecoder extends PoolDecoder {
   }
 }
 
-type ReparsedOp =
+export type ReparsedOp =
   | { op: number; kind: 'G'; node: PoolNode }
   | { op: number; kind: 'U' | 'W' | 'Z' | 'R'; value: number }
   | { op: number; kind: 'N'; values: number[] }
@@ -587,25 +587,36 @@ export function makeRowDecoder(
   rows: FillRow[], pool: PoolNode[], ab0: Uint8Array, profile: WorldProfile,
   charset: ArrayLike<string>, symbols: string[],
 ): (slot: number) => EffectExtra[] | null {
+  const decode = makeRegistryRowDecoder(rows, ab0, profile);
+  const builder: ExtraBuilder = {
+    pool, glyphs: charset, symbols,
+    view: new DataView(ab0.buffer, ab0.byteOffset, ab0.byteLength),
+    base: ab0.byteOffset,
+  };
+  return (slot: number) => {
+    const ops = decode(slot);
+    return ops ? opsToExtras(builder, ops) : null;
+  };
+}
+
+/** Retain complete top-level fields for consumers that need original values
+ * rather than the bounded effect-inspector representation. */
+export function makeRegistryRowDecoder(
+  rows: FillRow[], ab0: Uint8Array, profile: WorldProfile,
+): (slot: number) => ReparsedOp[] | null {
   const arities = (obj: Record<string, number>) => {
     const map = new Map<number, number>();
     for (const key in obj) map.set(+key, obj[key]);
     return map;
   };
   const dec = new FillValueDecoder(ab0, arities(profile.class_fields), arities(profile.tag6_fields));
-  const builder: ExtraBuilder = {
-    pool, glyphs: charset, symbols,
-    view: new DataView(ab0.buffer, ab0.byteOffset, ab0.byteLength),
-    base: ab0.byteOffset,
-  };
   const quiet: ParseAudit = { parse_failures: 0, parse_mismatches: 0 };
   return (slot: number) => {
     if (!Number.isInteger(slot) || slot < 0 || slot >= rows.length) return null;
     const row = rows[slot];
     const sel = profile.selectors[String(row.selector)];
     if (!sel) return null;
-    const ops = reparseRow(dec, sel, row, quiet);
-    return ops ? opsToExtras(builder, ops) : null;
+    return reparseRow(dec, sel, row, quiet);
   };
 }
 

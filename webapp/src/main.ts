@@ -33,6 +33,7 @@ import { showPendingNotices } from './notices.js';
 import { entryByOrdinal } from './store.js';
 import type { AppStore, IndexEntry, FetchErrorDetail } from './store.js';
 import { partRecolor } from './recolor.js';
+import { episodeFilters, matchesFilters, type FilterDef } from './list-filters.js';
 
 
 // a parsed hash route ('#/mesh/12', '#/diff/<a>..<b>', …)
@@ -119,10 +120,9 @@ const imgBytes = (e: any) => (e.entries || []).reduce((s: number, x: any) => s +
 const isCreature = (m: any) => m.sk && (m.share ?? 0) > 0 && (m.share ?? 0) <= 16 && (m.clips ?? 0) > 0;
 const isPart = (m: any) => m.sk && (m.share ?? 0) > 16;
 
-type FilterDef = [label: string, pred: (it: any) => boolean, tip?: string];
 
 // list filters: [label, predicate]. Presented as a checkbox dropdown; multiple
-// checked filters AND together (an item must satisfy every checked filter). No
+// checked independent filters AND together; episode selections OR together. No
 // 'all' entry: nothing checked = show everything.
 const FILTERS: Record<string, FilterDef[]> = {
   meshes: [
@@ -985,7 +985,7 @@ class App {
   // static per-category filters + dynamic facets (strings namespaces,
   // compare-mode diff states)
   catFilters(cat: string | undefined): FilterDef[] {
-    return [...(FILTERS[cat ?? ''] || []), ...(this._diffFacets || [])];
+    return [...(FILTERS[cat ?? ''] || []), ...(cat === 'world' ? episodeFilters(this.items) : []), ...(this._diffFacets || [])];
   }
 
   // checkbox-dropdown filter for the current category (multiple check = AND)
@@ -994,7 +994,7 @@ class App {
     const filters = this.catFilters(cat);
     if (!filters.length) return;
     const dd = el('details', { class: 'filter-dd' });
-    const sum = el('summary', { title: 'Filter the list: shows items matching ALL checked filters (AND)' });
+    const sum = el('summary', { title: 'Match all selected filters. Multiple episodes include rooms from any selected episode.' });
     const panel = el('div', { class: 'filter-panel' });
     const syncSum = () => { sum.textContent = this.filters.size ? `Filter · ${this.filters.size}` : 'Filter'; };
     for (const [label, , tip] of filters) {
@@ -1027,8 +1027,7 @@ class App {
     let arr = this.items;
     const filters = this.catFilters(cat);
     if (filters.length && this.filters.size) {
-      const preds = filters.filter(([l]) => this.filters.has(l)).map(([, p]) => p);
-      if (preds.length) arr = arr.filter((it) => preds.every((p) => p(it)));   // AND
+      arr = arr.filter(it => matchesFilters(it, filters, this.filters));
     }
     const q = this.filterEl.value.trim().toLowerCase();
     if (q) arr = arr.filter((it) => this.hay(cat, it).includes(q));
@@ -1060,7 +1059,7 @@ class App {
       case 'rigs': return `${it.i} ${it.bones} ${extra}`;
       case 'strings': return `${it.i} ${it.src || ''} ${it.text} ${it.h || ''}`.toLowerCase();
       case 'models': return `${(it.name || '').toLowerCase()} ${it.id}`;
-      case 'world': return `${it.i} ${(it.name || '').toLowerCase()}`;
+      case 'world': return `${it.i} ${(it.name || '').toLowerCase()} ${(it.episode?.name || '').toLowerCase()}`;
       default: return String(it.i ?? '');
     }
   }
@@ -1483,6 +1482,8 @@ class App {
     const pairs: [string, any][] = [
       ['room', `#${r.i}`],
       ['name', r.name || null],
+      ['episode', r.episode?.name ?? null],
+      ['map position', r.mapPosition?.join(', ') ?? null],
       ['size', r.w && r.h ? `${r.w} × ${r.h} tiles` : null],
       ['plane', r.world?.plane ?? null],
       ['world position', r.world && Number.isFinite(r.world.x) ? `${r.world.x}, ${r.world.y}` : null],
