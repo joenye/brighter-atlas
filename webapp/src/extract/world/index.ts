@@ -261,8 +261,11 @@ export async function extractWorld({
   );
   const poolStrings = new modelsMod.PoolStrings(pool.values, dt.charset);
   const poolRegistryRefs = modelsMod.makePoolRegistryRefs(pool.values);
+  const entityVariantRecords = modelsMod.extractEntityVariantRecords(rows, pool.values, assetMaps.meshSlots,
+    new Map([...assetMaps.textureSlots, ...materialAssets.materialTextures]), poolStrings,
+    modelsMod.extractIndexedMaterialVariantBatches(rows));
   const enemyDefs = modelsMod.scanEnemyDefinitions(rows, pool.values, dt.charset, {
-    strings: poolStrings, poolRegistryRefs,
+    strings: poolStrings, poolRegistryRefs, entityVariantRecords,
   });
   bail();
 
@@ -551,6 +554,7 @@ export async function extractWorld({
     assetMaps,             // shared pure derivations (computed once above)
     materialAssets,
     strings: poolStrings,
+    entityVariantRecords,
   });
   bail();
   // AB2 structural records: occurrence-qualified terrain/block texture

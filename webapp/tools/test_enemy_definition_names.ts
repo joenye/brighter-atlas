@@ -31,5 +31,19 @@ try {
   const pooled=[{tag:14,values:[0,1,2,3,4]}];
   const poolRow=row(2,'Mouse','Mice');poolRow.g[0]=[4,0,0,0];
   assert.equal(scanEnemyDefinitions([rows[0],rows[1],poolRow],pooled,['M','o','u','s','e'])[2].name,'Mouse');
+  const single=(slot:number,name:string,field=9,runtime=80)=>({slot,selector:70,runtime,start:slot,g:[[field,0,14,name]],r:[],s:[]});
+  const older=[single(0,'Bat'),single(1,'Rat'),single(2,'Named Boss'),single(3,'Unrelated',9,81)];
+  const evidence=(owner:number,name:string)=>({rule:'entity_variant',entity_family_owner_slot:owner,entity_family_name:name});
+  const families=[evidence(0,'Bat'),evidence(1,'Rat')];
+  assert.deepEqual(scanEnemyDefinitions(older,[],[],{entityVariantRecords:families}).map(d=>[d.slot,d.name,d.plural]),
+    [[0,'Bat',null],[1,'Rat',null],[2,'Named Boss',null]]);
+  assert.deepEqual(scanEnemyDefinitions(older,[],[],{entityVariantRecords:[families[0],families[0]]}),[],
+    'two parts of one family are not independent witnesses');
+  assert.deepEqual(scanEnemyDefinitions([older[0],single(1,'Rat',10),older[2]],[],[],{entityVariantRecords:families}),[],
+    'conflicting singular field locations remain unresolved');
+  older[2].g.push([11,0,14,'Another label']);
+  assert.deepEqual(scanEnemyDefinitions(older,[],[],{entityVariantRecords:families}).map(d=>d.slot),[0,1]);
+  assert.deepEqual(scanEnemyDefinitions(older,[],[],{entityVariantRecords:[...families,evidence(0,'Different name')]}),[],
+    'conflicting family labels do not establish a binding');
   console.log('Definition names retain irregular plurals and proper names only with multiple agreeing same-type field bindings; missing, nested, conflicting and unrelated fields remain unresolved');
 }finally{await rm(tmp,{recursive:true,force:true});}

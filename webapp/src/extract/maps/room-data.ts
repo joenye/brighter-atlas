@@ -30,7 +30,8 @@ export async function extractMapRoomData({rows,pool,bytes,profile,charset,rooms,
   onRoom?:(done:number,total:number)=>void;
 }):Promise<MapRoomData> {
   const selected=[...rooms],assets=new AssetGraph(rows,pool);
-  const spawns=new SpawnGraph(rows,pool,assets,{bytes,profile,charset,enemyDefs:scanEnemyDefinitions(rows,pool,charset)});
+  const enemyDefs=scanEnemyDefinitions(rows,pool,charset);
+  const spawns=new SpawnGraph(rows,pool,assets,{bytes,profile,charset,enemyDefs});
   const roomRows=spawns.discoverRoomRows(selected.map(r=>r.room));
   const describe=objectDescriptionReader(rows,pool,bytes,profile,charset),resources=new Map<number,ObjectDescription>();
   const inventory:MapRoomInventory[]=[];
@@ -54,5 +55,5 @@ export async function extractMapRoomData({rows,pool,bytes,profile,charset,rooms,
   const roomIds=new Set(selected.map(r=>r.room));
   onRoom(inventory.length,selected.length);
   return {format:1,resources:[...resources.values()],rooms:inventory,
-    unplaced:extractEnemyRosters(rows,pool,charset).filter(r=>roomIds.has(r.room))};
+    unplaced:extractEnemyRosters(rows,pool,charset,enemyDefs).filter(r=>roomIds.has(r.room))};
 }

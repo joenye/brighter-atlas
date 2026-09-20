@@ -2943,14 +2943,15 @@ export function annotateModelNames(
 
 export interface EnemyBaseName {
   name: string;
-  plural: string;
+  plural: string | null;
   def_slot: number;
   tier_slot: number;
 }
 
-// One definition row with an authored singular/plural display pair, with its
-// referenced rows pre-resolved. Regular pairs establish name-field bindings
-// for other records of the same decoded type, including irregular plurals.
+// Definition names with referenced rows pre-resolved. Regular singular/plural
+// pairs establish name-field bindings for other records of the same decoded
+// type. Complete indexed families establish older singular-only schemas;
+// an absent authored plural remains null.
 // `targets` is every registry row the definition references (typed 0x26 +
 // pooled + direct + series, first-occurrence order) and `targetTargets[i]`
 // is the identical projection of `targets[i]`. extractEnemyBaseNames and
@@ -2961,19 +2962,19 @@ export interface EnemyBaseName {
 export interface EnemyDefinition {
   slot: number;
   name: string;                  // singular
-  plural: string;
+  plural: string | null;
   targets: number[];
   targetTargets: number[][];
 }
 
-// The shared definition scan. `shared` optionally supplies the memoized
-// PoolStrings / pool-ref walk (both pure of (pool, charset)); absent, local
-// instances are built exactly as the per-function copies used to.
+// Shared pure derivations may be supplied by the world orchestrator. Otherwise
+// string/reference caches and indexed family records are derived locally.
 export function scanEnemyDefinitions(
   rows: RegistryRow[], pool: any[], charsetGlyphs: ArrayLike<string>,
   shared: {
     strings?: PoolStrings | null;
     poolRegistryRefs?: ((index: number) => number[]) | null;
+    entityVariantRecords?: AssetRecord[] | null;
   } = {},
 ): EnemyDefinition[] {
   const strings = shared.strings ?? new PoolStrings(pool, charsetGlyphs);
@@ -2994,7 +2995,7 @@ export function scanEnemyDefinitions(
     return [...out].filter((target) => target >= 0 && target < rows.length);
   };
 
-  const names = new Map<number, {name: string; plural: string}>();
+  const names = new Map<number, {name: string; plural: string | null}>();
   const bindings = new Map<string, Map<string, {singular: number; plural: number; witnesses: number}>>();
   const readerKey = (row: RegistryRow) => `${row.selector}\u0000${row.runtime}`;
   for (const row of rows) {
@@ -3033,21 +3034,61 @@ export function scanEnemyDefinitions(
     binding.witnesses++;
     fields.set(pair, binding); bindings.set(key, fields);
   }
+  // Older family definitions can omit the plural field entirely. A complete
+  // indexed visual family establishes its source definition and label. Require
+  // several distinct families of one decoded type to agree on that field;
+  // sharing a room, profession or arbitrary reference is not naming evidence.
+  let familyRecords = shared.entityVariantRecords;
+  if (!familyRecords) {
+    const maps = traceAssetMaps(rows);
+    const materials = materialMap(pool, new Resolver(pool, maps.meshSlots), maps.textureSlots);
+    const textures = new Map([...maps.textureSlots, ...materials.materialTextures]);
+    familyRecords = extractEntityVariantRecords(rows, pool, maps.meshSlots, textures,
+      strings, extractIndexedMaterialVariantBatches(rows));
+  }
+  const familyNames = new Map<number, Set<string>>();
+  for (const record of familyRecords) {
+    const owner = record.entity_family_owner_slot, name = record.entity_family_name;
+    if (record.rule !== 'entity_variant' || !isInt(owner) || !rows[owner] || typeof name !== 'string') continue;
+    const labels = familyNames.get(owner) ?? new Set<string>(); labels.add(name); familyNames.set(owner, labels);
+  }
+  const singularBindings = new Map<string, Map<number, Set<number>>>();
+  for (const [owner, labels] of familyNames) {
+    const key = readerKey(rows[owner]);
+    if (bindings.has(key) || labels.size !== 1) continue;
+    const name = [...labels][0], events = strings.directStrings(rows[owner]);
+    const fields = orderedUnique(events.filter(e => e.text === name).map(e => e.field_op));
+    if (fields.length !== 1 || fields[0] === null) continue;
+    const candidates = singularBindings.get(key) ?? new Map<number, Set<number>>();
+    const witnesses = candidates.get(fields[0]) ?? new Set<number>(); witnesses.add(owner);
+    candidates.set(fields[0], witnesses); singularBindings.set(key, candidates);
+  }
   const defs: EnemyDefinition[] = [];
   for (const row of rows) {
     let label = names.get(row.slot);
     if (!label) {
       const candidates = bindings.get(readerKey(row));
-      if (!candidates || candidates.size !== 1) continue;
-      const binding = [...candidates.values()][0];
-      if (binding.witnesses < 2) continue;
+      const singleFields = singularBindings.get(readerKey(row));
+      if (!candidates && !singleFields) continue;
       const events = strings.directStrings(row);
       const at = (op: number) => orderedUnique(events.filter(e => e.field_op === op).map(e => e.text));
-      const singular = at(binding.singular), plural = at(binding.plural);
-      if (singular.length !== 1 || plural.length !== 1
-        || ![singular[0], plural[0]].every(text => text.trim() && isLabelString(text)
-          && !isSentenceLike(text) && !isTechnicalLabel(text))) continue;
-      label = {name: singular[0], plural: plural[0]};
+      const usable = (text: string) => text.trim() && isLabelString(text) && !isSentenceLike(text) && !isTechnicalLabel(text);
+      if (candidates) {
+        if (candidates.size !== 1) continue;
+        const binding = [...candidates.values()][0];
+        if (binding.witnesses < 2) continue;
+        const singular = at(binding.singular), plural = at(binding.plural);
+        if (singular.length !== 1 || plural.length !== 1 || ![singular[0], plural[0]].every(usable)) continue;
+        label = {name: singular[0], plural: plural[0]};
+      } else {
+        const fields = singleFields;
+        if (!fields || fields.size !== 1) continue;
+        const [op, witnesses] = [...fields][0];
+        if (witnesses.size < 2) continue;
+        const singular = at(op), labels = orderedUnique(events.map(e => e.text).filter(usable));
+        if (singular.length !== 1 || labels.length !== 1 || singular[0] !== labels[0]) continue;
+        label = {name: singular[0], plural: null};
+      }
     }
     const targets = targetsOf(row.slot);
     defs.push({
@@ -3060,10 +3101,9 @@ export function scanEnemyDefinitions(
   return defs;
 }
 
-// The roaming-enemy catalog: definition rows carrying exactly one
-// singular+plural display pair ("Street Hag"/"Street Hags" — 133 in the
-// current build) reference small per-tier rows, each of which references the
-// tier's visual/style owner. The tier rows carry only the QUALIFIER label
+// The roaming-enemy catalog: named definitions reference small per-tier rows,
+// each of which references the tier's visual/style owner. The tier rows carry
+// only the QUALIFIER label
 // ("Powerful"), which the mutual-reference naming tier would otherwise
 // transfer onto the card; the definition row carries the family BASE name.
 // -> Map<visual owner slot, base name>, dropping any owner reached by two
@@ -3110,7 +3150,7 @@ export interface EnemyRosterEntry {
   def_slot: number;
   roster_slot: number;
   name: string;
-  plural: string;
+  plural: string | null;
   owners: number[];               // tier visual owners, definition order
 }
 
@@ -3237,6 +3277,7 @@ export interface ExtractAssetModelsOptions {
   assetMaps?: { meshSlots: Map<number, number>; textureSlots: Map<number, number[]> } | null;
   materialAssets?: { handles: Set<number>; materialTextures: Map<number, number[]> } | null;
   strings?: PoolStrings | null;
+  entityVariantRecords?: AssetRecord[] | null;
 }
 
 export interface AssetModelsResult {
@@ -3268,6 +3309,7 @@ export function extractAssetModels(
   {
     onProgress, charsetGlyphs = null, actorSlots = null,
     assetMaps = null, materialAssets = null, strings: sharedStrings = null,
+    entityVariantRecords: sharedEntityVariantRecords = null,
   }: ExtractAssetModelsOptions = {},
 ): AssetModelsResult {
   const { meshSlots, textureSlots } = assetMaps ?? traceAssetMaps(rows);
@@ -3282,7 +3324,7 @@ export function extractAssetModels(
   const indexedMaterialBatches = extractIndexedMaterialVariantBatches(rows);
   const indexedMeshDefinitionBatches = extractIndexedMeshDefinitionBatches(rows);
   const records = extractRecords(rows, pool, meshSlots, materialTextures, onProgress, actorSlots);
-  const entityVariantRecords = extractEntityVariantRecords(
+  const entityVariantRecords = sharedEntityVariantRecords ?? extractEntityVariantRecords(
     rows, pool, meshSlots, materialLookup, strings, indexedMaterialBatches,
   );
   records.push(...entityVariantRecords);
