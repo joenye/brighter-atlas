@@ -1032,9 +1032,9 @@ export class WorldScene {
       Math.fround(Math.fround(finite(spawn[sc.y])) + centreOffset) * this.tileUnits,
       surfaceZ ?? finite(spawn[sc.z]) * this.layerUnits,
     );
-    // Actors carry a facing convention opposite the static mesh-forward one:
-    // with only mesh_forward applied, every NPC/monster faced 180° away from
-    // its authored gameplay direction, so spawns take an extra half-turn.
+    // The default mesh-forward correction and actor half-turn cancel, so
+    // the base actor frame uses its authored angle directly. This frame
+    // precedes any animation or attachment transform.
     target.multiply(_scratchRotZ.makeRotationZ(
       (quarterTurns + this.meshForwardQuarterTurns + SPAWN_FACING_HALF_TURN) * Math.PI / 2,
     ));
