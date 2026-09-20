@@ -40,6 +40,7 @@ export async function extractMapImages(
   const images: Record<string,MapBitmap> = {}, sprites: Record<string,MapSprite> = {};
   for (const [name,key] of [['round','labelRound'],['panel','labelPanel'],['entity','entityPanel'],
     ['connector','labelConnector'],['badge','annotationBadge']]) {
+    if(name==='entity'&&data.labels?.layout==='fixed'&&!data.bindings[key])continue;
     const slot = binding(key,2);
     const fields = (decode(slot) ?? []).flatMap(op => op.kind === 'G' ? [resolveValue(pool,op.node)] : []);
     const textures = fields.filter(n=>n?.tag===71), packing = fields.filter(n=>n?.tag===36 && n.fields?.length===16);

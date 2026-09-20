@@ -23,6 +23,23 @@ export function decodeMapBinding(
   return node;
 }
 
+// Some builds keep the compiled annotations in a global room-keyed table.
+// Its keys precede its values; the room's own list can instead contain providers.
+export function decodeMapAnnotationTable(
+  bytes: Uint8Array, pool: PoolNode[], profile: WorldProfile, binding: MapBinding,
+): Map<number, PoolNode[]> {
+  const table=decodeMapBinding(bytes,pool,profile,binding);
+  if(table.tag!==44||!table.values||table.values.length%2)throw Error('invalid map annotation table');
+  const count=table.values.length/2,result=new Map<number,PoolNode[]>();
+  for(let i=0;i<count;i++){
+    const key=resolveValue(pool,table.values[i]),value=resolveValue(pool,table.values[count+i]);
+    if(key?.tag!==38||!Number.isInteger(key.value)||key.value<0||key.value>=profile.stream.object_count
+      ||result.has(key.value)||value?.tag!==32||!value.values)throw Error('invalid room annotation entry');
+    result.set(key.value,value.values);
+  }
+  return result;
+}
+
 export function decodeMapStyleDefaults(
   rows: FillRow[], pool: PoolNode[], bytes: Uint8Array, profile: WorldProfile, binding: MapBinding,
 ): Map<number, number> {

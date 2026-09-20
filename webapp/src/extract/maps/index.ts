@@ -5,7 +5,7 @@ import {makeSlabReader, decodeObject, type BundleFrames} from '../bundles.js';
 import {decodeFontGlyphs, parseDatafileRecords} from '../image.js';
 import {deriveMapRoomRecords} from './records.js';
 import {extractMapGeometry} from './geometry.js';
-import {decodeMapBinding, decodeMapStyleDefaults} from './bindings.js';
+import {decodeMapBinding, decodeMapStyleDefaults, decodeMapAnnotationTable} from './bindings.js';
 import {validateMapDecodeData} from './decode-data.js';
 import {resolveMapPalette} from './palette.js';
 import {extractMapFonts} from './fonts.js';
@@ -33,7 +33,10 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   catch {throw Error('2D maps are not supported for this game build yet');}
   progress('room records');
   const {rows}=replayGraph(ab0,profile),pool=decodePool(ab0,profile).values;
-  const records=deriveMapRoomRecords(rows,pool,ab0,profile,dt.charset,dt.symbols);
+  const annotationBinding=data.bindings.annotationTable;
+  const annotationTable=annotationBinding?{offset:annotationBinding.offset,
+    entries:decodeMapAnnotationTable(ab0,pool,profile,annotationBinding)}:undefined;
+  const records=deriveMapRoomRecords(rows,pool,ab0,profile,dt.charset,dt.symbols,undefined,annotationTable);
   const defaults=decodeMapStyleDefaults(rows,pool,ab0,profile,data.bindings.styleDictionary);
   const byOwner=new Map([...records.values()].map(r=>[r.owner,r]));
   const read2=makeSlabReader(files[2]),read3=makeSlabReader(files[3]);
@@ -46,9 +49,10 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
     });
   const badge=mapBadgeFormatter(ab0,pool,profile,data,dt.charset);
   const rooms=[...records.values()].map(r=>{
-    if(r.labels.metrics.length!==2 || r.labels.metrics.some(m=>m.length!==4))throw Error('unsupported map label layout');
+    const fixed=data.labels?.layout==='fixed';
+    if(r.labels.metrics.length!==(fixed?1:2) || r.labels.metrics.some(m=>m.length!==(fixed?5:4)))throw Error('unsupported map label layout');
     return {room:r.room,owner:r.owner,name:r.name,episode:r.episode,mapPosition:r.mapPosition,roomSize:r.mapSize,
-      colors:r.terrain.baseColors,labels:{...r.labels,background:r.labels.background.symbol,
+      colors:r.terrain.baseColors,labels:{...r.labels,...(fixed?{layout:'fixed' as const}:{}),background:r.labels.background.symbol,
         connector:r.labels.connector.symbol??r.labels.connector,annotations:r.labels.annotations.map(a=>({...a,badge:badge(a.marker)}))}};
   });
   const roomData=includeRoomData?await extractMapRoomData({rows,pool,bytes:ab0,profile,charset:dt.charset,

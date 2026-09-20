@@ -49,6 +49,20 @@ try {
  assert.equal(current.labels.annotations[0].palette.length,6);
  assert.deepEqual(current.labels.metrics,[[1,2,3,4],[5,6,7,8]]);assert.deepEqual(old.labels.metrics,[[1,2,3,4,5]]);
  assert.equal(old.labels.annotations.length,0);assert.deepEqual(old.labels.annotationEntries,[{tag:38,value:0}]);
+ const compiled={tag:36,class:3,fields:[
+  {tag:14,values:Array.from('Crystal Workshop',c=>charset.indexOf(c))},
+  {tag:38,value:palette},{tag:10,value:24},{tag:10,value:7},{tag:15,value:0},
+ ]};
+ const historicalMetadata=new Map([[78,metadata.get(78)]]);
+ const table={offset:123,entries:new Map([[old.owner,[compiled]]])};
+ const withTable=deriveMapRoomRecords(rows,[],Uint8Array.from(bytes),profile,charset,['$none','$panel'],historicalMetadata,table).get(78);
+ assert.equal(withTable.labels.annotations[0].text,'Crystal Workshop');
+ assert.deepEqual(withTable.labels.annotations[0].source,{field:null,index:0,typedClass:3,tableOffset:123});
+ assert.deepEqual(withTable.labels.annotationEntries,old.labels.annotationEntries);
+ const emptyTable=deriveMapRoomRecords(rows,[],Uint8Array.from(bytes),profile,charset,['$none','$panel'],historicalMetadata,{offset:123,entries:new Map()}).get(78);
+ assert.equal(emptyTable.labels.annotations.length,0);
+ assert.deepEqual(emptyTable.labels.annotationEntries,old.labels.annotationEntries);
+ assert.throws(()=>deriveMapRoomRecords(rows,[],Uint8Array.from(bytes),profile,charset,['$none','$panel'],metadata,table),/unexpected room annotation providers/);
  const lut=Uint8Array.from([...Array(32).fill(1),2,0,16,0,1,2,0,16,0,1]);
  let reading=false,calls=0;
  const read=async()=>{assert(!reading);reading=true;await new Promise(r=>setTimeout(r,1));reading=false;calls++;return lut;};

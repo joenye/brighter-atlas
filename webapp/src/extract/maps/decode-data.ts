@@ -13,6 +13,7 @@ export interface MapDecodeData {
   bindings: Record<string, MapBinding>;
   fontAtlas: MapFontAtlasSchema;
   palette: MapPaletteRules;
+  labels?: {layout:'fixed'};
 }
 
 export function validateMapDecodeData(value: unknown, hash: string): MapDecodeData {
@@ -28,5 +29,7 @@ export function validateMapDecodeData(value: unknown, hash: string): MapDecodeDa
   if (!Number.isInteger(data.fontAtlas?.selector) || data.fontAtlas.selector < 0
     || !Number.isInteger(data.fontAtlas.uvTablesField) || data.fontAtlas.uvTablesField < 0
     || !data.palette?.base || !data.palette.rooms) throw Error('incomplete map decode data');
+  if(data.labels&&data.labels.layout!=='fixed')throw Error('unsupported map label layout');
+  if(data.labels?.layout==='fixed'&&!data.bindings.annotationTable)throw Error('missing compiled map annotations');
   return data;
 }

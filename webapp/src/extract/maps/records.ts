@@ -26,7 +26,7 @@ export interface MapAnnotation {
   parameter: number;
   marker: MapValue;
   condition: MapValue;
-  source: {field: number; index: number; typedClass: number};
+  source: {field: number | null; index: number; typedClass: number; tableOffset?: number};
 }
 export interface MapRoomRecord extends RoomMetadata {
   terrain: {
@@ -53,6 +53,7 @@ export function deriveMapRoomRecords(
   rows: FillRow[], pool: PoolNode[], bytes: Uint8Array, profile: WorldProfile,
   charset: ArrayLike<string>, symbols: ArrayLike<string>,
   metadata = deriveRoomMetadata(rows, pool, bytes, profile, charset),
+  annotationTable?: {offset:number; entries:Map<number,PoolNode[]>},
 ): Map<number, MapRoomRecord> {
   const decode = makeRegistryRowDecoder(rows, bytes, profile);
   const resolve = (n: PoolNode | undefined | null) => resolveValue(pool, n ?? undefined);
@@ -126,7 +127,10 @@ export function deriveMapRoomRecords(
       || (counts as number[]).reduce((a,b) => a+b, 0) > positions.length || positions.some(p => !p)) {
       throw Error(`invalid map terrain counts in room ${room.room}`);
     }
-    const annotationNodes = list(f[annotationIndex].node)!;
+    const providerNodes = list(f[annotationIndex].node)!;
+    if(annotationTable&&providerNodes.some(n=>n?.tag!==38))throw Error('unexpected room annotation providers');
+    const annotationNodes = annotationTable
+      ? (annotationTable.entries.get(room.owner)??[]).map(resolve) : providerNodes;
     const annotations = annotationNodes.flatMap((n, index): MapAnnotation[] => {
       // Older schemas retain resource references for their label providers.
       // Keep them in annotationEntries until their provider is resolved; do
@@ -138,7 +142,8 @@ export function deriveMapRoomRecords(
       if (!v || text === null || style === null || parameter === null) throw Error(`invalid map annotation in room ${room.room}`);
       return [{text, glyphs: [...v[0]!.values!], styleOwner: style, palette: palette(style), parameter,
         marker: snapshot(v[3]), condition: snapshot(v[4]),
-        source: {field: f[annotationIndex].op, index, typedClass: n!.class!}}];
+        source: {field: annotationTable?null:f[annotationIndex].op, index, typedClass: n!.class!,
+          ...(annotationTable?{tableOffset:annotationTable.offset}:{})}}];
     });
     const title = f.find(p => p.op === room.source.nameField)?.node;
     if (!title || decodeGlyphText(title, charset) !== room.displayName) throw Error('map title differs from room header');
@@ -149,7 +154,7 @@ export function deriveMapRoomRecords(
       labels: {title: room.displayName, glyphs: [...title.values!],
         offsets: [0,1].map(k => vector(f[labelIndex + k].node, 24, 2)) as [Pair, Pair],
         metrics: measurements,
-        connector: snapshot(f[labelIndex + 2].node), background: snapshot(f[annotationIndex - 1].node), annotations, annotationEntries: annotationNodes.map(n => snapshot(n))},
+        connector: snapshot(f[labelIndex + 2].node), background: snapshot(f[annotationIndex - 1].node), annotations, annotationEntries: providerNodes.map(n => snapshot(n))},
       mapSource: {lutField: f[lutIndex].op, colorsField: f[colorIndex].op,
         labelField: f[labelIndex].op, annotationsField: f[annotationIndex].op},
     });

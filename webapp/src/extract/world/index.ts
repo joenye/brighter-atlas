@@ -16,6 +16,8 @@ import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
 import { deriveMapRoomRecords } from '../maps/records.js';
+import { decodeMapAnnotationTable } from '../maps/bindings.js';
+import { validateMapDecodeData } from '../maps/decode-data.js';
 import { deriveRoomMetadata } from './room-metadata.js';
 import {loadPlacementData} from './placement.js';
 import { replayGraph } from './replay.js';
@@ -200,7 +202,14 @@ export async function extractWorld({
   if (!layersById.size) throw new Error('no rooms found in assetBundle2. Mixed game versions?');
 
   const roomMetadata = deriveRoomMetadata(rows, pool.values, ab0, profile, dt.charset, rooms.map(r => r.idx));
-  const mapRecords = deriveMapRoomRecords(rows, pool.values, ab0, profile, dt.charset, dt.symbols, roomMetadata);
+  let annotationTable;
+  try {
+    const hash=profile.bundle0!.raw_sha256!;
+    const data=validateMapDecodeData(await (fetchJson??defaultFetchJson)(`builds/${hash.slice(0,16)}.maps.json`),hash);
+    const binding=data.bindings.annotationTable;
+    if(binding)annotationTable={offset:binding.offset,entries:decodeMapAnnotationTable(ab0,pool.values,profile,binding)};
+  } catch { /* Optional annotation data may be unavailable for this build. */ }
+  const mapRecords = deriveMapRoomRecords(rows, pool.values, ab0, profile, dt.charset, dt.symbols, roomMetadata,annotationTable);
   // Historical naming remains a fallback for rooms without a complete header.
   // Direct titles always win over shipped or cross-build name suggestions.
   const names = roomMod.deriveRoomNames(ab0, dt.charset, rooms.filter(r => !roomMetadata.has(r.idx)).map(r => r.idx));

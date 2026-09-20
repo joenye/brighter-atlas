@@ -11,7 +11,7 @@ try {
   const file = path.join(tmp, 'test.mjs');
   await build({stdin: {contents: ['palette','bindings','fonts','decode-data'].map(n => `export * from './src/extract/maps/${n}.ts';`).join('\n'),
     resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
-  const {evaluateMapColor, resolveMapPalette, decodeMapStyleDefaults, decodeMapBinding, extractMapFonts, validateMapDecodeData} = await import(pathToFileURL(file).href);
+  const {evaluateMapColor, resolveMapPalette, decodeMapStyleDefaults, decodeMapBinding, decodeMapAnnotationTable, extractMapFonts, validateMapDecodeData} = await import(pathToFileURL(file).href);
   assert.equal(evaluateMapColor({kind:'rgb',color:0,multiply:[1,2,1]}, [[0.5,0.25,0]], 0), 16896);
   assert.equal(evaluateMapColor({kind:'hsl',color:0,multiply:[1,1,2]}, [[0.5,0,0]], 0), 31744);
   for (const [rgb, expected] of [[[0,0,0],0], [[1,1,1],32767], [[1,0,0],31744], [[0,1,0],992],
@@ -94,5 +94,17 @@ try {
   assert.throws(()=>validateMapDecodeData(mapData,'b'.repeat(64)),/different/);
   assert.throws(()=>validateMapDecodeData({...mapData,fontAtlas:null},hash),/incomplete/);
   assert.throws(()=>validateMapDecodeData({...mapData,bindings:{}},hash),/missing/);
+  // The compiled table contains all keys followed by all value lists. Reject
+  // duplicate owners and malformed values instead of silently losing labels.
+  const table=(nodes:number[][])=>Uint8Array.from([44,...uint(nodes.length/2),...nodes.flat()]);
+  const tableBinding={offset:0,tag:44};
+  const annotations=decodeMapAnnotationTable(table([ref(38,1),ref(38,2),list([int(7)]),list([])]),[],profile,tableBinding);
+  assert.equal(annotations.get(1)[0].value,7);assert.deepEqual(annotations.get(2),[]);
+  for(const nodes of [[ref(38,1),ref(38,1),list([]),list([])],
+    [ref(38,rows.length),list([])], [ref(38,1),int(7)]]) {
+    assert.throws(()=>decodeMapAnnotationTable(table(nodes),[],profile,tableBinding),/annotation/);
+  }
+  assert.throws(()=>validateMapDecodeData({...mapData,labels:{layout:'fixed'}},hash),/annotation/);
+  assert.equal(validateMapDecodeData({...mapData,labels:{layout:'fixed'},bindings:{...mapData.bindings,annotationTable:tableBinding}},hash).labels.layout,'fixed');
   console.log('Map colour operations, strict bindings, glyph metrics, nullable variants and stored A8/RGBA rotations passed');
 } finally {await rm(tmp,{recursive:true,force:true});}

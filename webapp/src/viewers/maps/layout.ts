@@ -14,10 +14,11 @@ export function textLine(font:MapFont,text:string,size:number,tracking:number) {
 }
 export function labelLayout(room:any) {
   const [titleWidth,titleHeight,annotationWidth,width]=room.labels.metrics[0];
-  const count=room.labels.annotations.length,rowHeight=83,height=titleHeight+5+count*rowHeight;
+  const fixed=room.labels.layout==='fixed',count=room.labels.annotations.length,rowHeight=fixed?95:83;
+  const height=fixed?room.labels.metrics[0][4]:titleHeight+5+count*rowHeight;
   const [dx,dy]=room.labels.offsets[0];
   return {x:(room.roomSize[0]*64-width)/2+dx,y:(room.roomSize[1]*64-height)/2+dy,
-    width,height,titleWidth,titleHeight,annotationWidth,rowHeight};
+    width,height,titleWidth,titleHeight,annotationWidth,rowHeight,fixed};
 }
 function annotationPanelColor(floor:number[],palette:number[]) {
   const [r,g,b]=floor,hi=Math.max(r,g,b),lo=Math.min(r,g,b),delta=hi-lo,light=(hi+lo)/2;
@@ -35,8 +36,8 @@ export function panelTint(color:number[]) {
 }
 export function labelComposition(room:any,bounds:any) {
   const n=room.labels.annotations.length,title=room.labelFonts.title;
-  const background=room.colors[({'$floor':0,'$water':1,'$bridge':2} as Record<string,number>)[room.labels.background]??3];
-  const titleSize=58,annotationSize=48;
+  const background=room.colors[({'$floor':0,'$water':1,'$bridge':2} as Record<string,number>)[room.labels.background]??(bounds.fixed?2:3)];
+  const titleSize=bounds.fixed?64:58,annotationSize=bounds.fixed?64:48;
   const titleY=n?bounds.y-40:bounds.y+(bounds.height-bounds.titleHeight)/2;
   const titleX=bounds.x+(bounds.width-bounds.titleWidth)/2;
   const panels:any[]=[];
@@ -49,14 +50,16 @@ export function labelComposition(room:any,bounds:any) {
   const textHeight=(title.ascent+title.descent+(lines-1)*lineHeight)*titleSize;
   const titleBaseline=titleY-2+(bounds.titleHeight-textHeight)/2+title.ascent*titleSize;
   const annotation=room.labelFonts.annotation;
-  const annotationBaseline=bounds.y+bounds.titleHeight-15+(bounds.rowHeight-5-(annotation.ascent+annotation.descent)*annotationSize)/2+annotation.ascent*annotationSize;
+  const annotationBaseline=bounds.y+bounds.titleHeight-15+
+    (bounds.fixed?0:(bounds.rowHeight-5-(annotation.ascent+annotation.descent)*annotationSize)/2)+annotation.ascent*annotationSize;
   return {panels,titleBaseline,annotationBaseline,titleLineStep:lineHeight*titleSize,titleSize,annotationSize};
 }
 export function annotationRowGeometry(bounds:any,index=0) {
   const f=Math.fround,left=f(f(f(f(bounds.width)-f(bounds.annotationWidth))*.5)+f(bounds.x));
   let y=f(f(f(bounds.titleHeight)+f(bounds.y))-15);
   for(let i=0;i<index;i++)y=f(y+f(bounds.rowHeight));
-  return {textLeft:f(left+10),badgeX:f(f(f(f(bounds.annotationWidth)+left)-200)-5),y,badgeWidth:200,badgeHeight:bounds.rowHeight-5};
+  const width=bounds.fixed?90:200;
+  return {textLeft:f(left+(bounds.fixed?15:10)),badgeX:f(f(f(f(bounds.annotationWidth)+left)-width)-5),y,badgeWidth:width,badgeHeight:bounds.rowHeight-5};
 }
 export function labelConnector(room:any,bounds:any) {
   const offset=room.labels.connector;

@@ -15,6 +15,13 @@ export function mapBadgeFormatter(bytes: Uint8Array, pool: PoolNode[], profile: 
   const star=read('annotationStar');
   if (star.tag!==14 || !star.values?.length) throw Error('invalid map star glyph');
   const starText=star.values.map(text).join('');
+  if(data.labels?.layout==='fixed')return marker=>{
+    if(marker.tag===15&&marker.symbol==='$star')return {text:starText,size:Math.fround(89.6)};
+    if(marker.tag!==10)return null;
+    const value=marker.value as number;
+    if(!Number.isInteger(value)||value<0)throw Error('invalid map level');
+    return {text:String(value),size:Math.fround(57.6)};
+  };
   const parts=Object.fromEntries(['Minor','Major'].map(kind=>{
     const glyph=read('level'+kind+'Glyph'),color=read('level'+kind+'Color');
     if (glyph.tag!==0x73 || color.tag!==21) throw Error('invalid map level badge');

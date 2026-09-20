@@ -21,7 +21,7 @@ flat out vec4 tint;
 flat out vec4 extra;
 flat out vec4 uvBounds;
 flat out int kind;
-vec4 edges(float size,bool badge){
+vec4 edges(float size,bool badge,bool classic){
  if(!badge){
   float outer=5.0/size,inner=4.0/size;
   float weight=(0.6-0.5)+64.0/255.0;
@@ -29,8 +29,8 @@ vec4 edges(float size,bool badge){
   return floor(clamp(vec4(high,low,0,0),0.0,1.0)*65535.0)/65535.0;
  }
  float a=5.0/size,b=4.0/size,c=3.0/size,d=4.0/size;
- float base=min(((0.53-0.5)+64.0/255.0)-a,1.0);
- float high=1.0-base,gap=min((0.1-b)-c,high);
+ float base=min((((classic?0.6:0.53)-0.5)+64.0/255.0)-a,1.0);
+ float high=1.0-base,gap=min(((classic?0.25:0.1)-b)-c,high);
  a=a+b;d=d+c;
  if(((base+a)+gap)+d>1.0){float ratio=a/(d+a),available=high-gap;d=(1.0-ratio)*available;a=available*ratio;}
  float low=high-a,outlineHigh=low-gap,outlineLow=outlineHigh-d;
@@ -40,7 +40,7 @@ void main(){
  vec2 corner=vec2(gl_VertexID&1,gl_VertexID>>1);
  vec2 p=origin+axes.xy*corner.x+axes.zw*corner.y;
  vec2 pixel=(p-camera)*scale+viewport*0.5;
- kind=int(params.x);tint=color;extra=(kind==2||kind==3)?edges(params.y*scale,kind==3):detail;
+ kind=int(params.x);tint=color;extra=(kind==2||kind==3||kind==5)?edges(params.y*scale,kind!=2,kind==5):detail;
  texcoord=uv.xy+uv.zw*corner;uvBounds=vec4(uv.xy,uv.xy+uv.zw);
  gl_Position=vec4(pixel.x/viewport.x*2.0-1.0,1.0-pixel.y/viewport.y*2.0,kind==0?detail.w*2.0-1.0:0.0,1.0);
 }`;
@@ -70,7 +70,7 @@ void main(){
   result=vec4(tint.rgb*tint.a,tint.a);
  }else{
   float value=texture(atlas,clamp(texcoord,uvBounds.xy+texel*0.5,uvBounds.zw-texel*0.5)).a;
-  if(kind==3){
+  if(kind==3||kind==5){
    if(value>=extra.y)result=vec4(tint.rgb*coverage(value,extra.y,extra.x),1.0);
    else result=vec4(0,0,0,coverage(value,extra.w,extra.z));
   }else{float a=coverage(value,extra.y,extra.x)*tint.a;result=vec4(tint.rgb*a,a);}
@@ -115,13 +115,21 @@ function makeLabels(scene:any,images:Record<string,MapBitmap>){
    for(const [index,{glyph,x}] of line.glyphs.entries()){
     if(!glyph.visible)continue;const b=glyph.bitmap!,[,,w,h]=b.rect;
     quad(passes[pass],images.glyphs,[offset[0]+left+x-size/b.em,offset[1]+baseline-glyph.metrics[0]*size-size/b.em,w*size/b.em,h*size/b.em],
-     b.rect,b.color?[1,1,1,1]:[...(colors?.[index]??color).map((v:number)=>v/255),1],b.color?1:badge?3:2,size);
+     b.rect,b.color?[1,1,1,1]:[...(colors?.[index]??color).map((v:number)=>v/255),1],b.color?1:badge?(bounds.fixed?5:3):2,size);
    }
   }
   r.labels.title.split('\n').forEach((line:string,i:number)=>paint(6,scene.labelFonts.title,line,composition.titleSize,.02,composition.titleBaseline+i*composition.titleLineStep,[255,255,255]));
   r.labels.annotations.forEach((a:any,i:number)=>{
    const row=annotationRowGeometry(bounds,i);
    paint(5,scene.labelFonts.annotation,a.text,composition.annotationSize,.01,composition.annotationBaseline+i*bounds.rowHeight,[0,0,0],{left:row.textLeft});
+   if(bounds.fixed){
+    if(a.marker.symbol!=='$none')quad(passes[4],images.badge,
+     [offset[0]+row.badgeX,offset[1]+row.y,90,90],[0,0,images.badge.width,images.badge.height],a.palette[0]);
+    if(a.badge)paint(5,scene.labelFonts.annotation,a.badge.text,a.badge.size,.01,
+     row.y+Math.fround(6.3)+scene.labelFonts.annotation.ascent*a.badge.size,a.palette[0].slice(0,3).map((v:number)=>v*255),
+     {center:row.badgeX+45,badge:true});
+    return;
+   }
    if(a.badge){
     const source=scene.labelBackgrounds.badge,[width,height]=source.dimensions,cut=source.sourceBorder,destCut=cut*source.scale;
     const xs=[0,cut,width-cut,width],dx=[row.badgeX,row.badgeX+destCut,row.badgeX+row.badgeWidth-destCut,row.badgeX+row.badgeWidth];
