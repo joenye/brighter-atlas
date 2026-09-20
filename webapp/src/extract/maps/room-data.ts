@@ -16,7 +16,7 @@ export type MapOccurrence=[resource:number,x:number,y:number,layer:number,rotati
 export interface MapRoomInventory {
   room:number; owner:number; name:string; position:number[]; size:number[];
   occurrences:MapOccurrence[];
-  actors:ReturnType<SpawnGraph['roomSpawns']>;
+  actors:(ReturnType<SpawnGraph['roomSpawns']>[number]&{runtime:number;selector:number})[];
   volumes:ReturnType<SpawnGraph['roomVolumes']>;
 }
 export interface MapRoomData {
@@ -49,7 +49,7 @@ export async function extractMapRoomData({rows,pool,bytes,profile,charset,rooms,
         o.parentLink,o.childLinks,o.individual,o.packed];
     });
     inventory.push({room:r.room,owner:r.owner,name:r.name,position:r.mapPosition,size:r.mapSize,
-      occurrences,actors:spawns.roomSpawns(r.room,owner),volumes:spawns.roomVolumes(r.owner)});
+      occurrences,actors:spawns.roomSpawns(r.room,owner).map(a=>({...a,runtime:rows[a.record].runtime,selector:rows[a.record].selector})),volumes:spawns.roomVolumes(r.owner)});
   }
   const roomIds=new Set(selected.map(r=>r.room));
   onRoom(inventory.length,selected.length);

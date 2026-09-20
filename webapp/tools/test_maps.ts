@@ -9,7 +9,7 @@ import {CHROME,GL_ARGS} from './chrome.ts';
 requireBuild('maps');
 const {root,cleanup}=await shimWebroot('atlas-maps-'),fixture=mapFixture();
 for(const dir of ['data/maps','data/index','downloads'])await mkdir(path.join(root,dir),{recursive:true});
-for(const [name,data] of [['manifest.json',fixture.manifest],['index/maps.json',fixture.index],['maps/scene.json',fixture.doc]] as const)
+for(const [name,data] of [['manifest.json',fixture.manifest],['index/maps.json',fixture.index],['maps/scene.json',fixture.doc],['maps/room-data.json',fixture.roomData]] as const)
   await writeFile(path.join(root,'data',name),JSON.stringify(data));
 const {server,port}=await serve(root),base=`http://127.0.0.1:${port}/?data=data`;
 const browser=await puppeteer.launch({executablePath:CHROME!,headless:true,args:['--no-sandbox',...GL_ARGS]});
@@ -39,11 +39,39 @@ try{
     if(files.length)png=await readFile(path.join(root,'downloads',files[0]));else await new Promise(r=>setTimeout(r,100));
   }
   assert(png);assert.equal(Math.max(png.readUInt32BE(16),png.readUInt32BE(20)),512);
+  await page.select('[aria-label="Map data mode"]','room');
+  await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.matches==='7');
+  assert(Number(await page.$eval('.map-view',e=>(e as any).dataset.markers))>0);
+  await page.evaluate(()=>[...document.querySelectorAll('button')].find(e=>e.textContent==='Filters / inspect')!.click());
+  await page.type('[aria-label="Search map entities"]','Gathering node');
+  await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.matches==='2');
+  await page.click('[data-map-option="linked"]');
+  await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.matches==='1');
+  await page.click('.map-results button');
+  const detail=JSON.parse(await page.$eval('.map-selection pre',e=>e.textContent!));
+  assert.deepEqual(detail.mapPosition,[1,.5]);assert.deepEqual(detail.footprint,[2,1]);
+  await page.evaluate(()=>window.__bs.app.view.exportPng());
+  assert.equal(await page.$eval('.map-view',e=>(e as any).dataset.exportMarkers),'1');
+  await page.evaluate(()=>[...document.querySelectorAll('.map-inspection button')].find(e=>e.textContent==='Download filtered records')!.click());
+  let records:any=null;
+  for(let i=0;i<30&&!records;i++) {
+    const files=await readdir(path.join(root,'downloads'));
+    if(files.includes('map-records.json'))records=JSON.parse(await readFile(path.join(root,'downloads/map-records.json'),'utf8'));
+    else await new Promise(r=>setTimeout(r,100));
+  }
+  assert(records);assert.equal(records.inventory.resources.length,1);assert.equal(records.inventory.rooms[0].occurrences.length,1);
+  await page.evaluate(()=>[...document.querySelectorAll('.map-selection button')].find(e=>e.textContent==='Hide this node type')!.click());
+  await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.matches==='0');
+  await page.evaluate(()=>[...document.querySelectorAll('.map-inspection button')].find(e=>e.textContent==='Reset filters')!.click());
+  await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.matches==='7');
+  await page.select('[aria-label="Map data mode"]','map');
+  await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.markers==='0');
+  await page.evaluate(()=>[...document.querySelectorAll('.map-inspection button')].find(e=>e.textContent==='Close')!.click());
   await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true,deviceScaleFactor:2});
   await page.goto(base+'#/map/11',{waitUntil:'networkidle0'});await page.waitForSelector('.map-view[data-ready="true"]');
   assert.equal(await page.$('.mgate'),null);
   assert(await page.$eval('.map-view canvas',e=>e.getBoundingClientRect().width>=380));
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
   assert.deepEqual(errors,[]);
-  console.log('Maps category, room and episode selection, native canvas, pan, exact PNG size and mobile layout passed');
+  console.log('Maps category, native canvas, room/episode selection, entity modes/filters/inspection, filtered PNG and record export, pan and mobile layout passed');
 }finally{await browser.close();await new Promise<void>(r=>server.close(()=>r()));await cleanup();}

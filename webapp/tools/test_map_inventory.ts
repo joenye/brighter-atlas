@@ -1,0 +1,42 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {build} from 'esbuild';
+import {mapFixture} from './map-fixture.ts';
+const tmp=await mkdtemp(path.join(os.tmpdir(),'atlas-map-inventory-'));
+try {
+  const file=path.join(tmp,'inventory.mjs');
+  await build({entryPoints:['src/viewers/maps/inventory.ts'],bundle:true,platform:'node',format:'esm',outfile:file});
+  const {MapInventory,nodeType}=await import(pathToFileURL(file).href),{roomData}=mapFixture();
+  const inventory=new MapInventory(roomData);
+  const all={sources:new Set(['object','other','actor','enemy','region']),categories:new Set(inventory.categories.keys()),
+    disabledTypes:new Set(),roots:true,linked:true,additionalOnly:false,query:'',typeQuery:'',rooms:null};
+  const nodes=inventory.filter(all);assert.equal(nodes.length,7);
+  assert.deepEqual(inventory.detail(nodes[0]).mapPosition,[1,.5]);
+  assert.deepEqual(inventory.detail(nodes[1]).mapPosition,[1.5,1]);assert.deepEqual(inventory.footprint(nodes[1]),[1,2]);
+  assert.deepEqual(inventory.detail(nodes[1]).occurrence.parentLink,[0,0,0]);
+  assert.deepEqual(inventory.detail(nodes[0]).position,[0,0]);
+  const enemies=inventory.filter({...all,sources:new Set(['enemy'])});assert.equal(enemies.length,1);
+  assert.deepEqual(inventory.detail(enemies[0]).mapPosition,[4.5,2.5]);
+  assert.equal(inventory.hits(nodes,4.5,2.5,25,true).length,2);
+  assert.equal(inventory.filter({...all,roots:false}).length,4);
+  assert.equal(inventory.filter({...all,linked:false}).length,6);
+  assert.equal(inventory.filter({...all,rooms:new Set([10])}).length,6);
+  assert.equal(inventory.filter({...all,categories:new Set(['Gathering'])}).length,3);
+  assert.equal(inventory.filter({...all,disabledTypes:new Set([nodeType(nodes[0])])}).length,5);
+  assert.equal(inventory.filter({...all,query:'Fiend'}).length,1);
+  assert.equal(inventory.filter({...all,typeQuery:'runtime:1001'}).length,1);
+  const exported=inventory.filteredData(inventory.filter({...all,query:'Gathering node'}));
+  assert.equal(exported.rooms.length,1);assert.equal(exported.rooms[0].occurrences.length,2);
+  assert.equal(exported.resources.length,1);assert.equal(exported.rooms[0].actors.length,0);
+  assert.deepEqual(exported.rooms[0].occurrences[1],roomData.rooms[0].occurrences[1]);
+  const view={cx:3,cy:1,scale:25,width:400,height:300};
+  assert.equal(inventory.markers(nodes,view,true,true).length,7);
+  assert.equal(inventory.markers(nodes,view,false,false).length,6);
+  roomData.rooms[0].actors[0].centre_offset=null as any;
+  const unresolved=new MapInventory(roomData);
+  assert.equal(unresolved.markers(unresolved.filter(all),view,true,true).length,6);
+  console.log('Map inventory preserves rotated footprints, authored centres, overlapping records, links and room/source/category/type filters; unresolved centres are not plotted');
+}finally{await rm(tmp,{recursive:true,force:true});}

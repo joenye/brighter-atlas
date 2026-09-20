@@ -19,7 +19,24 @@ export function mapFixture() {
     base555:i?0x199f:0x7d80,corners555:[0,0,0,0],tiles:Array(16).fill(1)})),
     labelFonts:{title:font,annotation:font},labelBackgrounds:{round:sprite,panel:sprite,connector:{...sprite,width:60},badge:{...sprite,sourceBorder:2,scale:1.3}},
     atlas:{width:480,height:40}};
-  const doc={format:1,scene,terrainMips:[atlas],images:{glyphs,round:white,panel:white,connector:white,badge:white}};
+  const resource=(id:number,name:string|null,described:boolean,glyph:number|null,dimensions:number[]|null)=>({id,name,glyph,dimensions,
+    runtime:id+500,selector:id+600,qualifier:null,category:described?'Gathering':'Other placement',iconResource:null,
+    descriptors:described?[{field:30,name,qualifier:null,glyph,category:'Gathering',iconResource:null}]:[]});
+  const actor=(record:number,label:string,enemy:boolean)=>({record,label,authored_label:label,runtime:800+record,selector:900+record,
+    position:[3,1,0],centre_offset:1.5,centre_field_op:7,rotation_quarters:1,angle_degrees:90,
+    enemy_definitions:enemy?[{record:record+10,name:label}]:[],memberships:[{kind:'default_room',field_op:20,series_index:-1,leaf_index:-1}],
+    default_room_record:0,default_room_field_op:20,direction_resource:22,location_field_op:21,location_series_index:0,location_class:7,
+    direction_field_op:2,label_field_op:5,parts:[],appearance_confidence:null});
+  const roomData={format:1,resources:[resource(100,'Gathering node',true,0,[2,1]),resource(101,null,false,null,[1,1]),resource(102,'Storage',true,1,null)],
+    rooms:rooms.map((r,i)=>({room:r.room,owner:r.owner,name:r.name,position:r.mapPosition,size:r.roomSize,
+      occurrences:i?[[102,0,0,0,0,40,0,null,[],null,0]]:[
+        [100,0,0,0,0,20,0,null,[[1,0,0]],null,0],
+        [100,1,0,1,1,21,0,[0,0,0],[],null,1],
+        [101,0,1,0,0,22,0,null,[],null,0]],
+      actors:i?[]:[actor(200,'Guide',false),actor(201,'Fiend',true)],
+      volumes:i?[]:[{field_op:8,typed_class:9,path:[],origin:[0,0,0],extent:[2,2,1]}]})),
+    unplaced:[{room:10,name:'Unplaced creature',def_slot:77,roster_slot:78}]};
+  const doc={format:1,scene,terrainMips:[atlas],images:{glyphs,round:white,panel:white,connector:white,badge:white},roomData:{file:'maps/room-data.json',records:7}};
   const index=[{i:0,room:null,name:'Full world'},...rooms.map(r=>({i:r.room+1,room:r.room,name:r.name,episode:r.episode}))];
-  return {doc,index,manifest:{game:'Synthetic maps',categories:{maps:{count:3,exported:3,index:'index/maps.json'}}}};
+  return {doc,index,roomData,manifest:{game:'Synthetic maps',categories:{maps:{count:3,exported:3,index:'index/maps.json'}}}};
 }

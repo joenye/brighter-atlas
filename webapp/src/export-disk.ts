@@ -193,8 +193,10 @@ export function openExportDialog(app: any): void {
       const jobs: { out: string; load: () => Promise<SinkData> }[] = [];
       for (const c of chosen) {
         if(c==='maps') {
-          jobs.push({out:'maps/scene.json',load:async()=>JSON.stringify(await app.store.json('maps/scene.json'),
+          const scene=await app.store.json('maps/scene.json');
+          jobs.push({out:'maps/scene.json',load:async()=>JSON.stringify(scene,
             (_,v)=>ArrayBuffer.isView(v)?Array.from(v as unknown as ArrayLike<number>):v)});
+          if(scene.roomData)jobs.push({out:'maps/room-data.json',load:async()=>JSON.stringify(await app.store.json('maps/room-data.json'))});
           continue;
         }
         if (c === 'world') {

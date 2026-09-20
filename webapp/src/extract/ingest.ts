@@ -485,7 +485,7 @@ async function ingest({
   if (cats.includes('maps')) {
     try {
       const {extractMaps} = await import('./maps/index.js');
-      mapsOutcome = await extractMaps({ab0,dt,files,frames,fetchJson:fetchJson??undefined,onProgress,signal});
+      mapsOutcome = await extractMaps({ab0,dt,files,frames,fetchJson:fetchJson??undefined,onProgress,signal,includeRoomData:true});
       indexes.maps = mapsOutcome.index;
     } catch (err) {
       if (signal?.aborted || err?.message === 'cancelled') throw err;
@@ -564,6 +564,7 @@ async function ingest({
   for (const [cat, idx] of Object.entries(indexes)) derivedEntries.push([`index:${cat}`, idx]);
   if (worldOutcome) derivedEntries.push(['world:index', worldOutcome.worldIndex]);
   if (mapsOutcome) derivedEntries.push(['maps:scene', mapsOutcome.doc]);
+  if (mapsOutcome?.roomData) derivedEntries.push(['maps:room-data',mapsOutcome.roomData]);
   if (attachedSystem) {
     derivedEntries.push(['system:models', attachedSystem.models]);
     derivedEntries.push(['system:bindings', attachedSystem.bindings]);

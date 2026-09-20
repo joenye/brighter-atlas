@@ -310,8 +310,11 @@ ok(roomLabels.layouts === roomLabels.rooms && roomLabels.annotations > 100,
 if(catState['2D Maps']?.checked) {
   const maps=await page.evaluate(async()=>{
     const store=window.__bs.app.store,index=await store.index('maps'),doc=await store.json('maps/scene.json');
+    const inventory=await store.json('maps/room-data.json');
     return {entries:index.length,rooms:doc?.scene.rooms.length,patches:doc?.scene.shingles.length,
-      glyphs:doc?.scene.labelFonts.title.glyphs.length,rgba:doc?.images.glyphs.rgba instanceof Uint8Array};
+      glyphs:doc?.scene.labelFonts.title.glyphs.length,rgba:doc?.images.glyphs.rgba instanceof Uint8Array,
+      placements:inventory.rooms.reduce((n,r)=>n+r.occurrences.length+r.actors.length+r.volumes.length,0),
+      actors:inventory.rooms.reduce((n,r)=>n+r.actors.length,0)};
   });
   ok(maps.rooms===rooms.length && maps.entries===rooms.length+1 && maps.patches>1000 && maps.glyphs>20 && maps.rgba,
     `2D map index, primitives and typed glyph pixels stored (${JSON.stringify(maps)})`);
@@ -319,6 +322,12 @@ if(catState['2D Maps']?.checked) {
   await page.waitForSelector('.map-view[data-ready="true"]',{timeout:120000});
   ok(await page.$eval('.map-view',e=>Number(e.dataset.rooms)>100 && Number(e.dataset.tiles)>1000),'full world map renders from stored primitives');
   ok(await page.$('[aria-label="PNG long edge in pixels"]')!==null,'map exposes resolution-selectable PNG export');
+  ok(maps.placements>10000&&maps.actors>1000,'additional room placements persist separately from map primitives');
+  await page.select('[aria-label="Map data mode"]','room');
+  await page.waitForFunction(n=>Number(document.querySelector('.map-view').dataset.matches)===n,{timeout:120000},maps.placements);
+  ok(Number(await page.$eval('.map-view',e=>e.dataset.markers))>0,'room-data mode renders the full recovered placement inventory');
+  await page.select('[aria-label="Map data mode"]','map');
+  await page.waitForFunction(()=>document.querySelector('.map-view').dataset.markers==='0');
 }
 
 // flagship mesh: the biggest exported one, via the UI's own triangles sort

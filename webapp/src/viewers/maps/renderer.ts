@@ -40,7 +40,7 @@ void main(){
  vec2 corner=vec2(gl_VertexID&1,gl_VertexID>>1);
  vec2 p=origin+axes.xy*corner.x+axes.zw*corner.y;
  vec2 pixel=(p-camera)*scale+viewport*0.5;
- kind=int(params.x);tint=color;extra=kind>=2?edges(params.y*scale,kind==3):detail;
+ kind=int(params.x);tint=color;extra=(kind==2||kind==3)?edges(params.y*scale,kind==3):detail;
  texcoord=uv.xy+uv.zw*corner;uvBounds=vec4(uv.xy,uv.xy+uv.zw);
  gl_Position=vec4(pixel.x/viewport.x*2.0-1.0,1.0-pixel.y/viewport.y*2.0,kind==0?detail.w*2.0-1.0:0.0,1.0);
 }`;
@@ -62,6 +62,12 @@ void main(){
   result=vec4(t.r*tint.rgb*t.g*(1.0-t.a)+t.b*extra.rgb*t.a,t.g*(1.0-t.a)+t.a);
  }else if(kind==1){
   vec4 t=texture(atlas,texcoord);result=vec4(t.rgb*tint.rgb*tint.a,t.a*tint.a);
+ }else if(kind==4){
+  vec2 p=texcoord*2.0-1.0;
+  if(extra.x==1.0&&dot(p,p)>1.0)discard;
+  if(extra.x==2.0&&abs(p.x)+abs(p.y)>1.0)discard;
+  if(extra.x==3.0&&(p.y< -1.0||abs(p.x)>(p.y+1.0)*0.5))discard;
+  result=vec4(tint.rgb*tint.a,tint.a);
  }else{
   float value=texture(atlas,clamp(texcoord,uvBounds.xy+texel*0.5,uvBounds.zw-texel*0.5)).a;
   if(kind==3){
@@ -139,7 +145,40 @@ function makeTerrain(scene:any){
  return data;
 }
 
-export interface MapView {cx:number;cy:number;scale:number;width:number;height:number;dpr?:number;labels?:boolean}
+export interface MapMarker {
+  id:number;x:number;y:number;source:'object'|'other'|'actor'|'enemy'|'region';glyph:number|null;
+  footprint:number[]|null;linked:boolean;selected:boolean;
+}
+export interface MapView {cx:number;cy:number;scale:number;width:number;height:number;dpr?:number;labels?:boolean;markers?:MapMarker[]}
+function makeMarkers(view:MapView,doc:MapDocument) {
+  const rows:number[]=[],unit=64/view.scale,glyphs=new Map(doc.scene.labelFonts.annotation.glyphs.map(g=>[g.glyph,g]));
+  const colors={region:[.706,.631,.812],actor:[.49,.812,1],enemy:[1,.671,.471],object:[.502,.882,.729],other:[.788,.827,.875]};
+  const solid=(rect:number[],color:number[],shape=0)=>quad(rows,{width:1,height:1},rect,[0,0,1,1],color,4,0,null,[shape,0,0,0]);
+  const outline=(x:number,y:number,w:number,h:number,color:number[],thickness=unit)=>{
+    solid([x,y,w,thickness],color);solid([x,y+h-thickness,w,thickness],color);
+    solid([x,y,thickness,h],color);solid([x+w-thickness,y,thickness,h],color);
+  };
+  for(const m of view.markers??[]) {
+    const x=m.x*64,y=m.y*64,color=m.linked?[.792,.651,1]:colors[m.source];
+    if(m.footprint&&view.scale>=5){
+      const w=m.footprint[0]*64,h=m.footprint[1]*64;
+      solid([x-w/2,y-h/2,w,h],[...color,.075]);outline(x-w/2,y-h/2,w,h,[...color,.6]);
+    }
+    const g=m.glyph===null?null:glyphs.get(m.glyph),b=g?.bitmap;
+    if(m.source==='other')solid([x-unit,y-unit,unit*2,unit*2],[...color,.33]);
+    else if(m.source==='region'){if(view.scale>=5)solid([x-unit*2,y-unit*2,unit*4,unit*4],[...color,1]);}
+    else if(b&&view.scale>=3) {
+      const [,,w,h]=b.rect,side=Math.max(9,Math.min(34,view.scale*.85))*unit,f=side/Math.max(w,h);
+      quad(rows,doc.images.glyphs,[x-w*f/2,y-h*f/2,w*f,h*f],b.rect,b.color?[1,1,1,1]:[0,0,0,1],b.color?1:2,f*b.em);
+    }else{
+      const side=Math.max(2,Math.min(7,view.scale*.28))*unit,shape=m.source==='actor'?2:m.source==='enemy'?3:1;
+      solid([x-side-unit,y-side-unit,(side+unit)*2,(side+unit)*2],[.067,.067,.067,1],shape);
+      solid([x-side,y-side,side*2,side*2],[...color,1],shape);
+    }
+    if(m.selected)outline(x-unit*12,y-unit*12,unit*24,unit*24,[1,1,1,1],unit*2);
+  }
+  return new Float32Array(rows);
+}
 type BufferBatch={vao:WebGLVertexArrayObject;buffer:WebGLBuffer;count:number;texture?:string};
 export class MapRenderer {
   readonly gl:WebGL2RenderingContext;
@@ -152,7 +191,7 @@ export class MapRenderer {
   private uniforms:Record<string,WebGLUniformLocation|null>={};
   private view:MapView|null=null;
   private lost=false;
-  readonly stats={terrainTiles:0,labelQuads:0,renderer:'WebGL2 map primitives'};
+  readonly stats={terrainTiles:0,labelQuads:0,markers:0,renderer:'WebGL2 map primitives'};
   private onLost=(e:Event)=>{e.preventDefault();this.lost=true;};
   private onRestored=()=>{this.lost=false;this.initialize();if(this.view)this.draw(this.view);};
   constructor(readonly canvas:HTMLCanvasElement,readonly doc:MapDocument) {
@@ -210,12 +249,12 @@ export class MapRenderer {
       surface.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(image.rgba),image.width,image.height),0,0);
       texture(name,image.width,image.height);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,surface);
     }
-    for(const [i,rows] of [this.geometry,...this.labels.map(p=>p.rows)].entries()){
+    for(const [i,rows] of [this.geometry,...this.labels.map(p=>p.rows),new Float32Array()].entries()){
       const vao=gl.createVertexArray()!,buffer=gl.createBuffer()!;gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,rows,gl.STATIC_DRAW);
       let offset=0;for(const [j,size] of [2,4,4,4,4,2].entries()){
         gl.enableVertexAttribArray(j);gl.vertexAttribPointer(j,size,gl.FLOAT,false,STRIDE*4,offset*4);gl.vertexAttribDivisor(j,1);offset+=size;
       }
-      this.buffers.push({vao,buffer,count:rows.length/STRIDE,texture:i?this.labels[i-1].texture:'terrain'});
+      this.buffers.push({vao,buffer,count:rows.length/STRIDE,texture:i===this.labels.length+1?'glyphs':i?this.labels[i-1].texture:'terrain'});
     }
   }
   draw(view:MapView) {
@@ -226,8 +265,11 @@ export class MapRenderer {
     gl.viewport(0,0,w,h);gl.useProgram(this.program);gl.uniform2f(u.camera,cx*64,cy*64);gl.uniform2f(u.viewport,w,h);gl.uniform1f(u.scale,scale*dpr/64);
     const lod=Math.floor(Math.max(0,Math.min(this.doc.terrainMips.length-1,Math.log2(64/(scale*dpr))-.5))+.5);gl.uniform1f(u.lod,lod);
     gl.depthMask(true);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);
+    const markerBuffer=this.buffers.at(-1)!,markers=makeMarkers(view,this.doc);
+    gl.bindBuffer(gl.ARRAY_BUFFER,markerBuffer.buffer);gl.bufferData(gl.ARRAY_BUFFER,markers,gl.DYNAMIC_DRAW);markerBuffer.count=markers.length/STRIDE;
+    this.stats.markers=view.markers?.length??0;
     for(const [i,b] of this.buffers.entries()){
-      if(i===1){gl.disable(gl.DEPTH_TEST);gl.depthMask(false);}if(!b.count||(!labels&&i))continue;
+      if(i===1){gl.disable(gl.DEPTH_TEST);gl.depthMask(false);}if(!b.count||(!labels&&i&&b!==markerBuffer))continue;
       const t=this.textures.get(b.texture!)!;gl.bindTexture(gl.TEXTURE_2D,t.texture);gl.uniform2f(u.texel,1/t.width,1/t.height);
       gl.bindVertexArray(b.vao);gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,b.count);
     }

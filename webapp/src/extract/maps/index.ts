@@ -12,10 +12,11 @@ import {extractMapFonts} from './fonts.js';
 import {extractMapImages} from './images.js';
 import {mapBadgeFormatter} from './badges.js';
 import {hashText} from '../hash.js';
+import {extractMapRoomData} from './room-data.js';
 
-export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>{},signal}: {
+export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>{},signal,includeRoomData=false}: {
   ab0:Uint8Array; dt:any; files:Record<number,Blob>; frames:Record<number,BundleFrames>;
-  fetchJson?:FetchJson; onProgress?:(ev:any)=>void; signal?:AbortSignal;
+  fetchJson?:FetchJson; onProgress?:(ev:any)=>void; signal?:AbortSignal; includeRoomData?:boolean;
 }) {
   const bail=()=>{if(signal?.aborted)throw Error('cancelled');};
   const progress=(step:string)=>{bail();onProgress({stage:'index',cat:'maps',done:0,total:1,note:step});};
@@ -50,9 +51,13 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
       colors:r.terrain.baseColors,labels:{...r.labels,background:r.labels.background.symbol,
         connector:r.labels.connector.symbol??r.labels.connector,annotations:r.labels.annotations.map(a=>({...a,badge:badge(a.marker)}))}};
   });
+  const roomData=includeRoomData?await extractMapRoomData({rows,pool,bytes:ab0,profile,charset:dt.charset,
+    rooms:records.values(),readRoom:async id=>{bail();return decodeObject(2,await read2(frames[2].entries[id]));},
+    onRoom:(done,total)=>{bail();onProgress({stage:'index',cat:'maps',done,total,note:'additional room placements'});}}):null;
   progress('glyphs');
   const titleGlyphs=rooms.flatMap(r=>r.labels.glyphs),annotationGlyphs=rooms.flatMap(r=>r.labels.annotations.flatMap(a=>[
     ...a.glyphs,...Array.from(a.badge?.text??'',ch=>dt.charset.indexOf(ch))]));
+  for(const r of roomData?.resources??[])if(r.glyph!==null)annotationGlyphs.push(r.glyph);
   const fontSlot=(name:string)=>decodeMapBinding(ab0,pool,profile,data.bindings[name]).value;
   const {fonts,sheet}=await extractMapFonts(rows,pool,ab0,profile,dt.charset,
     {title:{slot:fontSlot('titleFont'),glyphs:titleGlyphs},annotation:{slot:fontSlot('annotationFont'),glyphs:annotationGlyphs}},
@@ -62,12 +67,13 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   progress('textures');
   const {atlas,images,sprites}=await extractMapImages(rows,pool,ab0,profile,data,raw3);
   const scene={rooms,shingles,labelFonts:fonts,labelBackgrounds:sprites,atlas:{width:atlas[0].width,height:atlas[0].height}};
-  const doc={format:1,scene,terrainMips:atlas,images:{...images,glyphs:sheet}};
+  const doc={format:1,scene,terrainMips:atlas,images:{...images,glyphs:sheet},
+    roomData:roomData?{file:'maps/room-data.json',records:roomData.rooms.reduce((n,r)=>n+r.occurrences.length+r.actors.length+r.volumes.length,0)}:null};
   const index=[{i:0,name:'Full world',room:null,rooms:rooms.length,h:hashText(rawSha256),f:'maps/scene.json'},
     ...rooms.map(r=>({i:r.room+1,room:r.room,name:r.name,episode:r.episode,w:r.roomSize[0],hTiles:r.roomSize[1],
       mapAnnotations:r.labels.annotations.map(a=>a.text),h:hashText(JSON.stringify(r)),f:'maps/scene.json'}))];
   bail();onProgress({stage:'index',cat:'maps',done:1,total:1});
-  return {doc,index};
+  return {doc,index,roomData};
 }
 
 export type MapDocument = Awaited<ReturnType<typeof extractMaps>>['doc'];
