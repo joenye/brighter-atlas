@@ -2064,6 +2064,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (isSpawn && SPAWN_ORIGIN_NOTES[info.origin]) rows.push(['Position', SPAWN_ORIGIN_NOTES[info.origin]]);
       if (isSpawn && info.authoredLabel && info.authoredLabel !== info.label) rows.push(['Source label', info.authoredLabel]);
       if (isSpawn) rows.push(['Centre offset', compact(info.centreOffset)]);
+      if (isSpawn) rows.push(['Height source', info.heightSource==='room_tiles'?'Authored room tiles':'Estimated terrain surface']);
       rows.push(['Tile', tileCell]);
     } else {
       const texture = identifier(info.texture);
@@ -2094,6 +2095,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           ['Label', info.label || 'unlabelled'],
           ['Spawn', `${identifier(info.record)} · row ${identifier(info.spawnIndex)}`],
           ['Centre offset', compact(info.centreOffset)],
+          ['Height source', info.heightSource==='room_tiles'?'Authored room tiles':'Estimated terrain surface'],
           ...(info.authoredLabel && info.authoredLabel !== info.label ? [['Source label', info.authoredLabel] as [string, string]] : []),
           ...(SPAWN_ORIGIN_NOTES[info.origin] ? [['Position', SPAWN_ORIGIN_NOTES[info.origin]] as [string, string]] : []),
         );

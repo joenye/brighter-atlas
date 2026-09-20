@@ -1024,9 +1024,9 @@ export class WorldScene {
 
     // Gameplay actor positions share the occurrences' raw room-local frame
     // (see the map_offset note near the top of this module), so like every
-    // other display consumer they take no crop offset. Grounded shards carry the
-    // sampled authored terrain height in native mesh units; the fallback
-    // keeps raw actor Z.
+    // other display consumer they take no crop offset. New supported shards
+    // carry the decoded room height in mesh units; older shards may carry a
+    // sampled surface estimate. The legacy fallback keeps raw actor Z.
     target.makeTranslation(
       Math.fround(Math.fround(finite(spawn[sc.x])) + centreOffset) * this.tileUnits,
       Math.fround(Math.fround(finite(spawn[sc.y])) + centreOffset) * this.tileUnits,
@@ -1716,6 +1716,9 @@ export class WorldScene {
       directionResource: spawn[sc.direction_resource],
       position: Object.freeze([spawn[sc.x], spawn[sc.y], spawn[sc.z]]),
       surfaceZ: optionalFinite(spawn[sc.surface_z]),
+      heightSource: spawn[sc.height_source]??'surface_estimate',
+      heightRoom: optionalFinite(spawn[sc.height_room]),
+      authoredHeight: optionalFinite(spawn[sc.authored_height]),
       rotationQuarters: spawn[sc.rotation_quarters],
       parts: Object.freeze(parts),
     });

@@ -17,6 +17,7 @@ import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
 import { deriveMapRoomRecords } from '../maps/records.js';
 import { deriveRoomMetadata } from './room-metadata.js';
+import {loadPlacementData} from './placement.js';
 import { replayGraph } from './replay.js';
 import { decodePool } from './value-pool.js';
 import { decodeObject, makeSlabReader } from '../bundles.js';
@@ -93,6 +94,7 @@ export async function extractWorld({
   step('profile', 0, 1);
   const { profile, error } = await loadWorldProfile(ab0, { fetchJson });
   if (!profile) throw new Error(error || 'no world decode profile for this game build yet');
+  const placementData=await loadPlacementData(profile.bundle0!.raw_sha256!,fetchJson??defaultFetchJson);
   step('profile', 1, 1);
   bail();
 
@@ -292,6 +294,7 @@ export async function extractWorld({
     loadMeshBytes,
     profile,
     charset: dt.charset,
+    placement:placementData,
     bytes: ab0,
     assetMaps,             // shared pure derivations (computed once above)
     materialAssets,

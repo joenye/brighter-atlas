@@ -769,6 +769,7 @@ const actorAudit = await page.evaluate(async () => {
   const threePath = '/vendor/three.module.js';
   const {Matrix4} = await import(threePath);
   let actors = 0, defaults = 0, volumes = 0, largeActors = 0, transforms = 0;
+  let authoredHeights = 0, heightTransforms = 0, zeroHeights = 0, linkedHeights = 0;
   const failures = [];
   for (const room of index.rooms) {
     const shard = await store.worldRoom(room.id);
@@ -778,6 +779,18 @@ const actorAudit = await page.evaluate(async () => {
       if (row[cols.origin] !== 0 || row[cols.default_room_record] !== row[cols.room_record]
         || !Number.isFinite(row[cols.centre_offset])) failures.push([room.id, i, 'provenance']);
       if (shard.spawn_memberships.some(m => m[0] === i && m[1] === index.enums.spawn_membership_kind.default_room)) defaults++;
+      if(row[cols.height_source]==='room_tiles'){
+        authoredHeights++;
+        if(row[cols.authored_height]===0)zeroHeights++;
+        if(row[cols.height_room]!=null&&row[cols.height_room]!==room.id)linkedHeights++;
+        if(row[cols.surface_z]!==row[cols.authored_height]*index.coordinate_system.layer_units)
+          failures.push([room.id,i,'height units']);
+        const part=shard.spawn_parts.find(p=>p[pc.spawn]===i);
+        if(part){
+          const matrix=world._spawnMatrix(shard,part,new Matrix4());heightTransforms++;
+          if(matrix.elements[14]!==row[cols.surface_z])failures.push([room.id,i,'rendered height']);
+        }
+      }
       if (row[cols.centre_offset] > 0.5) {
         largeActors++;
         const part = shard.spawn_parts.find(p => p[pc.spawn] === i);
@@ -789,11 +802,14 @@ const actorAudit = await page.evaluate(async () => {
       }
     }
   }
-  return {actors, defaults, volumes, largeActors, transforms, failures};
+  return {actors, defaults, volumes, largeActors, transforms, authoredHeights, heightTransforms, zeroHeights, linkedHeights, failures};
 });
 ok(actorAudit.actors > 1000 && actorAudit.defaults === actorAudit.actors && actorAudit.volumes > 0
   && actorAudit.largeActors > 0 && actorAudit.transforms > 0 && actorAudit.failures.length === 0,
   `every actor retains default-room provenance; large actor matrices use authored centres (${JSON.stringify(actorAudit)})`);
+if(process.env.BS_EXPECT_AUTHORED_HEIGHTS==='1')ok(actorAudit.authoredHeights===actorAudit.actors
+  &&actorAudit.heightTransforms>0&&actorAudit.failures.length===0,
+  'all authored tile heights reach stored actors and rendered matrices, including zero and linked-room results');
 
 // ---- 7d. recovered particle effect systems ------------------------------------
 // The world:effects doc rode in with the World extraction. Thresholds are

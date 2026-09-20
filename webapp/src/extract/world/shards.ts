@@ -19,6 +19,7 @@
 import { roomOccupancy, roomIndividualAnchors } from './room.js';
 import { AssetGraph, type OccurrenceHit, type PartRecord, type PoolNode, type RegistryRow } from './graph.js';
 import { SpawnGraph, type RoomRowRef } from './spawns.js';
+import {createActorHeightReader, type PlacementDecodeData} from './placement.js';
 import {
   extractEnemyRosters, type EnemyRosterEntry, type EnemyDefinition,
 } from './models.js';
@@ -116,6 +117,7 @@ export const SPAWN_COLUMNS = [
   'location_series_index', 'location_class', 'direction_field_op',
   'room_field_op', 'origin', 'centre_offset', 'centre_field_op',
   'default_room_record', 'default_room_field_op', 'authored_label',
+  'height_source', 'height_room', 'authored_height',
 ];
 export const SPAWN_PART_COLUMNS = [
   'spawn', 'mesh', 'material', 'texture', 'render_texture', 'flags',
@@ -188,7 +190,7 @@ export const SEMANTICS = {
   terrain: 'class-351 occurrence with a secondary ground resource',
   models: 'exact root-occurrence appearance parts, whether rigid or skinned',
   spawns: 'gameplay actor records with an exact typed integer XYZ/direction object and exact parallel mesh/material appearance where present',
-  spawn_coordinates: 'spawn x/y are already in full map_size coordinates and do not receive the class-351 map_offset; raw z is retained as actor/navigation provenance, while surface_z is a display grounding height in game units sampled from source surface triangles at the authored actor centre (null where this room owns no intersecting top face)',
+  spawn_coordinates: 'spawn x/y do not receive the class-351 map_offset; raw z is the authored navigation layer. surface_z is placement height in game units: height_source=room_tiles uses the packed room height and ordered linked-room lookup, including zero; surface_estimate uses triangles at the actor centre. authored_height and height_room retain the exact lookup result and supplying room where available',
   spawn_memberships: 'room-row generic/direct references and actor default-room references are retained; repeated memberships of one registry actor slot produce one spawn row',
   spawn_origin: 'new rows use origin=actor and retain authored coordinates; legacy roster and roster_center values are reserved only for reading older extractions',
   spawn_recolors: 'two exact actor tint fields are paired by part index when serialized as series, or applied actor-wide when both fields are scalar; the actor schema has implicit neutral output modulation rather than a fabricated third stored colour',
@@ -235,6 +237,7 @@ export interface ShardContext {
   meshIsSkinned: (meshId: number) => boolean;
   surfaceMesh: (meshId: number) => SurfaceMesh;
   occupancy: (roomId: number) => ReturnType<typeof roomOccupancy>;
+  actorHeight: ReturnType<typeof createActorHeightReader>;
 }
 
 const inc = (counts: Record<string, number>, key: string, n = 1) => {
@@ -546,6 +549,7 @@ export interface ShardContextOptions {
   names?: Map<number, string> | null;
   loadMeshBytes: (meshId: number) => Uint8Array;
   profile?: any;
+  placement?: PlacementDecodeData | null;
   bytes?: Uint8Array;
   // dt.charset: decodes actor labels and enemy-definition associations.
   charset?: ArrayLike<string> | null;
@@ -568,12 +572,13 @@ export interface ShardContextOptions {
 //   profile      : optional per-build decode data (provenance in the index)
 export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
-  charset = null, bytes, enemyDefs = null,
+  charset = null, bytes, enemyDefs = null, placement = null,
 }: ShardContextOptions): ShardContext {
   const graph = new AssetGraph(rows, pool);
   const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs });
   const roomIds = Array.from(rooms.keys()).sort((a, b) => a - b);
   const roomRows = spawnGraph.discoverRoomRows(roomIds);
+  const actorHeight=createActorHeightReader({data:placement,rooms,roomRows,rows,pool,bytes,profile});
   // A definition can associate an enemy with a room without specifying a
   // starting position. Preserve that association separately from actors.
   const rostersByRoom = new Map<number, EnemyRosterEntry[]>();
@@ -593,6 +598,7 @@ export function createShardContext({
     spawnGraph,
     rooms,
     roomRows,
+    actorHeight,
     roomIds,
     rostersByRoom,
     names,
@@ -810,8 +816,9 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     // source triangles touching that point without moving the authored XY.
     const sampleXs = new Set([Math.floor(centreX), Math.floor(centreX - 1e-7)]);
     const sampleYs = new Set([Math.floor(centreY), Math.floor(centreY - 1e-7)]);
-    let surfaceZ: number | null = null;
-    for (const sx of sampleXs) for (const sy of sampleYs) {
+    const authoredHeight=ctx.actorHeight?.(roomId,actor)??null;
+    let surfaceZ: number | null = authoredHeight?.z??null;
+    if(!authoredHeight)for (const sx of sampleXs) for (const sy of sampleYs) {
       const key = `${sx},${sy}`;
       const sampled = terrainSurfaceZ(ctx, [x, y], terrainSurfaceParts.get(key) ?? [],
         z, cellLayers.get(key) ?? null, centreOffset);
@@ -826,6 +833,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       actor.location_class, actor.direction_field_op,
       actor.room_field_op, SPAWN_ORIGIN.actor, actor.centre_offset, actor.centre_field_op,
       actor.default_room_record, actor.default_room_field_op, actor.authored_label,
+      authoredHeight?'room_tiles':'surface_estimate',authoredHeight?.room??null,authoredHeight?.height??null,
     ]);
     for (const membership of actor.memberships) {
       spawnMembershipRows.push([
