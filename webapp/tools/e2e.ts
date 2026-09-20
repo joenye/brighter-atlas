@@ -327,10 +327,12 @@ if(catState['2D Maps']?.checked) {
     return {entries:index.length,rooms:doc?.scene.rooms.length,patches:doc?.scene.shingles.length,
       glyphs:doc?.scene.labelFonts.title.glyphs.length,rgba:doc?.images.glyphs.rgba instanceof Uint8Array,
       placements:inventory.rooms.reduce((n,r)=>n+r.occurrences.length+r.actors.length+r.volumes.length,0),
-      actors:inventory.rooms.reduce((n,r)=>n+r.actors.length,0)};
+      actors:inventory.rooms.reduce((n,r)=>n+r.actors.length,0),
+      irregularEnemies:inventory.rooms.flatMap(r=>r.actors).filter(a=>a.enemy_definitions.some(d=>d.name==='Jellyfish')).length};
   });
   ok(maps.rooms===rooms.length && maps.entries===rooms.length+1 && maps.patches>1000 && maps.glyphs>20 && maps.rgba,
     `2D map index, primitives and typed glyph pixels stored (${JSON.stringify(maps)})`);
+  ok(maps.irregularEnemies>0,'map inventory retains enemy names whose singular and plural forms match');
   await page.goto(`${base}/index.html#/map/0`,{waitUntil:'networkidle0'});
   await page.waitForSelector('.map-view[data-ready="true"]',{timeout:120000});
   ok(await page.$eval('.map-view',e=>Number(e.dataset.rooms)>100 && Number(e.dataset.tiles)>1000),'full world map renders from stored primitives');

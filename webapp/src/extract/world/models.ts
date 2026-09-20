@@ -2927,8 +2927,9 @@ export interface EnemyBaseName {
   tier_slot: number;
 }
 
-// One roaming-enemy definition row (exactly one singular+plural display pair
-// — "Street Hag"/"Street Hags"), with its referenced rows pre-resolved:
+// One definition row with an authored singular/plural display pair, with its
+// referenced rows pre-resolved. Regular pairs establish name-field bindings
+// for other records of the same decoded type, including irregular plurals.
 // `targets` is every registry row the definition references (typed 0x26 +
 // pooled + direct + series, first-occurrence order) and `targetTargets[i]`
 // is the identical projection of `targets[i]`. extractEnemyBaseNames and
@@ -2972,7 +2973,9 @@ export function scanEnemyDefinitions(
     return [...out].filter((target) => target >= 0 && target < rows.length);
   };
 
-  const defs: EnemyDefinition[] = [];
+  const names = new Map<number, {name: string; plural: string}>();
+  const bindings = new Map<string, Map<string, {singular: number; plural: number; witnesses: number}>>();
+  const readerKey = (row: RegistryRow) => `${row.selector}\u0000${row.runtime}`;
   for (const row of rows) {
     // exactly one singular+plural label pair on the definition row
     const labels: string[] = [];
@@ -2993,11 +2996,42 @@ export function scanEnemyDefinitions(
       if (b === `${a}s` || b === `${a}es`) { singular = a; plural = b; break; }
     }
     if (singular === null) continue;
+    names.set(row.slot, {name: singular, plural: plural!});
+    // Agreeing records of the same decoded type establish the authored name
+    // fields. Other members may have irregular plurals, identical singular and
+    // plural forms, or proper names; English suffix rules cannot identify those.
+    const events = strings.directStrings(row);
+    const singularFields = orderedUnique(events.filter(e => e.text === singular).map(e => e.field_op));
+    const pluralFields = orderedUnique(events.filter(e => e.text === plural).map(e => e.field_op));
+    if (singularFields.length !== 1 || pluralFields.length !== 1
+      || singularFields[0] === null || pluralFields[0] === null
+      || singularFields[0] === pluralFields[0]) continue;
+    const key = readerKey(row), fields = bindings.get(key) ?? new Map();
+    const pair = `${singularFields[0]}:${pluralFields[0]}`;
+    const binding = fields.get(pair) ?? {singular: singularFields[0], plural: pluralFields[0], witnesses: 0};
+    binding.witnesses++;
+    fields.set(pair, binding); bindings.set(key, fields);
+  }
+  const defs: EnemyDefinition[] = [];
+  for (const row of rows) {
+    let label = names.get(row.slot);
+    if (!label) {
+      const candidates = bindings.get(readerKey(row));
+      if (!candidates || candidates.size !== 1) continue;
+      const binding = [...candidates.values()][0];
+      if (binding.witnesses < 2) continue;
+      const events = strings.directStrings(row);
+      const at = (op: number) => orderedUnique(events.filter(e => e.field_op === op).map(e => e.text));
+      const singular = at(binding.singular), plural = at(binding.plural);
+      if (singular.length !== 1 || plural.length !== 1
+        || ![singular[0], plural[0]].every(text => text.trim() && isLabelString(text)
+          && !isSentenceLike(text) && !isTechnicalLabel(text))) continue;
+      label = {name: singular[0], plural: plural[0]};
+    }
     const targets = targetsOf(row.slot);
     defs.push({
       slot: row.slot,
-      name: singular,
-      plural: plural!,
+      ...label,
       targets,
       targetTargets: targets.map((target) => targetsOf(target)),
     });
