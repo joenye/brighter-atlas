@@ -60,44 +60,20 @@ export function decodeSkeleton(
   return { i, bones };
 }
 
-// Rest-pose bone WORLD translations, forward-kinematics through the parent
-// chain (decodeSkeleton's depth-first pre-order guarantees parent < child,
-// so a single forward pass suffices). Mirrors the viewer's Rig.restWorldInfo
-// (viewers/rig.ts) exactly -- TRS compose then multiply down the tree -- but
-// without a THREE.js dependency: extraction only needs the resulting POINT
-// positions (see extract/world/effects.ts rig-bone binding for particle
-// placement), never full bone orientations, so this returns translations
-// only. Matrices are column-major (THREE.Matrix4 convention) purely as
-// internal working state; only element [12,13,14] (translation) is read out
-// per bone.
-export function restWorldTranslations(bones: SkeletonBone[]): number[][] {
+// Stored local matrices define the rest pose. Keep their full affine basis;
+// recomposing the separate animation defaults can lose matrix precision.
+// Parents precede children in the decoded depth-first order. Returned
+// matrices are column-major, matching Matrix4 and the rendering pipeline.
+export function restWorldMatrices(bones: SkeletonBone[]): number[][] {
   const world = new Array<number[]>(bones.length);
-  const out = new Array<number[]>(bones.length);
   for (let i = 0; i < bones.length; i++) {
     const b = bones[i];
-    const local = composeMatrix(b.trans, b.quat, b.scale);
-    const m = b.parent >= 0 && b.parent < i ? multiplyMatrices(world[b.parent], local) : local;
-    world[i] = m;
-    out[i] = [m[12], m[13], m[14]];
+    const m = b.bind;
+    const local = [m[0], m[4], m[8], 0, m[1], m[5], m[9], 0,
+      m[2], m[6], m[10], 0, m[3], m[7], m[11], 1];
+    world[i] = b.parent >= 0 && b.parent < i ? multiplyMatrices(world[b.parent], local) : local;
   }
-  return out;
-}
-
-// THREE.Matrix4.compose(position, quaternion, scale), reimplemented
-// dependency-free (column-major 16-element array).
-function composeMatrix(pos: number[], quat: number[], scale: number[]): number[] {
-  const [x, y, z, w] = quat;
-  const x2 = x + x; const y2 = y + y; const z2 = z + z;
-  const xx = x * x2; const xy = x * y2; const xz = x * z2;
-  const yy = y * y2; const yz = y * z2; const zz = z * z2;
-  const wx = w * x2; const wy = w * y2; const wz = w * z2;
-  const [sx, sy, sz] = scale;
-  return [
-    (1 - (yy + zz)) * sx, (xy + wz) * sx, (xz - wy) * sx, 0,
-    (xy - wz) * sy, (1 - (xx + zz)) * sy, (yz + wx) * sy, 0,
-    (xz + wy) * sz, (yz - wx) * sz, (1 - (xx + yy)) * sz, 0,
-    pos[0], pos[1], pos[2], 1,
-  ];
+  return world;
 }
 
 // THREE.Matrix4.multiply (this = a * b), reimplemented dependency-free

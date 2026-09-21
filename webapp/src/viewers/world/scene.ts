@@ -46,21 +46,21 @@ export function composePlacementMatrix(
   {
     centerX, centerY, z, quarterTurns, meshForwardQuarterTurns,
     packedFlags = 0, localMatrix = null, tileUnits, layerUnits,
-    reflectionBaked = false, tieBias = 0,
+    reflectionBaked = false,
   }: {
     centerX: number; centerY: number; z: number; quarterTurns: number;
     meshForwardQuarterTurns: number; packedFlags?: number;
     localMatrix?: number[] | null; tileUnits: number; layerUnits: number;
-    reflectionBaked?: boolean; tieBias?: number;
+    reflectionBaked?: boolean;
   },
 ): THREE.Matrix4 {
   target.makeTranslation(
-    centerX * tileUnits, centerY * tileUnits, z * layerUnits - tieBias,
+    centerX * tileUnits, centerY * tileUnits, z * layerUnits,
   );
   target.multiply(_scratchRotZ.makeRotationZ(
     ((quarterTurns & 3) + meshForwardQuarterTurns) * Math.PI / 2,
   ));
-  if ((packedFlags & 0x4) !== 0 && !reflectionBaked) {
+  if ((packedFlags & 0x4) !== 0) {
     target.multiply(_scratchReflect.makeScale(-1, 1, 1));
   }
   if (localMatrix) {
@@ -74,7 +74,15 @@ export function composePlacementMatrix(
       0, 0, 0, 1,
     ));
   }
-  return target;
+  // Geometry already mirrored by F needs M*F as its instance matrix:
+  // (M*F)*(F*v) = M*v. Removing an earlier reflection from M is invalid
+  // when a component's local matrix includes translation, rotation or shear.
+  return unbakeGeometryReflection(target, reflectionBaked);
+}
+
+/** Change between source-geometry and reflected-geometry matrix frames. */
+export function unbakeGeometryReflection(target: THREE.Matrix4, reflected: boolean): THREE.Matrix4 {
+  return reflected ? target.multiply(_scratchReflect.makeScale(-1, 1, 1)) : target;
 }
 
 // AB5 meshes face opposite the authored object-tree forward direction; the
@@ -165,6 +173,7 @@ interface WorldBatch {
   recolors: number[][] | null;
   z: any;
   reflectLocalX: boolean;
+  depthRank: number;
   entries: WorldBatchEntry[];
 }
 
@@ -775,7 +784,9 @@ export class WorldScene {
     renderTexture: number,
     flags: number,
     recolors: number[][] | null,
+    depthRank = 0,
   ): Promise<THREE.Material> {
+    const depthOffset = { polygonOffset: depthRank > 0, polygonOffsetFactor: 0, polygonOffsetUnits: depthRank };
     const authoredEmpty = !!(flags & this.flags.authoredEmpty);
     const unrenderable = !!(flags & this.flags.unrenderable);
     const alpha = !!(flags & this.flags.alpha);
@@ -783,7 +794,7 @@ export class WorldScene {
     const key = JSON.stringify([
       category, materialId, renderTexture, authoredEmpty ? 1 : 0,
       unrenderable ? 1 : 0, alpha ? 1 : 0,
-      uniformLuminanceTint ? 1 : 0, recolors,
+      uniformLuminanceTint ? 1 : 0, recolors, depthRank,
     ]);
     return cachedPromise(this._materialPromises, key, async () => {
       if (this.disposed) throw new Error('WorldScene is disposed');
@@ -798,7 +809,7 @@ export class WorldScene {
         // triangles again as DoubleSide flips their lighting normal and makes
         // foliage cards alternate between textured and black faces.
         const material = new THREE.MeshStandardMaterial({
-          color: CATEGORY_COLOURS[category], metalness: 0.02, roughness: 0.88,
+          ...depthOffset, color: CATEGORY_COLOURS[category], metalness: 0.02, roughness: 0.88,
           side: THREE.FrontSide,
         });
         if (recolors) applyPackedRecolor(material, null, recolors);
@@ -811,7 +822,7 @@ export class WorldScene {
       const material = new THREE.MeshStandardMaterial({
         // Preserve authored face ownership; two-sided foliage already carries
         // explicit opposite-winding triangles with its intended normals.
-        color: 0xffffff, map: textures.map, normalMap: textures.normalMap,
+        ...depthOffset, color: 0xffffff, map: textures.map, normalMap: textures.normalMap,
         metalness: 0.02, roughness: 0.88, side: THREE.FrontSide,
       });
       if (alpha || textures.meta.alpha) {
@@ -941,13 +952,9 @@ export class WorldScene {
     });
   }
 
-  // Deterministic coplanar tie-break. The native engine draws placements in
-  // definition order and the FIRST definition wins depth ties (Dawkin Lane's
-  // terrain occ 189 renders above occ 190 in-game); batching and the merged
-  // bake lose that order, which z-fights. Rank the occurrences that share an
-  // exact (x,y,z) cell by definition order and push later ranks a hair down:
-  // 4% of a height layer per rank, far below any authored spacing, zero for
-  // the (vast) unconflicted majority. Render-side only: shards stay byte-true.
+  // Keep definition-order precedence for depth ties after batching. Sharing
+  // a cell does not mean surfaces are coplanar, so this rank must only affect
+  // raster depth, never the placement matrix, bounds, picking or shadows.
   _coplanarRank(shard: any, occurrenceIndex: number | string): number {
     let ranks = shard.__tieRanks;
     if (!ranks) {
@@ -980,6 +987,31 @@ export class WorldScene {
     return ranks.get(Number(occurrenceIndex)) || 0;
   }
 
+  _placementLocalMatrix(shard: any, placement: any): number[] | null {
+    const pc = this.placementColumns;
+    const matrixIndex = finite(placement[pc.matrix], -1);
+    let localMatrix: number[] | null = null;
+    if (matrixIndex >= 0) {
+      const values = shard.matrices?.[matrixIndex];
+      if (!Array.isArray(values) || values.length !== 12 || values.some((value) => !Number.isFinite(value))) {
+        throw new Error(`placement has invalid local matrix ${matrixIndex}`);
+      }
+      localMatrix = values;
+    }
+    return localMatrix;
+  }
+
+  _placementReflectLocalX(shard: any, placement: any): boolean {
+    const occurrence = shard.occurrences[placement[this.placementColumns.occurrence]];
+    const packed = finite(occurrence?.[this.occurrenceColumns.appearance_packed_flags
+      ?? this.occurrenceColumns.packed_flags], 0);
+    const m = this._placementLocalMatrix(shard, placement);
+    const det = m ? m[0] * (m[5] * m[10] - m[6] * m[9])
+      - m[1] * (m[4] * m[10] - m[6] * m[8])
+      + m[2] * (m[4] * m[9] - m[5] * m[8]) : 1;
+    return ((packed & 4) ? -det : det) < 0;
+  }
+
   _placementMatrix(shard: any, placement: any, target: THREE.Matrix4, reflectionBaked = false): THREE.Matrix4 {
     const pc = this.placementColumns;
     const oc = this.occurrenceColumns;
@@ -991,24 +1023,15 @@ export class WorldScene {
     const centerY = placementAnchor?.center[1] ?? finite(occurrence[oc.y]) + 0.5;
     const z = finite(occurrence[oc.z]);
     const quarterTurns = finite(occurrence[oc.rotation_quarters], 0) & 3;
-    const tieBias = this._coplanarRank(shard, occurrenceIndex) * this.layerUnits * 0.04;
-    const packedFlags = finite(occurrence[oc.packed_flags], 0);
+    const packedFlags = finite(occurrence[oc.appearance_packed_flags ?? oc.packed_flags], 0);
 
-    const matrixIndex = finite(placement[pc.matrix], -1);
-    let localMatrix: number[] | null = null;
-    if (matrixIndex >= 0) {
-      const values = shard.matrices?.[matrixIndex];
-      if (!Array.isArray(values) || values.length !== 12 || values.some((value) => !Number.isFinite(value))) {
-        throw new Error(`placement has invalid local matrix ${matrixIndex}`);
-      }
-      localMatrix = values;
-    }
+    const localMatrix = this._placementLocalMatrix(shard, placement);
     return composePlacementMatrix(target, {
       centerX, centerY, z, quarterTurns,
       meshForwardQuarterTurns: this.meshForwardQuarterTurns,
       packedFlags, localMatrix,
       tileUnits: this.tileUnits, layerUnits: this.layerUnits,
-      reflectionBaked, tieBias,
+      reflectionBaked,
     });
   }
 
@@ -1065,16 +1088,18 @@ export class WorldScene {
         | this.flags.uniformLuminanceTint
       );
       const reflectLocalX = sourceKind === 'occurrence'
-        && (finite(shard.occurrences[row[pc.occurrence]]?.[this.occurrenceColumns.packed_flags], 0) & 0x4) !== 0;
+        && this._placementReflectLocalX(shard, row);
+      const depthRank = sourceKind === 'occurrence'
+        ? this._coplanarRank(shard, row[pc.occurrence]) : 0;
       const key = JSON.stringify([
         category, sourceKind, mesh, material, texture, renderTexture, z,
-        visualFlags, recolors, reflectLocalX,
+        visualFlags, recolors, reflectLocalX, depthRank,
       ]);
       let batch = batches.get(key);
       if (!batch) {
         batch = {
           key, category, sourceKind, mesh, material, texture, renderTexture,
-          flags, recolorIndex, recolors, z, reflectLocalX, entries: [],
+          flags, recolorIndex, recolors, z, reflectLocalX, depthRank, entries: [],
         };
         batches.set(key, batch);
       }
@@ -1215,7 +1240,7 @@ export class WorldScene {
           this._meshGeometry(batch.mesh, batch.reflectLocalX),
           this._material(
             batch.category, batch.material, batch.renderTexture, batch.flags,
-            batch.recolors,
+            batch.recolors, batch.depthRank,
           ),
         ]);
         if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
@@ -1225,7 +1250,7 @@ export class WorldScene {
         for (let index = 0; index < batch.entries.length; index++) {
           const entry = batch.entries[index];
           if (entry.sourceKind === 'spawn') this._spawnMatrix(shard, entry.row, matrix);
-          else this._placementMatrix(shard, entry.row, matrix, true);
+          else this._placementMatrix(shard, entry.row, matrix, batch.reflectLocalX);
           mesh.setMatrixAt(index, matrix);
         }
         mesh.instanceMatrix.needsUpdate = true;
@@ -1248,6 +1273,7 @@ export class WorldScene {
           authoredEmpty,
           untextured: !authoredEmpty && Number(batch.renderTexture) < 0,
           reflectLocalX: !!batch.reflectLocalX,
+          depthRank: batch.depthRank,
           z: batch.z,
           placementIndices: batch.entries.map((entry) => entry.placementIndex),
           placementRows: batch.entries.map((entry) => entry.row),
@@ -1643,13 +1669,17 @@ export class WorldScene {
       placementIndex,
       placement,
       occurrenceIndex,
+      depthRank: this._coplanarRank(shard, occurrenceIndex),
       occurrence,
       record: oc.record === undefined ? null : occurrence[oc.record],
-      resource: occurrence[oc.resource],
+      resource: oc.appearance_resource === undefined ? occurrence[oc.resource] : occurrence[oc.appearance_resource],
+      sourceResource: occurrence[oc.resource],
       secondary: secondaryValue >= 0 ? secondaryValue : null,
       entrySlot: oc.entry_slot === undefined ? null : occurrence[oc.entry_slot],
       packed: oc.packed === undefined ? null : occurrence[oc.packed],
-      packedFlags: oc.packed_flags === undefined ? null : occurrence[oc.packed_flags],
+      packedFlags: oc.appearance_packed_flags === undefined
+        ? (oc.packed_flags === undefined ? null : occurrence[oc.packed_flags])
+        : occurrence[oc.appearance_packed_flags],
       individual: individualIndex >= 0
         ? shard.individuals?.[individualIndex] ?? null
         : null,

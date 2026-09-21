@@ -6,6 +6,11 @@
 // rotationQuarters, packedFlags, parentLink, childLinks). Part records keep
 // snake_case keys: they flow directly into shard rows.
 
+import { makeRegistryRowDecoder } from './effects.js';
+import { readStaticAppearance, type StaticAppearance } from './default-appearance.js';
+import type { FillRow } from './replay.js';
+import type { WorldProfile } from './profile.js';
+
 // One replayed registry fill row. g: [op, depth, tag, value] events,
 // r: [op, ref] direct refs, v: constructor values.
 export interface RegistryRow {
@@ -89,7 +94,8 @@ function rotateXY(x: number, y: number, quarterTurns: number): [number, number] 
   return [x, y];
 }
 
-// Decode one native packed owner-alignment axis in mesh units.
+// Decode one packed owner-alignment axis in mesh units. The selector order
+// is none, centre, maximum edge, minimum edge (not spatial order).
 export function nativeAxisAlignment(
   mode: number, selector: number, dimension: number,
   minimum: number, maximum: number, tileUnits: number,
@@ -99,14 +105,14 @@ export function nativeAxisAlignment(
   const halfTile = tileUnits / 2;
   const halfExtent = halfTile * dimension;
   if (mode === 0 || mode === 1) {
-    if (selector === 1) return -halfExtent - minimum;
-    if (selector === 2) return -(minimum + maximum) / 2;
-    return halfExtent - maximum;
+    if (selector === 3) return Math.fround(-halfExtent - minimum);
+    if (selector === 1) return -Math.fround(minimum + maximum) / 2;
+    return Math.fround(halfExtent - maximum);
   }
-  if (mode === 2) return selector === 2 ? -(minimum + maximum) / 2 : -(minimum + maximum);
-  if (mode === 3) return selector === 1 ? -halfTile : selector === 2 ? 0 : halfTile;
-  if (mode === 4) return selector === 3 ? halfTile : 0;
-  if (mode === 5) return selector === 2 ? -halfTile : 0;
+  if (mode === 2) return -Math.fround(minimum + maximum) / (selector === 1 ? 2 : 1);
+  if (mode === 3) return selector === 3 ? -halfTile : selector === 1 ? 0 : halfTile;
+  if (mode === 4) return selector === 3 ? -halfTile : 0;
+  if (mode === 5) return selector === 2 ? halfTile : 0;
   throw new Error(`unsupported generated-owner anchor mode ${mode}`);
 }
 
@@ -162,6 +168,11 @@ export class AssetGraph {
   } | null;
   private _oneMeshCache: WeakMap<DecodedField, [number, number] | null>;
   private _oneMaterialCache: WeakMap<DecodedField, [number, number] | null>;
+  private _decode: ReturnType<typeof makeRegistryRowDecoder> | null;
+  private _symbols: string[];
+  private _drawOwners = new Map<number, number | null>();
+  private _resolvedDrawHits = new WeakSet<OccurrenceHit>();
+  private _staticAppearance = new Map<number, StaticAppearance | null>();
 
   constructor(
     rows: RegistryRow[], pool: PoolNode[],
@@ -172,9 +183,13 @@ export class AssetGraph {
     // face-base learning) stays per-graph, preserving the fresh-graph
     // requirement of the structural-binding stage.
     shared?: { meshBySlot: Map<number, number>; texturesByMaterial: Map<number, number[]> },
+    source?: { bytes?: Uint8Array; profile?: WorldProfile | null; symbols?: string[] },
   ) {
     this.rows = rows;
     this.pool = pool;
+    this._decode = source?.bytes && source.profile
+      ? makeRegistryRowDecoder(rows as FillRow[], source.bytes, source.profile) : null;
+    this._symbols = source?.symbols ?? [];
     if (shared) {
       this.meshBySlot = shared.meshBySlot;
       this.texturesByMaterial = shared.texturesByMaterial;
@@ -279,6 +294,25 @@ export class AssetGraph {
   fields(ownerSlot: number): Map<number, DecodedField> {
     let decoded = this._fieldCache.get(ownerSlot);
     if (decoded) return decoded;
+    // Edge rows omit inline array boundaries, scalar payloads and matrices.
+    // Read the complete source fields when available, with the row decoder's
+    // exact endpoint check. Pooled and inline values then share one path.
+    const source = this._decode?.(ownerSlot);
+    if (source) {
+      decoded = new Map();
+      for (const field of source) {
+        if (field.kind !== 'G') continue;
+        const node = this.deref(field.node);
+        const series = node?.tag === 0x20;
+        const elements = series ? node.values || [] : [node];
+        decoded.set(field.op, {
+          poolIndices: field.node.tag === 0 ? [field.node.value] : [],
+          elements, leaves: elements.map((element: any) => this.leaves(element)), series,
+        });
+      }
+      this._fieldCache.set(ownerSlot, decoded);
+      return decoded;
+    }
     const grouped = new Map<number, number[]>(); // op -> pool indices, first-occurrence order
     for (const [op, depth, tag, value] of this.rows[ownerSlot].g) {
       if (depth === 0 && tag === 0 && value >= 0 && value < this.pool.length) {
@@ -414,6 +448,14 @@ export class AssetGraph {
       || !Array.isArray(node.value) || node.value.length !== 4
       || !node.value.every((v: any) => typeof v === 'number')) return null;
     return node.value.slice();
+  }
+
+  staticAppearance(slot: number): StaticAppearance | null {
+    if (this._staticAppearance.has(slot)) return this._staticAppearance.get(slot)!;
+    const fields = this._decode?.(slot);
+    const selected = fields ? readStaticAppearance(fields, n => this.deref(n), i => this._symbols[i]) : null;
+    this._staticAppearance.set(slot, selected);
+    return selected;
   }
 
   // The two structural op positions dimensions3i / bounds3f read are NOT fixed
@@ -631,14 +673,54 @@ export class AssetGraph {
     return result;
   }
 
-  // [x, y, semanticKind] for one class-351 occurrence: the rotated direct
-  // generated-owner cardinal centre, plus optional native axis alignment from
-  // packed bits 3..6 composed after bit-0x4 reflection and the quarter-turn.
+  // Resolve the archived scenery trim setting without changing its source
+  // occurrence. A replacement keeps orientation and links, clears alignment
+  // selectors and enables all draw slots. Apply the substitution once only.
+  drawOccurrence(hit: OccurrenceHit): OccurrenceHit | null {
+    if (!this._decode || !this._symbols.length || this._resolvedDrawHits.has(hit)) return hit;
+    let resource = this._drawOwners.get(hit.resource);
+    if (resource === undefined) {
+      resource = hit.resource;
+      if (this.dimensions3i(hit.resource)) {
+        const fields = this.fields(hit.resource);
+        const dims = this._ensureStructuralOps().dimsOps;
+        const scalar = (op: number) => {
+          const field = fields.get(op);
+          return field && !field.series && field.elements.length === 1
+            ? this.deref(field.elements[0]) : null;
+        };
+        const condition = scalar(dims[0] - 3), alternate = scalar(dims[0] - 1);
+        if (condition?.tag === 0x26) {
+          const config = this._decode(condition.value);
+          // Shared configuration prefix: parent, generic flag, fixed byte.
+          // Guard the complete shape; unrelated referenced records must not
+          // be treated as trim definitions merely because they contain bytes.
+          if (config?.[0]?.kind === 'U' && config[1]?.kind === 'G'
+            && config[2]?.kind === 'F' && config[2].raw.length === 1
+            && config[2].raw[0] !== 0) {
+            if (alternate?.tag === 0x0f && this._symbols[alternate.value] === '$remove') resource = null;
+            else if (alternate?.tag === 0x26 && this.dimensions3i(alternate.value)) resource = Number(alternate.value);
+          }
+        }
+      }
+      this._drawOwners.set(hit.resource, resource);
+    }
+    if (resource === null) return null;
+    if (resource === hit.resource) return hit;
+    const draw = { ...hit, resource, secondary: null,
+      packedFlags: ((hit.packedFlags ?? 0) & 7) | (0x1ff << 7) };
+    this._resolvedDrawHits.add(draw);
+    return draw;
+  }
+
+  // [x, y, semanticKind]: the rotated owner centre, plus packed axis
+  // alignment composed with the same reflection and rotation as its mesh.
   occurrenceAnchor(
     hit: OccurrenceHit,
     { tileUnits = 1024, meshForwardQuarterTurns = 2 }:
       { tileUnits?: number; meshForwardQuarterTurns?: number } = {},
   ): [number, number, string] {
+    hit = this.drawOccurrence(hit) ?? hit;
     const [x, y] = hit.cell;
     const dimensions = this.dimensions3i(hit.resource);
     if (dimensions === null) {
@@ -667,7 +749,9 @@ export class AssetGraph {
         modes[1], selectorY, dimensions[1], bounds[1], bounds[4], tileUnits,
       );
       if (packed & 0x4) localX = -localX;
-      const [offsetX, offsetY] = rotateXY(localX, localY, hit.rotationQuarters ?? 0);
+      // This is a local translation: it uses the same reflection and full
+      // rotation as the mesh, including the mesh-forward correction.
+      const [offsetX, offsetY] = rotateXY(localX, localY, turns);
       if (offsetX || offsetY) {
         anchorX += offsetX / tileUnits;
         anchorY += offsetY / tileUnits;
@@ -1124,23 +1208,19 @@ export class AssetGraph {
     const customCandidates: [number, [number, number], [number, number]][] = [];
     for (const [op, field] of shape) {
       if (op <= 0) continue;
-      const mesh = this.oneMesh(shape.get(op - 1));
+      const meshField = shape.get(op - 1);
+      // A component array containing one mesh is not a scalar mesh field.
+      if (!meshField || meshField.series || meshField.elements.length !== 1
+        || this.deref(meshField.elements[0])?.tag !== 0x26) continue;
+      const mesh = this.oneMesh(meshField);
       const fieldMaterial = this.oneMaterial(field);
       if (mesh !== null && fieldMaterial !== null) customCandidates.push([op, mesh, fieldMaterial]);
     }
     let custom = customCandidates.length === 1 ? customCandidates[0] : null;
-    // The single-(mesh,material) custom-terrain heuristic assumes such a pair
-    // means the whole tile is one authored mesh. On a build whose appearance
-    // block is packed tighter than the current one (detected offset != the
-    // default), a NORMAL eight-face block's repeated face-table copy leaves its
-    // trailing face mesh immediately before the shape's fallback material,
-    // forging exactly one such pair, so the block collapses to a single wall
-    // slab (85% of the older build's terrain, vs a real custom mesh being a
-    // rare exact subtype). If the owner still resolves a genuine multi-face
-    // block, it is a block, not a custom mesh; prefer the faces. Guarded on the
-    // detected offset, so the current build's exact custom-terrain subtype (its
-    // faces alias the same heuristic there) ships byte-identical.
-    if (custom !== null && this._ensureBlockFaceOffset() !== BLOCK_FACE_DEFAULT_OFFSET) {
+    // A later alternate appearance can also contain a mesh/material pair.
+    // It does not replace an owner's multi-face terrain appearance. This
+    // ambiguity occurs in both compact and expanded field layouts.
+    if (custom !== null) {
       const guardBase = this._faceBase(shapeSlot, groundSlot);
       if (guardBase !== null
         && this.faceParts(shapeSlot, groundSlot, 'terrain_face', guardBase).length >= 2) {
@@ -1170,22 +1250,12 @@ export class AssetGraph {
       }
       return [part];
     }
-    const typedGroups: PartRecord[] = [];
-    const typedOps = new Set<number>();
-    for (const group of this.modelGroups(shapeSlot)) {
-      for (const staticPart of group.parts) {
-        if (staticPart.typed_schema !== 'mesh_material_colors3_matrix3x4') continue;
-        typedGroups.push({
-          ...staticPart,
-          kind: 'terrain_model_part',
-          ground_resource: groundSlot,
-        });
-        typedOps.add(group.mesh_op);
-      }
-    }
-    if (typedOps.size === 1) return typedGroups;
+    const typedGroups = this.staticParts(shapeSlot)
+      .filter(part => part.typed_schema === 'mesh_material_colors3_matrix3x4'
+        || part.typed_schema === 'mesh_material_colors3')
+      .map(part => ({ ...part, kind: 'terrain_model_part', ground_resource: groundSlot }));
     const faceBase = this._faceBase(shapeSlot, groundSlot);
-    return this.faceParts(shapeSlot, groundSlot, 'terrain_face', faceBase);
+    return [...this.faceParts(shapeSlot, groundSlot, 'terrain_face', faceBase), ...typedGroups];
   }
 
   blockParts(ownerSlot: number): PartRecord[] {
@@ -1642,6 +1712,13 @@ export class AssetGraph {
 
   // The qualified static group, excluding inherited face copies.
   staticParts(ownerSlot: number): PartRecord[] {
+    // A block's component array follows its eight face fields. Later groups
+    // belong to other appearances and cannot replace an empty component list.
+    const layout = this._blockLayout(ownerSlot);
+    if (layout !== null) {
+      return this.modelGroups(ownerSlot).find(group => group.mesh_op === layout[0] + 8
+        && group.material_op === group.mesh_op)?.parts || [];
+    }
     const selected = this._selectedStaticParts(ownerSlot);
     return this._isInheritedBlockFaceCopy(ownerSlot, selected) ? [] : selected;
   }
@@ -1651,10 +1728,12 @@ export class AssetGraph {
   // (the shard builder never mutates).
   roomPlacements(
     occurrences: Iterable<OccurrenceHit>,
-  ): { occurrence: OccurrenceHit; part: PartRecord }[] {
-    const result: { occurrence: OccurrenceHit; part: PartRecord }[] = [];
-    for (const hit of occurrences) {
-      const includeStatic = hit.secondary === null && hit.parentLink === null;
+  ): { occurrence: OccurrenceHit; drawOccurrence: OccurrenceHit; part: PartRecord }[] {
+    const result: { occurrence: OccurrenceHit; drawOccurrence: OccurrenceHit; part: PartRecord }[] = [];
+    for (const source of occurrences) {
+      const hit = this.drawOccurrence(source);
+      if (!hit) continue;
+      const includeStatic = hit.secondary === null;
       const templateKey = `${hit.resource}|${hit.secondary}|${includeStatic}`;
       let templates = this._roomPartTemplateCache.get(templateKey);
       if (!templates) {
@@ -1674,7 +1753,20 @@ export class AssetGraph {
         }
         this._roomPartTemplateCache.set(templateKey, templates);
       }
-      for (const part of templates) result.push({ occurrence: hit, part });
+      for (const part of templates) {
+        // The low eight draw bits select the authored face slots directly;
+        // orientation is already encoded in each occurrence's transform.
+        // Filter after retrieving the template because two occurrences of
+        // the same owner can have different masks. Keep lossless occurrence
+        // records and catalog parts independent of this draw selection.
+        if ((part.kind === 'terrain_face' || part.kind === 'block_face')
+          && hit.packedFlags !== null
+          && !((hit.packedFlags >>> 7) & (1 << part.face_index))) continue;
+        if ((part.typed_schema === 'mesh_material_colors3_matrix3x4'
+          || part.typed_schema === 'mesh_material_colors3')
+          && hit.packedFlags !== null && !(hit.packedFlags & 0x8000)) continue;
+        result.push({ occurrence: source, drawOccurrence: hit, part });
+      }
     }
     return result;
   }

@@ -56,6 +56,23 @@ const pre040Extraction = (app: any) => engineOlderThan(app, 1);
 
 const NOTICES: Notice[] = [
   {
+    id: 'world-positioning-1',
+    title: 'More accurate rooms and objects',
+    paras: [
+      'Room objects now use corrected alignment, so connected pieces such as pipes fit together properly. Effects and connected rooms also use improved positions from the game files. Isolated rooms remain separate from the connected layout.',
+      'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.',
+    ],
+    when: async (app: any) => {
+      if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
+      const index = await app.store.worldIndex();
+      return !!index && ((index.coordinate_system?.room_world_position_revision ?? 0) < 1
+        || (index.coordinate_system?.owner_alignment_revision ?? 0) < 2
+        || (index.coordinate_system?.occurrence_draw_revision ?? 0) < 2
+        || (index.coordinate_system?.effect_anchor_revision ?? 0) < 8
+        || (index.coordinate_system?.scenery_trim_revision ?? 0) < 1);
+    },
+  },
+  {
     id: 'extraction-engine-3-equipment',
     title: 'Equipment names and body slots: time for a fresh extraction',
     paras: [

@@ -19,6 +19,7 @@
 // The Rig / ClipSampler / PlaybackBar are reused wholesale from rig.js.
 
 import * as THREE from '../../../vendor/three.module.js';
+import { PartSkinnedMesh } from '../part-skinned-mesh.js';
 import { entryByOrdinal } from '../../store.js';
 import type { AppStore, IndexEntry } from '../../store.js';
 import type { WorldScene } from './scene.js';
@@ -75,8 +76,8 @@ export async function resolveSpawnAnim({ store, parts }: {
   for (const part of parts) {
     const mesh = entryByOrdinal(meshesIdx, Number(part.mesh));
     if (mesh && mesh.sk && Number.isInteger(mesh.skel) && mesh.skel >= 0) {
-      skinnedSet.add(Number(part.mesh));
       if (skelOrdinal < 0) skelOrdinal = Number(mesh.skel);
+      if (Number(mesh.skel) === skelOrdinal) skinnedSet.add(Number(part.mesh));
     }
   }
   if (skelOrdinal < 0 || !skinnedSet.size) return { kind: 'norig' };
@@ -134,6 +135,16 @@ export class SpawnAnimComposite {
     this.group.matrixWorldNeedsUpdate = true;
   }
 
+  setPartMatrices(matrices: THREE.Matrix4[]): void {
+    for (const mesh of this._meshes) {
+      const matrix = matrices[mesh.userData.partIndex];
+      if (!matrix) continue;
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.copy(matrix);
+      mesh.matrixWorldNeedsUpdate = true;
+    }
+  }
+
   /** Build every part (skinned -> SkinnedMesh bound to the rig; else static). */
   async loadParts({ parts, shard, skinnedSet, category = 'spawns', isDestroyed = null }: {
     parts: any[] | null | undefined;
@@ -142,7 +153,7 @@ export class SpawnAnimComposite {
     category?: string;
     isDestroyed?: (() => boolean) | null;
   }): Promise<void> {
-    for (const part of parts || []) {
+    for (const [partIndex, part] of (parts || []).entries()) {
       if (this._disposed || isDestroyed?.()) return;
       let geometry;
       try { geometry = await this.world._meshGeometry(Number(part.mesh), false); } catch { continue; }
@@ -156,7 +167,8 @@ export class SpawnAnimComposite {
       } catch { material = null; }
       if (this._disposed || isDestroyed?.() || !material) continue;
       const skinned = !!skinnedSet?.has(Number(part.mesh)) && !!geometry.attributes.skinIndex;
-      const mesh = skinned ? new THREE.SkinnedMesh(geometry, material) : new THREE.Mesh(geometry, material);
+      const mesh = skinned ? new PartSkinnedMesh(geometry, material, this.group) : new THREE.Mesh(geometry, material);
+      mesh.userData.partIndex = partIndex;
       if (skinned) {
         // Explicit identity bind matrix: the bones live under this group; a
         // parameterless bind() would recompute boneInverses from the current

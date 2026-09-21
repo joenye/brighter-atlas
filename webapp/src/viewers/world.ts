@@ -35,7 +35,7 @@ import { Scene3D, getRenderer, mountImmersiveControls } from './three-common.js'
 import * as THREE from '../../vendor/three.module.js';
 import { OrbitControls } from '../../vendor/OrbitControls.js';
 import WorldScene, {
-  WORLD_CATEGORIES, CATEGORY_COLOURS, loadRoomsWithRetry, yieldToBrowser,
+  WORLD_CATEGORIES, CATEGORY_COLOURS, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection,
 } from './world/scene.js';
 import { FlyControls } from './world/fly-controls.js';
 import {
@@ -55,6 +55,7 @@ import { Rig, PlaybackBar } from './rig.js';
 import {
   resolveSpawnAnim, SpawnAnimComposite, resolveShardRecolors,
 } from './world/spawn-anim.js';
+import { EffectBoneAnimation } from './world/effects-animation.js';
 import { WorldEffectsLayer, effectInstanceKey } from './world/effects-layer.js';
 import type { EffectInstanceEdit } from './world/effects-layer.js';
 import { createEffectsBrowserView } from './world/effects-browser.js';
@@ -1526,7 +1527,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return primary ? [primary] : [];
   }
 
-  function memberWorldMatrix(member: any, target: THREE.Matrix4): THREE.Matrix4 {
+  function memberWorldMatrix(member: any, target: THREE.Matrix4, sourceGeometry = false): THREE.Matrix4 {
     if (member.mode === 'graph') {
       member.object.getMatrixAt(member.instanceId, target);
       for (let node = member.object; node && node !== world.root; node = node.parent) {
@@ -1534,6 +1535,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       }
     } else {
       pickIndex.matrix(member.entryIndex, target);
+    }
+    if (sourceGeometry) {
+      const reflected = member.mode === 'graph'
+        ? !!member.object.userData.exact?.reflectLocalX
+        : !!pickIndex.ref(member.entryIndex).reflect;
+      unbakeGeometryReflection(target, reflected);
     }
     return target;
   }
@@ -1701,8 +1708,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       const cell = merged?.cellOfRoom(members[0]?.info.room);
       for (const member of members) {
         const isSpawn = member.info.sourceKind === 'spawn';
-        const set = isSpawn ? hiddenSpawnParts : hiddenModelParts;
-        const key = `${Number(member.info.room)}|${Number(member.info.placementIndex)}`;
+        const set = isSpawn ? hiddenSpawnParts : hiddenOccurrenceParts;
+        const key = `${Number(member.info.room)}|${member.info.category}|${Number(member.info.placementIndex)}`;
         set.add(key);
         let bucketKey = null;
         if (cell) {
@@ -1711,6 +1718,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             const classified = merged.classifyBucket({
               category: member.info.category, renderTexture: member.info.renderTexture,
               flags: member.info.flags, recolors: member.info.recolors, z: member.info.z,
+              depthRank: member.info.depthRank,
             }, geometry);
             bucketKey = merged.bucketKeyFor(cell.cellX, cell.cellY, classified);
           } catch { /* fall back to no targeted re-bake */ }
@@ -1747,26 +1755,39 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const variant = variants[index];
     const vparts = Array.isArray(variant?.parts) ? variant.parts : [];
     const members = group.members;
+    const primary = members[0];
+    const shard = primary?.shard || await cachedShard(primary?.info?.room);
+    if (!shard || destroyed || inspectedKey !== guardKey) return;
+    // Variants own their part list and local matrices. Original part counts
+    // and offsets need not match (for example, additional clothing pieces).
+    const base = replacementBaseMatrix(primary, shard);
+    if (!base) return;
     const built = [];
-    for (let i = 0; i < members.length; i++) {
-      const vpart = vparts[i] || vparts[members.length === vparts.length ? i : 0];
-      if (!vpart) continue;
+    for (const vpart of vparts) {
       let geometry = null;
-      try { geometry = await world._meshGeometry(Number(vpart.mesh ?? members[i].info.mesh), false); } catch { continue; }
+      try { geometry = await world._meshGeometry(Number(vpart.mesh), false); } catch { continue; }
       if (destroyed || inspectedKey !== guardKey) return;
       let material = null;
       try {
-        material = await world._material('models', vpart.material ?? members[i].info.material,
-          Number(vpart.image ?? members[i].info.renderTexture), members[i].info.flags | 0, vpart.recolors || null);
+        material = await world._material('models', vpart.material ?? primary.info.material,
+          Number(vpart.image ?? primary.info.renderTexture), primary.info.flags | 0, vpart.recolors || null);
       } catch { material = null; }
       if (destroyed || inspectedKey !== guardKey) return;
       const mesh = new THREE.Mesh(geometry, material || highlightMaterial);
       mesh.matrixAutoUpdate = false;
-      memberWorldMatrix(members[i], mesh.matrix);
+      mesh.matrix.copy(base);
+      const local = vpart.local_matrix;
+      if (Array.isArray(local) && local.length === 12 && local.every(Number.isFinite)) {
+        mesh.matrix.multiply(new THREE.Matrix4().set(
+          local[0], local[1], local[2], local[3],
+          local[4], local[5], local[6], local[7],
+          local[8], local[9], local[10], local[11], 0, 0, 0, 1,
+        ));
+      }
       mesh.matrixWorldNeedsUpdate = true;
       built.push(mesh);
     }
-    if (destroyed || inspectedKey !== guardKey || !built.length) { for (const m of built) m.geometry?.dispose?.(); return; }
+    if (destroyed || inspectedKey !== guardKey || !built.length) { return; }
     const hidden = await hideGroupStatics(members);
     if (destroyed || inspectedKey !== guardKey) return;
     for (const mesh of built) highlightRoot.add(mesh);
@@ -1905,12 +1926,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   //     active, partsLoaded, _hiddenGraph, _hiddenMerged }
   let spawnAnim: any = null;
   let spawnAnimToken = 0;
-  // Merged-mode transient hide: "room|placementIndex" of spawn parts whose
+  // Merged-mode transient hide: "room|category|placementIndex" of spawn parts whose
   // baked static must be skipped by the cell re-bake while the composite plays.
   const hiddenSpawnParts = new Set<string>();
-  // Same, for a whole-model group whose composite is playing (models-category
-  // placement indexes live in their own namespace).
-  const hiddenModelParts = new Set<string>();
+  // Same, for an occurrence group whose composite is playing. Category is
+  // part of the key because each category has its own placement indexes.
+  const hiddenOccurrenceParts = new Set<string>();
 
   // --- session edits (move/delete/reset, never persisted) -------------------
   const edits = new WorldEdits();
@@ -2363,12 +2384,38 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return matrix;
   }
 
+  function replacementBaseMatrix(member: any, shard: any): THREE.Matrix4 | null {
+    const info = member.info;
+    if (info.sourceKind === 'spawn') return computeSpawnBaseMatrix(info, shard);
+    const row = shard.placements?.[info.category]?.[info.placementIndex]?.slice();
+    if (!row) return null;
+    row[world.placementColumns.matrix] = -1;
+    const matrix = world._placementMatrix(shard, row, new THREE.Matrix4());
+    const edit = edits.get(info);
+    if (edit && !edit.deleted && !edits.isNoop(edit)) {
+      const pivot = pivotFor(info);
+      editedMatrix(edit, matrix.clone(), pivot[0], pivot[1],
+        world.tileUnits, world.layerUnits, matrix);
+    }
+    const offset = spawnRoomOffset(info.room);
+    matrix.elements[12] += offset[0];
+    matrix.elements[13] += offset[1];
+    return matrix;
+  }
+
   function updateSpawnCompositeMatrix(): void {
     if (!spawnAnim?.composite || !spawnAnim.shard) return;
     const matrix = spawnAnim.members
-      ? memberWorldMatrix(spawnAnim.members[0], new THREE.Matrix4())
+      ? memberWorldMatrix(spawnAnim.members[0], new THREE.Matrix4(), true)
       : computeSpawnBaseMatrix(spawnAnim.info, spawnAnim.shard);
-    if (matrix) spawnAnim.composite.setBaseMatrix(matrix);
+    if (matrix) {
+      spawnAnim.composite.setBaseMatrix(matrix);
+      if (spawnAnim.members) {
+        const inverse = matrix.clone().invert();
+        spawnAnim.composite.setPartMatrices(spawnAnim.members.map((member: any) =>
+          memberWorldMatrix(member, new THREE.Matrix4(), true).premultiply(inverse)));
+      }
+    }
   }
 
   // Single-room: zero-scale each of the spawn's static instances (restored 1:1).
@@ -2450,6 +2497,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         renderTexture: part.renderTexture,
         flags: part.flags,
         recolors: resolveShardRecolors(sa.shard, part.recolorIndex),
+        depthRank: part.depthRank,
         z: part.z ?? sa.info.z,
       }, geometry);
       keys.add(merged.bucketKeyFor(cell.cellX, cell.cellY, classified));
@@ -2459,9 +2507,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   function hideSpawnStaticMerged(sa: any): void {
     sa._hiddenMerged = [];
-    const set = sa.category === 'models' ? hiddenModelParts : hiddenSpawnParts;
+    const set = sa.category === 'spawns' ? hiddenSpawnParts : hiddenOccurrenceParts;
     for (const part of sa.parts || []) {
-      const key = `${Number(sa.info.room)}|${Number(part.rowIndex)}`;
+      const key = `${Number(sa.info.room)}|${sa.category}|${Number(part.rowIndex)}`;
       set.add(key);
       sa._hiddenMerged.push(key);
     }
@@ -2469,7 +2517,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   function restoreSpawnStaticMerged(sa: any): void {
-    const set = sa.category === 'models' ? hiddenModelParts : hiddenSpawnParts;
+    const set = sa.category === 'spawns' ? hiddenSpawnParts : hiddenOccurrenceParts;
     for (const key of sa._hiddenMerged || []) set.delete(key);
     sa._hiddenMerged = null;
     queueSpawnBucketRebake(sa).catch(() => { /* re-bake is best-effort */ });
@@ -2484,9 +2532,33 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (sa?._hiddenMerged) restoreSpawnStaticMerged(sa);
   }
 
+  function syncSpawnEffectAnimation(sa: any): void {
+    if (!sa || sa.info.sourceKind === 'spawn' || !Number.isInteger(sa.info.occurrenceIndex)
+      || sa.info.occurrenceIndex < 0) return;
+    const room = Number(sa.info.room), occurrence = sa.info.occurrenceIndex;
+    const clip = sa.active ? sa.bar?.clipJson : null;
+    const tickRate = effectsLayer?.clock.tickRate || Number(effectsDoc?.tick_rate?.value) || 600;
+    if (sa.effectClip !== clip || sa.effectLoop !== sa.bar?.loop || sa.effectTickRate !== tickRate) {
+      sa.effectAnimation?.dispose();
+      sa.effectClip = clip;
+      sa.effectLoop = sa.bar?.loop;
+      sa.effectTickRate = tickRate;
+      sa.effectAnimation = clip && sa.skeletonJson ? new EffectBoneAnimation(
+        sa.skeletonJson, clip, sa.bar.loop, tickRate,
+        () => sa.bar.elapsedMs) : null;
+      sa.effectLayer?.setOccurrenceAnimation(room, occurrence, null);
+      sa.effectLayer = null;
+    }
+    if (sa.effectLayer !== effectsLayer) {
+      effectsLayer?.setOccurrenceAnimation(room, occurrence, sa.effectAnimation || null);
+      sa.effectLayer = effectsLayer;
+    }
+  }
+
   function deactivateSpawnComposite(): void {
     if (!spawnAnim) return;
     spawnAnim.active = false;
+    syncSpawnEffectAnimation(spawnAnim);
     if (spawnAnim.composite) spawnAnim.composite.group.visible = false;
     restoreSpawnStatic(spawnAnim);
     setInspectHighlightsVisible(true);
@@ -2494,6 +2566,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   async function activateSpawnComposite(token: number): Promise<void> {
     if (destroyed || !spawnAnim || token !== spawnAnimToken || !spawnAnim.composite) return;
+    clearVariantOverlay();
+    restoreSpawnStatic(spawnAnim);
     if (!spawnAnim.partsLoaded) {
       spawnAnim.partsLoaded = true;
       const shard = await spawnShard(spawnAnim.info.room);
@@ -2509,14 +2583,14 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       });
       if (destroyed || !spawnAnim || token !== spawnAnimToken) return;
       spawnAnimRoot.add(spawnAnim.composite.group);
-      updateSpawnCompositeMatrix();
     }
     if (destroyed || !spawnAnim || token !== spawnAnimToken) return;
-    clearVariantOverlay();   // variant + animation are mutually exclusive
+    updateSpawnCompositeMatrix();
     hideSpawnStatic(spawnAnim);
     setInspectHighlightsVisible(false);
     spawnAnim.composite.group.visible = true;
     spawnAnim.active = true;
+    syncSpawnEffectAnimation(spawnAnim);
   }
 
   function onSpawnClipChange(token: number): void {
@@ -2538,6 +2612,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
     if (destroyed || !spawnAnim || token !== spawnAnimToken) return;
     const rig = new Rig(skelJson);
+    spawnAnim.skeletonJson = skelJson;
     spawnAnim.rig = rig;
     spawnAnim.composite = new SpawnAnimComposite({ world, rig });
     clear(spawnAnim.box);
@@ -2598,6 +2673,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // remove its DOM. Used on view destroy and when the clip is cleared.
   function disposeSpawnAnim(sa: any): void {
     if (!sa) return;
+    sa.effectLayer?.setOccurrenceAnimation(Number(sa.info.room), sa.info.occurrenceIndex, null);
+    sa.effectAnimation?.dispose();
     restoreSpawnStatic(sa);
     try { sa.bar?.destroy(); } catch { /* not yet built */ }
     sa.bar?.root?.remove();
@@ -2720,6 +2797,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       renderTexture: info.renderTexture,
       flags: info.flags,
       recolors: info.recolors,
+      depthRank: info.depthRank,
       z: info.z,
     }, member.geometry);
     return edits.ensure(info, {
@@ -2775,6 +2853,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   function nudgePinned(prop: string, delta: number): void {
     if (!pinnedCtx || destroyed) return;
+    if (spawnAnim?.active) restoreSpawnStatic(spawnAnim);
     // whole-model selection: the nudge applies to every part of the group
     for (const member of pinnedMembers()) {
       const edit = ensureEditForMember(member);
@@ -2792,7 +2871,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     refreshGroupHighlights();
     if (pinnedCtx) showReadout(pinnedCtx.info, true);
     // A playing spawn composite must follow the nudge to where the static sits.
-    if (spawnAnim?.active && spawnAnim.key === currentSpawnKey()) updateSpawnCompositeMatrix();
+    if (spawnAnim?.active && spawnAnim.key === currentSpawnKey()) {
+      updateSpawnCompositeMatrix();
+      hideSpawnStatic(spawnAnim);
+    }
     syncEditsUi();
   }
 
@@ -2918,6 +3000,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             renderTexture: batch.renderTexture,
             flags: batch.flags,
             recolors: batch.recolors,
+            depthRank: batch.depthRank,
             z: batch.z,
           }, geometry);
           const key = merged.bucketKeyFor(cellX, cellY, classified);
@@ -2933,12 +3016,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             // A spawn part whose animated composite is currently playing is
             // skipped, so its static bake vanishes under the overlay.
             if (entry.sourceKind === 'spawn'
-                && hiddenSpawnParts.has(`${Number(roomId)}|${Number(entry.placementIndex)}`)) continue;
-            if (entry.sourceKind !== 'spawn' && batch.category === 'models'
-                && hiddenModelParts.has(`${Number(roomId)}|${Number(entry.placementIndex)}`)) continue;
+                && hiddenSpawnParts.has(`${Number(roomId)}|${batch.category}|${Number(entry.placementIndex)}`)) continue;
+            if (entry.sourceKind !== 'spawn'
+                && hiddenOccurrenceParts.has(`${Number(roomId)}|${batch.category}|${Number(entry.placementIndex)}`)) continue;
             try {
               if (entry.sourceKind === 'spawn') world._spawnMatrix(shard, entry.row, original);
-              else world._placementMatrix(shard, entry.row, original, true);
+              else world._placementMatrix(shard, entry.row, original, batch.reflectLocalX);
             } catch { continue; }
             if (edit) {
               editedMatrix(edit, original, edit.pivot[0], edit.pivot[1],
@@ -2955,6 +3038,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             def = {
               key, cellX, cellY,
               materialToken: classified.materialToken,
+              depthRank: classified.depthRank,
               renderTexture: classified.renderTexture,
               flatCategory: classified.flatCategory,
               alpha: classified.alpha,
@@ -3758,8 +3842,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     else focusWorld();
   });
 
-  // Stitched world placement for the all-rooms view: door-graph positions from
-  // the index; rooms the stitch could not place park in a grid to the east.
+  // World positions from the index, with a separate display grid for rooms
+  // outside the connected layout, even when they have stored coordinates.
   function buildWorldFrames(rooms: any[]): NonNullable<typeof worldFrame> {
     const frames = new Map<number, { x: number; y: number; w: number; h: number; detached?: boolean }>();
     let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
@@ -4212,9 +4296,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             if (!((row[pc.flags!] | 0) & emptyFlag)) continue;
             const occurrence = shard.occurrences?.[row[pc.occurrence!]];
             if (!occurrence) continue;
-            const reflect = oc.packed_flags !== undefined
-              && (Number(occurrence[oc.packed_flags]) & 0x4) !== 0;
-            try { world._placementMatrix(shard, row, matrix, true); } catch { continue; }
+            const reflect = world._placementReflectLocalX(shard, row);
+            try { world._placementMatrix(shard, row, matrix, reflect); } catch { continue; }
             matrix.elements[12] += offX;
             matrix.elements[13] += offY;
             addEmpty(category, row[pc.mesh!], reflect, Number(occurrence[oc.z!]) || 0);
@@ -4381,7 +4464,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     // Advance the pinned spawn's clip (PlaybackBar self-gates on
     // sampler+playing; the shared render loop then poses the skinned mesh).
     if (spawnAnim?.bar) spawnAnim.bar.tick(dt);
-    for (const parked of persistentAnims.values()) parked.bar?.tick(dt);
+    syncSpawnEffectAnimation(spawnAnim);
+    for (const parked of persistentAnims.values()) {
+      parked.bar?.tick(dt);
+      syncSpawnEffectAnimation(parked);
+    }
     // effects: advance the tick clock and refill the particle batches
     if (effectsLayer) effectsLayer.tick(dt, scene3d.camera);
     // merged all-rooms: re-rank proximity activation on a slow cadence
@@ -4870,7 +4957,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       variantOverlay = null;
       persistentVariants.clear();
       hiddenSpawnParts.clear();
-      hiddenModelParts.clear();
+      hiddenOccurrenceParts.clear();
       spawnAnimRoot.removeFromParent();
       effectsLayer?.dispose();
       effectsLayer = null;

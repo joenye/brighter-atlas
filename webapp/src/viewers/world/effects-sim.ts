@@ -20,6 +20,9 @@
 import type {
   EffectConfig, EffectEmitter, EffectSystem,
 } from '../../extract/world/effects.js';
+import type { EffectBirthFrames } from './effects-frames.js';
+
+export type EffectBirthFrameSampler = (tick: number) => EffectBirthFrames;
 
 /** Hard alive ceiling per emitter instance. Set to the game engine's OWN
  *  documented maximum ("max_particles must be >0 and <=16383"), so an emitter
@@ -206,6 +209,31 @@ export class EmitterSim {
   head = 0;
   private _lastT = NaN;
   private _dirty = true;
+  private _birthPosition: readonly number[] | null = null;
+  private _birthDirection: readonly number[] | null = null;
+  private _birthFrameSampler: EffectBirthFrameSampler | null = null;
+
+  setBirthFrames(position: readonly number[] | null, direction: readonly number[] | null): void {
+    this._birthFrameSampler = null;
+    this._birthPosition = position ? Array.from(position) : null;
+    this._birthDirection = direction ? Array.from(direction) : null;
+    this._dirty = true;
+  }
+
+  // Sample the attachment at each birth, never at the current display time.
+  // Samplers must be pure functions of ticks so seeks can rebuild the ring.
+  setBirthFrameSampler(sample: EffectBirthFrameSampler | null): void {
+    this._birthFrameSampler = sample;
+    this._dirty = true;
+  }
+
+  spawnCenter(tick = 0): Vec3 {
+    const [x, y, z] = this.shape.center;
+    const m = this._birthFrameSampler ? this._birthFrameSampler(tick).position : this._birthPosition;
+    return m ? [m[0] * x + m[4] * y + m[8] * z + m[12],
+      m[1] * x + m[5] * y + m[9] * z + m[13],
+      m[2] * x + m[6] * y + m[10] * z + m[14]] : [x, y, z];
+  }
 
   constructor(system: EffectSystem, emitterIndex: number, emitter: EffectEmitter,
     configs: Record<string, EffectConfig>, tickRate: number) {
@@ -433,6 +461,21 @@ export class EmitterSim {
       dx = cp * s.w[0] + sp * (cy * s.u[0] + sy * s.v[0]);
       dy = cp * s.w[1] + sp * (cy * s.u[1] + sy * s.v[1]);
       dz = cp * s.w[2] + sp * (cy * s.u[2] + sy * s.v[2]);
+    }
+    const frames = this._birthFrameSampler?.(tick);
+    const p = frames ? frames.position : this._birthPosition;
+    const d = frames ? frames.direction : this._birthDirection;
+    if (p) {
+      const tx = p[0] * x + p[4] * y + p[8] * z + p[12];
+      const ty = p[1] * x + p[5] * y + p[9] * z + p[13];
+      z = p[2] * x + p[6] * y + p[10] * z + p[14];
+      x = tx; y = ty;
+    }
+    if (d) {
+      const tx = d[0] * dx + d[4] * dy + d[8] * dz;
+      const ty = d[1] * dx + d[5] * dy + d[9] * dz;
+      dz = d[2] * dx + d[6] * dy + d[10] * dz;
+      dx = tx; dy = ty;
     }
     this.birth[slot] = tick;
     this.px[slot] = x;

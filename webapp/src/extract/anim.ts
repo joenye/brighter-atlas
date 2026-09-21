@@ -10,7 +10,8 @@
 //       accumulated with int16 wraparound, /32767 -> unit quat (x,y,z,w)
 //     varint n_trans in {0,1,full}; n*3 BE f32 PLANAR tx[n],ty[n],tz[n]
 //   where full = ceil(duration/20)+1 (both endpoints included).
-// Channel count 0 = absent (skeleton rest pose), 1 = const, full = track.
+// Scale count 0 = unit scale. A bone without a track keeps its rest matrix.
+// Channel count 1 = const, full = track.
 
 import { readVarint } from './bundles.js';
 import { b64FromTyped } from './b64.js';
@@ -30,6 +31,7 @@ export interface AnimPayload {
   duration_ms: number;
   frame_ms: number;
   frames: number;
+  scale_threshold: number;
   bones: AnimBone[];
 }
 
@@ -88,8 +90,8 @@ function rotChannel(u8: Uint8Array, off: number, n: number): [AnimChannel, numbe
 //   frameMs = sample interval (always 20; the per-bone header byte is 0x14).
 export function decodeAnim(
   u8: Uint8Array,
-  { i, skel, dur = null, frameMs = SAMPLE_MS }:
-    { i?: number; skel?: number; dur?: number | null; frameMs?: number } = {},
+  { i, skel, dur = null, frameMs = SAMPLE_MS, flags }:
+    { i?: number; skel?: number; dur?: number | null; frameMs?: number; flags?: number } = {},
 ): AnimPayload {
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   let off = 0;
@@ -126,12 +128,16 @@ export function decodeAnim(
   if (off !== u8.length) throw new Error(`anim ${i}: ${u8.length - off} trailing bytes not consumed`);
 
   const durationMs = duration ?? 0; // all-absent clips: duration never seen
+  const thresholdBits = new DataView(new ArrayBuffer(4));
+  thresholdBits.setUint32(0, flags ?? 0);
+  const threshold = thresholdBits.getFloat32(0);
   return {
     i,
     skel,
     duration_ms: durationMs,
     frame_ms: frameMs,
     frames: Math.ceil(durationMs / frameMs) + 1,
+    scale_threshold: Number.isFinite(threshold) ? threshold : 0,
     bones,
   };
 }

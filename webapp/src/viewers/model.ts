@@ -12,6 +12,7 @@
 import { renderTransparentFrame, SHOT_RES, captureTiledPng } from './capture-common.js';
 import { Scene3D, THREE, getRenderer, makeGridToggle, makeLightToggle, mountImmersiveControls, savedLights } from './three-common.js';
 import { Rig, SkeletonViz, PlaybackBar } from './rig.js';
+import { PartSkinnedMesh } from './part-skinned-mesh.js';
 import { buildMeshGeometry } from './mesh-geometry.js';
 import { resolveRoles, texFile, resolveVariantImage } from '../texmap.js';
 import { el, clear, badge, fmtInt, notExported } from '../ui.js';
@@ -37,12 +38,14 @@ import type { EffectSystem, WorldEffectsDoc } from '../extract/world/effects.js'
 function applyPartTransform(obj: any, part: ModelPart | undefined): void {
   const a = part?.local_matrix;
   if (!Array.isArray(a) || a.length !== 12) return;
-  obj.applyMatrix4(new THREE.Matrix4().set(
+  obj.matrixAutoUpdate = false;
+  obj.matrix.set(
     a[0], a[1], a[2], a[3],
     a[4], a[5], a[6], a[7],
     a[8], a[9], a[10], a[11],
     0, 0, 0, 1,
-  ));
+  );
+  obj.matrixWorldNeedsUpdate = true;
 }
 
 function partImageOrdinal(row: any, imagesIdx: IndexEntry[] | null): number | null {
@@ -273,10 +276,7 @@ async function renderVariantThumb(app: any, model: any, v: number): Promise<stri
         }
       }
       const m = new THREE.Mesh(geo, mat);
-      if (Array.isArray(part.local_matrix) && part.local_matrix.length === 12) {
-        const l = part.local_matrix;
-        m.applyMatrix4(new THREE.Matrix4().set(l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7], l[8], l[9], l[10], l[11], 0, 0, 0, 1));
-      }
+      applyPartTransform(m, part);
       m.frustumCulled = false;
       group.add(m);
       own.push(geo, mat);
@@ -685,9 +685,8 @@ export function createModelView(app: any, model: ModelRecord) {
           geo.dispose(); texMat.map?.dispose();
           texMat.brighterParameterMap?.dispose(); texMat.dispose(); return null;
         }
-        const Cls = (skinned ? THREE.SkinnedMesh : THREE.Mesh) as any;
-        const obj = new Cls(geo, mats.lit);
-        const wire = new Cls(geo, wireMat);
+        const obj = skinned ? new PartSkinnedMesh(geo, mats.lit, anchor) : new THREE.Mesh(geo, mats.lit);
+        const wire = skinned ? new PartSkinnedMesh(geo, wireMat, anchor) : new THREE.Mesh(geo, wireMat);
         applyPartTransform(obj, m._part);
         applyPartTransform(wire, m._part);
         if (skinned) {

@@ -337,7 +337,7 @@ export class ClientStore extends EventTarget implements AppStore {
       const dir = (await this._dir('datatable:animdir'))?.[i];
       if (!dir) throw new Error(`no anim_dir entry for ${i}`);
       const dec = decodeObject(1, await this._rawObject(1, i));
-      return decodeAnim(dec, { i, skel: dir.skel, dur: dir.dur, frameMs: 20 });
+      return decodeAnim(dec, { i, skel: dir.skel, dur: dir.dur, frameMs: dir.frameMs, flags: dir.flags });
     }
     // skeletons
     const dec = decodeObject(6, await this._rawObject(6, i));

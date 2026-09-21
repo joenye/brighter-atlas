@@ -195,8 +195,8 @@ function bakeBucket(msg: BakeJobMessage): BakeBucketArrays {
       }
       recolors.fill(item.palette, vertexBase, vertexBase + vertsPerInstance);
 
-      // Winding is copied verbatim: a negative-determinant local matrix
-      // flips screen winding identically in the per-room instanced path.
+      // Winding is copied verbatim: total placement reflection is already
+      // baked into the source geometry by the shared room batching path.
       for (let i = 0; i < indicesPerInstance; i++) {
         indices[indexBase + i] = vertexBase + sourceIndex[i];
       }

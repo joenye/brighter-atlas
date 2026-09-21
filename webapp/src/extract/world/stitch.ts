@@ -93,6 +93,28 @@ function mostCommon<K>(counts: Map<K, number>): K {
 
 const bump = <K>(map: Map<K, number>, key: K, w = 1) => map.set(key, (map.get(key) ?? 0) + w);
 
+// Preserve the connected layout's membership: stored coordinates alone do
+// not establish that an isolated room belongs in the connected world. Correct
+// its placed rooms with authored coordinates, and translate any door-derived
+// fallback into the same frame using the most common shared-room offset.
+export function resolveRoomPositions(
+  stitched: ReadonlyMap<number, readonly number[]>,
+  authored: ReadonlyMap<number, readonly number[]>,
+): Map<number, [number, number]> {
+  if (!authored.size) return new Map([...stitched].map(([id, xy]) => [id, [xy[0], xy[1]]]));
+  const offsets = new Map<string, number>();
+  for (const [id, xy] of authored) {
+    const old = stitched.get(id);
+    if (old) bump(offsets, `${xy[0] - old[0]},${xy[1] - old[1]}`, 1);
+  }
+  if (!offsets.size) return new Map([...stitched].map(([id, xy]) => [id, [xy[0], xy[1]]]));
+  const result = new Map<number, [number, number]>();
+  const delta = mostCommon(offsets).split(',').map(Number);
+  for (const [id, xy] of stitched) result.set(id, [xy[0] + delta[0], xy[1] + delta[1]]);
+  for (const [id, xy] of authored) if (stitched.has(id)) result.set(id, [xy[0], xy[1]]);
+  return result;
+}
+
 // Infer build-local opposite direction objects from reciprocal doors.
 // exits: flat [{ room, tile, z, type, code, dest }].
 export function inferOpposites(exits: FlatExit[]): Map<number, number> {

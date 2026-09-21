@@ -29,7 +29,7 @@ export async function extractMapRoomData({rows,pool,bytes,profile,charset,rooms,
   rooms:Iterable<RoomMetadata>;readRoom:(id:number)=>Promise<Uint8Array>;
   onRoom?:(done:number,total:number)=>void;
 }):Promise<MapRoomData> {
-  const selected=[...rooms],assets=new AssetGraph(rows,pool);
+  const selected=[...rooms],assets=new AssetGraph(rows,pool,undefined,{bytes,profile});
   const enemyDefs=scanEnemyDefinitions(rows,pool,charset);
   const spawns=new SpawnGraph(rows,pool,assets,{bytes,profile,charset,enemyDefs});
   const roomRows=spawns.discoverRoomRows(selected.map(r=>r.room));

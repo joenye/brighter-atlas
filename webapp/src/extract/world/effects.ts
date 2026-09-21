@@ -29,12 +29,15 @@
 // iteration everywhere, floats only from the bundle bytes via DataView, no
 // timestamps.
 
+import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
+
 import { PoolDecoder } from './value-pool.js';
 import type { PoolNode } from './value-pool.js';
 import type { WorldProfile, WorldProfileSelector } from './profile.js';
 import type { FillRow } from './replay.js';
 import type { PoolStrings } from './models.js';
 import type { RoomOccurrence } from './room.js';
+import type { EffectAttachmentMotion } from './effect-motion.js';
 
 // 2: emitter sprites carry their `draw` metrics (sub-image, dimensions, mask).
 export const WORLD_EFFECTS_FORMAT = 2;
@@ -109,12 +112,10 @@ export interface EffectConfig {
 export interface EffectEmitter {
   slot: number; family: number;
   burst: number | null; shape: number | null;  // -> configs[slot]
-  // rig bone binding: the emitter's own attachment field, detected by TAG
-  // (an int, tag 0x0a) never by absolute op position. Non-null only means
-  // something when the owning attachment's mesh is RIGGED (see
-  // attachments.rooms[].bones); a symbol (tag 0x0f) or the field's absence
-  // both mean "no bone, use the object/mesh root", so both decode to null.
+  // Primary bone index, retained for compatibility. Use `transform` for the
+  // full binding, including the second reference and inverse-bind mode.
   bone: number | null;
+  transform?: EffectTransformBinding | null;
   // `images` are ab3 container ordinals; `draw` is how to render the first of
   // them, resolved once here so no renderer needs image metadata or pixel
   // access (the model page has neither). Null when the container carries no
@@ -137,6 +138,7 @@ export interface EffectEmitter {
   rate: { value: number; den: number; op: number } | null;
   direction: { v: [number, number, number]; op: number } | null;
   acceleration: { v: [number, number, number]; op: number } | null;
+  acceleration_frame?: EffectAccelerationFrame | null;
   confidence: 'vote' | 'order';
   extra: EffectExtra[];
 }
@@ -152,6 +154,7 @@ export interface EffectSystem {
   // plenty of triggered systems are flagged looping. See the marker count in
   // the extractor.
   triggered: boolean;
+  rig_selection?: EffectRigSelection | null;
   emitters: EffectEmitter[];                   // series order
   names: { name: string; source: 'controller' | 'row'; controller: number }[]; // sorted (name, controller)
   controllers: number[]; clips: number[];      // sorted asc
@@ -174,23 +177,30 @@ export interface WorldEffectsDoc {
   };
   configs: Record<string, EffectConfig>;       // key = String(slot), ascending insert
   systems: EffectSystem[];                     // ascending slot
+  // Complete rest-world matrices in the rig's own frame, column-major.
+  rigs?: Record<string, number[][]>;
   attachments: {
     // Placement-frame inputs for the OWNING occurrence, sufficient for a
-    // consumer to reproduce the exact mesh-placement matrix scene.ts uses
+    // consumer to reproduce the static owner frame scene.ts uses
     // (see viewers/world/scene.ts composePlacementMatrix): `center` is the
     // owner-dimensions anchor centre (tile-fractional units, == scene.ts
     // _placementAnchor.center); `cell[2]` is occ.z (layer units); `rot` is
     // occ.rotation_quarters; `packedFlags` carries the reflect bit (0x4);
-    // `matrix` is the occurrence's representative local 3x4 matrix (row-
-    // major, 12 values) or null for identity. `bones` is the RIGGED owner's
-    // rest-WORLD bone translations ([x,y,z] per bone index), or null when
-    // the owner is static, unrigged, or its rig could not be resolved (an
-    // emitter attachment then falls back to the object root, never crashes).
+    // `matrix` is null for the static controller root: visual-part local
+    // matrices belong only to those parts, never to the whole system.
+    // `bones` retains rest-world rig translations as provenance. `rig` joins
+    // the complete matrices in `rigs`; 'transform' uses `motion` instead.
+    // null means static, while omission means unresolved or an older document.
     rooms: { room: number; cell: [number, number, number]; occurrence: number;
              resource: number; rot: number; via: 'resource' | 'secondary';
              system: number; controller: number | null;
              center: [number, number]; packedFlags: number;
-             matrix: number[] | null; bones: number[][] | null }[]; // sorted (room, occurrence, system, controller)
+             matrix: number[] | null; bones: number[][] | null;
+             // False retains a catalogue candidate that is not selected by
+             // this owner's stored default. Omission means unresolved.
+             default_active?: boolean;
+             rig?: number | 'transform' | null;
+             motion?: EffectAttachmentMotion }[]; // sorted (room, occurrence, system, controller)
     actors: { actor: number; label: string | null; system: number;
               controller: number | null }[];                // sorted (actor, system)
     owners: { owner: number; system: number; controller: number | null }[]; // sorted (owner, system)
@@ -226,7 +236,12 @@ export interface WorldEffectsShared {
   roomPlacements: (occurrences: RoomOccurrence[]) =>
     { occurrence: RoomOccurrence; part: { mesh: number; local_matrix_game?: number[] | null } }[];
   occurrenceAnchor: (hit: RoomOccurrence) => [number, number, string];
+  drawOccurrence?: (hit: RoomOccurrence) => RoomOccurrence | null;
+  staticAppearance?: (slot: number) => { controllers: number[] } | null;
+  appearanceCandidates?: (slot: number) => number[] | null;
+  effectMotion?: (controller: number, hit: RoomOccurrence, room: number) => EffectAttachmentMotion | null;
   rigBoneTranslations: Map<number, number[][]>;
+  rigWorldMatrices?: Map<number, number[][]>;
   bail: () => void;                           // cancellation check, throws on cancel
   onStep?: (done: number, total: number) => void;
 }
@@ -916,6 +931,9 @@ function extractEffects(
   for (const slot of [...emitterSlots].sort((a, b) => a - b)) {
     const ops = decoded.get(slot);
     if (!ops) { droppedCandidates++; continue; }   // re-decode failed: dropped in E2
+    // Parent topology alone also admits actor containers. Their materials
+    // must not become particle sprites and their actors must not emit dots.
+    if (!hasEmitterTimingHeader(ops)) { droppedCandidates++; continue; }
     const row = rows[slot];
     let hasBurst = false; let hasShape = false;
     for (const [, ref] of row.r) {
@@ -992,7 +1010,7 @@ function extractEffects(
   }
 
   // ---- E5: per-family role templates (order within tag type, voted) ---------
-  interface RoleTemplate { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order' }
+  interface RoleTemplate { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null }
   const roleTemplates = new Map<number, RoleTemplate>();
   for (const family of [...families.keys()].sort((a, b) => a - b)) {
     const via = familyVia.get(family)!;
@@ -1029,7 +1047,10 @@ function extractEffects(
       }
       if (violations / voters.length > FADE_DEMOTION) fades = 'none';
     }
-    roleTemplates.set(family, { fades, confidence: via === 'vote' && agreed ? 'vote' : 'order' });
+    const familyFields = members.map((slot) => decoded.get(slot)!);
+    const transform = inferEffectTransformLayout(familyFields);
+    roleTemplates.set(family, { fades, confidence: via === 'vote' && agreed ? 'vote' : 'order',
+      transform, accelerationFrameOp: inferEffectAccelerationFrameOp(familyFields, transform) });
   }
 
   // ---- names, controllers, clips --------------------------------------------
@@ -1263,6 +1284,7 @@ function extractEffects(
     if (triggered) audit.triggered_systems++;
     systemDocs.push({
       slot: sysSlot, blend, facing, loop, cycle_ticks: cycleTicks, triggered,
+      rig_selection: sysOps ? readEffectRigSelection(sysOps) : null,
       emitters, names, controllers, clips: [...clipSet].sort((a, b) => a - b), extra,
     });
   }
@@ -1330,21 +1352,19 @@ function extractEffects(
     const { occurrences } = shared.occupancy(roomId);
     // Every rendered mesh part for this room, joined back to its owning
     // occurrence: the SAME join buildRoomShard uses to fill placement rows
-    // (shards.ts), reused read-only so the mesh ordinal(s) and local matrix
-    // recorded here can never drift from what the room actually renders. A
+    // (shards.ts), reused read-only to find the rig-bearing mesh ordinals. A
     // resolution failure degrades every occurrence in the room to no parts
     // (bones stay null, matrix stays null: root-anchored placement, the
     // graceful default), never fails the room.
     const occIndexOf = new Map<RoomOccurrence, number>();
     occurrences.forEach((hit, index) => occIndexOf.set(hit, index));
-    const partsByOcc = new Map<number, { mesh: number; matrix: number[] | null }[]>();
+    const partsByOcc = new Map<number, { mesh: number }[]>();
     try {
       for (const { occurrence, part } of shared.roomPlacements(occurrences)) {
         const index = occIndexOf.get(occurrence);
         if (index === undefined) continue;
         const entry = {
           mesh: Number(part.mesh),
-          matrix: Array.isArray(part.local_matrix_game) ? part.local_matrix_game.map(Number) : null,
         };
         const list = partsByOcc.get(index);
         if (list) list.push(entry); else partsByOcc.set(index, [entry]);
@@ -1352,7 +1372,9 @@ function extractEffects(
     } catch { /* placement join failed: every occurrence below keeps no parts */ }
 
     for (let index = 0; index < occurrences.length; index++) {
-      const hit = occurrences[index];
+      const sourceHit = occurrences[index];
+      const hit = shared.drawOccurrence ? shared.drawOccurrence(sourceHit) : sourceHit;
+      if (!hit) continue;
       // Placement-frame centre: the owner-dimensions anchor scene.ts stores
       // per occurrence (== _placementAnchor.center). Falls back to the tile
       // centre (today's placement) if it cannot be resolved.
@@ -1367,35 +1389,42 @@ function extractEffects(
       } catch { /* keep the tile-centre default */ }
       const packedFlags = hit.packedFlags ?? 0;
       const parts = partsByOcc.get(index) || [];
-      // Representative local matrix: the occurrence's first part that
-      // carries one. Effect-bearing objects observed so far place their
-      // mesh instance(s) at identity, so this is exact today; a future
-      // occurrence with a genuine multi-matrix layout degrades to the
-      // first carrying part's matrix.
-      const matrix = parts.find((p) => p.matrix)?.matrix ?? null;
+      // The effect instance uses its controller's root frame. At rest this
+      // is the occurrence owner frame; no visual-part matrix participates.
+      // Choosing a representative part would make effects move whenever
+      // the component list changes, even when the owner itself does not.
+      const matrix = null;
       // RIGGED discrimination: any part's mesh with a nonzero skeleton_ref
       // (ab0 mesh directory region 8 index [3]) marks the whole occurrence
-      // rigged (a multi-mesh object's parts are expected to share one rig).
-      // Bones resolve from the precomputed rest-world translation table; a
-      // rig this build could not decode simply leaves bones null.
+      // rigged. Validate agreement across all parts before choosing a rig.
+      // Translation provenance and full matrices share that same selection.
       let bones: number[][] | null = null;
+      const rigIds = new Set<number>();
       for (const part of parts) {
         let skeletonRef = 0;
         try { skeletonRef = shared.meshSkeletonRef(part.mesh); } catch { skeletonRef = 0; }
         if (skeletonRef >= 2) {
-          const resolved = shared.rigBoneTranslations.get(skeletonRef - 2);
-          if (resolved) { bones = resolved; break; }
+          rigIds.add(skeletonRef - 2);
         }
       }
+      // Parts must agree on a rig. A conflicting or undecodable rig must
+      // not silently inherit whichever mesh happened to be visited first.
+      const rigId = rigIds.size === 1 ? rigIds.values().next().value! : null;
+      const rig = rigIds.size === 0 ? null : rigId !== null
+        && shared.rigWorldMatrices?.has(rigId) ? rigId : undefined;
+      if (rigId !== null) bones = shared.rigBoneTranslations.get(rigId) ?? null;
       // deterministic tie order: resource-derived pairs first; secondary pairs
       // only when they add a (system, controller) pair the occurrence lacks
       const emitted = new Set<string>();
       const emit = (slot: number | null, via: 'resource' | 'secondary') => {
         if (!isInt(slot) || !hasPairs(slot)) return;
+        const selected = shared.staticAppearance?.(slot);
+        const candidates = selected ? null : shared.appearanceCandidates?.(slot);
         for (const { system, controller } of pairsFor(slot)) {
           const key = `${system}\u0000${controller ?? ''}`;
           if (emitted.has(key)) continue;
           emitted.add(key);
+          const motion = controller === null ? null : shared.effectMotion?.(controller, hit, roomId);
           roomAtt.push({
             room: roomId,
             cell: [hit.cell[0], hit.cell[1], hit.cell[2]],
@@ -1403,7 +1432,10 @@ function extractEffects(
             resource: slot,
             rot: hit.rotationQuarters ?? 0,
             via, system, controller,
-            center, packedFlags, matrix, bones,
+            center, packedFlags, matrix, bones, rig: motion ? 'transform' : rig,
+            ...(motion ? {motion} : {}),
+            ...(selected ? { default_active: selected.controllers.includes(controller ?? system) }
+              : candidates && !candidates.includes(controller ?? system) ? { default_active: false } : {}),
           });
         }
       };
@@ -1478,6 +1510,7 @@ function extractEffects(
     audit,
     configs,
     systems: systemDocs,
+    rigs: Object.fromEntries(shared.rigWorldMatrices ?? []),
     attachments: { rooms: roomAtt, actors: actorAtt, owners: ownerAtt },
   };
 }
@@ -1491,7 +1524,7 @@ function extractEffects(
 // there.
 function buildEmitter(
   row: FillRow, ops: EffectExtra[], ownerSlot: number,
-  template: { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order' },
+  template: { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null },
   classifyConfig: (slot: number) => { kind: EffectConfig['kind'] } | null,
   shippedConfigs: Set<number>,
   textureSlots: Map<number, number[]>,
@@ -1627,39 +1660,20 @@ function buildEmitter(
     direction = take(remainingVec3s[0]);
     acceleration = take(remainingVec3s[remainingVec3s.length - 1]);
   }
-  // rig bone binding: detected by TAG and SHAPE, never a fixed op index. The
-  // attachment field sits in a two-slot pattern next to a marker symbol
-  // (observed as "$additional_transform"): a root-anchored emitter fills
-  // ITS OWN slot with a second copy of that same marker (the symbol
-  // appears twice, adjacent); a bone-bound emitter fills that slot with an
-  // int instead (the bone index, tag 0x0a), leaving a single marker
-  // occurrence. Scanning for the marker and checking BOTH neighbours (build
-  // layouts are not assumed to order the pair one way) finds the field
-  // regardless of its absolute op position: other unrelated top-level ints
-  // on this build (fixed configuration flags) never sit adjacent to the
-  // marker, so they are never mistaken for it.
-  let bone: number | null = null;
-  for (let i = 0; i < ops.length; i++) {
-    const e = ops[i];
-    if (e.kind !== 'symbol' || e.name === null || !e.name.includes('transform') || consumed.has(i)) continue;
-    const before = i > 0 ? ops[i - 1] : null;
-    const after = i + 1 < ops.length ? ops[i + 1] : null;
-    const dupBefore = !!before && before.kind === 'symbol' && before.name === e.name && !consumed.has(i - 1);
-    const dupAfter = !!after && after.kind === 'symbol' && after.name === e.name && !consumed.has(i + 1);
-    const intBefore = !!before && before.kind === 'int' && Number.isInteger(before.value) && before.value >= 0 && !consumed.has(i - 1);
-    const intAfter = !!after && after.kind === 'int' && Number.isInteger(after.value) && after.value >= 0 && !consumed.has(i + 1);
-    if (dupAfter) { consumed.add(i); consumed.add(i + 1); }              // this slot IS the marker; the copy follows: root
-    else if (dupBefore) { consumed.add(i - 1); consumed.add(i); }        // the copy precedes this marker: root
-    else if (intBefore) { bone = before!.value; consumed.add(i - 1); consumed.add(i); }
-    else if (intAfter) { bone = after!.value; consumed.add(i); consumed.add(i + 1); }
-    else { consumed.add(i); }   // lone marker with no paired slot either side: still root
-    break;   // one attachment field per emitter
+  const transform = readEffectTransformBinding(ops, template.transform ?? null);
+  const bone = typeof transform?.primary === 'number' ? transform.primary : null;
+  if (transform) {
+    const { primaryOp, secondaryOp, skinOp } = transform.source;
+    for (let i = 0; i < ops.length; i++) {
+      if ((ops[i].op === primaryOp && transform.primary !== null)
+        || (ops[i].op === secondaryOp && transform.secondary !== null) || ops[i].op === skinOp) consumed.add(i);
+    }
   }
   const extra: EffectExtra[] = [];
   for (let i = 0; i < ops.length; i++) if (!consumed.has(i)) extra.push(ops[i]);
   return {
     slot: row.slot, family: row.runtime,
-    burst, shape, bone, sprite, blend,
+    burst, shape, bone, transform, sprite, blend,
     life: life && { ticks: life.ticks, op: life.op },
     fade_in: fadeIn && { ticks: fadeIn.ticks, op: fadeIn.op },
     fade_out: fadeOut && { ticks: fadeOut.ticks, op: fadeOut.op },
@@ -1670,7 +1684,7 @@ function buildEmitter(
     speed: speed && { value: speed.value, den: speed.den, op: speed.op },
     angular_speed: angularSpeed && { value: angularSpeed.value, den: angularSpeed.den, op: angularSpeed.op },
     rate: rate && { value: rate.value, den: rate.den, op: rate.op },
-    direction, acceleration,
+    direction, acceleration, acceleration_frame: readEffectAccelerationFrame(ops, template.transform ?? null, template.accelerationFrameOp),
     confidence: template.confidence,
     extra,
   };

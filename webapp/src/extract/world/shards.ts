@@ -97,6 +97,7 @@ export const OCCURRENCE_COLUMNS = [
   'record', 'resource', 'secondary', 'x', 'y', 'z', 'entry_slot',
   'packed', 'rotation_quarters', 'packed_flags', 'individual', 'role',
   'anchor_x', 'anchor_y', 'anchor_kind',
+  'appearance_resource', 'appearance_packed_flags',
 ];
 export const PLACEMENT_COLUMNS = [
   'occurrence', 'mesh', 'material', 'texture', 'render_texture',
@@ -130,17 +131,24 @@ export const SPAWN_MEMBERSHIP_COLUMNS = [
 ];
 
 export const COORDINATE_SYSTEM = {
+  owner_alignment_revision: 2,
+  room_world_position_revision: 1,
+  occurrence_draw_revision: 2,
+  effect_anchor_revision: 8,
+  scenery_trim_revision: 1,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,
   layer_units: LAYER_UNITS,
   room_y_sign: 1,
   mesh_forward_quarter_turns: MESH_FORWARD_QUARTER_TURNS,
-  cell_translation: 'the occurrence anchor columns use the centre of every class-351 resource\'s rotated generated-owner width/height; map_offset and z are then applied',
-  map_offset: 'source-space crop origin inside map_size; because occupancy and display rows have opposite Y directions, display_offset=[map_offset.x,map_size.y-size.y-map_offset.y]',
+  cell_translation: 'the occurrence anchor columns use the rotated owner centre plus packed alignment; x/y are room-local and z is scaled by layer_units',
+  map_offset: 'preserved source metadata; occupancy, collision and actor coordinates already share the room-local frame, so display placement does not add this crop offset',
   viewer_conversion: 'game (x,y,z) -> three.js (x,z,y)',
   composition: 'viewer_conversion * cell_translation * rotation_z((occurrence.rotation_quarters + mesh_forward_quarter_turns) * 90deg) * optional_local_x_reflection(packed_flags & 0x4) * local_matrix_game',
   spawn_translation: '((spawn.x+centre_offset)*tile_units,(spawn.y+centre_offset)*tile_units,spawn.surface_z); older shards without centre_offset use 0.5; when surface_z is null consumers may retain the raw spawn.z compatibility placement',
-  packed_orientation: 'packed low two bits are rotation_quarters; bit 0x4 reflects local X; bits 3..4 and 5..6 select optional native owner-alignment offsets composed after reflection and the native quarter-turn; bit 0x800 is retained as provenance and does not change placement; class-101 local matrices follow',
+  packed_orientation: 'rotation_quarters stores the source low two bits separately; packed_flags retains the remaining bits; bit 0x4 reflects local X; bits 3..4 and 5..6 select optional native owner-alignment offsets composed with the same reflection and full mesh rotation; bit 0x800 is retained as provenance and does not change placement; class-101 local matrices follow',
+  occurrence_draw: 'bits 7..14 of packed_flags select the eight terrain/block face slots and bit 15 selects the component array, without changing their transforms; filtered parts remain recoverable from lossless source occurrences and catalog bindings',
+  appearance: 'appearance_resource and appearance_packed_flags describe the archived draw substitution; resource/secondary/packed remain the original source. A negative appearance_resource means the client trims the draw. Replacement orientation is preserved, alignment selectors reset, and all draw slots enabled; anchor_x/y use the replacement owner.',
   local_matrix_game: 'row-major 3x4 affine, interned without TRS reduction',
 };
 
@@ -185,7 +193,7 @@ export const ENUMS = {
 export const SEMANTICS = {
   index_sentinel: '-1 means absent for placement asset, matrix, recolor, field-op and target-occurrence indices',
   placement_matrix: 'matrix=-1 is identity; otherwise index into the room matrices array',
-  map_offset: 'map_offset is preserved in source row order; display consumers reflect the crop margin in Y as map_size.y-size.y-map_offset.y before translating occurrences and collision, while spawns are already in full map_size coordinates',
+  map_offset: 'map_offset is preserved as source metadata; occurrences, collision and spawns use the same room-local coordinates without a crop translation',
   render_texture: 'render_texture=-1 has no decodable image; inspect placement flags to distinguish authored-empty from decode failure',
   terrain: 'class-351 occurrence with a secondary ground resource',
   models: 'exact root-occurrence appearance parts, whether rigid or skinned',
@@ -200,7 +208,7 @@ export const SEMANTICS = {
   individual_anchors: 'class-447/448 room-space polygons and explicit centers, parallel to the class-189 individuals array',
   root_dimension_anchor: 'generated visual-owner operations 4/5/6 are exact positive XYZ cell dimensions; the root cell is the lower-left corner, odd occurrence quarter-turns swap width/height, and Z remains the root layer',
   class_127_topology: 'all resolved parent/child links remain serialized as independent component provenance; their transitive XY extent validates owner dimensions but does not replace the direct owner anchor when sparse or decorative members change that extent',
-  occurrence_anchor: 'all class-351 roles start at the rotated generated-owner dimension centre; when packed axis selectors are nonzero, the native six-way owner modes combine dimensions and tag-0x25 bounds into a local offset, then compose bit-0x4 reflection and the packed quarter-turn',
+  occurrence_anchor: 'all class-351 roles start at the rotated generated-owner dimension centre; when packed axis selectors are nonzero, the native six-way owner modes combine dimensions and tag-0x25 bounds into a local offset, then compose bit-0x4 reflection and the full mesh quarter-turn',
   packed_reflection: 'packed bit 0x4 composes local scale(-1,1,1) after the occurrence quarter-turn and before any class-101 local matrix',
   collision: 'occupancy-derived envelope; not a decoded physics mesh',
   authored_empty: 'material container is explicitly empty (and no image fallback exists)',
@@ -351,6 +359,7 @@ function terrainSurfaceZ(
     // The source anchor uses the positive turn (x,y)->(-y,x); undo that exact
     // integer transform before sampling the source mesh.
     for (let k = 0; k < turns; k++) { const t = localX; localX = localY; localY = -t; }
+    if ((hit.packedFlags ?? 0) & 4) localX = -localX;
     const mesh = ctx.surfaceMesh(part.mesh);
     const localZ = surfaceHeightAtXY(mesh.positions, mesh.triangles, localX, localY);
     if (localZ !== null) {
@@ -405,6 +414,7 @@ export function occurrenceRows(
   const rows = occurrences.map((hit, index) => {
     const [x, y, z] = hit.cell;
     const [anchorX, anchorY, anchorKind] = occurrenceAnchorRow(ctx, hit);
+    const draw = ctx.graph.drawOccurrence(hit);
     return [
       hit.record, hit.resource,
       hit.secondary !== null ? hit.secondary : -1,
@@ -415,6 +425,7 @@ export function occurrenceRows(
       hit.individual !== null ? hit.individual : -1,
       ROLE[role(hit)],
       anchorX, anchorY, anchorKind,
+      draw?.resource ?? -1, draw?.packedFlags ?? 0,
     ];
   });
   const audit: Record<string, number> = {};
@@ -454,7 +465,8 @@ export function occurrenceRows(
     }
     const linkedX = (minX + maxX) / 2;
     const linkedY = (minY + maxY) / 2;
-    const dimensions = ctx.graph.dimensions3i(occurrences[rootIndex].resource);
+    const drawRoot = ctx.graph.drawOccurrence(occurrences[rootIndex]);
+    const dimensions = ctx.graph.dimensions3i((drawRoot ?? occurrences[rootIndex]).resource);
     if (dimensions === null) { // occurrenceAnchor already rejects this case
       throw new Error('dimension-anchored root lost its dimensions');
     }
@@ -553,6 +565,7 @@ export interface ShardContextOptions {
   bytes?: Uint8Array;
   // dt.charset: decodes actor labels and enemy-definition associations.
   charset?: ArrayLike<string> | null;
+  symbols?: string[];
   // Precomputed shared derivations from the orchestrator, each a pure
   // never-mutated function of the same rows/pool passed here: the
   // traceAssetMaps / materialMap results and the enemy-definition scan.
@@ -572,9 +585,9 @@ export interface ShardContextOptions {
 //   profile      : optional per-build decode data (provenance in the index)
 export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
-  charset = null, bytes, enemyDefs = null, placement = null,
+  charset = null, symbols, bytes, enemyDefs = null, placement = null,
 }: ShardContextOptions): ShardContext {
-  const graph = new AssetGraph(rows, pool);
+  const graph = new AssetGraph(rows, pool, undefined, { bytes, profile, symbols });
   const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs });
   const roomIds = Array.from(rooms.keys()).sort((a, b) => a - b);
   const roomRows = spawnGraph.discoverRoomRows(roomIds);
@@ -695,8 +708,8 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
 
   const available = (textureId: number) => ctx.texMeta(textureId).kind === 'image';
 
-  for (const { occurrence: hit, part } of ctx.graph.roomPlacements(occurrences)) {
-    const index = occurrenceIndex.get(hit)!;
+  for (const { occurrence: source, drawOccurrence: hit, part } of ctx.graph.roomPlacements(occurrences)) {
+    const index = occurrenceIndex.get(source)!;
     const meshId = part.mesh;
     roomMeshes.add(meshId);
 
@@ -825,6 +838,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       if (sampled !== null && (surfaceZ === null || sampled > surfaceZ)) surfaceZ = sampled;
     }
     inc(counts, surfaceZ !== null ? 'spawn_grounded' : 'spawn_ungrounded');
+    inc(counts, authoredHeight ? 'spawn_height_room_tiles' : 'spawn_height_surface_estimate');
     spawnRows.push([
       actor.record, actor.room_record, x, y, z, surfaceZ,
       actor.rotation_quarters, actor.direction_resource,

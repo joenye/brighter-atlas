@@ -1,9 +1,9 @@
 // Skeleton building + clip sampling + playback UI (the skinned-animation core).
 //
 // ab6 skeleton JSON: bones[] of { parent, scale[3], quat[x,y,z,w], trans[3], bind[12] }
-//   - local rest pose = TRS(trans, quat, scale)
-//   - bind is the LOCAL bind matrix [R*S | T], row-major 3x4 (equal to
-//     compose(quat,scale)+trans). World bind = parent world bind * local bind, so
+//   - bind is the LOCAL rest matrix, row-major 3x4. Separate TRS values
+//     provide defaults for sampled animation channels.
+//     World bind = parent world bind * local bind, so
 //     boneInverses = inverse(world bind) composed down the tree.
 // ab1 clip JSON: bones[] of { present, scale|rot|trans: {mode absent|const|track} },
 //   sampled every frame_ms (20 ms); tracks are interleaved f32 (xyz / xyzw).
@@ -20,6 +20,12 @@ export const SPEEDS = [0.1, 0.25, 0.5, 1, 1.5, 2, 4];
 // look, so 0.5× reads as in-game "1×". Only used until the user picks a speed
 // (which persists via the 'speed' pref).
 export const prefSpeed = (): number => (SPEEDS.includes(getPref('speed')) ? getPref('speed') : 0.5);
+
+// Share the same phase calculation with effects sampled at past birth times.
+export function clipPhase(timeMs: number, duration: number, loop: boolean): number {
+  const t = Math.max(0, timeMs);
+  return loop && t > duration ? (duration > 0 ? t % duration : 0) : Math.min(t, duration);
+}
 
 export function mat4From3x4(m: ArrayLike<number>): THREE.Matrix4 {
   return new THREE.Matrix4().set(
@@ -79,11 +85,17 @@ export class Rig {
   }
 
   resetToRest(): void {
-    this.bones.forEach((b, i) => {
-      b.position.copy(this.rest[i].pos);
-      b.quaternion.copy(this.rest[i].quat);
-      b.scale.copy(this.rest[i].scale);
-    });
+    this.bones.forEach((_, i) => this.resetBoneToRest(i));
+  }
+
+  resetBoneToRest(i: number): void {
+    const b = this.bones[i];
+    b.position.copy(this.rest[i].pos);
+    b.quaternion.copy(this.rest[i].quat);
+    b.scale.copy(this.rest[i].scale);
+    b.matrixAutoUpdate = false;
+    b.matrix.copy(mat4From3x4(this.def[i].bind));
+    b.matrixWorldNeedsUpdate = true;
   }
 
   // rest-pose world positions (for framing / joint sizing)
@@ -93,7 +105,7 @@ export class Rig {
     const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
     const mats: THREE.Matrix4[] = [];
     this.def.forEach((d, i) => {
-      const local = new THREE.Matrix4().compose(this.rest[i].pos, this.rest[i].quat, this.rest[i].scale);
+      const local = mat4From3x4(d.bind);
       mats[i] = d.parent >= 0 ? mats[d.parent].clone().multiply(local) : local;
       const p = new THREE.Vector3().setFromMatrixPosition(mats[i]);
       world.push(p);
@@ -118,6 +130,10 @@ function decodeChannel(ch: any, width: number): Channel {
 interface ClipBone { scale: Channel; rot: Channel; trans: Channel }
 
 const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
+const f32 = Math.fround;
+function quaternionDot32(a: THREE.Quaternion, b: THREE.Quaternion): number {
+  return f32(f32(f32(f32(a.x * b.x) + f32(a.y * b.y)) + f32(a.z * b.z)) + f32(a.w * b.w));
+}
 
 export class ClipSampler {
   index: number;
@@ -125,6 +141,7 @@ export class ClipSampler {
   duration: number;
   frameMs: number;
   frames: number;
+  scaleThreshold: number;
   bones: (ClipBone | null)[];
 
   constructor(clipJson: any) {
@@ -133,6 +150,7 @@ export class ClipSampler {
     this.duration = clipJson.duration_ms;
     this.frameMs = clipJson.frame_ms || 20;
     this.frames = Math.max(1, clipJson.frames);
+    this.scaleThreshold = Number.isFinite(clipJson.scale_threshold) ? clipJson.scale_threshold : 0;
     this.bones = clipJson.bones.map((b: any) => (b && b.present ? {
       scale: decodeChannel(b.scale, 3),
       rot: decodeChannel(b.rot, 4),
@@ -142,8 +160,8 @@ export class ClipSampler {
 
   // apply pose at tMs to a Rig (bones without clip data stay at rest pose)
   apply(rig: Rig, tMs: number): void {
-    const t = Math.max(0, Math.min(this.duration, tMs));
-    const f = this.frames > 1 ? Math.min(t / this.frameMs, this.frames - 1) : 0;
+    const t = Math.max(0, Math.min(this.duration, Math.trunc(tMs)));
+    const f = this.frames > 1 ? Math.min(f32(t / this.frameMs), this.frames - 1) : 0;
     const i0 = Math.floor(f);
     const i1 = Math.min(i0 + 1, this.frames - 1);
     const a = f - i0;
@@ -152,35 +170,62 @@ export class ClipSampler {
       const rest = rig.rest[i];
       const cb = i < this.bones.length ? this.bones[i] : null;
       if (!cb) {
-        bone.position.copy(rest.pos);
-        bone.quaternion.copy(rest.quat);
-        bone.scale.copy(rest.scale);
+        rig.resetBoneToRest(i);
         continue;
       }
       this._vec(cb.trans, i0, i1, a, bone.position, rest.pos);
-      this._vec(cb.scale, i0, i1, a, bone.scale, rest.scale);
+      if (cb.scale.mode === 'absent') bone.scale.set(1, 1, 1);
+      else this._vec(cb.scale, i0, i1, a, bone.scale, rest.scale, this.scaleThreshold);
       const r = cb.rot;
       if (r.mode === 'absent') bone.quaternion.copy(rest.quat);
-      else if (r.mode === 'const') bone.quaternion.set(r.value[0], r.value[1], r.value[2], r.value[3]);
+      else if (r.mode === 'const') bone.quaternion.set(f32(r.value[0]), f32(r.value[1]), f32(r.value[2]), f32(r.value[3]));
       else {
         _qa.fromArray(r.data, i0 * 4);
-        if (i1 !== i0 && a > 0) {
+        // Interior track samples use the normalized linear blend, including
+        // sign-equivalent quaternion keys. Endpoints keep their stored values.
+        if (t > 0 && i1 !== i0) {
           _qb.fromArray(r.data, i1 * 4);
-          _qa.slerp(_qb, a); // three's slerp takes the short path across q/-q flips
+          const b = quaternionDot32(_qa, _qb) < 0 ? -a : a, weight = f32(1 - a);
+          _qa.set(
+            f32(f32(_qa.x * weight) + f32(_qb.x * b)),
+            f32(f32(_qa.y * weight) + f32(_qb.y * b)),
+            f32(f32(_qa.z * weight) + f32(_qb.z * b)),
+            f32(f32(_qa.w * weight) + f32(_qb.w * b)),
+          );
+          const lengthSquared = quaternionDot32(_qa, _qa);
+          if (lengthSquared >= f32(1e-4)) {
+            const inverseLength = f32(1 / Math.sqrt(lengthSquared));
+            _qa.set(f32(_qa.x * inverseLength), f32(_qa.y * inverseLength),
+              f32(_qa.z * inverseLength), f32(_qa.w * inverseLength));
+          }
         }
-        bone.quaternion.copy(_qa).normalize();
+        bone.quaternion.copy(_qa);
       }
+      // Preserve the full quaternion basis, including quantized endpoints
+      // whose squared length is slightly different from one.
+      bone.matrixAutoUpdate = false;
+      bone.matrix.compose(bone.position, bone.quaternion, bone.scale);
+      const correction = bone.quaternion.lengthSq() - 1;
+      const matrix = bone.matrix.elements;
+      matrix[0] += correction * bone.scale.x;
+      matrix[5] += correction * bone.scale.y;
+      matrix[10] += correction * bone.scale.z;
+      bone.matrixWorldNeedsUpdate = true;
     }
   }
 
-  private _vec(ch: Channel, i0: number, i1: number, a: number, target: THREE.Vector3, rest: THREE.Vector3): void {
+  private _vec(ch: Channel, i0: number, i1: number, a: number, target: THREE.Vector3, rest: THREE.Vector3, threshold?: number): void {
     if (ch.mode === 'absent') { target.copy(rest); return; }
     if (ch.mode === 'const') { target.set(ch.value[0], ch.value[1], ch.value[2]); return; }
     const d = ch.data, o0 = i0 * 3, o1 = i1 * 3;
+    const blend = (offset: number) => {
+      const first = d[o0 + offset], next = d[o1 + offset];
+      // Keep a collapsing axis on its earlier side until the next key.
+      if (threshold !== undefined && first > threshold && next <= threshold) return first;
+      return f32(f32(first * f32(1 - a)) + f32(next * a));
+    };
     target.set(
-      d[o0] + (d[o1] - d[o0]) * a,
-      d[o0 + 1] + (d[o1 + 1] - d[o0 + 1]) * a,
-      d[o0 + 2] + (d[o1 + 2] - d[o0 + 2]) * a);
+      blend(0), blend(1), blend(2));
   }
 }
 
@@ -274,9 +319,15 @@ export class PlaybackBar {
   sampler: ClipSampler | null;
   clipJson: any;
   playing: boolean;
-  loop: boolean;
+  private _loop = false;
+  get loop(): boolean { return this._loop; }
+  set loop(value: boolean) { this._loop = value; this.elapsedMs = this._t; }
   speed: number;
-  t: number;
+  private _t = 0;
+  // Continuous across loop boundaries, but reset by an explicit seek.
+  elapsedMs = 0;
+  get t(): number { return this._t; }
+  set t(value: number) { this._t = value; this.elapsedMs = value; }
   root: HTMLDivElement;
   select: HTMLSelectElement;
   sortSel: HTMLSelectElement;
@@ -503,10 +554,11 @@ export class PlaybackBar {
   // called from the Scene3D tick loop
   tick(dt: number): void {
     if (!this.sampler || !this.playing) return;
-    this.t += dt * this.speed;
-    if (this.t > this.sampler.duration) {
-      if (this.loop) this.t = this.sampler.duration > 0 ? this.t % this.sampler.duration : 0;
-      else { this.t = this.sampler.duration; this.pause(); }
+    this.elapsedMs += dt * this.speed;
+    this._t = clipPhase(this.elapsedMs, this.sampler.duration, this.loop);
+    if (!this.loop && this.elapsedMs > this.sampler.duration) {
+      this.elapsedMs = this.sampler.duration;
+      this.pause();
     }
     this.applyPose();
   }

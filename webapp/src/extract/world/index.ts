@@ -19,7 +19,7 @@ import { deriveMapRoomRecords } from '../maps/records.js';
 import { decodeMapAnnotationTable } from '../maps/bindings.js';
 import { validateMapDecodeData } from '../maps/decode-data.js';
 import { deriveRoomMetadata } from './room-metadata.js';
-import {loadPlacementData} from './placement.js';
+import {loadPlacementData,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
 import { replayGraph } from './replay.js';
 import { decodePool } from './value-pool.js';
 import { decodeObject, makeSlabReader } from '../bundles.js';
@@ -40,7 +40,7 @@ import {objectDescriptionReader} from './object-descriptors.js';
 import {annotateObjectCatalog,appendObjectMeshNames} from './object-names.js';
 import { inferMeshSlots, type RigSkeleton } from './mesh-slots.js';
 import * as effectsMod from './effects.js';
-import { decodeSkeleton, restWorldTranslations } from '../skeleton.js';
+import { decodeSkeleton, restWorldMatrices } from '../skeleton.js';
 
 
 // default JSON fetch for world data files (same contract as profile.js):
@@ -295,6 +295,7 @@ export async function extractWorld({
   };
   const ctx = createShardContext({
     rows,
+    symbols: dt.symbols,
     pool: pool.values,
     meshDir: dt.meshDir,
     texMeta,
@@ -457,6 +458,7 @@ export async function extractWorld({
   // The bone PARENTS come along for the ride: the body-slot inference below
   // walks them to give an unlabelled bone its nearest labelled ancestor's slot.
   const rigBoneTranslations = new Map<number, number[][]>();
+  const rigWorldMatrices = new Map<number, number[][]>();
   const rigSkeletons = new Map<number, RigSkeleton>();
   if (files[6] && frames[6]) {
     const rigIds = new Set<number>();
@@ -470,7 +472,9 @@ export async function extractWorld({
           try {
             const dec = decodeObject(6, ab6.subarray(e.offset, e.offset + e.length));
             const { bones } = decodeSkeleton(dec, { i: rigId });
-            const rest = restWorldTranslations(bones);
+            const matrices = restWorldMatrices(bones);
+            const rest = matrices.map(m => [m[12], m[13], m[14]]);
+            rigWorldMatrices.set(rigId, matrices);
             rigBoneTranslations.set(rigId, rest);
             rigSkeletons.set(rigId, { parents: bones.map((b) => b.parent), rest });
           } catch { /* malformed skeleton: this rig stays unresolved */ }
@@ -478,6 +482,9 @@ export async function extractWorld({
       } catch { /* bundle 6 unreadable: every rig stays unresolved */ }
     }
   }
+  const defaultAppearances=decodeDefaultAppearances(placementData,ab0,profile,pool.values,dt.symbols,rows.length);
+  const appearanceCandidates=createAppearanceCandidateReader(placementData,rows,ab0,profile,pool.values,dt.symbols);
+  const effectMotion=createEffectMotionReader(placementData,rows,ab0,profile,pool.values,dt.symbols);
   try {
     const effects = effectsMod.extractWorldEffects(rows, pool.values, ab0, profile, {
       charset: dt.charset, symbols: dt.symbols, strings: poolStrings, poolRegistryRefs,
@@ -487,10 +494,24 @@ export async function extractWorld({
       spawnActors: spawnActorsBySlot,
       meshSkeletonRef: (meshId) => (dt.meshDir[meshId]?.sref ?? 0),
       roomPlacements: (occurrences) => ctx.graph.roomPlacements(occurrences as any) as any,
+      drawOccurrence: (hit) => ctx.graph.drawOccurrence(hit as any) as any,
+      staticAppearance: (slot) => defaultAppearances.get(rows[slot]?.runtime) ?? ctx.graph.staticAppearance(slot),
+      appearanceCandidates,
+      effectMotion: (controller,hit,roomId) => {
+        const motion=effectMotion(controller);
+        if(!motion||!placementData)return null;
+        const room=layersById.get(roomId),dimensions=ctx.graph.dimensions3i(hit.resource);
+        if(!room||!dimensions)return null;
+        const source=roomMod.deref(room.top.slice(room.table.length)[placementData.rooms.origin],room.table);
+        if(source.tag!==46||source.value?.length!==2||!source.value.every(Number.isInteger))return null;
+        const turn=(hit.rotationQuarters??0)&1;
+        return {...motion,footprint:[dimensions[turn],dimensions[turn^1]],origin:[source.value[0]|0,source.value[1]|0]};
+      },
       occurrenceAnchor: (hit) => ctx.graph.occurrenceAnchor(hit as any, {
         tileUnits: shardsMod.TILE_UNITS, meshForwardQuarterTurns: shardsMod.MESH_FORWARD_QUARTER_TURNS,
       }),
       rigBoneTranslations,
+      rigWorldMatrices,
       bail, onStep: (d, t) => step('effects', d, t),
     });
     await sink.derivedPut(versionId, 'world:effects', effects);
@@ -503,16 +524,24 @@ export async function extractWorld({
   // ---- door-graph world placement, calibrated by the jigsaw connectors ------
   step('stitch', 0, 1);
   const placement = stitchMod.stitchWorld(rooms, connectorTiles.size ? connectorTiles : null);
+  const authoredPositions = new Map<number, [number, number]>();
+  for (const room of rooms) {
+    const layers = layersById.get(room.idx);
+    const position = layers && roomMod.roomWorldPosition(layers.top, roomMetadata.get(room.idx)?.mapPosition);
+    if (position) authoredPositions.set(room.idx, position);
+  }
+  const worldPositions = stitchMod.resolveRoomPositions(placement.positions, authoredPositions);
   step('stitch', 1, 1);
   for (const entry of shardsMeta) {
     // per-room ambience rides the index record, next to the room's own name
     const ambience = ambienceByRoom.get(entry.id);
     if (ambience) entry.ambience = ambience;
-    const pos = placement.positions.get(entry.id) || null;
+    const pos = worldPositions.get(entry.id) || null;
     entry.world = {
       x: pos ? pos[0] : null,
       y: pos ? pos[1] : null,
       plane: placement.planes.get(entry.id) ?? 0,
+      source: !pos ? null : authoredPositions.has(entry.id) ? 'authored' : 'doors',
     };
   }
   // Cross-build name fill: still-unnamed rooms take the name of the reference
@@ -581,7 +610,7 @@ export async function extractWorld({
   step('package', 0, 1);
   const structuralGraph = new graphMod.AssetGraph(rows, pool.values, {
     meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
-  });
+  }, { bytes: ab0, profile });
   const occurrenceGroups: [number, any][] = [];
   for (const roomId of layersById.keys()) {
     // same deterministic occupancy the shard loop already computed (read-only)

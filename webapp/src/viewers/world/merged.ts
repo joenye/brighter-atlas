@@ -145,6 +145,7 @@ gl_FragColor.rgb *= mix( vec3( 1.0 ),
 /** Bucket classification shared by the bake and the session-edit re-bake. */
 export interface MergedBucketClass {
   materialToken: string;
+  depthRank: number;
   renderTexture: number;
   flatCategory: string | null;
   alpha: boolean;
@@ -174,6 +175,7 @@ export interface MergedBucketDef {
   cellX: number;
   cellY: number;
   materialToken: string;
+  depthRank: number;
   renderTexture: number;
   flatCategory: string | null;
   alpha: boolean;
@@ -399,7 +401,7 @@ export class MergedWorld {
     textures: WorldTextureSet | null,
     parameterMap: THREE.Texture | null,
   ): THREE.MeshStandardMaterial {
-    const cacheKey = `${bucket.materialToken}|a${bucket.alpha ? 1 : 0}`;
+    const cacheKey = `${bucket.materialToken}|a${bucket.alpha ? 1 : 0}|d${bucket.depthRank}`;
     let material = this._materialCache.get(cacheKey);
     if (material) return material;
     if (bucket.renderTexture < 0) {
@@ -425,6 +427,9 @@ export class MergedWorld {
       (material as any).brighterMergedParameterMap = parameterMap;
       this._applyMergedProgram(material, { colors: true });
     }
+    material.polygonOffset = bucket.depthRank > 0;
+    material.polygonOffsetFactor = 0;
+    material.polygonOffsetUnits = bucket.depthRank;
     material.name = `merged-${cacheKey}`;
     this._materialCache.set(cacheKey, material);
     return material;
@@ -521,6 +526,7 @@ export class MergedWorld {
       | (fullTint ? 16 : 0);
     return {
       materialToken,
+      depthRank: Number(exact.depthRank) || 0,
       renderTexture: textured ? renderTexture : -1,
       flatCategory: textured ? null : exact.category,
       alpha,
@@ -536,7 +542,7 @@ export class MergedWorld {
   bucketKeyFor(cellX: number, cellY: number, classified: MergedBucketClass): string {
     return `${cellX},${cellY}|${classified.materialToken}`
       + `|a${classified.alpha ? 1 : 0}|g${classified.tangent ? 1 : 0}`
-      + `|w${classified.water ? 1 : 0}`;
+      + `|w${classified.water ? 1 : 0}|d${classified.depthRank}`;
   }
 
   /** The world cell a room was harvested into (rooms map to exactly one). */
@@ -650,6 +656,7 @@ export class MergedWorld {
             cellX,
             cellY,
             materialToken: classified.materialToken,
+            depthRank: classified.depthRank,
             renderTexture: classified.renderTexture,
             flatCategory: classified.flatCategory,
             alpha: classified.alpha,
@@ -827,8 +834,8 @@ export class MergedWorld {
         }
         recolors.fill(item.palette, vertexBase, vertexBase + vertsPerInstance);
 
-        // Winding is copied verbatim: a negative-determinant local matrix
-        // flips screen winding identically in the per-room instanced path.
+        // Winding is copied verbatim: total placement reflection is already
+        // baked into the source geometry by the shared room batching path.
         for (let i = 0; i < indicesPerInstance; i++) {
           indices[indexBase + i] = vertexBase + sourceIndex[i];
         }

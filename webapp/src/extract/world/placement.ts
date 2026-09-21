@@ -8,6 +8,9 @@ import type {RegistryRow} from './graph.js';
 import type {FillRow} from './replay.js';
 import type {FetchJson, WorldProfile} from './profile.js';
 import type {RoomRowRef, SpawnRecord} from './spawns.js';
+import {PoolDecoder} from './value-pool.js';
+import {readAppearanceControllers} from './default-appearance.js';
+import type {EffectMotion} from './effect-motion.js';
 
 export interface PlacementDecodeData {
   kind: 'brighter-atlas-placement-decode';
@@ -15,6 +18,12 @@ export interface PlacementDecodeData {
   bundle0_raw_sha256: string;
   rooms: {fieldCount:number; width:number; height:number; origin:number; words:number; links:number};
   actors: {parent:number};
+  defaultAppearances?: {runtime:number; start:number; end:number}[];
+  appearanceCandidates?: {runtime:number; fields:number[]}[];
+  effectMotion?: {
+    controllers: {runtime:number; field:number}[];
+    settings: {runtime:number; x:[number,number,number]; y:[number,number,number]}[];
+  };
 }
 export interface ActorHeight {height:number; z:number; room:number|null}
 
@@ -28,7 +37,106 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   const fields=['width','height','origin','words'].map(k=>data.rooms[k]);
   if(new Set(fields).size!==fields.length||fields.some(n=>n>=data.rooms.fieldCount))
     throw Error('invalid room placement fields');
+  if(data.defaultAppearances!==undefined){
+    const values=data.defaultAppearances;
+    if(!Array.isArray(values)||values.length>65536||values.some(v=>!v||!integer(v.runtime)
+      ||!Number.isSafeInteger(v.start)||!Number.isSafeInteger(v.end)||v.start<0||v.end<=v.start
+      ||v.end-v.start>65536)||new Set(values.map(v=>v.runtime)).size!==values.length)
+      throw Error('invalid default appearance bindings');
+  }
+  if(data.appearanceCandidates!==undefined){
+    const values=data.appearanceCandidates;
+    if(!Array.isArray(values)||values.length>65536||values.some(v=>!v||!integer(v.runtime)
+      ||!Array.isArray(v.fields)||!v.fields.length||v.fields.length>65536
+      ||!v.fields.every(integer)||new Set(v.fields).size!==v.fields.length)
+      ||new Set(values.map(v=>v.runtime)).size!==values.length)
+      throw Error('invalid appearance candidate bindings');
+  }
+  if(data.effectMotion!==undefined){
+    const {controllers,settings}=data.effectMotion??{};
+    const unique=(values:any)=>Array.isArray(values)&&values.length<=65536
+      &&values.every(v=>v&&integer(v.runtime))&&new Set(values.map(v=>v.runtime)).size===values.length;
+    if(!unique(controllers)||!unique(settings)||controllers.some((v:any)=>!integer(v.field))
+      ||settings.some((v:any)=>![v.x,v.y].every(a=>Array.isArray(a)&&a.length===3&&a.every(integer))
+        ||new Set([...v.x,...v.y]).size!==6))throw Error('invalid effect motion bindings');
+  }
   return data;
+}
+
+export function createEffectMotionReader(data:PlacementDecodeData|null,rows:RegistryRow[],
+  bytes:Uint8Array,profile:WorldProfile,pool:any[],symbols:string[]):(slot:number)=>EffectMotion|null {
+  if(!data?.effectMotion)return ()=>null;
+  validatePlacementData(data,profile.bundle0?.raw_sha256??'');
+  const controllers=new Map(data.effectMotion.controllers.map(v=>[v.runtime,v.field]));
+  const settings=new Map(data.effectMotion.settings.map(v=>[v.runtime,v]));
+  const decode=makeRegistryRowDecoder(rows as FillRow[],bytes,profile);
+  const cache=new Map<number,EffectMotion|null>();
+  return slot=>{
+    if(cache.has(slot))return cache.get(slot)!;
+    const op=controllers.get(rows[slot]?.runtime);
+    if(op===undefined)return null;
+    const field=decode(slot)?.find(f=>f.op===op);
+    const ref=field?.kind==='G'?resolveValue(pool,field.node):null;
+    if(ref?.tag===15&&symbols[ref.value]==='$none'){cache.set(slot,null);return null;}
+    if(ref?.tag!==38||!rows[ref.value])throw Error('invalid effect motion reference');
+    const binding=settings.get(rows[ref.value].runtime);
+    if(!binding)return null;
+    const fields=decode(ref.value);
+    const axis=(ops:[number,number,number])=>{
+      const values=ops.map(op=>{
+        const f=fields?.find(v=>v.op===op),n=f?.kind==='G'?resolveValue(pool,f.node):null;
+        if(n?.tag!==11||n.value?.length!==1||!Number.isFinite(n.value[0]))throw Error('invalid effect motion value');
+        return n.value[0] as number;
+      });
+      return {amplitude:values[0],spatialFrequency:values[1],temporalFrequency:values[2]};
+    };
+    const motion={x:axis(binding.x),y:axis(binding.y)};cache.set(slot,motion);return motion;
+  };
+}
+
+// A bound on possible selections can exclude unrelated actions without
+// declaring which conditional state is active.
+export function createAppearanceCandidateReader(data:PlacementDecodeData|null,rows:RegistryRow[],
+  bytes:Uint8Array,profile:WorldProfile,pool:any[],symbols:string[]):(slot:number)=>number[]|null {
+  if(!data)return ()=>null;
+  validatePlacementData(data,profile.bundle0?.raw_sha256??'');
+  const bindings=new Map((data.appearanceCandidates??[]).map(v=>[v.runtime,v.fields]));
+  const decode=makeRegistryRowDecoder(rows as FillRow[],bytes,profile);
+  const cache=new Map<number,number[]>();
+  return slot=>{
+    const fields=bindings.get(rows[slot]?.runtime);
+    if(!fields)return null;
+    if(cache.has(slot))return cache.get(slot)!;
+    const source=decode(slot),controllers=new Set<number>();
+    for(const op of fields){
+      const field=source?.find(f=>f.op===op);
+      const values=field?.kind==='G'
+        ?readAppearanceControllers(field.node,n=>resolveValue(pool,n),i=>symbols[i]):null;
+      if(!values||values.some(id=>id>=rows.length))throw Error('invalid appearance candidate source value');
+      for(const id of values)controllers.add(id);
+    }
+    const result=[...controllers];cache.set(slot,result);return result;
+  };
+}
+
+// Per-build bindings identify source values for the authored default state.
+// Controller references are always decoded from the supplied game files.
+export function decodeDefaultAppearances(data:PlacementDecodeData|null,bytes:Uint8Array,
+  profile:WorldProfile,pool:any[],symbols:string[],rowCount:number):Map<number,{controllers:number[]}> {
+  const result=new Map<number,{controllers:number[]}>();
+  if(!data)return result;
+  validatePlacementData(data,profile.bundle0?.raw_sha256??'');
+  const arities=(values:Record<string,number>)=>new Map(Object.entries(values).map(([k,v])=>[+k,v]));
+  for(const binding of data.defaultAppearances??[]){
+    if(binding.end>bytes.length)throw Error('default appearance lies outside source data');
+    const decoder=new PoolDecoder(bytes.subarray(binding.start,binding.end),arities(profile.class_fields),arities(profile.tag6_fields));
+    const node=decoder.value();
+    const controllers=readAppearanceControllers(node,n=>resolveValue(pool,n),i=>symbols[i]);
+    if(decoder.pos!==binding.end-binding.start||!controllers||controllers.some(id=>id>=rowCount))
+      throw Error('invalid default appearance source value');
+    result.set(binding.runtime,{controllers});
+  }
+  return result;
 }
 
 export async function loadPlacementData(hash:string,get:FetchJson):Promise<PlacementDecodeData|null> {

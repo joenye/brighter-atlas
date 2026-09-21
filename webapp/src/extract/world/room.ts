@@ -148,6 +148,16 @@ export interface ParsedRoom {
   table: RoomNode[];
 }
 
+// Accept an authored world position only when the room and its structured
+// map metadata agree. Ambiguous or absent records keep the layout fallback.
+export function roomWorldPosition(top: RoomNode[], mapPosition?: readonly number[]): [number, number] | null {
+  if (!mapPosition || mapPosition.length !== 2 || !mapPosition.every(Number.isInteger)) return null;
+  const origins = top.filter(n => n.kind === 'lit' && n.tag === 0x2e && n.index === null);
+  if (origins.length !== 1 || !Array.isArray(origins[0].value) || origins[0].value.length !== 2) return null;
+  const xy = origins[0].value.map((n: number) => n | 0);
+  return xy.every((n: number, i: number) => n === mapPosition[i]) ? [xy[0], xy[1]] : null;
+}
+
 // -> { nTable, top, table }. table[k] resolves 0x00-k refs.
 export function parse(u8: Uint8Array): ParsedRoom {
   const { nTable, tokens } = tokenize(u8);

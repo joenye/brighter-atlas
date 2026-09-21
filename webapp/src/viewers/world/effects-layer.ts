@@ -42,6 +42,9 @@
 // the EffectInstanceEdit doc comment below for the per-field rationale.
 
 import * as THREE from '../../../vendor/three.module.js';
+import { restEffectBirthFrames, animatedEffectBirthFrames } from './effects-frames.js';
+import type { EffectBoneAnimation } from './effects-animation.js';
+import { proceduralEffectFrame } from './effects-motion.js';
 import {
   EmitterSim, EffectsClock,
 } from './effects-sim.js';
@@ -95,14 +98,10 @@ interface Anchor { m: Float32Array }
  * - hidden: drops every one of the instance's emitters from the fill loop
  *   entirely (zero particles, zero cost), never disposes anything.
  * - paused/clockOffset/frozenT: an independent pause + scrub riding the
- *   ONE shared EffectsClock rather than a second clock object per instance.
- *   The instance's effective sim time is `paused ? frozenT : clock.t +
- *   clockOffset`. A fully separate per-instance EffectsClock was not built:
- *   nothing here needs an independent speed multiplier, only an offset and a
- *   freeze, and both are cheap (two numbers + one branch in the hot fill
- *   loop). Pausing captures the CURRENT effective time into frozenT;
- *   resuming re-derives clockOffset so playback continues from exactly that
- *   point with no visible jump as the shared clock keeps advancing.
+ *   shared EffectsClock, or the selected mesh clip's continuous playback
+ *   time for an animated attachment. The instance's effective sim time is
+ *   `paused ? frozenT : baseTime + clockOffset`. Pausing captures the current
+ *   effective time; resuming re-derives the offset from that same time source.
  * All fields default to an exact no-op (see defaultEffectEdit) so an
  * instance nobody has touched behaves byte-identically to before this edit
  * surface existed -- load-bearing for the frozen-clock determinism gate.
@@ -140,6 +139,9 @@ export function effectInstanceKey(
 
 interface InstanceRec {
   key: string;
+  occurrence: number;
+  animation: EffectBoneAnimation | null;
+  configureAnimation: (animation: EffectBoneAnimation | null) => void;
   // the owning room's ambience colour, or null (see addRoom)
   modulation: number[] | null;
   system: EffectSystem;
@@ -159,20 +161,17 @@ interface InstanceRec {
   proxy: THREE.Mesh | null;
   // mean emitter spawn centre in the owner's local frame (see positionProxy)
   localCenter?: [number, number, number];
-  // boneOffset: the emitter's bound rig bone's rest-world translation
-  // (native units, in the SAME local frame as the emitter's own origin),
-  // added to the simulated position before `anchor` transforms it to world;
-  // [0,0,0] for a root-anchored (unrigged, or no bone attachment) emitter.
-  emitters: { sim: EmitterSim; batchKey: string; boneOffset: [number, number, number] }[];
+  movingCenter?: boolean;
+  emitters: { sim: EmitterSim; batchKey: string }[];
 }
 
 /** Mean of an instance's emitter spawn centres, in the owner's local frame.
  *  Emitters of one system are co-located by construction, so the mean is a
  *  fair representative of where the effect actually appears. */
-function meanSpawnCenter(rec: InstanceRec): [number, number, number] {
+function meanSpawnCenter(rec: InstanceRec, tick = 0): [number, number, number] {
   let x = 0; let y = 0; let z = 0; let n = 0;
   for (const { sim } of rec.emitters) {
-    const c = sim.shape?.center;
+    const c = sim.spawnCenter(tick);
     if (!Array.isArray(c) || c.length !== 3) continue;
     x += Number(c[0]) || 0; y += Number(c[1]) || 0; z += Number(c[2]) || 0; n++;
   }
@@ -196,7 +195,7 @@ interface Batch {
   draw: SpriteDraw;      // sub-image, native dimensions, channel layout
   blend: 'add' | 'mix';
   members: {
-    sim: EmitterSim; anchor: Anchor; boneOffset: [number, number, number];
+    sim: EmitterSim; anchor: Anchor; instance: InstanceRec;
     edit: EffectInstanceEdit;   // shared reference with the owning InstanceRec
     modulation: number[] | null;
   }[];
@@ -244,6 +243,7 @@ export class WorldEffectsLayer {
   private _anisotropy: number;
   private _systemsBySlot: Map<number, EffectSystem>;
   private _rooms = new Map<number, InstanceRec[]>();
+  private _animations = new Map<string, EffectBoneAnimation>();
   private _batches = new Map<string, Batch>();
   // texId -> draw metrics, recorded as emitters are added so a batch created
   // for that texId (and its texture) resolves the same sub-image and channel
@@ -338,6 +338,11 @@ export class WorldEffectsLayer {
     const seen = new Set<string>();
     for (const att of this.doc.attachments?.rooms || []) {
       if (Number(att.room) !== id) continue;
+      // A catalogue includes action effects as well as defaults. Keep its
+      // records inspectable, but do not instantiate known inactive entries.
+      // Check before deduplication so an inactive variant cannot shadow an
+      // active attachment of the same system.
+      if (att.default_active === false) continue;
       // controller variants repeat (occurrence, system) pairs: one instance each
       const key = `${att.occurrence}|${att.system}`;
       if (seen.has(key)) continue;
@@ -353,15 +358,11 @@ export class WorldEffectsLayer {
       if (system.triggered) continue;
       if (opts.loopOnly && !system.loop) continue;
       const cell = Array.isArray(att.cell) ? att.cell : [0, 0, 0];
-      // M_obj: EXACTLY the frame scene.ts places the owning mesh instance
-      // in (composePlacementMatrix, shared with scene.ts's own
-      // _placementMatrix so the two can never drift apart) -- owner-
-      // dimensions centre pivot, occ.z, Rz(occ.rot + meshForward), optional
-      // reflect, optional local matrix -- then the room's own display
-      // offset (merged all-rooms view) composed on top. `center`/
-      // `packedFlags`/`matrix` are absent on older docs (pre-v2
-      // extraction), in which case this degrades to the tile-centre pivot
-      // rotated by att.rot alone, same as the pre-v2 anchor.
+      // Static controller root, using the same owner-frame composition as
+      // scenery. New extractions leave matrix null: individual component
+      // transforms do not move the whole effect system. The room display
+      // offset is composed on top. Older documents retain their recorded
+      // matrix until re-extracted; missing centers use the tile center.
       const center = Array.isArray(att.center) ? att.center : [Number(cell[0]) + 0.5, Number(cell[1]) + 0.5];
       const packedFlags = Number(att.packedFlags) || 0;
       const localMatrix = Array.isArray(att.matrix) && att.matrix.length === 12
@@ -373,6 +374,9 @@ export class WorldEffectsLayer {
         packedFlags, localMatrix,
         tileUnits: this._tileUnits, layerUnits: this._layerUnits,
       });
+      const rigWorld = typeof att.rig === 'number' ? this.doc.rigs?.[String(att.rig)] : undefined;
+      const inverseOwner = _scratchObj.clone().invert().elements;
+      const motionPosition: [number, number] = [_scratchObj.elements[12], _scratchObj.elements[13]];
       _scratchObj.premultiply(_scratchOffset.makeTranslation(offset[0], offset[1], 0));
       const anchorOriginal = Float32Array.from(_scratchObj.elements);
       const anchor: Anchor = { m: Float32Array.from(anchorOriginal) };
@@ -382,7 +386,8 @@ export class WorldEffectsLayer {
         ? [Number(opts.modulation[0]), Number(opts.modulation[1]), Number(opts.modulation[2])]
         : null;
       const rec: InstanceRec = {
-        key: recKey, system, anchor, anchorOriginal, edit, proxy: null,
+        key: recKey, occurrence: Number(att.occurrence), animation: null, configureAnimation: () => {},
+        system, anchor, anchorOriginal, edit, proxy: null,
         modulation: mod, emitters: [],
       };
       // A persisted edit (surviving a prior instantiation of this SAME
@@ -390,23 +395,10 @@ export class WorldEffectsLayer {
       // `anchor.m` exactly the authored matrix, so an untouched instance
       // never runs the recompute at all.
       if (!isEffectEditNoop(edit)) this._applyAnchorEdit(rec);
-      // Every emitter of a system draws in its owning mesh instance's frame,
-      // with NO per-emitter offset.
-      //
-      // Emitters do carry an attachment field (doc `emitter.bone`), and it
-      // used to be resolved against the owning rig's rest-world bone
-      // translations and added here. That is wrong, and the way it fails is
-      // instructive: within ONE system the emitters that carry the field got
-      // shifted while their siblings stayed put, so a brazier's flame split
-      // into a correct part sitting in its bowl and a second part metres
-      // away. Authored effects are co-located by construction, so any rule
-      // that separates one system's emitters is refuted by that alone.
-      //
-      // The field is a "$additional_transform" slot, not a rig bone index,
-      // so indexing bone translations with it was reading an unrelated
-      // table. It stays decoded in the doc as provenance for whenever the
-      // additional-transform table itself is recovered; until then nothing
-      // consumes it, and every emitter anchors at the mesh root.
+      // Complete primary-rig rest frames affect birth points and directions
+      // separately. Rigged acceleration uses the common root frame. Alternate
+      // child rigs and older documents still need their own resolved frames.
+      const animationSetters: ((animation: EffectBoneAnimation | null) => void)[] = [];
       system.emitters.forEach((emitter, index) => {
         // An emitter with no material cannot be drawn: every one of the
         // game's particle pixel shaders samples a texture, so a material of
@@ -416,10 +408,40 @@ export class WorldEffectsLayer {
         // forager nodes and elsewhere, so they are skipped outright.
         if (!emitter.sprite?.images?.length) return;
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
+        // A static attachment can keep acceleration in world directions.
+        // Store it relative to the common owner so final drawing does not
+        // rotate it again. Rigged systems use their rig root independently.
+        if (att.rig === null && emitter.acceleration_frame?.world) {
+          const [x, y, z] = sim.accel, m = inverseOwner;
+          sim.accel = [m[0] * x + m[4] * y + m[8] * z,
+            m[1] * x + m[5] * y + m[9] * z, m[2] * x + m[6] * y + m[10] * z];
+        }
+        if (rigWorld && inverseOwner && system.rig_selection?.alternate === false && emitter.transform) {
+          const frames = restEffectBirthFrames(emitter.transform, rigWorld, inverseOwner);
+          if (frames) {
+            const binding = emitter.transform;
+            animationSetters.push(animation => {
+              if (animation) sim.setBirthFrameSampler(tick =>
+                animatedEffectBirthFrames(binding, animation.sample(tick), animation.inverseBinds, inverseOwner) || frames);
+              else sim.setBirthFrames(frames.position, frames.direction);
+            });
+            sim.setBirthFrames(frames.position, frames.direction);
+          }
+        }
+        if (att.rig === 'transform' && att.motion && system.rig_selection?.alternate === false
+          && emitter.transform?.primary === 'root' && emitter.transform.secondary === 'root') {
+          const motion = att.motion;
+          const origin: [number, number] = [-motion.origin[0] * this._tileUnits, -motion.origin[1] * this._tileUnits];
+          sim.setBirthFrameSampler(tick => {
+            const matrix = proceduralEffectFrame(motion, motionPosition, motion.footprint, Math.trunc(tick), origin);
+            return {position: matrix, direction: matrix};
+          });
+          rec.movingCenter = true;
+        }
         const texId = Number(emitter.sprite.images[0]);
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
         this._draws.set(texId, spriteDrawOf(emitter.sprite));
-        rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, boneOffset: [0, 0, 0] });
+        rec.emitters.push({ sim, batchKey: `${texId}|${blend}` });
       });
       // The pick target has to sit ON the particles, so it is built after the
       // emitters exist and placed at their mean spawn centre rather than at
@@ -428,20 +450,47 @@ export class WorldEffectsLayer {
       // or on a rooftop left the marker at ground level, usually buried
       // inside the owner's own geometry, so the effect could be seen but not
       // clicked.
-      rec.localCenter = meanSpawnCenter(rec);
+      rec.configureAnimation = animation => {
+        const accepted = animation?.rig === att.rig && animationSetters.length ? animation : null;
+        if (rec.animation === accepted) return;
+        rec.animation = accepted;
+        for (const set of animationSetters) set(accepted);
+        rec.movingCenter = !!accepted || att.rig === 'transform';
+        rec.localCenter = meanSpawnCenter(rec, this._instanceTime(rec));
+        if (rec.proxy) positionProxy(rec.proxy, rec);
+      };
+      rec.configureAnimation(this._animations.get(`${id}|${rec.occurrence}`) || null);
+      rec.localCenter = meanSpawnCenter(rec, this._instanceTime(rec));
       rec.proxy = this._createProxy(rec);
       this.root.add(rec.proxy);
       recs.push(rec);
     }
     this._rooms.set(id, recs);
     for (const rec of recs) {
-      for (const { sim, batchKey, boneOffset } of rec.emitters) {
+      for (const { sim, batchKey } of rec.emitters) {
         this._batchFor(batchKey).members.push({
-          sim, anchor: rec.anchor, boneOffset, edit: rec.edit, modulation: rec.modulation,
+          sim, anchor: rec.anchor, edit: rec.edit, modulation: rec.modulation, instance: rec,
         });
       }
     }
     this._rebalance();
+  }
+
+  /** Bind a selected clip to one occurrence. Retain it across room proximity
+   *  unload/reload; clearing the selection restores the authored rest frames. */
+  setOccurrenceAnimation(room: number, occurrence: number, animation: EffectBoneAnimation | null): void {
+    if (this._disposed) return;
+    const key = `${room}|${occurrence}`;
+    if (animation) this._animations.set(key, animation);
+    else this._animations.delete(key);
+    for (const rec of this._rooms.get(room) || []) {
+      if (rec.occurrence === occurrence) rec.configureAnimation(animation);
+    }
+  }
+
+  private _instanceTime(rec: InstanceRec): number {
+    return rec.edit.paused ? rec.edit.frozenT
+      : (rec.animation?.time() ?? this.clock.t) + rec.edit.clockOffset;
   }
 
   removeRoom(roomId: number): void {
@@ -645,8 +694,8 @@ export class WorldEffectsLayer {
     const edit = rec.edit;
     const on = !!paused;
     if (on !== edit.paused) {
-      if (on) edit.frozenT = this.clock.t + edit.clockOffset;
-      else edit.clockOffset = edit.frozenT - this.clock.t;
+      if (on) edit.frozenT = this._instanceTime(rec);
+      else edit.clockOffset = edit.frozenT - (rec.animation?.time() ?? this.clock.t);
       edit.paused = on;
     }
     return true;
@@ -708,6 +757,7 @@ export class WorldEffectsLayer {
       for (const rec of recs) rec.proxy?.removeFromParent();
     }
     this._rooms.clear();
+    this._animations.clear();
     for (const texture of this._textureCache.values()) texture.dispose();
     this._textureCache.clear();
     this._textureRefCount.clear();
@@ -970,11 +1020,15 @@ export class WorldEffectsLayer {
   }
 
   // Per-frame scratch fill: evaluate the closed form per alive particle and
-  // write sequentially into [0, alive). Positions are anchored (M_obj . bone
-  // offset, see the Anchor comment above) here on the CPU so one batch
-  // serves every instance.
+  // write sequentially into [0, alive). Positions receive their common owner
+  // frame here on the CPU so one batch serves every instance.
   private _fill(camera: THREE.Camera | null): void {
-    const T = this.clock.t;
+    for (const recs of this._rooms.values()) for (const rec of recs) {
+      if (!rec.movingCenter || !rec.proxy) continue;
+      const time = this._instanceTime(rec);
+      rec.localCenter = meanSpawnCenter(rec, time);
+      positionProxy(rec.proxy, rec);
+    }
     // Native -> display: the batch's own uSpriteSize supplies the sprite's
     // native dimensions, so the per-particle term is just the decoded scale
     // converted out of native units.
@@ -991,7 +1045,7 @@ export class WorldEffectsLayer {
       let idx = 0;
       const sortable = batch.blend === 'mix' && rootMatrix != null;
       for (const member of batch.members) {
-        const { sim, anchor, boneOffset, edit, modulation } = member;
+        const { sim, anchor, edit, modulation } = member;
         // The room's ambience, applied the way the game applies it: a
         // half-range colour whose rgb is DOUBLED, so 0.5 is neutral. Hoisted
         // out of the per-particle loop.
@@ -1000,26 +1054,25 @@ export class WorldEffectsLayer {
         const mb = modulation ? modulation[2] * 2 : 1;
         // Session-edit hook, exact no-op when untouched: a hidden instance
         // contributes nothing; otherwise the instance's own effective time
-        // (paused freeze or a running offset off the ONE shared clock,
+        // (paused freeze or an offset from ambient/selected-clip time,
         // see EffectInstanceEdit) stands in for the batch's shared T, and
         // its scale multiplier rides along with the decoded per-particle
         // scale. `edit.hidden` false / `paused` false / `clockOffset` 0 /
         // `scaleMult` 1 reduces this block byte-for-byte to the pre-edit
-        // behaviour (Tm === T, factor === 1), which is what keeps the
+        // behaviour for unanimated instances, which is what keeps the
         // frozen-clock determinism gate green for every instance nobody
         // touched.
         if (edit.hidden) continue;
-        const Tm = edit.paused ? edit.frozenT : T + edit.clockOffset;
+        const Tm = this._instanceTime(member.instance);
         const m = anchor.m;
-        const [bx, by, bz] = boneOffset;
         sim.ensure(Tm);
         sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll) => {
           if (idx >= cap) return;
-          // M_obj . (bone offset + simulated position), inlined rather than
+          // Owner frame applied after the independent birth transforms, rather than
           // a helper returning a tuple: no per-particle allocation, since
           // this loop runs thousands of times a frame across a merged room
           // set.
-          const lx = x + bx; const ly = y + by; const lz = z + bz;
+          const lx = x; const ly = y; const lz = z;
           const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
           const wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
           const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
