@@ -98,7 +98,7 @@ export const OCCURRENCE_COLUMNS = [
   'record', 'resource', 'secondary', 'x', 'y', 'z', 'entry_slot',
   'packed', 'rotation_quarters', 'packed_flags', 'individual', 'role',
   'anchor_x', 'anchor_y', 'anchor_kind',
-  'appearance_resource', 'appearance_packed_flags',
+  'appearance_resource', 'appearance_packed_flags', 'dynamic',
 ];
 export const PLACEMENT_COLUMNS = [
   'occurrence', 'mesh', 'material', 'texture', 'render_texture',
@@ -140,6 +140,8 @@ export const COORDINATE_SYSTEM = {
   effect_property_revision: 5,
   water_revision: 1,
   scenery_trim_revision: 1,
+  // 1: occurrences carry `dynamic` and placements a per-tile `part_colour`
+  draw_order_revision: 1,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,
   layer_units: LAYER_UNITS,
@@ -154,6 +156,7 @@ export const COORDINATE_SYSTEM = {
   occurrence_draw: 'bits 7..14 of packed_flags select the eight terrain/block face slots and bit 15 selects the component array, without changing their transforms; filtered parts remain recoverable from lossless source occurrences and catalog bindings',
   appearance: 'appearance_resource and appearance_packed_flags describe the archived draw substitution; resource/secondary/packed remain the original source. A negative appearance_resource means the client trims the draw. Replacement orientation is preserved, alignment selectors reset, and all draw slots enabled; anchor_x/y use the replacement owner.',
   local_matrix_game: 'row-major 3x4 affine, interned without TRS reduction',
+  draw_order: 'the game emits parts cell by cell (z descending, then y, then x, then entry_slot), each element in ascending part_index; static elements go to the layer of individual + 1 (layers ascending), dynamic ones (dynamic = 1) to one list drawn after every static group; parts sharing a material and texture draw as one group, groups in the order they first appear',
 };
 
 export const COLUMNS = {
@@ -253,6 +256,8 @@ export interface ShardContext {
   actorHeight: ReturnType<typeof createActorHeightReader>;
   tiles: TileDecodeData | null;
   recordType: (slot: number) => number | null;
+  /** 1 when the element record is drawn through the scene's dynamic list. */
+  dynamic: (slot: number) => number;
 }
 
 const inc = (counts: Record<string, number>, key: string, n = 1) => {
@@ -433,6 +438,7 @@ export function occurrenceRows(
       ROLE[role(hit)],
       anchorX, anchorY, anchorKind,
       draw?.resource ?? -1, draw?.packedFlags ?? 0,
+      ctx.dynamic(hit.resource),
     ];
   });
   const audit: Record<string, number> = {};
@@ -626,6 +632,15 @@ export function createShardContext({
       const typeValue = placement?.tiles?.variation.typeValue;
       const value = typeValue === undefined ? undefined : objects?.[slot]?.values?.[typeValue];
       return Number.isInteger(value) ? value! : null;
+    },
+    // An element whose record sets the scene's dynamic field (a boolean)
+    // draws after every static group (draw_order in the column notes).
+    dynamic: (slot: number) => {
+      const op = placement?.render?.scene?.dynamicField;
+      if (op === undefined || !(slot >= 0)) return 0;
+      const field = graph.fields(slot).get(op);
+      const node = field && field.elements.length === 1 ? graph.deref(field.elements[0]) : null;
+      return node?.tag === 0x0c ? 1 : 0;
     },
     roomIds,
     rostersByRoom,

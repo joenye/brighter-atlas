@@ -39,6 +39,9 @@ export interface RenderDecodeData {
   shadow: {size: number; lightViewOffset: number; normalOffsetTexels: number; borderTexels: number; marginTiles: number; layerHeight: number};
   ssao: {unit: number; radius: number; falloff: number; padDivisor: number; temporalBase: number; temporalDivisor: number; frameMs: number;
     programs: {mips: number[]; sao: number; blurH: number; blurV: number}; fullscreenVertex: number};
+  /** The element record field that sends an element through the scene's
+   *  dynamic list, drawn after every static group. */
+  scene?: {dynamicField: number};
   camera: {fov: number; near: number; far: number; pitch: number};
   vignette: {radius: number; overlayRadius: number; avatarFloor: [number, number, number, number]; avatarOffset: number};
   clock: {ticksPerSecond: number};
@@ -69,6 +72,7 @@ export function validRenderData(d: any): d is RenderDecodeData {
     || !['sky', 'ground', 'sun', 'vignette', 'height', 'floor'].every(s => index(e.slots?.[s]))
     || !['field', 'colour', 'intensity'].every(s => index(e.light?.[s])) || typeof e.avatarZ !== 'string'
     || !Array.isArray(e.overrides) || !e.overrides.every((o: any) => index(o?.roomRuntime) && index(o?.presetOffset))) return false;
+  if (d.scene !== undefined && !index(d.scene?.dynamicField)) return false;
   const s = d.shadow, a = d.ssao, c = d.camera, v = d.vignette;
   return !!d.lighting && index(d.lighting.directionOffset) && finite(d.lighting.gamma) && finite(d.lighting.fade)
     && !!s && [s.size, s.lightViewOffset, s.normalOffsetTexels, s.borderTexels, s.marginTiles, s.layerHeight].every(index)

@@ -14,6 +14,7 @@ import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
 import type { AppStore } from '../../store.js';
 import type { GameRoomSource, GameBatchSource } from './game-frame.js';
+import { emissionKey } from './draw-order.js';
 
 export const WORLD_CATEGORIES: readonly string[] = Object.freeze([
   'terrain', 'models', 'spawns', 'components',
@@ -1235,6 +1236,7 @@ export class WorldScene {
     const batches: GameBatchSource[] = [];
     const matrix = new THREE.Matrix4();
     room.group.updateMatrix();
+    const oc = this.occurrenceColumns, pc = this.placementColumns;
     for (const batch of this._batchRows(room.shard)) {
       if (batch.category === 'spawns') continue;
       const waterInfo = water?.materials?.[String(batch.material)] ?? null;
@@ -1255,6 +1257,7 @@ export class WorldScene {
         mesh: Number(batch.mesh), material: Number(batch.material), renderTexture: Number(batch.renderTexture),
         payload, matrices, tints: batch.entries.map((entry) => this._partColour(room.shard, entry.row) ?? batch.recolors?.[0] ?? null),
         recolours: batch.entries.map((entry) => this._partTints(room.shard, entry.row)),
+        order: batch.entries.map((entry) => emissionKey(room.shard.occurrences[entry.row[pc.occurrence]], entry.row, oc, pc)),
         water: waterInfo ? { kind: waterInfo.kind, style: waterInfo.style, opacity: waterInfo.opacity, window: waterInfo.window } : null,
       });
     }

@@ -14,6 +14,7 @@ import { THREE } from '../three-common.js';
 import { GameShaderLibrary, putFloats, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
 import { bakeGameGeometry } from './game-geometry.js';
+import { drawGroups, type DrawGroup, type EmissionKey } from './draw-order.js';
 import { detectChains } from '../../texture-roles.js';
 import type { YConvention } from './dxbc-glsl.js';
 
@@ -44,6 +45,8 @@ export interface GameBatchSource {
   tints: (number[] | null)[];
   /** Per instance: the two recolour tints (half range RGBA), or null for neutral. */
   recolours?: (number[][] | null)[];
+  /** Per instance: where the game's scene build emits the part (draw-order.ts). */
+  order?: EmissionKey[];
   water: null | { kind: 'surface' | 'curtain'; style: number; opacity: number; window: [number, number] };
 }
 
@@ -236,16 +239,21 @@ export class GameFrame {
     this.room = room;
     this.draws = [];
     this.waterDraws = [];
-    for (const batch of room.batches) {
-      const draw = await this.buildDraw(batch).catch((error) => { console.warn('game shading: batch skipped', batch.mesh, batch.material, error); return null; });
+    for (const group of drawGroups(room.batches)) {
+      const draw = await this.buildDraw(group).catch((error) => {
+        console.warn('game shading: group skipped', group.batch.material, group.batch.renderTexture, error);
+        return null;
+      });
       if (!draw) continue;
-      (batch.water ? this.waterDraws : this.draws).push(draw);
+      (group.batch.water ? this.waterDraws : this.draws).push(draw);
     }
-    // Surfaces draw before the shoreline sides (see the overlay order note).
-    this.waterDraws.sort((a, b) => (a.water!.kind === b.water!.kind ? 0 : a.water!.kind === 'surface' ? -1 : 1));
   }
 
-  private async buildDraw(batch: GameBatchSource): Promise<Draw | null> {
+  private async buildDraw(group: DrawGroup<GameBatchSource>): Promise<Draw | null> {
+    const batch = group.batch;
+    const instances = group.parts.map(({ batch: b, index: k }) => ({
+      payload: b.payload, matrix: b.matrices[k], tint: b.tints[k], recolours: b.recolours?.[k] ?? null,
+    }));
     let programIndex: number | null;
     if (batch.water) {
       // key (skinned, 32-bit, vignette) = (false, false, true)
@@ -258,9 +266,7 @@ export class GameFrame {
     const srgbToLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
     const byte = (v: number) => Math.min(255, Math.max(0, Math.floor(f32(f32(v) * 255))));
     const geometry = bakeGameGeometry({
-      payload: batch.payload,
-      instances: batch.matrices.map((matrix, k) => ({ matrix, tint: batch.tints[k], recolours: batch.recolours?.[k] ?? null })),
-      elements: program.elements, attributes: program.translated.attributes,
+      instances, elements: program.elements, attributes: program.translated.attributes,
       specular: material?.specular ?? [0, 0, 0],
       opacity: batch.water ? batch.water.opacity : (material?.opacity ?? 1),
       grid: null, tileUnits: this.tileUnits,
@@ -277,8 +283,7 @@ export class GameFrame {
       if (depthIndex !== null) {
         const depthProgram = await this.shaders.program(depthIndex, 'clip');
         const depthGeometry = bakeGameGeometry({
-          payload: batch.payload, instances: batch.matrices.map((matrix, k) => ({ matrix, tint: batch.tints[k] })),
-          elements: depthProgram.elements, attributes: depthProgram.translated.attributes,
+          instances, elements: depthProgram.elements, attributes: depthProgram.translated.attributes,
           specular: material?.specular ?? [0, 0, 0], opacity: material?.opacity ?? 1,
           grid: null, tileUnits: this.tileUnits,
         });

@@ -56,6 +56,9 @@ export function tileColourAt(grid: TileColourGrid, x: number, y: number, tileUni
 }
 
 export interface BakeInstance {
+  /** This placement's mesh when it differs from the batch's (a draw group
+   *  spans the meshes of one material). */
+  payload?: any;
   /** Native-frame placement of the raw mesh (column-major 4x4). */
   matrix: THREE.Matrix4;
   /** The part colour (full range; its vertex colour is half of it), or null for neutral. */
@@ -65,7 +68,9 @@ export interface BakeInstance {
 }
 
 export interface BakeInputs {
-  payload: any;                         // mesh payload (positions, normals, uvs, tangents, indices)
+  /** Mesh payload (positions, normals, uvs, tangents, indices) of the
+   *  instances that carry none of their own. */
+  payload?: any;
   instances: BakeInstance[];
   elements: number[];                   // vertex shader element formats
   attributes: AttributeBinding[];       // the translated vertex shader's attributes
@@ -86,17 +91,33 @@ export interface BakeInputs {
 const quantise10 = (v: number) => Math.min(1023, Math.max(0, Math.round((v + 1) * 511)));
 
 /** Bake a batch into one geometry with the vertex shader's attribute layout. */
-export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry {
-  const { payload, instances, elements, attributes } = input;
+interface DecodedMesh {
+  positions: Float32Array; normals: Float32Array; uvs: Float32Array; tangents: Float32Array | null;
+  source: Uint16Array | Uint32Array; count: number;
+}
+
+function decodeMesh(payload: any): DecodedMesh {
   const positions = b64f32(payload.positions);
-  const normals = b64f32(payload.normals);
-  const uvs = b64f32(payload.uvs);
-  const tangents = payload.tangents ? b64f32(payload.tangents) : null;
-  const source = payload.idx_dtype === 'u32' ? b64u32(payload.indices) : b64u16(payload.indices);
-  const nv = positions.length / 3;
-  const total = nv * instances.length;
+  return {
+    positions, normals: b64f32(payload.normals), uvs: b64f32(payload.uvs),
+    tangents: payload.tangents ? b64f32(payload.tangents) : null,
+    source: payload.idx_dtype === 'u32' ? b64u32(payload.indices) : b64u16(payload.indices),
+    count: positions.length / 3,
+  };
+}
+
+export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry {
+  const { instances, elements, attributes } = input;
+  const decoded = new Map<any, DecodedMesh>();
+  const meshes = instances.map(({ payload = input.payload }) => {
+    let mesh = decoded.get(payload);
+    if (!mesh) decoded.set(payload, mesh = decodeMesh(payload));
+    return mesh;
+  });
+  const total = meshes.reduce((n, m) => n + m.count, 0);
+  const indices = meshes.reduce((n, m) => n + m.source.length, 0);
   const geometry = new THREE.BufferGeometry();
-  const index = total > 65535 ? new Uint32Array(source.length * instances.length) : new Uint16Array(source.length * instances.length);
+  const index = total > 65535 ? new Uint32Array(indices) : new Uint16Array(indices);
   // Elements are named FIELD_A, FIELD_B, ... in order; shaders may skip some.
   const byElement = elements.map((format, k) => ({
     format, name: attributes.find((a) => a.semantic === `FIELD_${String.fromCharCode(65 + k)}` && a.semanticIndex === 0)?.name,
@@ -132,14 +153,16 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry {
   const rotation = new THREE.Matrix3();
   const cell = [0, 0, 0, 0];
   const opacityByte = Math.trunc(f32(f32(input.opacity) * 255));
+  let first = 0, at = 0;
   for (let i = 0; i < instances.length; i++) {
     const { matrix, tint, recolours } = instances[i];
+    const { positions, normals, uvs, tangents, source, count: nv } = meshes[i];
     const tintBytes = [0, 1].map((k) => (recolours?.[k] ? packColour(recolours[k]) : neutral));
     rotation.setFromMatrix4(matrix);
     const mirrored = matrix.determinant() < 0;
     const base = tint ? [f32(tint[0] * 0.5), f32(tint[1] * 0.5), f32(tint[2] * 0.5)] : [0.5, 0.5, 0.5];
     for (let v = 0; v < nv; v++) {
-      const o = i * nv + v;
+      const o = first + v;
       p.fromArray(positions, v * 3).applyMatrix4(matrix);
       pos[o * 3] = p.x; pos[o * 3 + 1] = p.y; pos[o * 3 + 2] = p.z;
       n.fromArray(normals, v * 3).applyMatrix3(rotation).normalize();
@@ -163,11 +186,11 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry {
     }
     // Source triangles are clockwise; a mirrored placement reverses them.
     for (let k = 0; k < source.length; k += 3) {
-      const at = i * source.length + k, first = i * nv;
-      index[at] = first + source[k];
-      index[at + 1] = first + source[mirrored ? k + 2 : k + 1];
-      index[at + 2] = first + source[mirrored ? k + 1 : k + 2];
+      index[at + k] = first + source[k];
+      index[at + k + 1] = first + source[mirrored ? k + 2 : k + 1];
+      index[at + k + 2] = first + source[mirrored ? k + 1 : k + 2];
     }
+    first += nv; at += source.length;
   }
   geometry.setIndex(new THREE.BufferAttribute(index, 1));
   byElement.forEach(({ name }, k) => {
