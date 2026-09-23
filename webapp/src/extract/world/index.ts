@@ -19,6 +19,8 @@ import {createEffectFacingReader} from './effect-facing.js';
 import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
+import {readWorldWater, type WorldWater} from './water-materials.js';
+import {b64FromTyped} from '../b64.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
@@ -161,6 +163,14 @@ export async function extractWorld({
   // ---- (c) interned value pool ---------------------------------------------
   step('pool', 0, 1);
   const pool = decodePool(ab0, profile);
+  // Water materials resolved from the user's bundle through the optional
+  // per-build decode data; absent or unreadable data leaves water to the
+  // viewer's plain surfaces.
+  let worldWater: WorldWater | null = null;
+  try {
+    worldWater = readWorldWater(placementData?.water, rows,
+      effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any, pool.values);
+  } catch { worldWater = null; }
   step('pool', 1, 1);
   bail();
 
@@ -180,6 +190,9 @@ export async function extractWorld({
     ambience?: { level: string | null; colors: number[][] } | null;
   }[] = [];
   const layersById = new Map<number, any>();     // ab2 idx -> roomLayers() result (decodable rooms)
+  // ab2 idx -> the room's per-tile colour grid (its outer rectangle): the
+  // game tints the room's ground and water by it.
+  const colourGrids = new Map<number, {x0: number; y0: number; width: number; height: number; colours: number[][]}>();
   const contentHashes = new Map<number, string>(); // ab2 idx -> sha256/16 of decoded bytes
   step('rooms', 0, entries2.length);
   for (let i = 0; i < entries2.length; i++) {
@@ -195,6 +208,14 @@ export async function extractWorld({
       const layers = roomMod.roomLayers(parsed!, i);
       if (layers) layersById.set(i, layers);
       const [x0, y0, x1, y1] = minimap.innerRect;
+      const [ox0, oy0, ox1, oy1] = minimap.outerRect;
+      const colours = minimap.grid.elems!.map((e: any) => {
+        const c = roomMod.deref(e, parsed!.table);
+        return c?.tag === 0x15 && Array.isArray(c.value) && c.value.length === 4 ? c.value.map(Number) : null;
+      });
+      if (colours.every((c: any) => c)) {
+        colourGrids.set(i, {x0: ox0, y0: oy0, width: ox1 - ox0, height: oy1 - oy0, colours: colours as number[][]});
+      }
       rooms.push({
         idx: i,
         exits: roomMod.roomExits(parsed!),
@@ -378,6 +399,9 @@ export async function extractWorld({
       Object.assign(shard, {mapLabels: mapRecord.labels});
       Object.assign(entry, {mapAnnotations: mapRecord.labels.annotations.map(a => a.text)});
     }
+    // The room's tile colours tint all of its ground (and its water).
+    const grid = colourGrids.get(roomId);
+    if (grid) shard.colour_grid = encodeColourGrid(grid);
     putBatch.push([`world:room:${roomId}`, shard]);
     if (putBatch.length >= 32) await flushShards();
     // ordinal-free room content hash: the diff identity for this room, so
@@ -594,6 +618,7 @@ export async function extractWorld({
   // + paired door adjacency for the merged all-rooms view
   worldIndex.textures = Object.fromEntries([...texMeta].map(([id, meta]) => [id, meta]));
   worldIndex.links = placement.links;
+  if (worldWater) worldIndex.water = worldWater;
   bail();
 
   // ---- (g) portable system catalog through the existing validation seam -----
@@ -727,4 +752,19 @@ export async function extractWorld({
   step('package', 1, 1);
 
   return { attachedSystem, roomsCount, worldIndex };
+}
+
+// Per-tile colours as a palette plus one 16-bit index per cell (row-major
+// from the grid's minimum corner), base64 encoded.
+function encodeColourGrid(grid: {x0: number; y0: number; width: number; height: number; colours: number[][]}) {
+  const palette: number[][] = [];
+  const index = new Map<string, number>();
+  const cells = new Uint16Array(grid.colours.length);
+  grid.colours.forEach((c, k) => {
+    const key = c.join(',');
+    let at = index.get(key);
+    if (at === undefined) { at = palette.length; palette.push(c); index.set(key, at); }
+    cells[k] = at;
+  });
+  return {x0: grid.x0, y0: grid.y0, width: grid.width, height: grid.height, palette, cells: b64FromTyped(cells)};
 }

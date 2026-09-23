@@ -56,16 +56,18 @@ const pre040Extraction = (app: any) => engineOlderThan(app, 1);
 
 const NOTICES: Notice[] = [
   {
-    id: 'world-effects-5',
-    title: 'More faithful particle effects',
+    id: 'world-effects-water-1',
+    title: 'More faithful effects, water and ground',
     paras: [
       'Effects now follow the game much more closely. Fountains spray and spill water properly, waves splash along the shore as they come in, street lanterns glow, bank sparkles use each bank’s own colour, and many effects have corrected colours, speeds, sizes, spin and spray patterns.',
+      'Seas, rivers and pools now rise and fall with the waves, ripple and reflect the sky the way they do in the game, and the ground takes on each area’s own colours, so beaches blend from sand into the sea.',
       'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.',
     ],
     when: async (app: any) => {
       if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
       const index = await app.store.worldIndex();
-      return !!index && (index.coordinate_system?.effect_property_revision ?? 0) < 5;
+      const system = index?.coordinate_system;
+      return !!index && ((system?.effect_property_revision ?? 0) < 5 || (system?.water_revision ?? 0) < 1);
     },
   },
   {

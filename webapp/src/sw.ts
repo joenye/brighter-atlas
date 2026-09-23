@@ -104,7 +104,10 @@ async function rawObject(c: VersionCtx, n: number, i: number): Promise<Uint8Arra
   }
 }
 
-async function servePng(c: VersionCtx, i: number, k: number): Promise<Response> {
+// `rg`: a two-channel sub-image served as plain red/green with opaque alpha,
+// so data maps (the water ripple normals) survive browser image decoding
+// without any alpha premultiplication.
+async function servePng(c: VersionCtx, i: number, k: number, rg = false): Promise<Response> {
   const dt = await dirTable(c, 'datatable:texturedir');
   const { flags, n } = dt?.[i] ?? { flags: 0, n: 0 };
   const decoded = decodeObject(3, await rawObject(c, 3, i));
@@ -125,12 +128,19 @@ async function servePng(c: VersionCtx, i: number, k: number): Promise<Response> 
     const px = decodeSubImage(meta[k], decoded.subs[k]);
     ({ w, h } = px);
     pixels = px.rgba;
+    if (rg && meta[k].fmt === 0x24) {
+      for (let o = 0; o < pixels.length; o += 4) {
+        pixels[o + 1] = pixels[o + 3]; pixels[o + 2] = 0; pixels[o + 3] = 255;
+      }
+    } else if (rg) {
+      for (let o = 0; o < pixels.length; o += 4) { pixels[o + 2] = 0; pixels[o + 3] = 255; }
+    }
     // The material albedo PNG is the render-ready view used by every main
     // editor surface and GLB export. Recover the same packed-blue silhouette
     // as World3D while leaving the other raw parameter PNGs untouched.
     const decodedRgba: Record<number, any> = { [k]: pixels };
     const roles = resolveRoles({ entries: meta });
-    if (k === roles.albedo) {
+    if (!rg && k === roles.albedo) {
       for (const index of roles.parameters) {
         if (meta[index]?.w !== w || meta[index]?.h !== h) continue;
         decodedRgba[index] = decodeSubImage(meta[index], decoded.subs[index]).rgba;
@@ -157,7 +167,7 @@ async function serveWav(c: VersionCtx, i: number): Promise<Response> {
 
 sw.addEventListener('fetch', (event: any) => {
   const m = new URL(event.request.url).pathname.match(
-    /\/cs\/([0-9a-f]{16})\/(?:images\/(\d{5})_e(\d+)\.png|audio\/(\d{5})\.wav)$/);
+    /\/cs\/([0-9a-f]{16})\/(?:images\/(\d{5})_e(\d+)(_rg)?\.png|audio\/(\d{5})\.wav)$/);
   if (!m || event.request.method !== 'GET') return;   // not ours: passthrough
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
@@ -166,8 +176,8 @@ sw.addEventListener('fetch', (event: any) => {
     try {
       const c = await ctx(m[1]);
       const res = m[2] !== undefined
-        ? await servePng(c, parseInt(m[2], 10), parseInt(m[3], 10))
-        : await serveWav(c, parseInt(m[4], 10));
+        ? await servePng(c, parseInt(m[2], 10), parseInt(m[3], 10), m[4] === '_rg')
+        : await serveWav(c, parseInt(m[5], 10));
       // Respond immediately; persist the copy in the background (waitUntil,
       // called while the fetch event is still active). Racing puts for the
       // same URL write identical bytes, so last-write-wins is harmless.

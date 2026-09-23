@@ -43,6 +43,8 @@ import {
   collectRoomWaterTiles, buildWaterSheetGeometry, waterSheetMaterialFor,
   isWaterWallGeometry,
 } from './world/water.js';
+import { updateGameWaterLights } from './world/game-water.js';
+import { EffectsClock } from './world/effects-sim.js';
 import { MergedWorld } from './world/merged.js';
 import { createWorldHud, classifyGpu } from './world/hud.js';
 import {
@@ -468,6 +470,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const waterUniforms = createWaterUniforms();
   const sheetMaterialCache = new Map<any, any>();
   const roomWaterSheets = new Map<number, any[]>();     // room id -> [sheet meshes]
+  const waterClock = new EffectsClock(600);
+  let waterTicks = 0;
   const roomWaterCurtains = new Map<number, any[]>();   // room id -> [curtain meshes]
   let waterRegistry: any = null;
   // Ambient effects layer state, shared by both view modes (see the "ambient
@@ -884,8 +888,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       waterColor),
     range('wopacity', 'Opacity', 10, 100, 2, (v) => `${v}%`, applyWater));
 
+  // Builds whose data carries the game's water materials draw water with
+  // them (surfaces and shoreline curtains); older data keeps the sheets.
+  const gameWaterAvailable = () => !!world.index?.water;
   function applyWater(): void {
     const enabled = !!state.water;
+    if (gameWaterAvailable()) world.setGameWaterEnabled(enabled);
     const auto = state.wcolor === 'auto';
     waterColor.disabled = auto;
     const override = waterUniforms.sheetColorOverride.value;
@@ -915,6 +923,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   function applyRoomWater(room: any): void {
     const id = Number(room.id);
+    if (gameWaterAvailable()) { applyWater(); return; }
     if (!roomWaterCurtains.has(id)) {
       roomWaterCurtains.set(id, room.meshes.filter((mesh: any) => {
         const exact = mesh.userData.exact;
@@ -4446,6 +4455,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const removeTick = scene3d.addTick((dt: number) => {
     if (state.water) waterUniforms.waterTime.value = performance.now() / 1000;
     updateWaterSheetLights(waterUniforms, hemi, sun);
+    if (gameWaterAvailable()) {
+      // Water follows the effects clock (so waves and the splashes they time
+      // agree, and frame-stepped captures stay in step); without effects it
+      // keeps its own clock at the same tick rate.
+      if (effectsLayer) waterTicks = effectsLayer.clock.t;
+      else { waterClock.advance(dt || 16); waterTicks = waterClock.t; }
+      world.updateGameWater(waterTicks);
+      updateGameWaterLights(world.gameWater, hemi, sun, scene3d.camera, world.gameWater.uNativeFromWorld.value);
+    }
     if (preview?.active && preview.spinner) {
       preview.spinner.rotation.y += (dt || 16) * 0.0009;
       preview.renderer.render(preview.scene, preview.camera);

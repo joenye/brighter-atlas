@@ -5,6 +5,11 @@
 // (per texture: kind + albedo/normal/parameter SUB-IMAGE indices + alpha).
 
 import * as THREE from '../../../vendor/three.module.js';
+import {
+  createGameWaterShared, createStyleUniforms, updateStyleUniforms, createWaterGrid, createGameWaterMaterial,
+  applyRoomTint, bindRoomTint,
+  type GameWaterShared, type GameWaterStyleUniforms, type GameWaterGrid,
+} from './game-water.js';
 import { buildMeshGeometry } from '../mesh-geometry.js';
 import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
@@ -312,7 +317,10 @@ function cachedPromise<V>(
 function disposeRoomGroup(group: THREE.Group): void {
   group.traverse((object: any) => {
     if (object.isInstancedMesh) object.dispose();
+    // water materials and the tile-colour grid are per room
+    object.userData?.gameWater?.water?.dispose?.();
   });
+  group.userData.waterGrid?.texture.dispose();
   group.clear();
 }
 
@@ -426,6 +434,12 @@ export class WorldScene {
   _parameterPromises: Map<any, Promise<THREE.Texture | null>>;
   _materialPromises: Map<string, Promise<THREE.Material>>;
   _structuralAnchorCache: WeakMap<object, Map<number, any>>;
+  /** Uniforms shared by the game-water materials (lights, frames). */
+  gameWater: GameWaterShared;
+  /** Water drawn with the game's surface and curtain materials (else plain). */
+  gameWaterEnabled: boolean;
+  _waterStyles: Map<number, GameWaterStyleUniforms>;
+  _waterTexturePromises: Map<string, Promise<any>>;
   _collisionGeometry: THREE.BoxGeometry;
   _collisionMaterial: THREE.MeshBasicMaterial;
   // filled by init() from the world index
@@ -492,6 +506,10 @@ export class WorldScene {
     this._parameterPromises = new Map();
     this._materialPromises = new Map();
     this._structuralAnchorCache = new WeakMap();
+    this.gameWater = createGameWaterShared();
+    this.gameWaterEnabled = true;
+    this._waterStyles = new Map();
+    this._waterTexturePromises = new Map();
 
     this._collisionGeometry = new THREE.BoxGeometry(1, 1, 1);
     this._collisionMaterial = new THREE.MeshBasicMaterial({
@@ -841,8 +859,133 @@ export class WorldScene {
         material.dispose();
         throw new Error('WorldScene was disposed while loading a material');
       }
+      // Ground takes the room's tile colours (bound per room at draw time).
+      if (category === 'terrain') applyRoomTint(material);
       return material;
     });
+  }
+
+  /** Load every sub-image of a texture container, in container order. */
+  _waterSubImages(textureId: number, suffix: string): Promise<HTMLImageElement[]> {
+    return cachedPromise(this._waterTexturePromises, `subs:${textureId}:${suffix}`, async () => {
+      const subs = this.textureMeta(textureId)?.subs;
+      if (!Array.isArray(subs) || !subs.length) throw new Error(`texture ${textureId} lists no images`);
+      const loader = new THREE.ImageLoader();
+      return Promise.all(subs.map((_: any, k: number) =>
+        loader.loadAsync(this.store.url(`images/${pad5(textureId)}_e${k}${suffix}.png`))));
+    });
+  }
+
+  /** The style's ripple normal map with its authored mip chain. */
+  _waterRipples(textureId: number): Promise<THREE.Texture> {
+    return cachedPromise(this._waterTexturePromises, `ripples:${textureId}`, async () => {
+      const images = (await this._waterSubImages(textureId, '_rg')).slice().sort((a, b) => b.width - a.width);
+      const chain = images.filter((image, k) => k === 0 || image.width * 2 === images[k - 1].width);
+      const texture = new THREE.Texture(chain[0]);
+      texture.mipmaps = chain;
+      texture.generateMipmaps = false;
+      texture.flipY = false;
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.minFilter = THREE.LinearMipmapLinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.colorSpace = THREE.NoColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    });
+  }
+
+  /** The reflected sky: six faces per level, levels largest first. */
+  _waterSky(textureId: number): Promise<THREE.CubeTexture> {
+    return cachedPromise(this._waterTexturePromises, `sky:${textureId}`, async () => {
+      const images = await this._waterSubImages(textureId, '');
+      const sizes = [...new Set(images.map((image) => image.width))].sort((a, b) => b - a);
+      const levels = sizes.map((size) => images.filter((image) => image.width === size));
+      if (!levels.length || levels.some((faces) => faces.length !== 6)) throw new Error(`texture ${textureId} is not a cube`);
+      const texture = new THREE.CubeTexture(levels[0]);
+      texture.mipmaps = levels.slice(1).map((faces) => ({ image: faces })) as any;
+      texture.generateMipmaps = false;
+      texture.flipY = false;
+      texture.minFilter = THREE.LinearMipmapLinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    });
+  }
+
+  /** A curtain's banded texture, sampled in its own (unflipped) orientation. */
+  _waterBands(textureId: number): Promise<THREE.Texture> {
+    return cachedPromise(this._waterTexturePromises, `bands:${textureId}`, async () => {
+      const meta = this.textureMeta(textureId);
+      const images = await this._waterSubImages(textureId, '');
+      const albedo = meta?.albedo != null ? images[meta.albedo] : images[0];
+      const chain = [albedo];
+      for (;;) {
+        const next = images.find((image) => image.width * 2 === chain[chain.length - 1].width
+          && image.height * 2 === chain[chain.length - 1].height);
+        if (!next) break;
+        chain.push(next);
+      }
+      const texture = new THREE.Texture(chain[0]);
+      texture.mipmaps = chain;
+      texture.generateMipmaps = false;
+      texture.flipY = false;
+      texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.minFilter = THREE.LinearMipmapLinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    });
+  }
+
+  _waterStyle(index: number): GameWaterStyleUniforms {
+    let uniforms = this._waterStyles.get(index);
+    if (!uniforms) {
+      uniforms = createStyleUniforms(this.index.water.styles[index]);
+      this._waterStyles.set(index, uniforms);
+    }
+    return uniforms;
+  }
+
+  async _gameWaterMaterial(info: any, grid: GameWaterGrid, renderTexture: number): Promise<THREE.ShaderMaterial | null> {
+    const style = this.index?.water?.styles?.[info.style];
+    if (!style) return null;
+    // A curtain samples its own material's texture (the batch's render texture).
+    if (info.kind === 'curtain' && !(renderTexture >= 0)) return null;
+    const [ripples, sky, bands] = await Promise.all([
+      this._waterRipples(style.normal), this._waterSky(style.cube),
+      info.kind === 'curtain' ? this._waterBands(renderTexture) : null,
+    ]);
+    return createGameWaterMaterial(info, this._waterStyle(info.style), this.gameWater, grid,
+      { ripples, sky, bands }, this.tileUnits);
+  }
+
+  /** Advance the game water to `ticks` and mirror the view's frame. */
+  updateGameWater(ticks: number): void {
+    const water = this.index?.water;
+    if (!water) return;
+    this.root.updateMatrixWorld();
+    this.gameWater.uWorldFromNative.value.copy(this.root.matrixWorld);
+    this.gameWater.uNativeFromWorld.value.copy(this.root.matrixWorld).invert();
+    this.gameWater.uLevel.value.set(water.level, 0);
+    for (const [index, uniforms] of this._waterStyles) updateStyleUniforms(uniforms, water.styles[index], ticks);
+  }
+
+  /** Switch every loaded room between the game's water and plain surfaces. */
+  setGameWaterEnabled(enabled: boolean): void {
+    this.gameWaterEnabled = !!enabled;
+    for (const room of this.rooms.values()) {
+      for (const mesh of room.meshes) {
+        const water = mesh.userData.gameWater;
+        if (!water) continue;
+        mesh.material = this.gameWaterEnabled ? water.water : water.base;
+        const shadowed = !this.gameWaterEnabled && !mesh.userData.exact?.authoredEmpty;
+        mesh.castShadow = shadowed;
+        mesh.receiveShadow = shadowed;
+        this._applyMeshVisibility(mesh);
+      }
+    }
   }
 
   _structuralAnchors(shard: any): Map<number, any> {
@@ -1147,9 +1290,12 @@ export class WorldScene {
 
   _applyMeshVisibility(mesh: THREE.InstancedMesh): void {
     const exact = mesh.userData.exact;
+    // A water surface has no plain texture of its own (its material is
+    // authored empty): while the game's water draws it, it is always shown.
+    const water = !!mesh.userData.gameWater && this.gameWaterEnabled;
     mesh.visible = this._isZVisible(exact.z)
-      && (!exact.authoredEmpty || this.showAuthoredEmpty)
-      && (!exact.untextured || this.showUntextured);
+      && (!exact.authoredEmpty || this.showAuthoredEmpty || water)
+      && (!exact.untextured || this.showUntextured || water);
   }
 
   _buildCollision(shard: any): { group: THREE.Group; mesh: THREE.InstancedMesh | null } {
@@ -1231,6 +1377,28 @@ export class WorldScene {
     const batches = this._batchRows(shard);
     const matrix = new THREE.Matrix4();
     const created: THREE.InstancedMesh[] = [];
+    const roomOffset: [number, number] = [
+      (finite(worldRoom.x) + origin.x) * this.tileUnits,
+      (finite(worldRoom.y) + origin.y) * this.tileUnits,
+    ];
+    const waterMaterials = new Map<string, Promise<THREE.ShaderMaterial | null>>();
+    // The room's tile colours: they tint its ground and its water.
+    const waterGrid = createWaterGrid(shard.colour_grid, roomOffset);
+    if (waterGrid) group.userData.waterGrid = waterGrid;
+    const nativeFromWorld = new THREE.Matrix4();
+    const bindTint = (_renderer: any, _scene: any, _camera: any, _geometry: any, material: any) => {
+      if (!material?.userData?.roomTint) return;
+      this.root.updateMatrixWorld();
+      nativeFromWorld.copy(this.root.matrixWorld).invert();
+      bindRoomTint(material, waterGrid, nativeFromWorld, this.tileUnits);
+    };
+    const waterMaterialFor = (materialSlot: any, renderTexture: any): Promise<THREE.ShaderMaterial | null> => {
+      const info = this.index?.water?.materials?.[String(materialSlot)];
+      if (!info) return Promise.resolve(null);
+      if (!waterGrid) return Promise.resolve(null);
+      return cachedPromise(waterMaterials, `${materialSlot}:${renderTexture}`,
+        () => this._gameWaterMaterial(info, waterGrid!, Number(renderTexture)));
+    };
     try {
       await eachLimit(batches, this.assetConcurrency, async (batch) => {
         // Bail before requesting assets: after a cancel/dispose, hundreds of
@@ -1244,7 +1412,12 @@ export class WorldScene {
           ),
         ]);
         if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
-        const mesh = new THREE.InstancedMesh(geometry, material, batch.entries.length);
+        const waterMaterial = await waterMaterialFor(batch.material, batch.renderTexture).catch(() => null);
+        if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
+        const mesh = new THREE.InstancedMesh(geometry, waterMaterial && this.gameWaterEnabled ? waterMaterial : material,
+          batch.entries.length);
+        if (waterMaterial) mesh.userData.gameWater = { base: material, water: waterMaterial };
+        if (batch.category === 'terrain') mesh.onBeforeRender = bindTint;
         mesh.name = `world-${batch.category}-m${batch.mesh}-t${batch.renderTexture}-z${batch.z}`;
         mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
         for (let index = 0; index < batch.entries.length; index++) {
@@ -1257,8 +1430,10 @@ export class WorldScene {
         mesh.computeBoundingBox();
         mesh.computeBoundingSphere();
         const authoredEmpty = !!(batch.flags & this.flags.authoredEmpty);
-        mesh.castShadow = !authoredEmpty;
-        mesh.receiveShadow = !authoredEmpty;
+        // Water neither casts nor receives shadows while the game's water draws it.
+        const shadowed = !authoredEmpty && !(waterMaterial && this.gameWaterEnabled);
+        mesh.castShadow = shadowed;
+        mesh.receiveShadow = shadowed;
         mesh.userData.exact = {
           room: meta.id,
           category: batch.category,
