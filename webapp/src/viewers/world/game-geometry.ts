@@ -4,8 +4,8 @@
 // position (float3), normal and tangent (10:10:10:2 unorm, fed as the exact
 // k/1023 values the hardware would produce), uv (16-bit unorm), specular
 // bytes (uint) and vertex colour (8-bit unorm). The vertex colour is the
-// room bake's: half the placement tint times the room's tile colours
-// (bilinear, tile centres), alpha the material opacity, truncated to bytes.
+// room bake's: half the part colour (the placement tint), alpha the material
+// opacity, truncated to bytes.
 import { THREE } from '../three-common.js';
 import { b64f32, b64u16, b64u32 } from '../../store.js';
 import type { AttributeBinding } from './dxbc-glsl.js';
@@ -68,6 +68,8 @@ export interface BakeInputs {
   attributes: AttributeBinding[];       // the translated vertex shader's attributes
   specular: [number, number, number];
   opacity: number;
+  /** The area colour grid tints only the flat floor tiles the game lays
+   *  around the loaded area; block faces (ground and water) never take it. */
   grid: TileColourGrid | null;
   tileUnits: number;
   /** Water surfaces: the packed style colour bytes (their first colour element). */

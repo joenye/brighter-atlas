@@ -13,7 +13,7 @@
 import { THREE } from '../three-common.js';
 import { GameShaderLibrary, putFloats, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
-import { bakeGameGeometry, decodeTileColourGrid, type TileColourGrid } from './game-geometry.js';
+import { bakeGameGeometry } from './game-geometry.js';
 import type { YConvention } from './dxbc-glsl.js';
 
 export interface GameRenderIndex extends GameRenderTables {
@@ -189,7 +189,6 @@ export class GameFrame {
   private waterDraws: Draw[] = [];
   private textures = new Map<string, Promise<GameTexture | null>>();
   private room: GameRoomSource | null = null;
-  private grid: TileColourGrid | null = null;
   private targets: any = null;
   private ssaoFrame = 0;
   private ssaoPrevious = 0;
@@ -232,7 +231,6 @@ export class GameFrame {
       if (!this.passPrograms.has(index)) this.passPrograms.set(index, await this.shaders.program(index, 'clip'));
     }
     this.room = room;
-    this.grid = decodeTileColourGrid(room.grid);
     this.draws = [];
     this.waterDraws = [];
     for (const batch of room.batches) {
@@ -262,7 +260,7 @@ export class GameFrame {
       elements: program.elements, attributes: program.translated.attributes,
       specular: material?.specular ?? [0, 0, 0],
       opacity: batch.water ? batch.water.opacity : (material?.opacity ?? 1),
-      grid: batch.category === 'terrain' ? this.grid : null, tileUnits: this.tileUnits,
+      grid: null, tileUnits: this.tileUnits,
       style: style ? [byte(srgbToLinear(style.colour[0])), byte(srgbToLinear(style.colour[1])), byte(srgbToLinear(style.colour[2])), byte(style.colour[3])] : undefined,
       window: batch.water?.kind === 'curtain' ? [Math.round(batch.water.window[0] * 65535), Math.round(batch.water.window[1] * 65535)] : undefined,
     });
@@ -279,7 +277,7 @@ export class GameFrame {
           payload: batch.payload, instances: batch.matrices.map((matrix, k) => ({ matrix, tint: batch.tints[k] })),
           elements: depthProgram.elements, attributes: depthProgram.translated.attributes,
           specular: material?.specular ?? [0, 0, 0], opacity: material?.opacity ?? 1,
-          grid: batch.category === 'terrain' ? this.grid : null, tileUnits: this.tileUnits,
+          grid: null, tileUnits: this.tileUnits,
         });
         const depthGl = this.gl.compile(depthProgram.translated);
         // cutout depth programs discard by the parameter plane: bind it too

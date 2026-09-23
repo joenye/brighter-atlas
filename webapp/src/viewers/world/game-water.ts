@@ -9,7 +9,7 @@
 // ripple map perturb it per pixel. The colour is the reflected sky mixed
 // toward the style colour by the style's alpha, lit by the scene's sky,
 // ground and sun, encoded with a 2.2 power, then tinted per vertex by the
-// room's tile colours. Curtain: tops at or above the water level follow the
+// part's own colour. Curtain: tops at or above the water level follow the
 // same waves, and the banded texture's rows follow the moving height.
 //
 // Heights and positions are native units (z up); wave rates are per tick.
@@ -85,38 +85,6 @@ export function updateStyleUniforms(u: GameWaterStyleUniforms, style: WorldWater
   u.uWaveY.value.z = positiveMod(style.waves.rate[1] * ticks, TWO_PI);
 }
 
-/** The room's tile colours as a float texture plus the mapping from native
- *  room-local position to grid texels (tile centres). */
-export interface GameWaterGrid {
-  texture: THREE.DataTexture;
-  size: THREE.Vector2;
-  origin: THREE.Vector4;   // room offset xy (native), grid min corner zw (tiles)
-}
-
-export function createWaterGrid(encoded: any, roomOffset: [number, number]): GameWaterGrid | null {
-  if (!encoded || !Array.isArray(encoded.palette) || typeof encoded.cells !== 'string') return null;
-  const bytes = Uint8Array.from(atob(encoded.cells), (c) => c.charCodeAt(0));
-  const cells = new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 1);
-  const { width, height } = encoded;
-  if (!(width > 0 && height > 0) || cells.length !== width * height) return null;
-  const data = new Float32Array(width * height * 4);
-  for (let k = 0; k < cells.length; k++) {
-    const c = encoded.palette[cells[k]];
-    if (!c) return null;
-    data.set([c[0], c[1], c[2], c[3]], k * 4);
-  }
-  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
-  texture.minFilter = THREE.NearestFilter;
-  texture.magFilter = THREE.NearestFilter;
-  texture.generateMipmaps = false;
-  texture.needsUpdate = true;
-  return {
-    texture,
-    size: new THREE.Vector2(width, height),
-    origin: new THREE.Vector4(roomOffset[0], roomOffset[1], encoded.x0, encoded.y0),
-  };
-}
-
 const COMMON = /* glsl */`
 uniform mat4 uNativeFromWorld;
 uniform mat4 uWorldFromNative;
@@ -124,27 +92,15 @@ uniform vec4 uWaveX;
 uniform vec4 uWaveY;
 uniform vec2 uLevel;
 uniform float uStyleLevel;
-uniform sampler2D uGrid;
-uniform vec2 uGridSize;
-uniform vec4 uGridOrigin;
+uniform vec3 uTint;
 uniform float uOpacity;
 uniform float uTileUnits;
 
-// The room's tile colour at a native position: bilinear between tile
-// centres, clamped to the grid, then packed at half scale (as the game's
-// vertex colours are) and restored.
+// The part's colour as the game bakes it into the vertex: packed at half
+// scale (truncated), restored by the vertex shader. Block faces carry their
+// ground's colour only; the room's tile colours tint none of them.
 vec4 waterTint(vec3 p) {
-  vec2 g = (p.xy - uGridOrigin.xy) / uTileUnits - 0.5 - uGridOrigin.zw;
-  g = clamp(g, vec2(0.0), uGridSize - 1.0);
-  vec2 f = fract(g);
-  ivec2 a = ivec2(floor(g));
-  ivec2 b = ivec2(floor(g + 0.99999));
-  vec3 c00 = texelFetch(uGrid, ivec2(a.x, a.y), 0).rgb;
-  vec3 c10 = texelFetch(uGrid, ivec2(b.x, a.y), 0).rgb;
-  vec3 c01 = texelFetch(uGrid, ivec2(a.x, b.y), 0).rgb;
-  vec3 c11 = texelFetch(uGrid, ivec2(b.x, b.y), 0).rgb;
-  vec3 c = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
-  vec3 packed = floor(c * 0.5 * 255.0) / 255.0;
+  vec3 packed = floor(uTint * 0.5 * 255.0) / 255.0;
   return vec4(packed * 2.0, floor(uOpacity * 255.0) / 255.0);
 }
 
@@ -281,13 +237,11 @@ export interface GameWaterTextures {
 
 export function createGameWaterMaterial(
   info: WorldWaterMaterial, style: GameWaterStyleUniforms, shared: GameWaterShared,
-  grid: GameWaterGrid, textures: GameWaterTextures, tileUnits: number,
+  tint: number[] | null, textures: GameWaterTextures, tileUnits: number,
 ): THREE.ShaderMaterial {
   const uniforms: Record<string, any> = {
     ...shared, ...style,
-    uGrid: { value: grid.texture },
-    uGridSize: { value: grid.size },
-    uGridOrigin: { value: grid.origin },
+    uTint: { value: new THREE.Vector3(tint?.[0] ?? 1, tint?.[1] ?? 1, tint?.[2] ?? 1) },
     uOpacity: { value: info.opacity },
     uTileUnits: { value: tileUnits },
   };
@@ -307,12 +261,12 @@ export function createGameWaterMaterial(
   }));
 }
 
-/** A neutral tile colour (one half) as the game packs it at half scale and
- *  restores it: the tint that leaves a surface unchanged. */
+/** A neutral part colour (one half) as the game packs it at half scale and
+ *  restores it: the vertex colour that leaves a surface unchanged. */
 export const NEUTRAL_TINT = (2 * 63) / 255;
 
 /** Mirror the view's lights into the shared uniforms, in native space. The
- *  view's lights are calibrated for surfaces at a neutral tile tint; the
+ *  view's lights are calibrated for surfaces with a neutral vertex colour; the
  *  game's lights are brighter by the inverse tint raised to its 2.2 encoding
  *  power, so the water's own arithmetic stays unchanged. The 1/pi matches
  *  the energy the standard materials give the same lights. */
@@ -330,87 +284,5 @@ export function updateGameWaterLights(
 }
 
 
-
-// Room tile tint for the view's standard ground materials. The game
-// multiplies each baked vertex's final colour by the room's tile colour
-// (bilinear between tile centres, packed at half scale); the view's lights
-// are calibrated for a neutral tile, so the tint is taken relative to it.
-// Rooms share materials, so the grid is bound per draw (bindRoomTint).
-const ROOM_TINT_VERTEX_PARS = /* glsl */`
-uniform sampler2D uRoomGrid;
-uniform vec2 uRoomGridSize;
-uniform vec4 uRoomGridOrigin;
-uniform mat4 uRoomNativeFromWorld;
-uniform float uRoomTileUnits;
-uniform float uRoomTintOn;
-varying vec3 vRoomTint;
-vec3 roomTint(vec3 p) {
-  vec2 g = (p.xy - uRoomGridOrigin.xy) / uRoomTileUnits - 0.5 - uRoomGridOrigin.zw;
-  g = clamp(g, vec2(0.0), uRoomGridSize - 1.0);
-  vec2 f = fract(g);
-  ivec2 a = ivec2(floor(g));
-  ivec2 b = ivec2(floor(g + 0.99999));
-  vec3 c = mix(mix(texelFetch(uRoomGrid, a, 0).rgb, texelFetch(uRoomGrid, ivec2(b.x, a.y), 0).rgb, f.x),
-    mix(texelFetch(uRoomGrid, ivec2(a.x, b.y), 0).rgb, texelFetch(uRoomGrid, b, 0).rgb, f.x), f.y);
-  return floor(c * 0.5 * 255.0) / 255.0 * 2.0 / ${NEUTRAL_TINT.toFixed(9)};
-}
-`;
-const ROOM_TINT_VERTEX = /* glsl */`
-vec4 roomTintLocal = vec4(transformed, 1.0);
-#ifdef USE_INSTANCING
-  roomTintLocal = instanceMatrix * roomTintLocal;
-#endif
-vRoomTint = uRoomTintOn > 0.5 ? roomTint((uRoomNativeFromWorld * modelMatrix * roomTintLocal).xyz) : vec3(1.0);
-`;
-
-let blankGrid: THREE.DataTexture | null = null;
-
-export function applyRoomTint(material: THREE.Material): void {
-  const mat = material as any;
-  if (mat.userData.roomTint) return;
-  if (!blankGrid) {
-    blankGrid = new THREE.DataTexture(new Float32Array([0.5, 0.5, 0.5, 1]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
-    blankGrid.needsUpdate = true;
-  }
-  const uniforms = {
-    uRoomGrid: { value: blankGrid as THREE.Texture },
-    uRoomGridSize: { value: new THREE.Vector2(1, 1) },
-    uRoomGridOrigin: { value: new THREE.Vector4() },
-    uRoomNativeFromWorld: { value: new THREE.Matrix4() },
-    uRoomTileUnits: { value: 1024 },
-    uRoomTintOn: { value: 0 },
-  };
-  const previous = material.onBeforeCompile;
-  const previousKey = material.customProgramCacheKey;
-  material.onBeforeCompile = (shader: any, renderer: any) => {
-    previous.call(material, shader, renderer);
-    Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${ROOM_TINT_VERTEX_PARS}`)
-      .replace('#include <project_vertex>', `#include <project_vertex>\n${ROOM_TINT_VERTEX}`);
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vRoomTint;')
-      .replace('#include <colorspace_fragment>', '#include <colorspace_fragment>\ngl_FragColor.rgb *= vRoomTint;');
-  };
-  material.customProgramCacheKey = () => `${previousKey.call(material)}:room-tint-1`;
-  mat.userData.roomTint = uniforms;
-  material.needsUpdate = true;
-}
-
-/** Bind one room's grid to a tinted material just before its draw. */
-export function bindRoomTint(material: THREE.Material, grid: GameWaterGrid | null,
-  nativeFromWorld: THREE.Matrix4, tileUnits: number): void {
-  const u = (material as any).userData?.roomTint;
-  if (!u) return;
-  u.uRoomTintOn.value = grid ? 1 : 0;
-  if (grid) {
-    u.uRoomGrid.value = grid.texture;
-    u.uRoomGridSize.value.copy(grid.size);
-    u.uRoomGridOrigin.value.copy(grid.origin);
-  }
-  u.uRoomNativeFromWorld.value.copy(nativeFromWorld);
-  u.uRoomTileUnits.value = tileUnits;
-  (material as any).uniformsNeedUpdate = true;
-}
 
 export type { WorldWater };

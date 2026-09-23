@@ -6,9 +6,8 @@
 
 import * as THREE from '../../../vendor/three.module.js';
 import {
-  createGameWaterShared, createStyleUniforms, updateStyleUniforms, createWaterGrid, createGameWaterMaterial,
-  applyRoomTint, bindRoomTint,
-  type GameWaterShared, type GameWaterStyleUniforms, type GameWaterGrid,
+  createGameWaterShared, createStyleUniforms, updateStyleUniforms, createGameWaterMaterial,
+  type GameWaterShared, type GameWaterStyleUniforms,
 } from './game-water.js';
 import { buildMeshGeometry } from '../mesh-geometry.js';
 import { applyPackedRecolor } from '../../recolor.js';
@@ -321,7 +320,6 @@ function disposeRoomGroup(group: THREE.Group): void {
     // water materials and the tile-colour grid are per room
     object.userData?.gameWater?.water?.dispose?.();
   });
-  group.userData.waterGrid?.texture.dispose();
   group.clear();
 }
 
@@ -861,8 +859,6 @@ export class WorldScene {
         material.dispose();
         throw new Error('WorldScene was disposed while loading a material');
       }
-      // Ground takes the room's tile colours (bound per room at draw time).
-      if (category === 'terrain') applyRoomTint(material);
       return material;
     });
   }
@@ -950,7 +946,7 @@ export class WorldScene {
     return uniforms;
   }
 
-  async _gameWaterMaterial(info: any, grid: GameWaterGrid, renderTexture: number): Promise<THREE.ShaderMaterial | null> {
+  async _gameWaterMaterial(info: any, tint: number[] | null, renderTexture: number): Promise<THREE.ShaderMaterial | null> {
     const style = this.index?.water?.styles?.[info.style];
     if (!style) return null;
     // A curtain samples its own material's texture (the batch's render texture).
@@ -959,7 +955,7 @@ export class WorldScene {
       this._waterRipples(style.normal), this._waterSky(style.cube),
       info.kind === 'curtain' ? this._waterBands(renderTexture) : null,
     ]);
-    return createGameWaterMaterial(info, this._waterStyle(info.style), this.gameWater, grid,
+    return createGameWaterMaterial(info, this._waterStyle(info.style), this.gameWater, tint,
       { ripples, sky, bands }, this.tileUnits);
   }
 
@@ -1437,27 +1433,14 @@ export class WorldScene {
     const batches = this._batchRows(shard);
     const matrix = new THREE.Matrix4();
     const created: THREE.InstancedMesh[] = [];
-    const roomOffset: [number, number] = [
-      (finite(worldRoom.x) + origin.x) * this.tileUnits,
-      (finite(worldRoom.y) + origin.y) * this.tileUnits,
-    ];
     const waterMaterials = new Map<string, Promise<THREE.ShaderMaterial | null>>();
-    // The room's tile colours: they tint its ground and its water.
-    const waterGrid = createWaterGrid(shard.colour_grid, roomOffset);
-    if (waterGrid) group.userData.waterGrid = waterGrid;
-    const nativeFromWorld = new THREE.Matrix4();
-    const bindTint = (_renderer: any, _scene: any, _camera: any, _geometry: any, material: any) => {
-      if (!material?.userData?.roomTint) return;
-      this.root.updateMatrixWorld();
-      nativeFromWorld.copy(this.root.matrixWorld).invert();
-      bindRoomTint(material, waterGrid, nativeFromWorld, this.tileUnits);
-    };
-    const waterMaterialFor = (materialSlot: any, renderTexture: any): Promise<THREE.ShaderMaterial | null> => {
+    // Water faces carry their part colour (the placement's first recolour).
+    const waterMaterialFor = (materialSlot: any, renderTexture: any, recolors: any): Promise<THREE.ShaderMaterial | null> => {
       const info = this.index?.water?.materials?.[String(materialSlot)];
       if (!info) return Promise.resolve(null);
-      if (!waterGrid) return Promise.resolve(null);
-      return cachedPromise(waterMaterials, `${materialSlot}:${renderTexture}`,
-        () => this._gameWaterMaterial(info, waterGrid!, Number(renderTexture)));
+      const tint: number[] | null = Array.isArray(recolors?.[0]) ? recolors[0].slice(0, 3).map(Number) : null;
+      return cachedPromise(waterMaterials, `${materialSlot}:${renderTexture}:${tint ? tint.join(',') : 'neutral'}`,
+        () => this._gameWaterMaterial(info, tint, Number(renderTexture)));
     };
     try {
       await eachLimit(batches, this.assetConcurrency, async (batch) => {
@@ -1472,12 +1455,11 @@ export class WorldScene {
           ),
         ]);
         if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
-        const waterMaterial = await waterMaterialFor(batch.material, batch.renderTexture).catch(() => null);
+        const waterMaterial = await waterMaterialFor(batch.material, batch.renderTexture, batch.recolors).catch(() => null);
         if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
         const mesh = new THREE.InstancedMesh(geometry, waterMaterial && this.gameWaterEnabled ? waterMaterial : material,
           batch.entries.length);
         if (waterMaterial) mesh.userData.gameWater = { base: material, water: waterMaterial };
-        if (batch.category === 'terrain') mesh.onBeforeRender = bindTint;
         mesh.name = `world-${batch.category}-m${batch.mesh}-t${batch.renderTexture}-z${batch.z}`;
         mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
         for (let index = 0; index < batch.entries.length; index++) {

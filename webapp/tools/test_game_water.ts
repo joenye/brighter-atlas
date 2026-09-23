@@ -1,7 +1,7 @@
 // Game water: resolving water materials and styles through per-build field
 // bindings (link field, styles, textures, opacity, texture rectangle), the
-// per-frame layer and wave uniforms, the packed style colour and the room
-// tile-colour grid. Synthetic records only.
+// per-frame layer and wave uniforms, the packed style colour and the part
+// colour a water material carries. Synthetic records only.
 import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
@@ -70,15 +70,13 @@ try {
   ok(Math.abs(u.uWaveX.value.z-turn(0.004*t))<1e-9&&Math.abs(u.uWaveY.value.z-turn(0.007*t))<1e-9,'phases '+t);
  }
  ok(u.uWaveX.value.x===20&&u.uWaveY.value.y===0.0011&&u.uWaveX.value.w===0.01,'wave constants');
- // Room grid: palette plus 16-bit cells, origin from the room offset and rect.
- const cells=new Uint16Array([0,1,1,0,2,0]);
- const b64=Buffer.from(cells.buffer).toString('base64');
- (globalThis as any).atob??=(s:string)=>Buffer.from(s,'base64').toString('binary');
- const grid=T.W.createWaterGrid({x0:-10,y0:-10,width:3,height:2,palette:[[0.5,0.5,0.5,1],[0.26,0.39,0.39,1],[0.56,0.5,0.37,1]],cells:b64},[2048,-1024]);
- ok(grid&&grid.size.x===3&&grid.size.y===2&&grid.origin.x===2048&&grid.origin.w===-10,'grid shape');
- const d=grid.texture.image.data;
- ok(d[4]===Math.fround(0.26)&&d[16]===Math.fround(0.56)&&d[20]===0.5,'grid texels');
- ok(T.W.createWaterGrid({x0:0,y0:0,width:2,height:2,palette:[[1,1,1,1]],cells:b64},[0,0])===null,'size mismatch rejected');
+ // A water material carries its part colour (no room colour grid).
+ const shared=T.W.createGameWaterShared();
+ const surfaceInfo={kind:'surface',style:0,opacity:0.4,window:[0,1]};
+ const tinted=T.W.createGameWaterMaterial(surfaceInfo,u,shared,[0.494,0.596,0.643],{ripples:null,sky:null,bands:null},1024);
+ ok(Math.abs(tinted.uniforms.uTint.value.y-0.596)<1e-9&&!('uGrid' in tinted.uniforms),'part colour, no grid');
+ const neutral=T.W.createGameWaterMaterial(surfaceInfo,u,shared,null,{ripples:null,sky:null,bands:null},1024);
+ ok(neutral.uniforms.uTint.value.x===1&&neutral.uniforms.uTint.value.z===1,'neutral part colour');
  ok(Math.abs(T.W.NEUTRAL_TINT-126/255)<1e-12,'neutral tint');
- console.log(`game water: ${checks} binding, style, uniform and grid checks passed`);
+ console.log(`game water: ${checks} binding, style, uniform and colour checks passed`);
 }finally{await rm(tmp,{recursive:true,force:true});}
