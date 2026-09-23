@@ -32,7 +32,7 @@ import { deriveRoomMetadata, resolveValue } from './room-metadata.js';
 import {loadPlacementData,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
-import { decodePool } from './value-pool.js';
+import { decodePool, type PoolNode } from './value-pool.js';
 import { decodeObject, makeSlabReader } from '../bundles.js';
 import { hashObject } from '../hash.js';
 
@@ -196,6 +196,21 @@ export async function extractWorld({
   const colourGrids = new Map<number, {x0: number; y0: number; width: number; height: number; colours: number[][]}>();
   const contentHashes = new Map<number, string>(); // ab2 idx -> sha256/16 of decoded bytes
   const environmentSlots = new Map<number, number>(); // ab2 idx -> environment record slot
+  const environmentPresets = new Map<number, PoolNode>(); // ab2 idx -> inline environment preset
+  // An inline preset in pool form. The room drops the preset's boolean (a bare
+  // marker), so its values fill the slots the environment reads, in order.
+  const inlinePreset = (group: any, table: any[], slots: number[]): PoolNode | null => {
+    const node = (n: any): PoolNode | null => {
+      n = roomMod.deref(n, table);
+      if (n?.kind === 'lit') return { tag: n.tag, start: -1, value: n.tag === 0x0b ? [n.value] : n.value };
+      if (n?.kind === 'group') return { tag: 0x24, start: -1, class: n.cls, fields: n.elems.map(node) };
+      return null;
+    };
+    if (group.elems.length !== slots.length) return null;
+    const fields: PoolNode[] = [];   // the dropped boolean stays a hole
+    slots.forEach((slot, k) => { const value = node(group.elems[k]); if (value) fields[slot] = value; });
+    return { tag: 0x24, start: -1, class: group.cls, fields };
+  };
   step('rooms', 0, entries2.length);
   for (let i = 0; i < entries2.length; i++) {
     bail();
@@ -218,11 +233,17 @@ export async function extractWorld({
       if (colours.every((c: any) => c)) {
         colourGrids.set(i, {x0: ox0, y0: oy0, width: ox1 - ox0, height: oy1 - oy0, colours: colours as number[][]});
       }
-      // The room's scene environment (lights, vignette colour, height fade).
+      // The room's scene environment (lights, vignette colour, height fade):
+      // a record, or a preset held inline in the room.
       const envValue = placementData?.render?.environment.assetValue;
       if (envValue !== undefined) {
         const ref = roomMod.deref(parsed!.top.slice(parsed!.table.length)[envValue], parsed!.table);
         if (ref?.kind === 'lit' && ref.tag === 0x26 && Number.isInteger(ref.value)) environmentSlots.set(i, ref.value);
+        else if (ref?.kind === 'group' && ref.cls === placementData!.render!.environment.presetClass) {
+          const slots = [...new Set(Object.values(placementData!.render!.environment.slots))].sort((a, b) => a - b);
+          const preset = inlinePreset(ref, parsed!.table, slots);
+          if (preset) environmentPresets.set(i, preset);
+        }
       }
       rooms.push({
         idx: i,
@@ -635,11 +656,13 @@ export async function extractWorld({
     if (render) {
       const decode = effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any;
       const environments: Record<string, RenderEnvironment> = {};
-      for (const [roomId, slot] of environmentSlots) {
+      for (const roomId of new Set([...environmentSlots.keys(), ...environmentPresets.keys()])) {
+        const slot = environmentSlots.get(roomId) ?? -1;
         const owner = roomMetadata.get(roomId)?.owner;
         const override = render.environment.overrides.find(o => rows[owner as number]?.runtime === o.roomRuntime);
         let preset = null;
         if (override) preset = archivedValue(ab0, profile, override.presetOffset);
+        else if (environmentPresets.has(roomId)) preset = environmentPresets.get(roomId)!;
         else if (rows[slot]?.runtime === render.environment.family) {
           const f = decode(slot)?.find((x: any) => x.op === render.environment.field);
           preset = f?.kind === 'G' ? resolveValue(pool.values, f.node) : null;

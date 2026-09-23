@@ -190,23 +190,27 @@ export function readEnvironmentPreset(data: RenderDecodeData, preset: PoolNode |
     const e = decode(s)?.find(x => x.op === env.light.field);
     return e?.kind === 'G' ? resolveValue(pool, e.node) : null;
   };
+  // A light is a {colour, intensity} value held inline or in a record.
   const light = (n: PoolNode | null): number[] | null => {
-    const value = recordField(n);
+    const value = n?.tag === 0x24 ? n : recordField(n);
     if (value?.tag !== 0x24 || !Array.isArray(value.fields)) return null;
     const colour = resolveValue(pool, value.fields[env.light.colour]);
     const intensity = resolveValue(pool, value.fields[env.light.intensity]);
     if (colour?.tag !== 0x15 || !Array.isArray(colour.value) || intensity?.tag !== 0x0b) return null;
     return [colour.value[0], colour.value[1], colour.value[2], intensity.value[0]].map(Number);
   };
+  // A height or floor is a number held inline or in a record, or the
+  // avatar-height symbol.
   const scalar = (n: PoolNode | null): number | 'avatar' | null => {
-    const value = recordField(n);
+    const value = n?.tag === 0x0b || n?.tag === 0x0a || n?.tag === 0x0f ? n : recordField(n);
     if (value?.tag === 0x0b && Array.isArray(value.value)) return Number(value.value[0]);
     if (value?.tag === 0x0a && Number.isInteger(value.value)) return value.value;
     if (value?.tag === 0x0f && symbols[value.value] === env.avatarZ) return 'avatar';
     return null;
   };
   const sky = light(slot(env.slots.sky)), ground = light(slot(env.slots.ground)), sun = light(slot(env.slots.sun));
-  const vignetteNode = recordField(slot(env.slots.vignette));
+  const vignetteSlot = slot(env.slots.vignette);
+  const vignetteNode = vignetteSlot?.tag === 0x15 ? vignetteSlot : recordField(vignetteSlot);
   const vignette = vignetteNode?.tag === 0x15 && Array.isArray(vignetteNode.value) ? vignetteNode.value.map(Number) : null;
   const height = scalar(slot(env.slots.height)), floor = scalar(slot(env.slots.floor));
   if (!sky || !ground || !sun || !vignette || height === null || floor === null) return null;
