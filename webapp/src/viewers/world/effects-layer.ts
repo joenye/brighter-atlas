@@ -46,7 +46,7 @@ import { restEffectBirthFrames, animatedEffectBirthFrames } from './effects-fram
 import type { EffectBoneAnimation } from './effects-animation.js';
 import { proceduralEffectFrame } from './effects-motion.js';
 import {
-  EmitterSim, EffectsClock,
+  EmitterSim, EffectsClock, hash32,
 } from './effects-sim.js';
 import { composePlacementMatrix, DEFAULT_MESH_FORWARD_QUARTER_TURNS } from './scene.js';
 import {
@@ -406,6 +406,9 @@ export class WorldEffectsLayer {
         const draws = emitterSpriteDraws(emitter, this.doc.configs || {});
         if (!draws.length) return;
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate, att.color_override);
+        sim.setInstanceSeed(hash32(id, Number(att.occurrence)));
+        // Wave-timed bursts sample the water at their placed point.
+        sim.setWaveFrame(Array.from(anchorOriginal));
         // A static attachment can keep acceleration in world directions.
         // Store it relative to the common owner so final drawing does not
         // rotate it again. Rigged systems use their rig root independently.

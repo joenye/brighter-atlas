@@ -73,5 +73,37 @@ try {
   assert.deepEqual(readPoint(0, pointOps), {kind: 'point', point: {position: [-780, -890, 670], axis: [.2, .2, 1.09], yaw: [0, 360], pitch: [1, 2]}});
   assert.equal(readPoint(0, pointOps.filter(e => e.op !== 41)), null);
   assert.equal(readPoint(0, pointOps.map(e => e.op === 43 ? {op: 43, kind: 'symbol', index: 1, name: '$x'} : e)), null);
-  console.log('effect origin extraction, sampled radius, point sources, elliptical geometry, direction and seek checks passed');
+  // Compact spawns: a literal position or a segment, each with a full cone.
+  const compact = [{instance: 14, kind: 'position', position: 50, axis: 51, yaw: [52, 53], pitch: [54, 55], uniformClass: 8},
+    {instance: 15, kind: 'segment', start: 58, end: 59, axis: 51, yaw: [52, 53], pitch: [54, 55], uniformClass: 8}];
+  assert(T.validEffectOrigins(compact));
+  assert(!T.validEffectOrigins([{...compact[1], end: undefined}]));
+  const compactOps = [{op: 50, kind: 'vec3', v: [0, 0, 1200]}, {op: 51, kind: 'vec3', v: [0, 0, 1]},
+    scalar(52, 90), scalar(53, 90), scalar(54, 90), scalar(55, 100),
+    {op: 58, kind: 'vec3', v: [512, -512, 0]}, {op: 59, kind: 'vec3', v: [-512, -512, 0]}];
+  const readCompact = T.createEffectOriginReader(compact, [{values: [0, 14]}, {values: [0, 15]}]);
+  assert.deepEqual(readCompact(0, compactOps), {kind: 'point', point: {position: [0, 0, 1200], axis: [0, 0, 1], yaw: [90, 90], pitch: [90, 100]}});
+  assert.deepEqual(readCompact(1, compactOps), {kind: 'segment', segment: {from: [512, -512, 0], to: [-512, -512, 0], axis: [0, 0, 1], yaw: [90, 90], pitch: [90, 100]}});
+  assert.equal(readCompact(1, compactOps.filter(e => e.op !== 59)), null);
+  {
+    // A bound segment spawns uniformly along its ends and aims through the cone:
+    // azimuth 90 degrees puts every direction in the y-z plane, polar 90..100
+    // keeps it at or below the horizon.
+    const segment = readCompact(1, compactOps).segment;
+    const sim = new T.EmitterSim({slot: 4, loop: true}, 0, {life: {ticks: 600}, burst: 1, shape: 2, speed: {value: 600}},
+      {1: {kind: 'burst_continuous', per_second: 600}, 2: {kind: 'shape', shape_kind: 'segment', segment: {from: segment.from, to: segment.to},
+        center: [0, -512, 0], axis: segment.axis, cone: {yaw: segment.yaw, pitch: segment.pitch}, origin: 'bound'}}, 600);
+    sim.ensure(300); let n = 0;
+    sim.evaluate(300, (x: number, y: number, z: number) => {
+      const age = 300 - Math.trunc(n * 600 / 600) + 0; n++;
+      assert(Math.abs(x) <= 512 + 1e-3, 'on the segment');
+      void age;
+    });
+    for (let j = sim.tail; j < sim.head; j++) {
+      const slot = j % sim.capacity;
+      const d = [sim.vx[slot], sim.vy[slot], sim.vz[slot]];
+      assert(Math.abs(d[0]) < 1e-6 && d[1] > 0.98 && d[2] <= 1e-6 && d[2] >= -0.18, JSON.stringify(d));
+    }
+  }
+  console.log('effect origin extraction, sampled radius, point, position and segment sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

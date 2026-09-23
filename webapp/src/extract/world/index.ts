@@ -18,6 +18,7 @@ import {createEffectSpriteReader} from './effect-sprites.js';
 import {createEffectFacingReader} from './effect-facing.js';
 import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
+import {createEffectWaveReader} from './effect-waves.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
@@ -511,6 +512,7 @@ export async function extractWorld({
       effectOrigin: createEffectOriginReader(placementData?.effectOrigins, objects),
       effectProperties: createEffectPropertyReader(placementData?.effectProperties,objects,ab0,profile,pool.values),
       effectFields: createEffectFieldReader(placementData?.effectFields, objects),
+      effectWave: createEffectWaveReader(placementData?.effectWaves, objects, effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any, pool.values),
       effectMotion: (controller,hit,roomId) => {
         const motion=effectMotion(controller);
         if(!motion||!placementData)return null;

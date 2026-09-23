@@ -35,6 +35,7 @@ import type {createEffectSpriteReader} from './effect-sprites.js';
 import type {EffectFacing, createEffectFacingReader} from './effect-facing.js';
 import type {RadialOrigin, createEffectOriginReader} from './effect-origins.js';
 import type {EffectFieldValues, createEffectFieldReader} from './effect-fields.js';
+import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
 
 import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type createEffectPropertyReader} from './effect-properties.js';
@@ -100,8 +101,10 @@ export type EffectExtra =        // unknown/unclassified ops ONLY
 
 export interface EffectConfig {
   slot: number; family: number;
-  kind: 'burst_continuous' | 'burst_windowed' | 'shape' | 'unknown';
+  kind: 'burst_continuous' | 'burst_windowed' | 'burst_wave' | 'shape' | 'unknown';
   emission_window?: EffectWindow;
+  // 'burst_wave': fires when the water height at its point crests.
+  wave?: EffectWave;
   radial?: RadialOrigin;
   // 'bound': origin and direction come from verified per-build decode
   // data rather than the structural shape guess.
@@ -191,7 +194,7 @@ export interface WorldEffectsDoc {
     rejected_children: number; parse_failures: number; parse_mismatches: number;
     hub_systems: number; hub_attachments: number; shape_center_reordered: number;
     triggered_systems: number;
-    families: Record<string, { members: number; via: 'vote' | 'exhaustive' | 'rejected';
+    families: Record<string, { members: number; via: 'vote' | 'exhaustive' | 'bound' | 'rejected';
       burst_fraction: number; origin_fraction: number; image_fraction: number }>;
     config_kinds: Record<string, number>;
     named_systems: number; attached_rooms: number; attached_actors: number;
@@ -269,6 +272,7 @@ export interface WorldEffectsShared {
   effectOrigin?: ReturnType<typeof createEffectOriginReader>;
   effectProperties?: ReturnType<typeof createEffectPropertyReader>;
   effectFields?: ReturnType<typeof createEffectFieldReader>;
+  effectWave?: ReturnType<typeof createEffectWaveReader>;
   effectMotion?: (controller: number, hit: RoomOccurrence, room: number) => EffectAttachmentMotion | null;
   rigBoneTranslations: Map<number, number[][]>;
   rigWorldMatrices?: Map<number, number[][]>;
@@ -987,7 +991,7 @@ function extractEffects(
     const list = families.get(ev.family);
     if (list) list.push(slot); else families.set(ev.family, [slot]);
   }
-  const familyVia = new Map<number, 'vote' | 'exhaustive' | 'rejected'>();
+  const familyVia = new Map<number, 'vote' | 'exhaustive' | 'bound' | 'rejected'>();
   for (const family of [...families.keys()].sort((a, b) => a - b)) {
     const members = families.get(family)!;
     const voters = members.slice(0, Math.min(members.length, VOTER_CAP));
@@ -999,9 +1003,12 @@ function extractEffects(
       if (ev.hasImage) withImage++;
     }
     const burstFraction = voters.length ? passing / voters.length : 0;
-    let via: 'vote' | 'exhaustive' | 'rejected';
+    let via: 'vote' | 'exhaustive' | 'bound' | 'rejected';
     if (voters.length >= MIN_VOTERS && burstFraction >= ACCEPT_FRACTION) via = 'vote';
     else if (members.length < MIN_VOTERS && passing === members.length) via = 'exhaustive';
+    // Per-build decode data identifies emitter classes directly; the vote
+    // above only guards structural guesses.
+    else if (shared.effectFields?.bound && members.every(slot => shared.effectFields!.bound(slot))) via = 'bound';
     else { via = 'rejected'; audit.rejected_children += members.length; }
     familyVia.set(family, via);
     // image/shape presence are voting features, never requirements: recall on
@@ -1374,11 +1381,23 @@ function extractEffects(
       cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
       cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
       cfg.origin = 'bound';
+    } else if (origin?.kind === 'segment') {
+      // Uniform along the segment, aimed through the authored cone.
+      const {from, to, axis, yaw, pitch} = origin.segment;
+      cfg.kind = 'shape'; cfg.shape_kind = 'segment'; cfg.segment = {from, to}; cfg.axis = axis;
+      cfg.center = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2];
+      cfg.cone = {yaw, pitch}; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
+      cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
+      cfg.origin = 'bound';
+    }
+    const wave = shared.effectWave?.(slot);
+    if (wave) {
+      cfg.kind = 'burst_wave'; cfg.wave = wave; cfg.per_second = null; delete cfg.windows;
     }
     cfg.extra = info.extra;   // assigned last so the retained-extras key lands last
     configs[String(slot)] = cfg;
   }
-  for (const kind of ['burst_continuous', 'burst_windowed', 'shape', 'unknown'] as const) {
+  for (const kind of ['burst_continuous', 'burst_windowed', 'burst_wave', 'shape', 'unknown'] as const) {
     let count = 0;
     for (const key in configs) if (configs[key].kind === kind) count++;
     if (count) audit.config_kinds[kind] = count;

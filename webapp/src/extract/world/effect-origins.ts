@@ -29,7 +29,28 @@ export interface PointOriginBinding {
   samples: [number, number];
   uniformClass: number;
 }
-export type EffectOriginBinding = RadialOriginBinding | PointOriginBinding;
+// Compact spawns: a literal position or a segment between two literal ends,
+// with a cone whose fractions are uniform over the authored bounds.
+export interface PositionOriginBinding {
+  instance: number;
+  kind: 'position';
+  position: number;
+  axis: number;
+  yaw: [number, number];
+  pitch: [number, number];
+  uniformClass: number;
+}
+export interface SegmentOriginBinding {
+  instance: number;
+  kind: 'segment';
+  start: number;
+  end: number;
+  axis: number;
+  yaw: [number, number];
+  pitch: [number, number];
+  uniformClass: number;
+}
+export type EffectOriginBinding = RadialOriginBinding | PointOriginBinding | PositionOriginBinding | SegmentOriginBinding;
 export interface RadialOrigin {
   center: [number, number, number];
   // A sampled radius is drawn for every particle.
@@ -44,15 +65,25 @@ export interface PointOrigin {
   yaw: [number, number];
   pitch: [number, number];
 }
-export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'point'; point: PointOrigin};
+export interface SegmentOrigin {
+  from: [number, number, number];
+  to: [number, number, number];
+  axis: [number, number, number];
+  yaw: [number, number];
+  pitch: [number, number];
+}
+export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'point'; point: PointOrigin}
+  | {kind: 'segment'; segment: SegmentOrigin};
 
 export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
   const integer = (n: any) => Number.isInteger(n) && n >= 0 && n < 65536;
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(integer);
   return Array.isArray(v) && v.length <= 65536 && v.every(b => b && integer(b.instance) && integer(b.uniformClass)
-    && [b.yaw, b.pitch, b.samples].every(pair) && (b.kind === 'radial'
-      ? integer(b.resample) && integer(b.center) && integer(b.radius) && pair(b.axisScale) && pair(b.overrides)
-      : b.kind === 'point' && integer(b.position) && integer(b.axis)))
+    && [b.yaw, b.pitch].every(pair) && (b.kind === 'radial'
+      ? pair(b.samples) && integer(b.resample) && integer(b.center) && integer(b.radius) && pair(b.axisScale) && pair(b.overrides)
+      : b.kind === 'point' ? pair(b.samples) && integer(b.position) && integer(b.axis)
+      : b.kind === 'position' ? integer(b.position) && integer(b.axis)
+      : b.kind === 'segment' && integer(b.start) && integer(b.end) && integer(b.axis)))
     && new Set(v.map(b => b.instance)).size === v.length;
 }
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
@@ -85,6 +116,21 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
       const result: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
       return result.every(Number.isFinite) ? result : null;
     };
+    if (b.kind === 'position' || b.kind === 'segment') {
+      const axis = vector(fields.get(b.axis));
+      const bounds = (ops: [number, number]): [number, number] | null => {
+        const v = ops.map(op => scalar(fields.get(op)));
+        return v.every(n => n !== null) ? v as [number, number] : null;
+      };
+      const yaw = bounds(b.yaw), pitch = bounds(b.pitch);
+      if (!axis || !yaw || !pitch) return null;
+      if (b.kind === 'position') {
+        const position = vector(fields.get(b.position));
+        return position ? {kind: 'point', point: {position, axis, yaw, pitch}} : null;
+      }
+      const from = vector(fields.get(b.start)), to = vector(fields.get(b.end));
+      return from && to ? {kind: 'segment', segment: {from, to, axis, yaw, pitch}} : null;
+    }
     if (b.kind === 'point') {
       const position = vector(fields.get(b.position)), axis = vector(fields.get(b.axis));
       const yaw = angles(b.yaw, b.samples[0]), pitch = angles(b.pitch, b.samples[1]);

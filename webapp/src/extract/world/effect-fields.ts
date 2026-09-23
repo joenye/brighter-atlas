@@ -56,7 +56,7 @@ export function createEffectFieldReader(data: EffectFieldData | undefined, objec
   if (data !== undefined && !validEffectFields(data)) throw Error('invalid effect field bindings');
   const byInstance = new Map((data?.bindings ?? []).map(b => [b.instance, b]));
   const classes = data?.classes;
-  return (slot: number, ops: EffectExtra[]): EffectFieldValues | null => {
+  const read = (slot: number, ops: EffectExtra[]): EffectFieldValues | null => {
     const b = byInstance.get(objects[slot]?.values[1]);
     if (!b || !classes) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
@@ -109,6 +109,9 @@ export function createEffectFieldReader(data: EffectFieldData | undefined, objec
       color: endpoints(b.color, '$color0', colour),
     };
   };
+  // Whether the build's decode data knows this row as a particle emitter.
+  const bound = (slot: number): boolean => byInstance.has(objects[slot]?.values[1]);
+  return Object.assign(read, {bound});
 }
 
 /** HSL with hue in sextants; saturation and lightness clamp first. */

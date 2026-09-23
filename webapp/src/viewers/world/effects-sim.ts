@@ -1,6 +1,7 @@
 import {EffectRandom} from './effects-random.js';
 import type {EffectScales} from '../../extract/world/effect-scales.js';
 import {effectHslToRgb, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
+import {waterHeight, type EffectWave} from '../../extract/world/effect-waves.js';
 import type {EffectWindow} from '../../extract/world/effect-windows.js';
 // Particle effect simulation core for the world viewer. Pure math over the
 // recovered world:effects doc (extract/world/effects.js): no DOM, no three.js.
@@ -52,6 +53,10 @@ const DEG = Math.PI / 180;
 // Burst-window sanity: a window emitting more spawns than this per cycle is
 // treated as inert rather than allowed to explode the schedule arithmetic.
 const WINDOW_SPAWN_CAP = 1e6;
+// Wave bursts rebuild their armed state from the last decisive height sample.
+// Samples further back than this cannot change the state (the waves are
+// bounded sines); a field that never dips below zero simply never fires.
+const WAVE_LOOKBACK_SAMPLES = 4096;
 
 const finite = (value: any, fallback: number): number => (
   Number.isFinite(Number(value)) ? Number(value) : fallback);
@@ -207,6 +212,7 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
  */
 export class EmitterSim {
   seed: number;
+  private _baseSeed = 0;
   tickRate: number;
   // envelope + look constants (tick domain)
   life: number;
@@ -258,6 +264,10 @@ export class EmitterSim {
   private _rot0!: Float32Array;
   private _colours!: Float32Array;
   private _eventWindow: EffectWindow | null = null;
+  private _wave: EffectWave | null = null;
+  private _wavePoint: [number, number] = [0, 0];
+  private _waveArmed = false;
+  private _waveNext = 0;
   private _windowNext = 0;
   private _lastT = NaN;
   private _dirty = true;
@@ -267,6 +277,13 @@ export class EmitterSim {
   nx!: Float32Array; ny!: Float32Array; nz!: Float32Array;
   private _birthDirection: readonly number[] | null = null;
   private _birthFrameSampler: EffectBirthFrameSampler | null = null;
+
+  /** Give one placed copy of an effect its own random stream. In the game,
+   *  separate copies of the same effect never repeat each other's particles. */
+  setInstanceSeed(instance: number): void {
+    this.seed = hash32(this._baseSeed, instance | 0);
+    this._dirty = true;
+  }
 
   setBirthFrames(position: readonly number[] | null, direction: readonly number[] | null): void {
     this._birthFrameSampler = null;
@@ -298,7 +315,7 @@ export class EmitterSim {
       : facing?.mode === 'velocity_screen' ? 4 : facing?.mode === 'direction_screen' ? 5 : 0;
     if ((facing?.mode === 'direction_single' || facing?.mode === 'direction_screen') && facing.axis?.length === 3
       && facing.axis.every(Number.isFinite)) this._facingAxis = [...facing.axis];
-    this.seed = hash32(system.slot | 0, emitterIndex | 0);
+    this.seed = this._baseSeed = hash32(system.slot | 0, emitterIndex | 0);
 
     this.life = Math.max(1, finite(emitter.life?.ticks, tickRate));
     this.fadeIn = clamp(finite(emitter.fade_in?.ticks, 0), 0, this.life);
@@ -357,7 +374,11 @@ export class EmitterSim {
     // (alive stays zero); siblings are unaffected.
     const burst = emitter.burst != null ? configs[String(emitter.burst)] || null : null;
     this._eventWindow = burst?.emission_window ?? null;
-    const rate = Math.max(0, finite(this._eventWindow?.rate ?? burst?.per_second, 0));
+    this._wave = burst?.kind === 'burst_wave' && burst.wave ? burst.wave : null;
+    if (this._wave) this.setWaveFrame(null);
+    // A wave burst's steady density: its count once per crest of the faster wave.
+    const waveRate = this._wave ? this._wave.count * Math.max(...this._wave.water.rate.map(Math.abs)) * tickRate / TWO_PI : 0;
+    const rate = this._wave ? waveRate : Math.max(0, finite(this._eventWindow?.rate ?? burst?.per_second, 0));
     this.rate = rate;
     this.step = rate > 0 ? tickRate / rate : Infinity;
     this.windows = null;
@@ -428,7 +449,10 @@ export class EmitterSim {
   setStride(k: number): void {
     const next = Math.max(1, Math.floor(k) || 1);
     const expected = this.expectedAlive() / next;
-    const capacity = Math.round(clamp(Math.ceil(expected * 1.25), 4, PER_EMITTER_CAP));
+    let capacity = Math.round(clamp(Math.ceil(expected * 1.25), 4, PER_EMITTER_CAP));
+    // A crest releases a whole burst at once; hold every burst one life can span.
+    if (this._wave) capacity = Math.round(clamp(Math.max(capacity, Math.ceil(this._wave.count / next)
+      * (Math.ceil(this.life * Math.max(...this._wave.water.rate.map(Math.abs)) / Math.PI) + 2)), 4, PER_EMITTER_CAP));
     if (next === this.k && capacity === this.capacity && this.birth) return;
     this.k = next;
     this.capacity = capacity;
@@ -479,7 +503,7 @@ export class EmitterSim {
    *  a one-shot schedule. */
   spawnTick(j: number): number {
     if (!(this.rate > 0) || j < 0) return Infinity;
-    if (this._eventWindow) return j >= this.tail && j < this.head ? this.birth[j % this.capacity] : Infinity;
+    if (this._eventWindow || this._wave) return j >= this.tail && j < this.head ? this.birth[j % this.capacity] : Infinity;
     const n = j * this.k;
     if (n >= this.totalCount) return Infinity;
     // Birth timestamps use integral ticks. Eligibility still follows the
@@ -618,6 +642,11 @@ export class EmitterSim {
       x = from[0] + (to[0] - from[0]) * r0;
       y = from[1] + (to[1] - from[1]) * r0;
       z = from[2] + (to[2] - from[2]) * r0;
+      if (s.cone) {
+        // A bound segment aims through its authored cone (azimuth, then polar).
+        [dx, dy, dz] = sampleConeDirection(s.w, [s.cone.yaw[0] * DEG, s.cone.yaw[1] * DEG],
+          [s.cone.pitch[0] * DEG, s.cone.pitch[1] * DEG], r1, r2);
+      } else {
       const yaw = r1 * s.yaw;
       const pitch = r2 * s.pitch;
       const cp = Math.cos(pitch); const sp = Math.sin(pitch);
@@ -625,6 +654,7 @@ export class EmitterSim {
       dx = cp * s.w[0] + sp * (cy * s.u[0] + sy * s.v[0]);
       dy = cp * s.w[1] + sp * (cy * s.u[1] + sy * s.v[1]);
       dz = cp * s.w[2] + sp * (cy * s.u[2] + sy * s.v[2]);
+      }
     } else if (s.kind === 'ring') {
       const theta = r0 * s.sweep;
       const ct = Math.cos(theta); const st = Math.sin(theta);
@@ -680,6 +710,60 @@ export class EmitterSim {
     this.sz[slot] = dz * speedSlope;
   }
 
+  /** Owner-to-world matrix (column-major) placing a wave burst's point in the
+   *  water's coordinate frame. Null leaves the point in the owner frame. */
+  setWaveFrame(m: readonly number[] | null): void {
+    const w = this._wave;
+    if (!w) return;
+    const [x, y] = w.point;
+    this._wavePoint = !m ? [x, y] : w.translation ? [x + m[12], y + m[13]]
+      : [m[0] * x + m[4] * y + m[12], m[1] * x + m[5] * y + m[13]];
+    this._dirty = true;
+  }
+
+  private _waveRatio(ticks: number): number {
+    const w = this._wave!;
+    return Math.fround(Math.fround(waterHeight(w.water, this._wavePoint[0], this._wavePoint[1], ticks)) / Math.fround(w.threshold));
+  }
+
+  // Crest-timed bursts: the height is sampled on a fixed tick grid; a sample
+  // at or above the threshold fires the burst once, and only a later sample
+  // below zero re-arms it. The ring stores birth ticks like event windows.
+  private _ensureWave(T: number): void {
+    const w = this._wave!;
+    const step = w.step;
+    const last = Math.floor(T / step);
+    const dt = T - this._lastT;
+    if (this._dirty || !(dt >= 0 && dt <= MAX_CATCHUP_TICKS)) {
+      this.tail = this.head = 0;
+      const first = Math.floor((T - this.life) / step) + 1;
+      let armed = false;
+      for (let n = first - 1; n > first - 1 - WAVE_LOOKBACK_SAMPLES; n--) {
+        const r = this._waveRatio(n * step);
+        if (r < 0) { armed = true; break; }
+        if (r >= 1) break;
+      }
+      this._waveArmed = armed;
+      this._waveNext = first;
+    }
+    for (let n = this._waveNext; n <= last; n++) {
+      const r = this._waveRatio(n * step);
+      if (r >= 1 && this._waveArmed) {
+        this._waveArmed = false;
+        for (let k = 0; k < w.count; k++) {
+          const counter = n * w.count + k;
+          if (counter % this.k) continue;
+          this._spawn(this.head++, counter, n * step);
+          if (this.head - this.tail > this.capacity) this.tail = this.head - this.capacity;
+        }
+      } else if (r < 0) this._waveArmed = true;
+    }
+    this._waveNext = Math.max(this._waveNext, last + 1);
+    while (this.tail < this.head && this.birth[this.tail % this.capacity] + this.life <= T) this.tail++;
+    this._dirty = false;
+    this._lastT = T;
+  }
+
   private _ensureWindow(T: number): void {
     const schedule = this._eventWindow!;
     const dt = T - this._lastT;
@@ -707,6 +791,7 @@ export class EmitterSim {
    *  full O(alive) rebuild on any discontinuity. */
   ensure(T: number): void {
     if (!(this.rate > 0)) { this._lastT = T; return; }
+    if (this._wave) { this._ensureWave(T); return; }
     if (this._eventWindow) { this._ensureWindow(T); return; }
     const dt = T - this._lastT;
     if (this._dirty || !(dt >= 0 && dt <= MAX_CATCHUP_TICKS)) {

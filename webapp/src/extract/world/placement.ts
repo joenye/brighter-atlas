@@ -8,6 +8,7 @@ import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
 import {validEffectOrigins, type EffectOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
 import {validEffectFields, type EffectFieldData} from './effect-fields.js';
+import {validEffectWaves, type EffectWaveData} from './effect-waves.js';
 import {deref, type RoomNode} from './room.js';
 import {makeRegistryRowDecoder} from './effects.js';
 import {resolveValue} from './room-metadata.js';
@@ -34,6 +35,7 @@ export interface PlacementDecodeData {
   effectOrigins?: EffectOriginBinding[];
   effectProperties?: EffectPropertyBinding[];
   effectFields?: EffectFieldData;
+  effectWaves?: EffectWaveData;
   effectMotion?: {
     controllers: {runtime:number; field:number}[];
     settings: {runtime:number; x:[number,number,number]; y:[number,number,number]}[];
@@ -81,6 +83,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectOrigins!==undefined&&!validEffectOrigins(data.effectOrigins))throw Error('invalid effect origin bindings');
   if(data.effectProperties!==undefined&&!validEffectProperties(data.effectProperties))throw Error('invalid effect property bindings');
   if(data.effectFields!==undefined&&!validEffectFields(data.effectFields))throw Error('invalid effect field bindings');
+  if(data.effectWaves!==undefined&&!validEffectWaves(data.effectWaves))throw Error('invalid effect wave bindings');
   return data;
 }
 
