@@ -1,4 +1,6 @@
-// Payload service worker: serves `cs/<versionId>/images/NNNNN_eK.png` and
+// Payload service worker: serves `cs/<versionId>/images/NNNNN_eK.png`,
+// `cs/<versionId>/images/NNNNN_eK.bc` (a sub-image's compressed blocks, for
+// the GPU), `cs/<versionId>/shaders/{vs,ps}_NNNNN.dxbc` and
 // `cs/<versionId>/audio/NNNNN.wav` by decoding on demand from the OPFS raw
 // bundles (written at ingest). This is what lets the viewers keep using the
 // synchronous store.url() contract (thumbnails via <img>, audio via <audio>,
@@ -14,8 +16,9 @@ import { getVersion, derivedGet, rawFile } from './storage.js';
 import { decodeObject } from './extract/bundles.js';
 import {
   parseImageMeta, decodeSubImage, applyMaterialCutout,
-  parseDatafileRecords, decodeFontGlyphs, decodeLut,
+  parseDatafileRecords, decodeFontGlyphs, decodeLut, interleaveBlocks,
 } from './extract/image.js';
+import { shaderBlobs } from './viewers/world/dxbc.js';
 import { encodePng, SERVED_PNG_LEVEL, DECODED_CACHE, DECODED_CACHE_MAX_BYTES } from './extract/png.js';
 import { resolveRoles } from './texture-roles.js';
 import {
@@ -153,6 +156,28 @@ async function servePng(c: VersionCtx, i: number, k: number, rg = false): Promis
   });
 }
 
+// One sub-image's blocks in the standard GPU layout, behind an 8-byte header:
+// u16 format, u16 width, u16 height, u16 0 (little-endian).
+async function serveBlocks(c: VersionCtx, i: number, k: number): Promise<Response> {
+  const decoded = decodeObject(3, await rawObject(c, 3, i));
+  const meta = parseImageMeta(decoded.tail);
+  if (!meta[k]) throw new Error(`sub ${k} out of range`);
+  const { fmt, w, h } = meta[k];
+  const blocks = fmt === 0x16 ? decoded.subs[k] : interleaveBlocks(fmt, w, h, decoded.subs[k]);
+  const out = new Uint8Array(8 + blocks.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint16(0, fmt, true); dv.setUint16(2, w, true); dv.setUint16(4, h, true);
+  out.set(blocks, 8);
+  return new Response(out as unknown as BodyInit, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' } });
+}
+
+// A shader object's first compiled blob (ab7 vertex, ab4 pixel).
+async function serveShader(c: VersionCtx, stage: string, i: number): Promise<Response> {
+  const blob = shaderBlobs(decodeObject(stage === 'vs' ? 7 : 4, await rawObject(c, stage === 'vs' ? 7 : 4, i)))[0];
+  if (!blob) throw new Error(`no compiled shader in ${stage} ${i}`);
+  return new Response(blob as unknown as BodyInit, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' } });
+}
+
 async function serveWav(c: VersionCtx, i: number): Promise<Response> {
   const raw = await rawObject(c, 8, i);
   const { codec, ch } = parseAudioHeader(raw);   // codec is the NAME ('qoa'|'bslpc'|'opus')
@@ -167,7 +192,7 @@ async function serveWav(c: VersionCtx, i: number): Promise<Response> {
 
 sw.addEventListener('fetch', (event: any) => {
   const m = new URL(event.request.url).pathname.match(
-    /\/cs\/([0-9a-f]{16})\/(?:images\/(\d{5})_e(\d+)(_rg)?\.png|audio\/(\d{5})\.wav)$/);
+    /\/cs\/([0-9a-f]{16})\/(?:images\/(\d{5})_e(\d+)(_rg)?\.png|audio\/(\d{5})\.wav|images\/(\d{5})_e(\d+)\.bc|shaders\/(vs|ps)_(\d{5})\.dxbc)$/);
   if (!m || event.request.method !== 'GET') return;   // not ours: passthrough
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
@@ -177,7 +202,9 @@ sw.addEventListener('fetch', (event: any) => {
       const c = await ctx(m[1]);
       const res = m[2] !== undefined
         ? await servePng(c, parseInt(m[2], 10), parseInt(m[3], 10), m[4] === '_rg')
-        : await serveWav(c, parseInt(m[5], 10));
+        : m[5] !== undefined ? await serveWav(c, parseInt(m[5], 10))
+        : m[6] !== undefined ? await serveBlocks(c, parseInt(m[6], 10), parseInt(m[7], 10))
+        : await serveShader(c, m[8], parseInt(m[9], 10));
       // Respond immediately; persist the copy in the background (waitUntil,
       // called while the fetch event is still active). Racing puts for the
       // same URL write identical bytes, so last-write-wins is harmless.

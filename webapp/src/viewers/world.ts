@@ -45,6 +45,7 @@ import {
 } from './world/water.js';
 import { updateGameWaterLights } from './world/game-water.js';
 import { EffectsClock } from './world/effects-sim.js';
+import { GameFrame } from './world/game-frame.js';
 import { MergedWorld } from './world/merged.js';
 import { createWorldHud, classifyGpu } from './world/hud.js';
 import {
@@ -117,6 +118,7 @@ const DEFAULT_STATE = Object.freeze({
   spawnnames: false,
   inspect: false,
   water: true,
+  game: true,
   effects: true,
   wcolor: 'auto',
   wopacity: 50,
@@ -141,7 +143,7 @@ interface WorldState {
   terrain: boolean; models: boolean; spawns: boolean; components: boolean;
   untextured: boolean; collision: boolean; empty: boolean; names: boolean;
   spawnnames: boolean;
-  inspect: boolean; water: boolean; effects: boolean;
+  inspect: boolean; water: boolean; game: boolean; effects: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
   shadows: boolean; flatten: boolean; merged: boolean;
   scale: number; cull: boolean; culld: number;
@@ -888,6 +890,85 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       waterColor),
     range('wopacity', 'Opacity', 10, 100, 2, (v) => `${v}%`, applyWater));
 
+  // --- the game's own shading (single room) ----------------------------------
+  // With the game's shader bundles and this build's render data, a single
+  // room is drawn frame by frame exactly as the game draws it: its programs,
+  // its lights, shadow map, ambient occlusion, vignette and water. Other
+  // layers (effects, highlights, labels) draw on top through three.js with
+  // the same camera and depth range.
+  let gameFrame: GameFrame | null = null;
+  let gameCamera: { eye: THREE.Vector3; target: THREE.Vector3 } | null = null;
+  const gameActive = () => !!gameFrame && !!state.game && !allMode;
+  const savedCamera = { fov: scene3d.camera.fov, near: scene3d.camera.near, far: scene3d.camera.far };
+  function applyGameShading(): void {
+    const on = gameActive();
+    world.setGameShading(on);
+    const cam = scene3d.camera;
+    const units = world.tileUnits || 1024;
+    const render = world.index?.render;
+    if (on && render) {
+      cam.fov = render.camera.fov;
+      cam.near = render.camera.near / units;
+      cam.far = render.camera.far / units;
+    } else Object.assign(cam, savedCamera);
+    cam.updateProjectionMatrix();
+  }
+  async function setupGameShading(room: any): Promise<void> {
+    const gl = renderer.getContext();
+    if (allMode || !world.index?.render || !(gl instanceof WebGL2RenderingContext)) return;
+    try {
+      const frame = new GameFrame(gl, (rel: string) => app.store.url(rel), world.index.render, world.tileUnits);
+      await frame.setRoom(await world.gameRoomSource(room));
+      renderer.resetState();
+      if (destroyed) return;
+      gameFrame = frame;
+      applyGameShading();
+    } catch (error) {
+      renderer.resetState();
+      console.warn('game shading unavailable for this room', error);
+    }
+  }
+  /** Native-frame camera of the current view (or the harness override). */
+  function currentGameCamera() {
+    const nativeFromWorld = world.root.matrixWorld.clone().invert();
+    const eye = gameCamera?.eye ?? scene3d.camera.position.clone().applyMatrix4(nativeFromWorld);
+    const target = gameCamera?.target ?? scene3d.controls.target.clone().applyMatrix4(nativeFromWorld);
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    return { eye, target, fov: scene3d.camera.fov, width: size.x, height: size.y };
+  }
+  if (!allMode) {
+    (scene3d as any)._loop = function gameLoop(this: any, t: number) {
+      if (!this._alive) return;
+      const dt = Math.min(100, t - this._lastT);
+      this._lastT = t;
+      for (const fn of this._ticks) fn(dt);
+      this.controls.update();
+      if (gameActive()) {
+        world.root.updateMatrixWorld();
+        const camera = currentGameCamera();
+        if (gameCamera) {
+          // keep three's camera on the same view for the overlays
+          const worldFromNative = world.root.matrixWorld;
+          this.camera.position.copy(camera.eye.clone().applyMatrix4(worldFromNative));
+          this.camera.lookAt(camera.target.clone().applyMatrix4(worldFromNative));
+          this.camera.updateMatrixWorld();
+        }
+        gameFrame!.render(camera, waterTicks, camera.target.z);
+        this.renderer.resetState();
+        // A colour background makes three clear the frame: overlays only.
+        const autoClear = this.renderer.autoClear, background = this.scene.background, fog = this.scene.fog;
+        this.renderer.autoClear = false;
+        this.scene.background = null;
+        this.scene.fog = null;
+        this.renderer.render(this.scene, this.camera);
+        this.renderer.autoClear = autoClear;
+        this.scene.background = background;
+        this.scene.fog = fog;
+      } else this.renderer.render(this.scene, this.camera);
+      requestAnimationFrame(this._loop);
+    }.bind(scene3d);
+  }
+
   // Builds whose data carries the game's water materials draw water with
   // them (surfaces and shoreline curtains); older data keeps the sheets.
   const gameWaterAvailable = () => !!world.index?.water;
@@ -1161,6 +1242,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   scene3d.controls.addEventListener('change', onControlsChange);
 
   const lightSection = section('Lighting & effects',
+    check('game', 'Game shading', () => applyGameShading(),
+      { swatch: '#c9a86a', title: "Draw the room with the game's own lights, shadows, shading and water (single room)" }),
     range('ambient', 'Ambient / sky', 0, 2.5, 0.05, (v) => v.toFixed(2), applyLights),
     range('sun', 'Sun', 0, 3, 0.05, (v) => v.toFixed(2), applyLights),
     check('shadows', 'Shadows', applyShadows, { swatch: '#5f6670' }),
@@ -4532,6 +4615,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       const room = await world.loadRoom(entry.i);
       if (destroyed || !room) return;
       hud.setStage(`ready · ${room.meshes.length} batches`, { steady: true });
+      setupGameShading(room);
       loadStats = {
         batches: room.meshes.length,
         instances: room.meshes.reduce((sum: number, mesh: any) => sum + mesh.count, 0),
@@ -4852,6 +4936,42 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         emptyInstances: wire.emptyMeshes.reduce((sum: number, mesh: any) => sum + mesh.count, 0),
         emptyVisible: wire.emptyGroup.visible,
       };
+    },
+    // Game shading test handle: whether the game's frame is drawing, and a
+    // fixed native-frame camera (eye and target in native units) for captures.
+    gameApi: {
+      ready: () => gameActive(),
+      setCamera(eye: number[] | null, target?: number[]) {
+        gameCamera = eye && target ? { eye: new THREE.Vector3(eye[0], eye[1], eye[2]), target: new THREE.Vector3(target[0], target[1], target[2]) } : null;
+      },
+      target(name: 'ao' | 'aoRaw' | 'blur1' | 'linear') {
+        const out = gameFrame?.readTarget(name) ?? null;
+        renderer.resetState();
+        return out;
+      },
+      /** Draw `frames` game frames (no overlays) and read the last back: RGBA rows top first,
+       *  with the occlusion targets of the same frame. `fresh` starts the occlusion history anew. */
+      capture(frames = 1, water = true, fresh = false) {
+        if (!gameActive()) return null;
+        gameFrame!.skipWater = !water;
+        world.root.updateMatrixWorld();
+        const camera = currentGameCamera();
+        if (fresh) gameFrame!.resetTemporal();
+        // The last frame is also presented, as the view shows it.
+        for (let k = 0; k < frames; k++) gameFrame!.render(camera, waterTicks, camera.target.z, k < frames - 1);
+        const out = gameFrame!.readTarget('main');
+        const gl = renderer.getContext() as WebGL2RenderingContext;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        const shown = new Uint8Array(camera.width * camera.height * 4);
+        gl.readPixels(0, 0, camera.width, camera.height, gl.RGBA, gl.UNSIGNED_BYTE, shown);
+        const canvas: number[] = [];
+        for (let y = camera.height - 1; y >= 0; y--) canvas.push(...shown.subarray(y * camera.width * 4, (y + 1) * camera.width * 4));
+        const targets = Object.fromEntries((['ao', 'aoRaw', 'blur1', 'linear'] as const).map((name) => [name, gameFrame!.readTarget(name)?.data ?? null]));
+        const constants = Object.fromEntries(Object.entries(gameFrame!.lastConstants).map(([k, v]) => [k, Array.from(v)]));
+        renderer.resetState();
+        gameFrame!.skipWater = false;
+        return out ? { width: out.width, height: out.height, rgba: out.data, canvas, targets, constants } : null;
+      },
     },
     // Effects debug/test handle: live counts, the frozen-clock controls the
     // harness drives, and a camera-focus helper for screenshots.

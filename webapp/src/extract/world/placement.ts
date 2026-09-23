@@ -10,6 +10,7 @@ import {validEffectProperties, type EffectPropertyBinding} from './effect-proper
 import {validEffectFields, type EffectFieldData} from './effect-fields.js';
 import {validEffectWaves, type EffectWaveData} from './effect-waves.js';
 import {validWaterData, type WaterDecodeData} from './water-materials.js';
+import {validRenderData, type RenderDecodeData} from './render-data.js';
 import {deref, type RoomNode} from './room.js';
 import {makeRegistryRowDecoder} from './effects.js';
 import {resolveValue} from './room-metadata.js';
@@ -38,6 +39,7 @@ export interface PlacementDecodeData {
   effectFields?: EffectFieldData;
   effectWaves?: EffectWaveData;
   water?: WaterDecodeData;
+  render?: RenderDecodeData;
   effectMotion?: {
     controllers: {runtime:number; field:number}[];
     settings: {runtime:number; x:[number,number,number]; y:[number,number,number]}[];
@@ -87,6 +89,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectFields!==undefined&&!validEffectFields(data.effectFields))throw Error('invalid effect field bindings');
   if(data.effectWaves!==undefined&&!validEffectWaves(data.effectWaves))throw Error('invalid effect wave bindings');
   if(data.water!==undefined&&!validWaterData(data.water))throw Error('invalid water bindings');
+  if(data.render!==undefined&&!validRenderData(data.render))throw Error('invalid render bindings');
   return data;
 }
 

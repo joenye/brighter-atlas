@@ -53,7 +53,14 @@ export const ALL_CATS = Object.keys(CAT_BUNDLES);
 
 export const BUNDLE_LABEL: Record<number, string> = {
   0: 'datatable', 1: 'animations', 2: 'metadata', 3: 'images',
-  5: 'meshes', 6: 'rigs', 8: 'audio',
+  4: 'pixel shaders', 5: 'meshes', 6: 'rigs', 7: 'vertex shaders', 8: 'audio',
+};
+
+// Bundles a category uses when they are supplied, and never requires: the
+// world view draws with the game's own shaders when both shader bundles are
+// present (Windows builds only; the viewer checks the format itself).
+export const OPTIONAL_CAT_BUNDLES: Record<string, number[]> = {
+  world: [4, 7],
 };
 
 export function requiredBundles(cats: string[]): number[] {
@@ -156,6 +163,10 @@ async function ingest({
   const errors: string[] = [];
   const need = requiredBundles(cats);
   const missing = need.filter((n) => !files[n]);
+  for (const c of cats) {
+    for (const n of OPTIONAL_CAT_BUNDLES[c] || []) if (files[n] && !need.includes(n)) need.push(n);
+  }
+  need.sort((a, b) => a - b);
   if (missing.length) {
     throw new Error(`missing bundle file(s): ${missing.map((n) => `assetBundle${n} (${BUNDLE_LABEL[n]})`).join(', ')}`);
   }

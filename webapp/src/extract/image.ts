@@ -235,6 +235,30 @@ export function decodeSubImage(
   return { w, h, rgba };
 }
 
+// Rebuild the standard interleaved block layout (BC1: colours then indices;
+// BC3: alpha endpoints, alpha indices, colours, colour indices; BC4: endpoints,
+// indices; BC5: red endpoints, red indices, green endpoints, green indices)
+// from the planar streams, so the blocks can be handed to the GPU as they are.
+export function interleaveBlocks(fmt: number, w: number, h: number, data: Uint8Array): Uint8Array {
+  const info = FORMATS[fmt];
+  if (!info || fmt === 0x16) throw new Error(`format 0x${fmt.toString(16)} has no blocks`);
+  const nb = Math.floor(w / 4) * Math.floor(h / 4);
+  if (data.length !== nb * info.bsize) throw new Error(`size mismatch: fmt 0x${fmt.toString(16)} ${w}x${h}`);
+  const out = new Uint8Array(data.length);
+  // [stream start per block, bytes per block] in the output block order
+  const streams: [number, number][] = fmt === 0x26 ? [[0, 4], [4 * nb, 4]]
+    : fmt === 0x28 ? [[0, 2], [6 * nb, 6], [2 * nb, 4], [12 * nb, 4]]
+    : fmt === 0x22 ? [[0, 2], [2 * nb, 6]]
+    : [[0, 2], [4 * nb, 6], [2 * nb, 2], [10 * nb, 6]];
+  for (let b = 0, o = 0; b < nb; b++) {
+    for (const [start, n] of streams) {
+      out.set(data.subarray(start + b * n, start + b * n + n), o);
+      o += n;
+    }
+  }
+  return out;
+}
+
 // Parameter-blue cutout is deliberately population-gated. All-zero packed
 // planes are common and mean "unused", not fully transparent; all-255 means
 // opaque. Only a plane containing both populations is coverage. The operation

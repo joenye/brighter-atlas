@@ -14,6 +14,7 @@ import { buildMeshGeometry } from '../mesh-geometry.js';
 import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
 import type { AppStore } from '../../store.js';
+import type { GameRoomSource, GameBatchSource } from './game-frame.js';
 
 export const WORLD_CATEGORIES: readonly string[] = Object.freeze([
   'terrain', 'models', 'spawns', 'components',
@@ -438,6 +439,7 @@ export class WorldScene {
   gameWater: GameWaterShared;
   /** Water drawn with the game's surface and curtain materials (else plain). */
   gameWaterEnabled: boolean;
+  gameShading = false;
   _waterStyles: Map<number, GameWaterStyleUniforms>;
   _waterTexturePromises: Map<string, Promise<any>>;
   _collisionGeometry: THREE.BoxGeometry;
@@ -1207,6 +1209,49 @@ export class WorldScene {
     return target;
   }
 
+  /** One loaded room's placed batches for the game's own programs: raw mesh
+   *  payloads with native-frame placements, the placement tints, and the
+   *  water material each water face draws with. */
+  async gameRoomSource(room: WorldSceneRoom): Promise<GameRoomSource> {
+    const water = this.index?.water ?? null;
+    const render = this.index?.render ?? null;
+    const batches: GameBatchSource[] = [];
+    const matrix = new THREE.Matrix4();
+    room.group.updateMatrix();
+    for (const batch of this._batchRows(room.shard)) {
+      if (batch.category === 'spawns') continue;
+      const waterInfo = water?.materials?.[String(batch.material)] ?? null;
+      const hasProgram = !!render?.materials?.[String(batch.material)];
+      if (!waterInfo && !hasProgram) continue;
+      // Untextured ground (the sea bed) draws with its colour-only program;
+      // untextured model placements are markers and stay hidden.
+      if (!waterInfo && batch.flags & this.flags.unrenderable) continue;
+      if (!waterInfo && batch.flags & this.flags.authoredEmpty && batch.category !== 'terrain') continue;
+      const payload = await this.store.payload(`meshes/${pad5(batch.mesh)}.json`);
+      const matrices = batch.entries.map((entry) => {
+        this._placementMatrix(room.shard, entry.row, matrix, false);
+        return room.group.matrix.clone().multiply(matrix);
+      });
+      batches.push({
+        category: batch.category,
+        mesh: Number(batch.mesh), material: Number(batch.material), renderTexture: Number(batch.renderTexture),
+        payload, matrices, tints: batch.entries.map(() => batch.recolors?.[0] ?? null),
+        water: waterInfo ? { kind: waterInfo.kind, style: waterInfo.style, opacity: waterInfo.opacity, window: waterInfo.window } : null,
+      });
+    }
+    const grid = room.shard.colour_grid ?? null;
+    const [w, h] = room.shard.size ?? [room.meta?.w ?? 0, room.meta?.h ?? 0];
+    return {
+      roomId: room.id,
+      bounds: {
+        inner: [0, 0, w, h],
+        outer: grid ? [grid.x0, grid.y0, grid.x0 + grid.width, grid.y0 + grid.height] : [0, 0, w, h],
+        layers: Number(room.shard.layers) || 1,
+      },
+      grid, batches, water, textureMeta: (id: number) => this.textureMeta(id),
+    };
+  }
+
   _batchRows(shard: any): WorldBatch[] {
     const batches = new Map<string, WorldBatch>();
     const add = ({ category, sourceKind, row, placementIndex, columns: pc, z }: {
@@ -1288,8 +1333,23 @@ export class WorldScene {
       : this.defaultZVisible;
   }
 
+  /** While the game's own frame draws the room, hide what it draws. */
+  setGameShading(on: boolean): void {
+    if (this.gameShading === on) return;
+    this.gameShading = on;
+    for (const room of this.rooms.values()) for (const mesh of room.meshes) this._applyMeshVisibility(mesh);
+  }
+
+  _gameDraws(exact: any): boolean {
+    if (!exact || exact.category === 'spawns') return false;
+    const material = String(exact.material);
+    return !!this.index?.water?.materials?.[material]
+      || (!!this.index?.render?.materials?.[material] && (!exact.authoredEmpty || exact.category === 'terrain'));
+  }
+
   _applyMeshVisibility(mesh: THREE.InstancedMesh): void {
     const exact = mesh.userData.exact;
+    if (this.gameShading && this._gameDraws(exact)) { mesh.visible = false; return; }
     // A water surface has no plain texture of its own (its material is
     // authored empty): while the game's water draws it, it is always shown.
     const water = !!mesh.userData.gameWater && this.gameWaterEnabled;

@@ -20,6 +20,7 @@ import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
 import {readWorldWater, type WorldWater} from './water-materials.js';
+import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, type RenderEnvironment} from './render-data.js';
 import {b64FromTyped} from '../b64.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
@@ -27,7 +28,7 @@ import { deriveRoomAmbience } from './room-ambience.js';
 import { deriveMapRoomRecords } from '../maps/records.js';
 import { decodeMapAnnotationTable } from '../maps/bindings.js';
 import { validateMapDecodeData } from '../maps/decode-data.js';
-import { deriveRoomMetadata } from './room-metadata.js';
+import { deriveRoomMetadata, resolveValue } from './room-metadata.js';
 import {loadPlacementData,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
@@ -194,6 +195,7 @@ export async function extractWorld({
   // game tints the room's ground and water by it.
   const colourGrids = new Map<number, {x0: number; y0: number; width: number; height: number; colours: number[][]}>();
   const contentHashes = new Map<number, string>(); // ab2 idx -> sha256/16 of decoded bytes
+  const environmentSlots = new Map<number, number>(); // ab2 idx -> environment record slot
   step('rooms', 0, entries2.length);
   for (let i = 0; i < entries2.length; i++) {
     bail();
@@ -215,6 +217,12 @@ export async function extractWorld({
       });
       if (colours.every((c: any) => c)) {
         colourGrids.set(i, {x0: ox0, y0: oy0, width: ox1 - ox0, height: oy1 - oy0, colours: colours as number[][]});
+      }
+      // The room's scene environment (lights, vignette colour, height fade).
+      const envValue = placementData?.render?.environment.assetValue;
+      if (envValue !== undefined) {
+        const ref = roomMod.deref(parsed!.top.slice(parsed!.table.length)[envValue], parsed!.table);
+        if (ref?.kind === 'lit' && ref.tag === 0x26 && Number.isInteger(ref.value)) environmentSlots.set(i, ref.value);
       }
       rooms.push({
         idx: i,
@@ -619,6 +627,37 @@ export async function extractWorld({
   worldIndex.textures = Object.fromEntries([...texMeta].map(([id, meta]) => [id, meta]));
   worldIndex.links = placement.links;
   if (worldWater) worldIndex.water = worldWater;
+  // How the game draws the world: program tables, materials and each room's
+  // scene environment, from the optional per-build render bindings.
+  try {
+    const render = placementData?.render;
+    if (render) {
+      const decode = effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any;
+      const environments: Record<string, RenderEnvironment> = {};
+      for (const [roomId, slot] of environmentSlots) {
+        const owner = roomMetadata.get(roomId)?.owner;
+        const override = render.environment.overrides.find(o => rows[owner as number]?.runtime === o.roomRuntime);
+        let preset = null;
+        if (override) preset = archivedValue(ab0, profile, override.presetOffset);
+        else if (rows[slot]?.runtime === render.environment.family) {
+          const f = decode(slot)?.find((x: any) => x.op === render.environment.field);
+          preset = f?.kind === 'G' ? resolveValue(pool.values, f.node) : null;
+        }
+        const env = readEnvironmentPreset(render, preset, rows, decode, pool.values, dt.symbols);
+        if (env) environments[roomId] = env;
+      }
+      worldIndex.render = {
+        programs: render.programs, vertexShaders: render.vertexShaders, pixelShaders: render.pixelShaders,
+        samplers: render.samplers, blends: render.blends, waterPrograms: render.waterPrograms,
+        materials: readRenderMaterials(render, rows, decode, pool.values, dt.symbols),
+        environments,
+        lighting: {direction: archivedFloats(ab0, profile, render.lighting.directionOffset, 0x22, 3),
+          gamma: render.lighting.gamma, fade: render.lighting.fade},
+        shadow: {...render.shadow, lightView: archivedFloats(ab0, profile, render.shadow.lightViewOffset, 0x30, 12)},
+        ssao: render.ssao, camera: render.camera, vignette: render.vignette, clock: render.clock,
+      };
+    }
+  } catch { delete worldIndex.render; }
   bail();
 
   // ---- (g) portable system catalog through the existing validation seam -----
