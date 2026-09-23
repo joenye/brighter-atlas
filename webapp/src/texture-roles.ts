@@ -27,17 +27,29 @@ const isColour = (entry: TextureEntry) => isFormat(entry, 'RGBA8')
 const isParameter = (entry: TextureEntry) => isFormat(entry, 'BC1') || isFormat(entry, 'BC3');
 
 // entries: [{fmt,w,h}, ...] -> chain id per entry (mip runs of one map).
+// Some containers store a map's smallest level after its largest (128, 256,
+// 512, then 64): the last image of a format run that is exactly half the
+// chain's smallest level belongs to that chain.
 export function detectChains(entries: TextureEntry[] | null | undefined): number[] {
+  const list = entries || [];
   const chains = [];
   let cur = -1;
   let prev = null;
-  for (const entry of entries || []) {
+  let members: TextureEntry[] = [];
+  for (let k = 0; k < list.length; k++) {
+    const entry = list[k];
     let cont = false;
     if (prev && prev.fmt === entry.fmt && prev.w && prev.h) {
       const ratio = Math.sqrt((entry.w / prev.w) * (entry.h / prev.h));
       cont = (ratio >= 1.7 && ratio <= 2.35) || (ratio >= 0.42 && ratio <= 0.59);
+      const lastOfRun = k + 1 === list.length || list[k + 1].fmt !== entry.fmt;
+      if (!cont && lastOfRun) {
+        const smallest = members.reduce((a, b) => (b.w * b.h < a.w * a.h ? b : a));
+        cont = entry.w * 2 === smallest.w && entry.h * 2 === smallest.h;
+      }
     }
-    cur = cont ? cur : cur + 1;
+    if (!cont) { cur++; members = []; }
+    members.push(entry);
     chains.push(cur);
     prev = entry;
   }

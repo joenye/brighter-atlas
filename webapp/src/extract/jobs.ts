@@ -143,7 +143,7 @@ export const INDEX_JOBS: Record<string,
       albedo: number | null; normal: number | null; parameter: number | null;
       specular: number | null;
       sprite: SpriteMeta | null;
-      subs?: [number, number][];
+      subs?: [number, number, number][];   // [width, height, format] per sub-image
     } = {
       i, kind: 'other', alpha: false, spreadMax: null,
       paramMin: null, paramMax: null, water: null,
@@ -161,7 +161,7 @@ export const INDEX_JOBS: Record<string,
       try { entries = parseImageMeta(tail); } catch { break decode; }
       // Every sub-image's size in container order, so renderers that need a
       // container's full mip set (water) request exactly what exists.
-      out.subs = entries.map((e) => [e.w, e.h]);
+      out.subs = entries.map((e) => [e.w, e.h, e.fmt]);
       // Sprite metrics are recorded for EVERY container with readable image
       // metadata, before the material-role gate below: a particle sprite is
       // typically a single-channel mask chain, which has no albedo role at

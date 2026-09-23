@@ -14,6 +14,7 @@ import { THREE } from '../three-common.js';
 import { GameShaderLibrary, putFloats, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
 import { bakeGameGeometry } from './game-geometry.js';
+import { detectChains } from '../../texture-roles.js';
 import type { YConvention } from './dxbc-glsl.js';
 
 export interface GameRenderIndex extends GameRenderTables {
@@ -356,14 +357,31 @@ export class GameFrame {
     return p;
   }
 
-  /** The sub-images of the plane whose largest image is `top` (same format, halving sizes). */
+  /** The sub-images of the plane holding `top`, largest first: its chain's
+   *  levels while width and height both halve. A level carrying its own
+   *  border (36 after 68, or 312 high after 620) ends the plane. */
   private planeSubs(meta: any, top: number): number[] {
-    const subs: [number, number][] = meta.subs ?? [];
+    const subs: number[][] = meta.subs ?? [];
+    if (subs.length && subs.every((s) => s.length >= 3)) {
+      const chains = detectChains(subs.map(([w, h, fmt]) => ({ w, h, fmt })));
+      const members = subs.map((_, k) => k).filter((k) => chains[k] === chains[top])
+        .sort((a, b) => subs[b][0] * subs[b][1] - subs[a][0] * subs[a][1]);
+      const levels = [members[0]];
+      for (const k of members.slice(1)) {
+        const [w, h] = subs[levels[levels.length - 1]];
+        if (subs[k][0] * 2 !== w || subs[k][1] * 2 !== h) break;
+        levels.push(k);
+      }
+      return levels;
+    }
+    // Older metadata without formats: walk the neighbours of `top`.
     const out = [top];
     // the chain is stored either smallest or largest first around its top
     for (const step of [-1, 1]) {
-      let k = top, w = subs[top]?.[0] ?? 0;
-      while (subs[k + step] && subs[k + step][0] * 2 === w) { k += step; w = subs[k][0]; out.push(k); }
+      let k = top, w = subs[top]?.[0] ?? 0, h = subs[top]?.[1] ?? 0;
+      while (subs[k + step] && subs[k + step][0] * 2 === w && subs[k + step][1] * 2 === h) {
+        k += step; [w, h] = subs[k]; out.push(k);
+      }
     }
     return out;
   }
