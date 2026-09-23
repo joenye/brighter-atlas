@@ -20,6 +20,7 @@ import { roomOccupancy, roomIndividualAnchors } from './room.js';
 import { AssetGraph, type OccurrenceHit, type PartRecord, type PoolNode, type RegistryRow } from './graph.js';
 import { SpawnGraph, type RoomRowRef } from './spawns.js';
 import {createActorHeightReader, type PlacementDecodeData} from './placement.js';
+import {partColour, tileFraction, type TileDecodeData} from './tile-colour.js';
 import {
   extractEnemyRosters, type EnemyRosterEntry, type EnemyDefinition,
 } from './models.js';
@@ -103,6 +104,7 @@ export const PLACEMENT_COLUMNS = [
   'occurrence', 'mesh', 'material', 'texture', 'render_texture',
   'flags', 'matrix', 'recolor', 'part_kind', 'part_index',
   'mesh_field_op', 'material_field_op', 'confidence', 'category_evidence',
+  'part_colour',
 ];
 export const LINK_COLUMNS = [
   'occurrence', 'direction', 'target_occurrence', 'dx', 'dy', 'dz',
@@ -205,6 +207,7 @@ export const SEMANTICS = {
   spawn_origin: 'new rows use origin=actor and retain authored coordinates; legacy roster and roster_center values are reserved only for reading older extractions',
   spawn_recolors: 'two exact actor tint fields are paired by part index when serialized as series, or applied actor-wide when both fields are scalar; the actor schema has implicit neutral output modulation rather than a fabricated third stored colour',
   placement_recolors: 'three values are tint1/tint2/half-range output modulation; a two-value placement with uniform_luminance_tint stores the compact ground schema\'s exact tint/output-modulation pair because its unused second tint is absent rather than fabricated',
+  part_colour: 'index into part_colours: twelve numbers, the colour the game gives the part at its tile (full range RGBA, its vertex colour is half of it) then the two recolour tints its recoloured textures use (half range RGBA each); the colour is two authored colours blended by a per-tile fraction hashed from the room seed and the tile x, y, or for the top faces of varied ground blocks one colour with a per-tile lightness shift; -1 where it is not known',
   skinned_is_not_spawn: 'AB5 skeleton metadata remains a placement flag only and is never used to identify gameplay actors',
   components: 'appearance parts on parent-linked class-351 occurrences',
   individual_anchors: 'class-447/448 room-space polygons and explicit centers, parallel to the class-189 individuals array',
@@ -248,6 +251,8 @@ export interface ShardContext {
   surfaceMesh: (meshId: number) => SurfaceMesh;
   occupancy: (roomId: number) => ReturnType<typeof roomOccupancy>;
   actorHeight: ReturnType<typeof createActorHeightReader>;
+  tiles: TileDecodeData | null;
+  recordType: (slot: number) => number | null;
 }
 
 const inc = (counts: Record<string, number>, key: string, n = 1) => {
@@ -575,6 +580,8 @@ export interface ShardContextOptions {
   assetMaps?: { meshSlots: Map<number, number>; textureSlots: Map<number, number[]> } | null;
   materialAssets?: { handles: Set<number>; materialTextures: Map<number, number[]> } | null;
   enemyDefs?: EnemyDefinition[] | null;
+  // Constructor values per registry slot (replay.js replayConstructors).
+  objects?: { values: number[] }[] | null;
 }
 
 // Context factory: everything the per-room builder needs, resolved once.
@@ -587,7 +594,7 @@ export interface ShardContextOptions {
 //   profile      : optional per-build decode data (provenance in the index)
 export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
-  charset = null, symbols, bytes, enemyDefs = null, placement = null,
+  charset = null, symbols, bytes, enemyDefs = null, placement = null, objects = null,
 }: ShardContextOptions): ShardContext {
   const graph = new AssetGraph(rows, pool, undefined, { bytes, profile, symbols });
   const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs });
@@ -614,6 +621,12 @@ export function createShardContext({
     rooms,
     roomRows,
     actorHeight,
+    tiles: placement?.tiles ?? null,
+    recordType: (slot: number) => {
+      const typeValue = placement?.tiles?.variation.typeValue;
+      const value = typeValue === undefined ? undefined : objects?.[slot]?.values?.[typeValue];
+      return Number.isInteger(value) ? value! : null;
+    },
     roomIds,
     rostersByRoom,
     names,
@@ -687,6 +700,16 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   const matrixLookup = new Map<string, number>();
   const recolors: number[][][] = [];
   const recolorLookup = new Map<string, number>();
+  // Part colours, per tile: the room's seed lives on its owner record.
+  const partColours: number[][] = [];
+  const partColourLookup = new Map<string, number>();
+  const tiles = ctx.tiles;
+  let seed: number | null = null;
+  if (tiles) {
+    const field = ctx.graph.fields(roomRow.record).get(tiles.seed);
+    const node = field && field.elements.length === 1 ? ctx.graph.deref(field.elements[0]) : null;
+    if (node?.tag === 0x85 && Array.isArray(node.value) && Number.isInteger(node.value[1])) seed = node.value[1];
+  }
   const placementRows: Record<'terrain' | 'models' | 'components', any[][]> = {
     terrain: [], models: [], components: [],
   };
@@ -778,6 +801,14 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
 
     const partIndex = part.face_index !== undefined ? part.face_index
       : part.series_index !== undefined ? part.series_index : -1;
+    let partColourIndex = -1;
+    if (tiles && seed !== null) {
+      const rule = ctx.graph.partColourRule(part, hit.resource, tiles, ctx.recordType(hit.resource));
+      if (rule) {
+        const entry = [...partColour(rule, tileFraction(seed, hit.cell[0], hit.cell[1])), ...rule.tints[0], ...rule.tints[1]];
+        partColourIndex = intern(partColours, partColourLookup, entry.join(','), entry);
+      }
+    }
     placementRows[category].push([
       index, meshId, part.material_slot, textureId, renderTexture,
       flags, matrixIndex, recolorIndex, PART_KIND[part.kind],
@@ -786,6 +817,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       part.material_field_op !== undefined ? part.material_field_op : -1,
       CONFIDENCE[part.confidence],
       CATEGORY_EVIDENCE[categoryEvidence],
+      partColourIndex,
     ]);
     inc(counts, category);
     inc(counts, 'placements');
@@ -928,6 +960,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     room_volumes: ctx.spawnGraph.roomVolumes(roomRow.record),
     matrices,
     recolors,
+    part_colours: partColours,
     collision: collisions,
     counts,
     occurrence_z: sortedCounter(occurrenceZ),

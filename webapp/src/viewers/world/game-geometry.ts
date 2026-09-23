@@ -57,7 +57,7 @@ export function tileColourAt(grid: TileColourGrid, x: number, y: number, tileUni
 export interface BakeInstance {
   /** Native-frame placement of the raw mesh (column-major 4x4). */
   matrix: THREE.Matrix4;
-  /** First recolour colour (the placement tint), or null for neutral. */
+  /** The part colour (full range; its vertex colour is half of it), or null for neutral. */
   tint: number[] | null;
 }
 

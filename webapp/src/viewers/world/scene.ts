@@ -1205,6 +1205,21 @@ export class WorldScene {
     return target;
   }
 
+  /** The colour the game gives a placed part at its tile (full range), when
+   *  the shard carries it. */
+  _partColour(shard: any, row: any[]): number[] | null {
+    const entry = this._partColourEntry(shard, row);
+    return entry ? entry.slice(0, 4) : null;
+  }
+
+  _partColourEntry(shard: any, row: any[]): number[] | null {
+    const column = this.placementColumns?.part_colour;
+    if (column === undefined) return null;
+    const index = Number(row[column]);
+    const entry = index >= 0 ? shard.part_colours?.[index] : null;
+    return Array.isArray(entry) && entry.length >= 4 ? entry.map(Number) : null;
+  }
+
   /** One loaded room's placed batches for the game's own programs: raw mesh
    *  payloads with native-frame placements, the placement tints, and the
    *  water material each water face draws with. */
@@ -1232,7 +1247,7 @@ export class WorldScene {
       batches.push({
         category: batch.category,
         mesh: Number(batch.mesh), material: Number(batch.material), renderTexture: Number(batch.renderTexture),
-        payload, matrices, tints: batch.entries.map(() => batch.recolors?.[0] ?? null),
+        payload, matrices, tints: batch.entries.map((entry) => this._partColour(room.shard, entry.row) ?? batch.recolors?.[0] ?? null),
         water: waterInfo ? { kind: waterInfo.kind, style: waterInfo.style, opacity: waterInfo.opacity, window: waterInfo.window } : null,
       });
     }

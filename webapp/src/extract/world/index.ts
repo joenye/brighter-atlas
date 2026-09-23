@@ -342,6 +342,7 @@ export async function extractWorld({
     profile,
     charset: dt.charset,
     placement:placementData,
+    objects,
     bytes: ab0,
     assetMaps,             // shared pure derivations (computed once above)
     materialAssets,

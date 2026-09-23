@@ -10,6 +10,7 @@ import { makeRegistryRowDecoder } from './effects.js';
 import { readStaticAppearance, type StaticAppearance } from './default-appearance.js';
 import type { FillRow } from './replay.js';
 import type { WorldProfile } from './profile.js';
+import type { PartColourRule, TileDecodeData } from './tile-colour.js';
 
 // One replayed registry fill row. g: [op, depth, tag, value] events,
 // r: [op, ref] direct refs, v: constructor values.
@@ -847,6 +848,62 @@ export class AssetGraph {
     };
     // Two owner-wide defaults precede the per-face triples.
     return decoded(base + 10 + 3 * faceIndex) || decoded(base + 1);
+  }
+
+  // How the game colours one placed part (see tile-colour.ts). Face parts
+  // take a pair from their ground: one pair per face, or one pair for the
+  // whole ground; on the default ground the block's own pair after its
+  // direct material. The top faces (0 and 2) of varied blocks use the
+  // ground's two varied colours instead, or on a one-pair ground whose
+  // colours match, shift the lightness of that colour. Model parts blend the
+  // pair after their material; typed parts keep their third colour (stored
+  // at half range). The first recolour tint is the face's (or the ground's)
+  // third colour, or a typed part's first; the second is neutral, or a typed
+  // part's second. null: this part's colour is not known here.
+  partColourRule(part: PartRecord, ownerSlot: number, tiles: TileDecodeData,
+    ownerType: number | null): PartColourRule | null {
+    const colour = (slot: number, op: number) => this.color4f(this.fields(slot).get(op));
+    const neutral = tiles.neutral.slice();
+    if (part.typed_schema === 'mesh_material_colors3_matrix3x4' || part.typed_schema === 'mesh_material_colors3') {
+      const [first, second, third] = part.recolors ?? [];
+      if (![first, second, third].every((c) => Array.isArray(c) && c.length === 4)) return null;
+      const full = [third[0] * 2, third[1] * 2, third[2] * 2, third[3]];
+      return { a: full, b: full, shift: false, tints: [first.slice(), second.slice()] };
+    }
+    if (part.kind === 'model_part') {
+      const op = part.material_field_op;
+      if (!Number.isInteger(op) || op < 0) return null;
+      const a = colour(ownerSlot, op + 1), b = colour(ownerSlot, op + 2);
+      return a && b ? { a, b, shift: false, tints: [neutral, neutral.slice()] } : null;
+    }
+    if (part.kind !== 'terrain_face' && part.kind !== 'block_face') return null;
+    const face = part.face_index;
+    if (!Number.isInteger(face) || !Number.isInteger(part.mesh_field_op)) return null;
+    const field = this.fields(ownerSlot).get(tiles.variation.flag);
+    const flag = field && field.elements.length === 1 ? this.deref(field.elements[0]) : null;
+    const [first, last] = tiles.variation.types;
+    const varied = ownerType !== null && ownerType >= first && ownerType <= last && flag?.tag === 0x0c;
+    const top = face === 0 || face === 2;
+    const ground = part.ground_resource;
+    let a: number[] | null, b: number[] | null, tint: number[] | null, onePair: boolean;
+    if (ground === tiles.defaultGround) {
+      const own = part.mesh_field_op - face + this._fallbackRel();
+      a = colour(ownerSlot, own + 1); b = colour(ownerSlot, own + 2); tint = neutral; onePair = true;
+    } else {
+      if (!Number.isInteger(ground)) return null;
+      const base = this._groundFieldBase(ground);
+      if (base === null) return null;
+      a = colour(ground, base + 10 + 3 * face); b = colour(ground, base + 11 + 3 * face);
+      tint = colour(ground, base + 12 + 3 * face);
+      onePair = !(a && b);
+      if (onePair) {
+        a = colour(ground, base + 1); b = colour(ground, base + 2); tint = colour(ground, base + 3);
+      } else if (varied && top) {
+        a = colour(ground, base + 8); b = colour(ground, base + 9);
+      }
+    }
+    if (!a || !b || !tint) return null;
+    return { a, b, shift: onePair && varied && top && a.every((v, k) => v === b![k]), tints: [tint, neutral.slice()] };
   }
 
   groundRecolors(groundSlot: number | null | undefined, faceIndex = 0): number[][] | null {
