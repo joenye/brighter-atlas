@@ -45,5 +45,15 @@ try {
   t.faceParts=()=>[];t.groundRecolorData=()=>null;
   const custom=t.terrainParts(0,1);assert.equal(custom.length,1);assert.equal(custom[0].kind,'terrain_custom_mesh');assert.equal(custom[0].mesh,10);
  }
- console.log('2,048 face-mask/orientation cases, cache reuse, linked terrain and alternate appearance guards passed');
+ // On the default ground a block's faces take its own material; any other
+ // ground supplies one material per face.
+ {
+  const g=new AssetGraph([],[],undefined,{defaultGround:7}),mesh={m:1};
+  const shape=new Map<number,any>([[37,mesh],[47,'own']]),ground=new Map<number,any>([[7,'ground']]);
+  g.fields=(id)=>id===0?shape:ground;g._groundFieldBase=()=>7;g._fallbackRel=()=>10;g.groundRecolorData=()=>null;
+  g.oneMesh=f=>f===mesh?[5,5]:null;g.oneMaterial=f=>f==='own'?[47,470]:f==='ground'?[7,70]:null;
+  assert.equal(g.faceParts(0,7,'block_face',37)[0].material_slot,47);
+  assert.equal(g.faceParts(0,8,'block_face',37)[0].material_slot,7);
+ }
+ console.log('2,048 face-mask/orientation cases, cache reuse, linked terrain, default ground and alternate appearance guards passed');
 } finally {await rm(tmp,{recursive:true,force:true});}

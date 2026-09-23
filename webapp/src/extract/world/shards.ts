@@ -596,7 +596,7 @@ export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
   charset = null, symbols, bytes, enemyDefs = null, placement = null, objects = null,
 }: ShardContextOptions): ShardContext {
-  const graph = new AssetGraph(rows, pool, undefined, { bytes, profile, symbols });
+  const graph = new AssetGraph(rows, pool, undefined, { bytes, profile, symbols, defaultGround: placement?.tiles?.defaultGround ?? null });
   const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs });
   const roomIds = Array.from(rooms.keys()).sort((a, b) => a - b);
   const roomRows = spawnGraph.discoverRoomRows(roomIds);

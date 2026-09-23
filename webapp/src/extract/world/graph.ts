@@ -171,6 +171,9 @@ export class AssetGraph {
   private _oneMaterialCache: WeakMap<DecodedField, [number, number] | null>;
   private _decode: ReturnType<typeof makeRegistryRowDecoder> | null;
   private _symbols: string[];
+  // The ground record a block names when it has no ground of its own
+  // (per-build tile decode data); its faces take the block's own material.
+  private _defaultGround: number | null;
   private _drawOwners = new Map<number, number | null>();
   private _resolvedDrawHits = new WeakSet<OccurrenceHit>();
   private _staticAppearance = new Map<number, StaticAppearance | null>();
@@ -184,13 +187,14 @@ export class AssetGraph {
     // face-base learning) stays per-graph, preserving the fresh-graph
     // requirement of the structural-binding stage.
     shared?: { meshBySlot: Map<number, number>; texturesByMaterial: Map<number, number[]> },
-    source?: { bytes?: Uint8Array; profile?: WorldProfile | null; symbols?: string[] },
+    source?: { bytes?: Uint8Array; profile?: WorldProfile | null; symbols?: string[]; defaultGround?: number | null },
   ) {
     this.rows = rows;
     this.pool = pool;
     this._decode = source?.bytes && source.profile
       ? makeRegistryRowDecoder(rows as FillRow[], source.bytes, source.profile) : null;
     this._symbols = source?.symbols ?? [];
+    this._defaultGround = source?.defaultGround ?? null;
     if (shared) {
       this.meshBySlot = shared.meshBySlot;
       this.texturesByMaterial = shared.texturesByMaterial;
@@ -1190,7 +1194,10 @@ export class AssetGraph {
     const ground = groundSlot !== null ? this.fields(groundSlot) : new Map<number, DecodedField>();
     if (faceBase === null) faceBase = this._faceBase(shapeSlot, groundSlot);
     if (faceBase === null) return [];
-    const groundBase = this._groundFieldBase(groundSlot);
+    // On the default ground every face takes the block's own material, as
+    // the game builds it; other grounds supply one material per face.
+    const groundBase = groundSlot !== null && groundSlot === this._defaultGround
+      ? null : this._groundFieldBase(groundSlot);
     const fallbackOp = faceBase + this._fallbackRel();
     const fallback = this.oneMaterial(shape.get(fallbackOp));
     const groundMaterials: [number, [number, number]][] = [];
