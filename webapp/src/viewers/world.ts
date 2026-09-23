@@ -913,9 +913,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     } else Object.assign(cam, savedCamera);
     cam.updateProjectionMatrix();
   }
+  // While a game frame is being built, its GL work (programs, buffers,
+  // textures, vertex arrays) lands between three's frames, behind three's
+  // state cache: three then draws with whatever program or texture the frame
+  // left bound. Until the build finishes, every frame resets that cache.
+  let gameBuilds = 0;
   async function setupGameShading(room: any): Promise<void> {
     const gl = renderer.getContext();
     if (allMode || !world.index?.render || !(gl instanceof WebGL2RenderingContext)) return;
+    gameBuilds++;
     try {
       const frame = new GameFrame(gl, (rel: string) => app.store.url(rel), world.index.render, world.tileUnits);
       await frame.setRoom(await world.gameRoomSource(room));
@@ -926,6 +932,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     } catch (error) {
       renderer.resetState();
       console.warn('game shading unavailable for this room', error);
+    } finally {
+      gameBuilds--;
     }
   }
   /** Native-frame camera of the current view (or the harness override). */
@@ -964,7 +972,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         this.renderer.autoClear = autoClear;
         this.scene.background = background;
         this.scene.fog = fog;
-      } else this.renderer.render(this.scene, this.camera);
+      } else {
+        if (gameBuilds) this.renderer.resetState();
+        this.renderer.render(this.scene, this.camera);
+      }
       requestAnimationFrame(this._loop);
     }.bind(scene3d);
   }

@@ -224,6 +224,17 @@ export class GameGL {
     gl.colorMask(s.colourWrite, s.colourWrite, s.colourWrite, s.colourWrite);
   }
 
+  private readonly samplerUnits = new Set<number>();
+
+  /** Unbind every sampler object bound here. three.js samples with its
+   *  textures' own parameters and knows nothing of sampler objects, so one
+   *  left on a unit overrides its filtering there, and the shadow map's
+   *  comparison sampler fails its draws outright (a format mismatch). */
+  releaseSamplers(): void {
+    for (const unit of this.samplerUnits) this.gl.bindSampler(unit, null);
+    this.samplerUnits.clear();
+  }
+
   /** Bind constant buffers (raw words), textures with their sampler objects, and the target height. */
   bindResources(p: GameGLProgram, cbs: Record<string, Uint32Array>, textures: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }>,
     stage: 'vs' | 'ps' | 'both', targetHeight: number): void {
@@ -240,6 +251,7 @@ export class GameGL {
       gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(bound ? bound.texture.target : (s.dim === 'cube' ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D), bound ? bound.texture.texture : null);
       gl.bindSampler(unit, bound?.sampler ?? null);
+      if (bound?.sampler) this.samplerUnits.add(unit);
     }
     if (p.translated.targetHeightUniform) {
       const location = p.uniforms.get(p.translated.targetHeightUniform);

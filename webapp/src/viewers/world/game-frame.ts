@@ -503,6 +503,7 @@ export class GameFrame {
       this.renderFrame(camera, ticks, avatarZ, offscreen);
     } finally {
       if (clip) clip.clipControlEXT(clip.LOWER_LEFT_EXT, clip.NEGATIVE_ONE_TO_ONE_EXT);
+      this.gl.releaseSamplers();
     }
   }
 
