@@ -1219,8 +1219,9 @@ export class WorldScene {
       const waterInfo = water?.materials?.[String(batch.material)] ?? null;
       const hasProgram = !!render?.materials?.[String(batch.material)];
       if (!waterInfo && !hasProgram) continue;
-      // Untextured ground (the sea bed) draws with its colour-only program;
-      // untextured model placements are markers and stay hidden.
+      // Untextured ground (the sea bed) draws with its colour-only program.
+      // Untextured free-standing placements stay hidden: the game keeps them
+      // out of its baked scene (several only anchor particle effects).
       if (!waterInfo && batch.flags & this.flags.unrenderable) continue;
       if (!waterInfo && batch.flags & this.flags.authoredEmpty && batch.category !== 'terrain') continue;
       const payload = await this.store.payload(`meshes/${pad5(batch.mesh)}.json`);
