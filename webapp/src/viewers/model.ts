@@ -33,6 +33,7 @@ import type { IndexEntry } from '../store.js';
 import { applyPackedRecolor, partRecolor } from '../recolor.js';
 import { meshDye, dyeRecolorInput } from '../dyes.js';
 import { EffectsPlayer } from './world/effects-player.js';
+import { EffectBoneAnimation } from './world/effects-animation.js';
 import type { EffectSystem, WorldEffectsDoc } from '../extract/world/effects.js';
 
 function applyPartTransform(obj: any, part: ModelPart | undefined): void {
@@ -366,17 +367,21 @@ export function createModelView(app: any, model: ModelRecord) {
 
   let destroyed = false, scene: any = null, bar: any = null;
   let effectsPlayer: EffectsPlayer | null = null;
-  // sibling group anchored at the model's rest-pose bbox centre; the
-  // EffectsPlayer mounts here so ambient effects (e.g. auras) radiate from
-  // the body rather than from the rig-root/scene-origin at the model's feet
+  // Effects share the mesh's authored local origin. Their own attachment
+  // selectors place births on the root or on individual bones.
   let effectsAnchor: any = null;
+  let effectsSkeleton: any = null, effectsClip: any = null;
+  let effectsAnimation: EffectBoneAnimation | null = null;
+  let effectsAnimationLoop = false;
+  const effectsBindings: {slot: number; ambient: boolean}[] = [];
   // the (at most one) timed system currently slaved to the clip transport:
-  // its clock is driven from bar.t every tick while that clip keeps playing
+  // its clock follows elapsed clip time, including paused seeks and loops
   let effectsSlaved: { slot: number; clip: number } | null = null;
+  let effectRequest = 0;
   const immersive = mountImmersiveControls({ pane: root, host, toolbar });
   const view = {
     root,
-    destroy() { destroyed = true; immersive.destroy(); effectsPlayer?.dispose(); effectsAnchor?.removeFromParent(); scene?.destroy(); bar?.destroy(); },
+    destroy() { destroyed = true; immersive.destroy(); effectsPlayer?.dispose(); effectsAnimation?.dispose(); effectsAnchor?.removeFromParent(); scene?.destroy(); bar?.destroy(); },
     // ←/→ from the global key handler: → enters/advances the variant strip,
     // ← retreats; ← on the leftmost variant exits strip focus back to the list
     variantNav(dir: number): boolean {
@@ -397,18 +402,31 @@ export function createModelView(app: any, model: ModelRecord) {
 
   // Advances the effects player each frame (called from the existing
   // scene.addTick, beside bar.tick). While a timed system is slaved to the
-  // clip transport, its progress tracks bar.t directly instead of the
+  // clip transport, its progress tracks elapsed clip time instead of the
   // player's own master clock, so windowed bursts land on the animation
-  // timeline; it releases back to standalone once that clip stops playing.
+  // timeline. Pause and seek retain the binding; selecting another clip
+  // clears the outgoing effect.
   function tickModelEffects(dt: number, playbackBar: any | null): void {
     if (!effectsPlayer) return;
+    if (effectsSlaved && playbackBar?.clipJson?.i !== effectsSlaved.clip) {
+      effectsPlayer.stop(effectsSlaved.slot);
+      effectsSlaved = null;
+    }
+    const clip = playbackBar?.clipJson ?? null;
+    const loop = !!playbackBar?.loop;
+    if (clip !== effectsClip || loop !== effectsAnimationLoop) {
+      effectsAnimation?.dispose();
+      effectsClip = clip;
+      effectsAnimationLoop = loop;
+      effectsAnimation = effectsSkeleton && clip
+        ? new EffectBoneAnimation(effectsSkeleton, clip, loop, effectsPlayer.clock.tickRate, () => playbackBar.elapsedMs)
+        : null;
+    }
+    for (const binding of effectsBindings) {
+      effectsPlayer.setAnimation(binding.slot, binding.ambient || effectsSlaved?.slot === binding.slot ? effectsAnimation : null);
+    }
     if (effectsSlaved) {
-      if (playbackBar?.playing && playbackBar.clipJson?.i === effectsSlaved.clip) {
-        effectsPlayer.syncClock(effectsSlaved.slot, playbackBar.t * (effectsPlayer.clock.tickRate / 1000));
-      } else {
-        effectsPlayer.unslave(effectsSlaved.slot);
-        effectsSlaved = null;
-      }
+      effectsPlayer.syncClock(effectsSlaved.slot, playbackBar.elapsedMs * (effectsPlayer.clock.tickRate / 1000));
     }
     effectsPlayer.tick(dt, scene.camera);
   }
@@ -419,7 +437,7 @@ export function createModelView(app: any, model: ModelRecord) {
   // timed (attack/impact) systems get a "Play effect" chip that either fires
   // standalone or, when bound to a clip this model actually has, slaves to
   // the PlaybackBar. Fire-and-forget: never blocks mesh loading.
-  async function attachModelEffects(effectsRoot: any, playbackBar: any | null, clipList: IndexEntry[]): Promise<void> {
+  async function attachModelEffects(effectsRoot: any, playbackBar: any | null, clipList: IndexEntry[], rig?: Rig, skeletonJson?: any): Promise<void> {
     const slots = modelOwnerSlots(model);
     if (!slots.size || typeof app.store.worldEffects !== 'function') return;
     let doc: WorldEffectsDoc | null = null;
@@ -428,25 +446,36 @@ export function createModelView(app: any, model: ModelRecord) {
     const systems = systemsForModel(doc, slots);
     if (!systems.length) return;
     const player = new EffectsPlayer({
-      root: effectsRoot, doc, url: (rel: string) => app.store.url(rel), anisotropy: 8,
+      root: effectsRoot, doc, url: (rel: string) => app.store.url(rel),
+      rig: rig ? {id: rig.skelIndex, bones: rig.boneInverses.map(m => m.clone().invert().elements)} : undefined,
     });
+    effectsSkeleton = skeletonJson ?? null;
     const chips: HTMLElement[] = [];
     for (const system of systems) {
-      if (player.addSystem(system.slot) !== 'timed') continue;
+      const mode = player.addSystem(system.slot);
+      if (!mode) continue;
+      effectsBindings.push({slot: system.slot, ambient: mode === 'loop'});
+      if (mode !== 'timed') continue;
       const btn = el('button', {
         class: 'btn', text: `▶ ${effectSystemLabel(system)}`,
         title: 'Play this timed particle effect once',
       });
       btn.addEventListener('click', () => {
+        const request = ++effectRequest;
+        if (effectsSlaved) player.stop(effectsSlaved.slot);
+        effectsSlaved = null;
         const boundClip = playbackBar
           ? system.clips.find((ordinal) => clipList.some((c) => c.i === ordinal && c.f))
           : undefined;
         if (playbackBar && boundClip != null) {
           const entry = clipList.find((c) => c.i === boundClip)!;
-          effectsSlaved = { slot: system.slot, clip: boundClip };
-          playbackBar.loadClip(entry).then(() => playbackBar.play());
+          playbackBar.loadClip(entry).then((loaded: boolean) => {
+            if (!loaded || destroyed || request !== effectRequest) return;
+            effectsSlaved = { slot: system.slot, clip: boundClip };
+            player.syncClock(system.slot, 0, scene.camera);
+            playbackBar.play();
+          });
         } else {
-          effectsSlaved = null;
           player.play(system.slot);
         }
       });
@@ -583,11 +612,8 @@ export function createModelView(app: any, model: ModelRecord) {
       scene.frameBox([bb.min.x, bb.min.y, bb.min.z], [bb.max.x, bb.max.y, bb.max.z]);
       scene.addGround(dim / 2, Math.min(0, bb.min.z), { x: (bb.min.x + bb.max.x) / 2, y: (bb.min.y + bb.max.y) / 2 });
       toolbar.append(makeGridToggle(scene), makeLightToggle(scene));
-      // dedicated anchor at the mesh bbox centre: effects mount here, not at
-      // the scene root, so a floor-level model origin doesn't put ambient
-      // effects at the model's feet
+      // Dedicated lifecycle group, using the same authored origin as the mesh.
       effectsAnchor = new THREE.Group();
-      effectsAnchor.position.copy(bb.getCenter(new THREE.Vector3()));
       scene.scene.add(effectsAnchor);
       const capStatic = { i: model.id.slice(0, 8), h: model.id, name: model.name };
       const staticShot = el('button', { class: 'btn', text: '▣ Screenshot', title: 'Capture the current 3D view as a PNG/JPEG/WebP image' });
@@ -631,13 +657,9 @@ export function createModelView(app: any, model: ModelRecord) {
     anchor.add(...rig.roots);
     scene.scene.add(anchor);
 
-    // dedicated sibling group at the rest-pose bbox centre: do NOT translate
-    // `anchor` itself (it holds the rig roots; moving it would move the
-    // model). Ambient effects (e.g. auras) mount on this group instead, so
-    // they radiate from the body rather than from the rig-root/scene-origin
-    // that sits at the model's feet
+    // A sibling of the mesh rig, in the same local coordinates. Moving the
+    // whole group to the bounding-box centre would offset every attachment.
     effectsAnchor = new THREE.Group();
-    effectsAnchor.position.set((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
     scene.scene.add(effectsAnchor);
 
     const viz = new SkeletonViz(scene.scene, rig, { jointRadius: Math.max(dim * 0.018, 0.12), onTop: true });
@@ -653,7 +675,7 @@ export function createModelView(app: any, model: ModelRecord) {
       if (viz.group.visible && bar.playing) viz.update();
       tickModelEffects(dt, bar);
     });
-    void attachModelEffects(effectsAnchor, bar, clips);
+    void attachModelEffects(effectsAnchor, bar, clips, rig, skelJson);
 
     const active = new Map<string, any>();
     const meshCountLbl = el('b', { text: '0' });

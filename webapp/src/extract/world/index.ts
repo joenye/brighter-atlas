@@ -1,3 +1,6 @@
+import {createEffectScaleReader} from './effect-scales.js';
+import {createEffectWindowReader} from './effect-windows.js';
+import {createEffectSpriteReader} from './effect-sprites.js';
 // World extraction orchestrator: turns the user's bundles into the stored
 // world package: match the per-build decode data against ab0, replay the
 // registry + value pool, parse every ab2 room, stitch the door graph into
@@ -12,6 +15,9 @@
 // This module itself is only ever dynamically imported (ingest.js), so nothing
 // here loads unless the user actually selected the World category.
 
+import {createEffectFacingReader} from './effect-facing.js';
+import {createEffectOriginReader} from './effect-origins.js';
+import {createEffectFieldReader} from './effect-fields.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
@@ -20,6 +26,7 @@ import { decodeMapAnnotationTable } from '../maps/bindings.js';
 import { validateMapDecodeData } from '../maps/decode-data.js';
 import { deriveRoomMetadata } from './room-metadata.js';
 import {loadPlacementData,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
+import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool } from './value-pool.js';
 import { decodeObject, makeSlabReader } from '../bundles.js';
@@ -101,7 +108,7 @@ export async function extractWorld({
   bail();
 
   // ---- (b) registry replay (constructor + fill streams) --------------------
-  const { rows } = replayGraph(ab0, profile, {
+  const { rows, objects } = replayGraph(ab0, profile, {
     onProgress: (done, total) => { bail(); step('replay', done, total); },
   });
   bail();
@@ -497,6 +504,13 @@ export async function extractWorld({
       drawOccurrence: (hit) => ctx.graph.drawOccurrence(hit as any) as any,
       staticAppearance: (slot) => defaultAppearances.get(rows[slot]?.runtime) ?? ctx.graph.staticAppearance(slot),
       appearanceCandidates,
+      effectScales: createEffectScaleReader(placementData?.effectScales, objects),
+      effectWindow: createEffectWindowReader(placementData?.effectWindows, objects),
+      effectSprites: createEffectSpriteReader(placementData?.effectSprites, objects, ab0, profile, pool.values),
+      effectFacing: createEffectFacingReader(placementData?.effectFacings, objects),
+      effectOrigin: createEffectOriginReader(placementData?.effectOrigins, objects),
+      effectProperties: createEffectPropertyReader(placementData?.effectProperties,objects,ab0,profile,pool.values),
+      effectFields: createEffectFieldReader(placementData?.effectFields, objects),
       effectMotion: (controller,hit,roomId) => {
         const motion=effectMotion(controller);
         if(!motion||!placementData)return null;

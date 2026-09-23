@@ -135,6 +135,7 @@ export const COORDINATE_SYSTEM = {
   room_world_position_revision: 1,
   occurrence_draw_revision: 2,
   effect_anchor_revision: 8,
+  effect_property_revision: 4,
   scenery_trim_revision: 1,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,

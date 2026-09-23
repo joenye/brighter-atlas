@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {build} from 'esbuild';
+const tmp=await mkdtemp(path.join(os.tmpdir(),'atlas-effect-properties-'));
+try {
+  const file=path.join(tmp,'properties.mjs');
+  await build({entryPoints:[path.resolve(import.meta.dirname,'../src/extract/world/effect-properties.ts')],bundle:true,platform:'node',format:'esm',outfile:file});
+  const {createEffectPropertyReader,validEffectProperties,effectTimingDurations}=await import(pathToFileURL(file).href);
+  const bytes=new Uint8Array(18),view=new DataView(bytes.buffer);bytes[1]=21;
+  [0.25,0.5,0.75,0.8].forEach((v,i)=>view.setFloat32(2+i*4,v));
+  const binding={instance:8,color:{start:1,end:18,alphaScale:0.25,systemField:7},speedField:12,angularSpeedField:4};
+  const profile={class_fields:{},tag6_fields:{}};
+  const objects=[{values:[0,8]},{values:[0,9]}];
+  const none=[{op:7,kind:'symbol',name:'$none'}];
+  const read=createEffectPropertyReader([binding],objects,bytes,profile,[]);
+  assert.deepEqual(read(0,none).rgba.slice(0,3),[0.25,0.5,0.75]);
+  assert(Math.abs(read(0,none).rgba[3]-0.2)<1e-7);
+  assert.equal(read(0,none).speedField,12);
+  assert.equal(read(1,none),null);
+  assert.equal(read(0,[]),null);
+  assert.equal(createEffectPropertyReader(undefined,objects,bytes,profile,[])(0,none),null);
+  const optional=[{op:7,kind:'typed',class:3,fields:[{op:7,kind:'color',rgba:[1,0.4,0.2,0.5]}]}];
+  assert.deepEqual(read(0,optional).rgba,[1,0.4,0.2,0.125]);
+  assert.equal(read(0,[{op:7,kind:'typed',class:3,fields:[]}]),null);
+  assert.equal(validEffectProperties([binding,binding]),false);
+  assert.equal(validEffectProperties([{...binding,color:{...binding.color,alphaScale:NaN}}]),false);
+  assert.throws(()=>createEffectPropertyReader([{...binding,color:{...binding.color,end:19}}],objects,bytes,profile,[]));
+  bytes[1]=11;assert.throws(()=>createEffectPropertyReader([binding],objects,bytes,profile,[]));
+  const durations=(values:number[])=>values.map((ticks,op)=>({op,kind:'duration',ticks}));
+  assert.deepEqual(effectTimingDurations(durations([100,10,70,100])),[100,10,70]);
+  assert.deepEqual(effectTimingDurations(durations([100,10,70])),[100,10,70]);
+  assert.deepEqual(effectTimingDurations(durations([100,100])),[100,100]);
+  assert.deepEqual(effectTimingDurations(durations([100,10,70,50])),[100,10,70,50]);
+  console.log('Effect properties: source colour, opacity, optional override, independent fields, legacy fallback, invalid data and repeated lifetime passed');
+} finally {await rm(tmp,{recursive:true,force:true});}

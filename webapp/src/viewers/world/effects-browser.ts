@@ -46,18 +46,31 @@ function emitterIsApproxShape(emitter: EffectEmitter, configs: Record<string, Ef
 }
 
 // Analytic framing radius: spawn-shape extent plus how far a particle can
-// travel over its own life (speed * life + 0.5 * accel * life^2), the same
-// closed-form terms effects-sim.ts evaluates per particle. Never exact (it
+// travel over its own life. Bound both motion endpoints so an accelerating
+// particle or a negative speed cannot shrink the frame. Never exact (it
 // ignores fan-out/spread), just enough to auto-frame the preview camera.
 function estimateSystemRadius(system: EffectSystem, configs: Record<string, EffectConfig>, tickRate: number): number {
   const rate = tickRate > 0 ? tickRate : 1;
   let maxReach = 0;
   for (const emitter of system.emitters) {
     const life = Math.max(1, Number(emitter.life?.ticks) || rate);
-    const speed = (Number(emitter.speed?.value) || 0) / rate;
+    // Sampled ranges bound by their largest magnitude.
+    const extent = (v: number | [number, number] | undefined) => Array.isArray(v)
+      ? Math.max(Math.abs(v[0]), Math.abs(v[1])) : Math.abs(Number(v) || 0);
+    const fields = emitter.fields;
+    const speed0 = Number(emitter.speed?.value) || 0;
+    const speed = fields?.speed
+      ? Math.max(extent(fields.speed.start.value) / fields.speed.start.ticks,
+        fields.speed.end === 'start' ? 0 : extent(fields.speed.end.value) / fields.speed.end.ticks)
+      : Math.max(Math.abs(speed0), Math.abs(emitter.speed1?.value ?? speed0)) / rate;
     const av = emitter.acceleration?.v;
-    const accelMag = Array.isArray(av)
-      ? Math.hypot(Number(av[0]) || 0, Number(av[1]) || 0, Number(av[2]) || 0) / (rate * rate) : 0;
+    const av1 = emitter.acceleration1?.v ?? av;
+    const magnitude = (v: readonly (number | [number, number])[] | undefined | null) => Array.isArray(v)
+      ? Math.hypot(extent(v[0]), extent(v[1]), extent(v[2])) : 0;
+    const accelMag = (fields?.acceleration
+      ? Math.max(magnitude(fields.acceleration.start),
+        fields.acceleration.end === 'start' ? 0 : magnitude(fields.acceleration.end))
+      : Math.max(magnitude(av), magnitude(av1))) / (rate * rate);
     let reach = speed * life + 0.5 * accelMag * life * life;
     // A particle's own quad counts towards the reach: an emitter that never
     // moves (no speed, no acceleration, origin at the centre) still occupies
@@ -65,6 +78,7 @@ function estimateSystemRadius(system: EffectSystem, configs: Record<string, Effe
     // INSIDE the quad, which reads as a blank or washed-out preview.
     const draw = spriteDrawOf(emitter.sprite);
     const maxScale = Math.max(
+      ...[emitter.scales?.start, emitter.scales?.end].flatMap(v => typeof v === 'number' ? [Math.abs(v)] : Array.isArray(v) ? v.map(Math.abs) : []),
       Math.abs(Number(emitter.scale0?.value) || 0),
       Math.abs(Number(emitter.scale1?.value) || 0),
     );
@@ -74,6 +88,7 @@ function estimateSystemRadius(system: EffectSystem, configs: Record<string, Effe
       const center = cfg.center;
       if (Array.isArray(center)) reach += Math.hypot(Number(center[0]) || 0, Number(center[1]) || 0, Number(center[2]) || 0);
       if (Number.isFinite(cfg.radius)) reach += Math.abs(Number(cfg.radius));
+      if (cfg.radial) reach += extent(cfg.radial.radius);
       if (cfg.spiral) reach += Math.abs(Number(cfg.spiral.start_radius) || 0) + Math.abs(Number(cfg.spiral.radius_rate) || 0) * life;
     }
     maxReach = Math.max(maxReach, reach);
@@ -363,7 +378,7 @@ export function createEffectsBrowserView(app: any): { root: HTMLElement; destroy
     resetGround(radius);
     scene!.frameBox([-radius, -radius, -radius], [radius, radius, radius]);
     const p = new EffectsPlayer({
-      root: scene!.scene, doc, url: (rel: string) => app.store.url(rel), anisotropy: 8,
+      root: scene!.scene, doc, url: (rel: string) => app.store.url(rel),
     });
     const mode = p.addSystem(row.system.slot);
     player = p;

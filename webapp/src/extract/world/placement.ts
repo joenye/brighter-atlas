@@ -1,6 +1,13 @@
+import {validEffectScales, type EffectScaleBinding} from './effect-scales.js';
+import {validEffectWindows, type EffectWindowBinding} from './effect-windows.js';
 // Optional per-build placement decode data is produced offline purely from
 // analysis of the game's own files, never by inspecting or modifying a running
 // game process or its memory. Missing data preserves legacy display grounding.
+import {validEffectSprites, type EffectSpriteBinding} from './effect-sprites.js';
+import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
+import {validEffectOrigins, type EffectOriginBinding} from './effect-origins.js';
+import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
+import {validEffectFields, type EffectFieldData} from './effect-fields.js';
 import {deref, type RoomNode} from './room.js';
 import {makeRegistryRowDecoder} from './effects.js';
 import {resolveValue} from './room-metadata.js';
@@ -20,6 +27,13 @@ export interface PlacementDecodeData {
   actors: {parent:number};
   defaultAppearances?: {runtime:number; start:number; end:number}[];
   appearanceCandidates?: {runtime:number; fields:number[]}[];
+  effectScales?: EffectScaleBinding[];
+  effectWindows?: EffectWindowBinding[];
+  effectSprites?: EffectSpriteBinding[];
+  effectFacings?: EffectFacingBinding[];
+  effectOrigins?: EffectOriginBinding[];
+  effectProperties?: EffectPropertyBinding[];
+  effectFields?: EffectFieldData;
   effectMotion?: {
     controllers: {runtime:number; field:number}[];
     settings: {runtime:number; x:[number,number,number]; y:[number,number,number]}[];
@@ -60,6 +74,13 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
       ||settings.some((v:any)=>![v.x,v.y].every(a=>Array.isArray(a)&&a.length===3&&a.every(integer))
         ||new Set([...v.x,...v.y]).size!==6))throw Error('invalid effect motion bindings');
   }
+  if(data.effectScales!==undefined&&!validEffectScales(data.effectScales))throw Error('invalid effect scale bindings');
+  if(data.effectWindows!==undefined&&!validEffectWindows(data.effectWindows))throw Error('invalid effect window bindings');
+  if(data.effectSprites!==undefined&&!validEffectSprites(data.effectSprites))throw Error('invalid effect sprite bindings');
+  if(data.effectFacings!==undefined&&!validEffectFacings(data.effectFacings))throw Error('invalid effect facing bindings');
+  if(data.effectOrigins!==undefined&&!validEffectOrigins(data.effectOrigins))throw Error('invalid effect origin bindings');
+  if(data.effectProperties!==undefined&&!validEffectProperties(data.effectProperties))throw Error('invalid effect property bindings');
+  if(data.effectFields!==undefined&&!validEffectFields(data.effectFields))throw Error('invalid effect field bindings');
   return data;
 }
 

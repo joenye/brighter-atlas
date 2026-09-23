@@ -422,7 +422,8 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
       if (orig && bar.loadClip) {
         // loadClip resets t and may auto-play (autoplay pref): force back to the
         // editor's exact prior playhead + play state.
-        bar.loadClip(orig).then(() => {
+        bar.loadClip(orig).then((loaded: boolean) => {
+          if (!loaded) return;
           bar.t = editorRestore.t;
           bar.applyPose?.();
           if (editorRestore.playing) bar.play(); else bar.pause();

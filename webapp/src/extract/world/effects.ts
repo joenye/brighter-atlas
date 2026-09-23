@@ -1,3 +1,6 @@
+import type {createEffectScaleReader, EffectScales} from './effect-scales.js';
+import type {EffectWindow, createEffectWindowReader} from './effect-windows.js';
+import type {createEffectSpriteReader} from './effect-sprites.js';
 // Particle-effect recovery over the replayed registry. Detection is
 // structural and per build: systems are rows whose series children all point
 // back at them through an op-0 scalar; child and config fields are re-decoded
@@ -29,8 +32,12 @@
 // iteration everywhere, floats only from the bundle bytes via DataView, no
 // timestamps.
 
+import type {EffectFacing, createEffectFacingReader} from './effect-facing.js';
+import type {RadialOrigin, createEffectOriginReader} from './effect-origins.js';
+import type {EffectFieldValues, createEffectFieldReader} from './effect-fields.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
 
+import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type createEffectPropertyReader} from './effect-properties.js';
 import { PoolDecoder } from './value-pool.js';
 import type { PoolNode } from './value-pool.js';
 import type { WorldProfile, WorldProfileSelector } from './profile.js';
@@ -94,13 +101,19 @@ export type EffectExtra =        // unknown/unclassified ops ONLY
 export interface EffectConfig {
   slot: number; family: number;
   kind: 'burst_continuous' | 'burst_windowed' | 'shape' | 'unknown';
+  emission_window?: EffectWindow;
+  radial?: RadialOrigin;
+  // 'bound': origin and direction come from verified per-build decode
+  // data rather than the structural shape guess.
+  origin?: 'bound';
   per_second?: number | null;                  // burst kinds
   windows?: [number, number][] | null;         // tick ranges, burst_windowed
-  shape_kind?: 'point' | 'ring' | 'spiral' | 'segment' | 'other';
+  shape_kind?: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'other';
   center?: [number, number, number] | null;    // first vec3
   axis?: [number, number, number] | null;
   radius?: number | null; sweep?: number | null;
   spread_yaw?: number | null; spread_pitch?: number | null;
+  cone?: { yaw: [number, number]; pitch: [number, number] };
   spiral?: { axis: [number, number, number]; start_radius: number; radius_rate: number;
              start_angle: number; angle_rate: number } | null;
   // 'segment': spawn spread evenly along a line, given as its two endpoints in
@@ -125,19 +138,28 @@ export interface EffectEmitter {
     material: number; images: number[];
     draw: { sub: number; w: number; h: number; mask: boolean } | null;
   } | null;
+  sprite_choices?: {kind: 'uniform'; sprites: NonNullable<EffectEmitter['sprite']>[]} | null;
   blend: 'add' | 'mix' | null;                 // emitter override, else system's
   life: { ticks: number; op: number } | null;
   fade_in: { ticks: number; op: number } | null;
   fade_out: { ticks: number; op: number } | null;
   color0: { rgba: [number, number, number, number]; op: number } | null;
   color1: { rgba: [number, number, number, number]; op: number } | null;
+  color_override_alpha?: number;
+  facing?: EffectFacing | null;
+  scales?: EffectScales;
+  // Spawn-time properties read through verified per-build field bindings
+  // (absent without them). Sampled ranges are drawn per particle.
+  fields?: EffectFieldValues;
   scale0: { value: number; op: number } | null;
   scale1: { value: number; op: number } | null;
   speed: { value: number; den: number; op: number } | null;
+  speed1?: { value: number; den: number; op: number } | null;
   angular_speed: { value: number; den: number; op: number } | null;
   rate: { value: number; den: number; op: number } | null;
   direction: { v: [number, number, number]; op: number } | null;
   acceleration: { v: [number, number, number]; op: number } | null;
+  acceleration1?: { v: [number, number, number]; op: number } | null;
   acceleration_frame?: EffectAccelerationFrame | null;
   confidence: 'vote' | 'order';
   extra: EffectExtra[];
@@ -199,6 +221,7 @@ export interface WorldEffectsDoc {
              // False retains a catalogue candidate that is not selected by
              // this owner's stored default. Omission means unresolved.
              default_active?: boolean;
+             color_override?: [number, number, number, number];
              rig?: number | 'transform' | null;
              motion?: EffectAttachmentMotion }[]; // sorted (room, occurrence, system, controller)
     actors: { actor: number; label: string | null; system: number;
@@ -237,8 +260,15 @@ export interface WorldEffectsShared {
     { occurrence: RoomOccurrence; part: { mesh: number; local_matrix_game?: number[] | null } }[];
   occurrenceAnchor: (hit: RoomOccurrence) => [number, number, string];
   drawOccurrence?: (hit: RoomOccurrence) => RoomOccurrence | null;
-  staticAppearance?: (slot: number) => { controllers: number[] } | null;
+  staticAppearance?: (slot: number) => { controllers: number[]; effectColor?: [number, number, number, number] } | null;
   appearanceCandidates?: (slot: number) => number[] | null;
+  effectScales?: ReturnType<typeof createEffectScaleReader>;
+  effectWindow?: ReturnType<typeof createEffectWindowReader>;
+  effectSprites?: ReturnType<typeof createEffectSpriteReader>;
+  effectFacing?: ReturnType<typeof createEffectFacingReader>;
+  effectOrigin?: ReturnType<typeof createEffectOriginReader>;
+  effectProperties?: ReturnType<typeof createEffectPropertyReader>;
+  effectFields?: ReturnType<typeof createEffectFieldReader>;
   effectMotion?: (controller: number, hit: RoomOccurrence, room: number) => EffectAttachmentMotion | null;
   rigBoneTranslations: Map<number, number[][]>;
   rigWorldMatrices?: Map<number, number[][]>;
@@ -747,11 +777,12 @@ function extractEffects(
     kind: EffectConfig['kind'];
     perSecond: number | null;
     windows: [number, number][] | null;
-    shapeKind: 'point' | 'ring' | 'spiral' | 'segment' | 'other' | null;
+    shapeKind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'other' | null;
     center: [number, number, number] | null;
     axis: [number, number, number] | null;
     radius: number | null; sweep: number | null;
     spreadYaw: number | null; spreadPitch: number | null;
+    cone?: EffectConfig['cone'];
     spiral: EffectConfig['spiral'];
     segment: EffectConfig['segment'];
     extra: EffectExtra[];
@@ -892,9 +923,9 @@ function extractEffects(
           : topFloats.findIndex((f, at) => at !== sweepAt && f.value > 0);
         if (angleRanges) {
           info.shapeKind = 'point';
-          // spread is the WIDTH of each range, which is what the sampler
-          // takes; a range starting away from zero is rare and its offset is
-          // not modelled, so the width alone is the honest reading.
+          // Preserve both endpoints, including reversed angular ranges.
+          info.cone = { yaw: [topFloats[0].value, topFloats[1].value],
+            pitch: [topFloats[2].value, topFloats[3].value] };
           info.spreadYaw = Math.abs(topFloats[1].value - topFloats[0].value);
           info.spreadPitch = Math.abs(topFloats[3].value - topFloats[2].value);
           for (let k = 0; k < 4; k++) consumed.add(topFloats[k].i);
@@ -1010,7 +1041,7 @@ function extractEffects(
   }
 
   // ---- E5: per-family role templates (order within tag type, voted) ---------
-  interface RoleTemplate { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null }
+  interface RoleTemplate { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null; pairs?: EffectPropertyPairs }
   const roleTemplates = new Map<number, RoleTemplate>();
   for (const family of [...families.keys()].sort((a, b) => a - b)) {
     const via = familyVia.get(family)!;
@@ -1021,8 +1052,7 @@ function extractEffects(
     const counts = new Map<number, number>();
     const durLists: number[][] = [];
     for (const slot of voters) {
-      const durs: number[] = [];
-      for (const e of decoded.get(slot)!) if (e.kind === 'duration') durs.push(e.ticks);
+      const durs = effectTimingDurations(decoded.get(slot)!);
       durLists.push(durs);
       counts.set(durs.length, (counts.get(durs.length) || 0) + 1);
     }
@@ -1050,7 +1080,8 @@ function extractEffects(
     const familyFields = members.map((slot) => decoded.get(slot)!);
     const transform = inferEffectTransformLayout(familyFields);
     roleTemplates.set(family, { fades, confidence: via === 'vote' && agreed ? 'vote' : 'order',
-      transform, accelerationFrameOp: inferEffectAccelerationFrameOp(familyFields, transform) });
+      transform, accelerationFrameOp: inferEffectAccelerationFrameOp(familyFields, transform),
+      pairs: inferEffectPropertyPairs(familyFields) });
   }
 
   // ---- names, controllers, clips --------------------------------------------
@@ -1240,7 +1271,21 @@ function extractEffects(
         seen.add(ref);
         emitters.push(buildEmitter(rows[ref], decoded.get(ref)!, sysSlot,
           roleTemplates.get(rows[ref].runtime) ?? { fades: 'none', confidence: 'order' },
-          classifyConfig, shippedConfigs, shared.textureSlots, shared.spriteMeta));
+          classifyConfig, shippedConfigs, shared.textureSlots, shared.spriteMeta,
+          shared.effectProperties?.(ref, sysOps ?? []) ?? null,
+          shared.effectFacing?.(ref, decoded.get(ref)!) ?? null,
+          shared.effectSprites?.(ref) ?? null));
+        const fields = shared.effectFields?.(ref, decoded.get(ref)!);
+        if (fields) applyEffectFields(emitters[emitters.length - 1], fields);
+        const scales = fields?.scale ?? shared.effectScales?.(ref, decoded.get(ref)!);
+        if (scales) {
+          const emitter = emitters[emitters.length - 1];
+          emitter.scales = scales;
+          // A sampled range has no single literal endpoint. Do not retain a
+          // scalar inferred from an unrelated field beside the range.
+          if (Array.isArray(scales.start)) emitter.scale0 = null;
+          if (Array.isArray(scales.end) || (scales.end === 'start' && Array.isArray(scales.start))) emitter.scale1 = null;
+        }
       }
     }
     emitterTotal += emitters.length;
@@ -1308,8 +1353,27 @@ function extractEffects(
       cfg.sweep = info.sweep;
       cfg.spread_yaw = info.spreadYaw;
       cfg.spread_pitch = info.spreadPitch;
+      if (info.cone) cfg.cone = info.cone;
       cfg.spiral = info.spiral;
       cfg.segment = info.segment;
+    }
+    const emissionWindow = shared.effectWindow?.(slot, decoded.get(slot) || []);
+    if (emissionWindow) {
+      cfg.kind = 'burst_windowed'; cfg.per_second = emissionWindow.rate;
+      cfg.windows = emissionWindow.windows; cfg.emission_window = emissionWindow;
+    }
+    const origin = shared.effectOrigin?.(slot, decoded.get(slot) || []);
+    if (origin?.kind === 'radial') {
+      cfg.kind = 'shape'; cfg.shape_kind = 'radial'; cfg.center = origin.radial.center;
+      cfg.radial = origin.radial; cfg.origin = 'bound';
+    } else if (origin?.kind === 'point') {
+      // A bound point source replaces the structural guess outright: its
+      // second vector is the cone axis, not the far end of a segment.
+      const {position, axis, yaw, pitch} = origin.point;
+      cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = position; cfg.axis = axis;
+      cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
+      cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
+      cfg.origin = 'bound';
     }
     cfg.extra = info.extra;   // assigned last so the retained-extras key lands last
     configs[String(slot)] = cfg;
@@ -1434,6 +1498,8 @@ function extractEffects(
             via, system, controller,
             center, packedFlags, matrix, bones, rig: motion ? 'transform' : rig,
             ...(motion ? {motion} : {}),
+            ...(selected?.effectColor && selected.controllers.includes(controller ?? system)
+              ? {color_override: selected.effectColor} : {}),
             ...(selected ? { default_active: selected.controllers.includes(controller ?? system) }
               : candidates && !candidates.includes(controller ?? system) ? { default_active: false } : {}),
           });
@@ -1524,11 +1590,14 @@ function extractEffects(
 // there.
 function buildEmitter(
   row: FillRow, ops: EffectExtra[], ownerSlot: number,
-  template: { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null },
+  template: { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null; pairs?: EffectPropertyPairs },
   classifyConfig: (slot: number) => { kind: EffectConfig['kind'] } | null,
   shippedConfigs: Set<number>,
   textureSlots: Map<number, number[]>,
   spriteMeta: (texId: number) => { sub: number; w: number; h: number; mask: boolean } | null,
+  properties: (EffectPropertyBinding & {rgba:[number,number,number,number]}) | null = null,
+  facing: EffectFacing | null = null,
+  spriteChoices: number[] | null = null,
 ): EffectEmitter {
   const consumed = new Set<number>();
   const durations: { ticks: number; op: number; i: number }[] = [];
@@ -1606,59 +1675,61 @@ function buildEmitter(
   } else if (template.fades === 'two' && durations.length >= 2) {
     fadeOut = take(durations[1]);
   }
-  // Property pairs. Every animatable emitter property occupies TWO adjacent
-  // slots, (value0, value1), interpolated across the particle's life. When
-  // value1 is not authored separately the slot instead holds a SYMBOL naming
-  // value0 ("$scale0", "$color0", ...), which means "value1 equals value0",
-  // i.e. the property is CONSTANT. Binding purely by order within tag type
-  // reads those two slots as an unrelated pair of values, which silently
-  // turns every constant property into a ramp: a steady flame then grows
-  // from nothing to full size on every particle, which is what made flames
-  // read as wrong. The marker is matched by its shipped name as a value (the
-  // same way blend/facing/loop already are), never by op position, and its
-  // absence falls back to the positional reading so builds that do not carry
-  // these markers decode exactly as before.
-  const markerFor = (suffix: string): number => {
-    for (let i = 0; i < ops.length; i++) {
-      const e = ops[i];
-      if (e.kind === 'symbol' && e.name !== null && e.name.endsWith(suffix) && !consumed.has(i)) return i;
-    }
-    return -1;
+  // Bind readable endpoint pairs before legacy role recovery. Computed
+  // properties may have instance-specific overrides, so unknown expressions
+  // retain their existing handling until an explicit binding resolves them.
+  const scalar = (e: EffectExtra | null) => e?.kind === 'float'
+    || (e?.kind === 'fixed' && e.floats?.length === 1);
+  const pair = (role: 'scale' | 'speed' | 'acceleration') => {
+    const p = readEffectPropertyPair(ops, template.pairs ?? {}, role);
+    const readable = (e: EffectExtra | null) => role === 'scale' ? scalar(e)
+      : e?.kind === (role === 'speed' ? 'rate' : 'vec3');
+    return p && readable(p.start) && readable(p.end) ? p : null;
   };
-  // The marked value0 is the entry occupying the slot immediately before the
-  // marker; consuming both leaves neither in `extra`.
-  const boundValue = <T extends { i: number }>(entries: T[], suffix: string): T | null => {
-    const at = markerFor(suffix);
-    if (at < 0) return null;
-    const value = entries.find((entry) => entry.i === at - 1);
+  const scalePair = pair('scale'), speedPair = pair('speed'), accelPair = pair('acceleration');
+  const reserved = new Set([scalePair, speedPair, accelPair].flatMap(p => p?.indices ?? []));
+  const remaining = <T extends {i: number}>(entries: T[]) =>
+    entries.filter(e => !reserved.has(e.i) && !consumed.has(e.i));
+  const endpoint = <T extends {i: number; op: number}>(entries: T[], field: EffectExtra | null | undefined) =>
+    take(field ? entries.find(e => e.op === field.op) : undefined);
+  const boundValue = <T extends {i: number}>(entries: T[], role: string): T | null => {
+    const at = ops.findIndex((e, i) => e.kind === 'symbol' && e.name === `$${role}0` && !consumed.has(i));
+    const value = at > 0 ? entries.find(e => e.i === at - 1) : undefined;
     if (!value) return null;
     consumed.add(at);
     return take(value);
   };
-
-  const boundColor = boundValue(colors, 'color0');
-  const color0 = boundColor ?? take(colors[0]);
-  const color1 = boundColor ? boundColor : (take(colors[1]) ?? color0);
-  const boundSpeed = boundValue(rates, 'speed0');
-  const speed = boundSpeed ?? take(rates[0]);
-  const remainingRates = rates.filter((entry) => !consumed.has(entry.i));
-  const angularSpeed = take(remainingRates[0]);
-  const rate = take(remainingRates[1]);
-  const boundScale = boundValue(floats, 'scale0');
-  const scale0 = boundScale ?? take(floats[0]);
-  const scale1 = boundScale ? boundScale : take(floats[1]);
-  const boundAccel = boundValue(vec3s, 'acceleration0');
-  let direction: { v: [number, number, number]; op: number } | null = null;
-  let acceleration: { v: [number, number, number]; op: number } | null = boundAccel;
-  const remainingVec3s = vec3s.filter((entry) => !consumed.has(entry.i));
-  if (acceleration) {
-    // the marker already claimed acceleration, so any other vec3 is direction
+  const boundColor = boundValue(colors, 'color');
+  const color0 = properties ? {rgba: properties.rgba, op: -1} : boundColor ?? take(colors[0]);
+  const color1 = properties ? color0 : boundColor ?? take(colors[1]) ?? color0;
+  const boundSpeed = speedPair ? null : boundValue(rates, 'speed');
+  const speed = properties ? take(rates.find(e => e.op === properties.speedField))
+    : speedPair ? endpoint(rates, speedPair.start) : boundSpeed ?? take(rates[0]);
+  const speed1 = properties ? speed : speedPair ? endpoint(rates, speedPair.end) : speed;
+  const remainingRates = remaining(rates);
+  const angularSpeed = properties ? take(rates.find(e => e.op === properties.angularSpeedField)) : take(remainingRates[0]);
+  const rate = properties ? null : take(remainingRates[1]);
+  const boundScale = scalePair ? null : boundValue(floats, 'scale');
+  const scale0 = scalePair ? endpoint(floats, scalePair.start) : boundScale ?? take(floats[0]);
+  const scale1 = scalePair ? endpoint(floats, scalePair.end) : boundScale ?? take(floats[1]);
+  const boundAccel = accelPair ? null : boundValue(vec3s, 'acceleration');
+  let direction: {v: [number, number, number]; op: number} | null = null;
+  let acceleration = accelPair ? endpoint(vec3s, accelPair.start) : boundAccel;
+  let acceleration1 = accelPair ? endpoint(vec3s, accelPair.end) : null;
+  const remainingVec3s = remaining(vec3s);
+  if (accelPair || acceleration) {
     direction = take(remainingVec3s[0]);
   } else if (remainingVec3s.length === 1) {
     acceleration = take(remainingVec3s[0]);
   } else if (remainingVec3s.length >= 2) {
     direction = take(remainingVec3s[0]);
     acceleration = take(remainingVec3s[remainingVec3s.length - 1]);
+  }
+  if (!accelPair) acceleration1 = acceleration;
+  for (const p of [scalePair, speedPair, accelPair]) {
+    if (p && p.indices.some(i => consumed.has(i))) for (const i of p.indices) {
+      if (ops[i].kind === 'symbol') consumed.add(i);
+    }
   }
   const transform = readEffectTransformBinding(ops, template.transform ?? null);
   const bone = typeof transform?.primary === 'number' ? transform.primary : null;
@@ -1673,18 +1744,24 @@ function buildEmitter(
   for (let i = 0; i < ops.length; i++) if (!consumed.has(i)) extra.push(ops[i]);
   return {
     slot: row.slot, family: row.runtime,
-    burst, shape, bone, transform, sprite, blend,
+    burst, shape, bone, transform, sprite, blend, facing,
+    sprite_choices: spriteChoices ? {kind: 'uniform', sprites: spriteChoices.map(material => {
+      const images = [...(textureSlots.get(material) ?? [])];
+      return {material, images, draw: images.length ? spriteMeta(images[0]) : null};
+    })} : null,
     life: life && { ticks: life.ticks, op: life.op },
     fade_in: fadeIn && { ticks: fadeIn.ticks, op: fadeIn.op },
     fade_out: fadeOut && { ticks: fadeOut.ticks, op: fadeOut.op },
     color0: color0 && { rgba: color0.rgba, op: color0.op },
     color1: color1 && { rgba: color1.rgba, op: color1.op },
+    ...(properties ? {color_override_alpha: properties.color.alphaScale} : {}),
     scale0: scale0 && { value: scale0.value, op: scale0.op },
     scale1: scale1 && { value: scale1.value, op: scale1.op },
     speed: speed && { value: speed.value, den: speed.den, op: speed.op },
+    speed1: speed1 && { value: speed1.value, den: speed1.den, op: speed1.op },
     angular_speed: angularSpeed && { value: angularSpeed.value, den: angularSpeed.den, op: angularSpeed.op },
     rate: rate && { value: rate.value, den: rate.den, op: rate.op },
-    direction, acceleration, acceleration_frame: readEffectAccelerationFrame(ops, template.transform ?? null, template.accelerationFrameOp),
+    direction, acceleration, acceleration1, acceleration_frame: readEffectAccelerationFrame(ops, template.transform ?? null, template.accelerationFrameOp),
     confidence: template.confidence,
     extra,
   };
@@ -1718,4 +1795,34 @@ function deriveTickRate(decoded: Map<number, EffectExtra[] | null>): WorldEffect
     return { value: mode, via: 'modal_denominator', votes: modeVotes };
   }
   return { value: TICK_DEN_DEFAULT, via: 'default', votes: total };
+}
+
+// Literal bound values also replace the structurally inferred fields, so
+// every consumer sees them; sampled ranges leave those fields empty. A role
+// the binding cannot read keeps its previous inference.
+function applyEffectFields(emitter: EffectEmitter, fields: EffectFieldValues): void {
+  emitter.fields = fields;
+  const literalRate = (r: {value: number | [number, number]; ticks: number}) =>
+    typeof r.value === 'number' ? {value: r.value, den: r.ticks, op: -1} : null;
+  if (fields.speed) {
+    emitter.speed = literalRate(fields.speed.start);
+    emitter.speed1 = fields.speed.end === 'start' ? emitter.speed : literalRate(fields.speed.end);
+  }
+  if (fields.angularSpeed) emitter.angular_speed = literalRate(fields.angularSpeed);
+  if (fields.acceleration) {
+    const literal = (v: (number | [number, number])[]) =>
+      v.every(c => typeof c === 'number') ? {v: v as [number, number, number], op: -1} : null;
+    emitter.acceleration = literal(fields.acceleration.start);
+    emitter.acceleration1 = fields.acceleration.end === 'start' ? emitter.acceleration : literal(fields.acceleration.end);
+  }
+  if (fields.color) {
+    const literal = (c: NonNullable<EffectFieldValues['color']>['start']) => 'rgba' in c ? {rgba: c.rgba, op: -1} : null;
+    emitter.color0 = literal(fields.color.start);
+    emitter.color1 = fields.color.end === 'start' ? emitter.color0 : literal(fields.color.end);
+  }
+  if (fields.scale) {
+    emitter.scale0 = typeof fields.scale.start === 'number' ? {value: fields.scale.start, op: -1} : null;
+    const end = fields.scale.end === 'start' ? fields.scale.start : fields.scale.end;
+    emitter.scale1 = typeof end === 'number' ? {value: end, op: -1} : null;
+  }
 }

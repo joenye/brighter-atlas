@@ -56,6 +56,19 @@ const pre040Extraction = (app: any) => engineOlderThan(app, 1);
 
 const NOTICES: Notice[] = [
   {
+    id: 'world-effects-4',
+    title: 'More faithful particle effects',
+    paras: [
+      'Effects now follow the game much more closely. Fountains spray and spill water properly, bank sparkles use each bank’s own colour, and many effects have corrected colours, speeds, sizes, spin and spray patterns.',
+      'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.',
+    ],
+    when: async (app: any) => {
+      if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
+      const index = await app.store.worldIndex();
+      return !!index && (index.coordinate_system?.effect_property_revision ?? 0) < 4;
+    },
+  },
+  {
     id: 'world-positioning-1',
     title: 'More accurate rooms and objects',
     paras: [

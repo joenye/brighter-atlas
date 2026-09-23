@@ -1014,7 +1014,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         tileUnits: world.tileUnits,
         layerUnits: world.layerUnits,
         meshForwardQuarterTurns: world.meshForwardQuarterTurns,
-        anisotropy: TEXTURE_ANISOTROPY,
         // Merged mode activates far more room effect sets than a lone room
         // ever holds at once, and the alive budget must thin proportionally
         // across all of them, not per room.
@@ -1024,7 +1023,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick
     } else {
       for (const id of effectsRooms) {
-        effectsLayer.addRoom(id, spawnRoomOffset(id), { modulation: ambienceOf(id) });
+        effectsLayer.addRoom(id, spawnRoomOffset(id));
       }
     }
   }
@@ -1087,23 +1086,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (activeEffectRooms.has(id)) continue;
       activeEffectRooms.add(id);
       effectsLayer!.addRoom(id, spawnRoomOffset(id),
-        { loopOnly: true, modulation: ambienceOf(id) });
+        { loopOnly: true });
     }
   }
 
   // lighting ---------------------------------------------------------------------
-  // The room's own ambience colour, or null when the room has none (or more
-  // than one room is loaded, where a single hemisphere light cannot speak for
-  // all of them).
-  // The ambience colour of ONE room by id, for the per-room particle
-  // modulation (merged mode has many rooms at once, so this is per instance
-  // rather than a single scene value).
-  function ambienceOf(roomId: number): number[] | null {
-    const rec = (world.index?.rooms || []).find((r: any) => Number(r.i ?? r.id ?? r.idx) === Number(roomId));
-    const first = rec?.ambience?.colors?.[0];
-    return Array.isArray(first) && first.length >= 3 ? first.map(Number) : null;
-  }
-
+  // The room ambience controls scene lighting. It is not an effect tint;
+  // individual effect instances retain their own authored colours.
   function roomAmbience(): number[] | null {
     if (mergedActive()) return null;
     const ids = [...world.rooms.keys()];

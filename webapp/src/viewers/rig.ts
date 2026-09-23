@@ -339,6 +339,8 @@ export class PlaybackBar {
   scrub: HTMLInputElement;
   timeLbl: HTMLSpanElement;
   controls: HTMLDivElement;
+  private _loadGeneration = 0;
+  private _destroyed = false;
 
   constructor({ host, clips, store, rig, onApplied, onError, autoSelect = false }: PlaybackBarOpts) {
     this.store = store;
@@ -506,11 +508,14 @@ export class PlaybackBar {
     }
   }
 
-  async loadClip(entry: IndexEntry): Promise<void> {
-    if (!entry.f) { this.onError(`clip #${entry.i} is not exported`); return; }
+  async loadClip(entry: IndexEntry): Promise<boolean> {
+    if (this._destroyed) return false;
+    const generation = ++this._loadGeneration;
+    if (!entry.f) { this.onError(`clip #${entry.i} is not exported`); return false; }
     this.pause();
     try {
       const json = await this.store.payload(entry.f);
+      if (generation !== this._loadGeneration || this._destroyed) return false;
       this.sampler = new ClipSampler(json);
       this.clipJson = json;
       this.t = 0;
@@ -518,12 +523,17 @@ export class PlaybackBar {
       this.scrub.disabled = false;
       this.applyPose();
       if (getPref('autoplay')) this.play();   // autoplay pref persists across selections/reloads
+      return true;
     } catch (e) {
-      this.onError(`failed to load clip #${entry.i}: ${e.message}`);
+      if (generation === this._loadGeneration && !this._destroyed) {
+        this.onError(`failed to load clip #${entry.i}: ${e.message}`);
+      }
+      return false;
     }
   }
 
   clearClip(): void {
+    ++this._loadGeneration;
     this.pause();
     this.sampler = null;
     this.clipJson = null;
@@ -573,5 +583,5 @@ export class PlaybackBar {
     this.onApplied?.();
   }
 
-  destroy(): void { this.pause(); }
+  destroy(): void { this._destroyed = true; ++this._loadGeneration; this.pause(); }
 }

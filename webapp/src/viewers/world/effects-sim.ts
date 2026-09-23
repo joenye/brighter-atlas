@@ -1,3 +1,7 @@
+import {EffectRandom} from './effects-random.js';
+import type {EffectScales} from '../../extract/world/effect-scales.js';
+import {effectHslToRgb, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
+import type {EffectWindow} from '../../extract/world/effect-windows.js';
 // Particle effect simulation core for the world viewer. Pure math over the
 // recovered world:effects doc (extract/world/effects.js): no DOM, no three.js.
 //
@@ -83,8 +87,10 @@ export function mulberry32(seed: number): () => number {
 type Vec3 = [number, number, number];
 
 interface ShapeSpec {
-  kind: 'point' | 'ring' | 'spiral' | 'segment' | 'other';
+  kind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'other';
   center: Vec3;
+  radial: EffectConfig['radial'] | null;
+  cone: EffectConfig['cone'] | null;
   // orthonormal frame: w = emission axis, u/v span its perpendicular plane
   w: Vec3; u: Vec3; v: Vec3;
   yaw: number;            // point cone azimuth range (rad)
@@ -94,6 +100,26 @@ interface ShapeSpec {
   spiral: { r0: number; rRate: number; a0: number; aRate: number } | null;
   // 'segment': spawn spread evenly between these two local-frame endpoints
   segment: { from: Vec3; to: Vec3 } | null;
+}
+
+// Sample polar cosine, giving uniform solid angle within the cone. The
+// quaternion preserves the azimuth origin when rotating the cone axis.
+export function sampleConeDirection(axis: readonly number[], yaw: readonly number[], pitch: readonly number[], azimuth: number, polar: number): Vec3 {
+  const length = Math.hypot(axis[0], axis[1], axis[2]);
+  const sign = axis[2] < 0 ? -1 : 1;
+  const nx = length ? axis[0] * sign / length : 0;
+  const ny = length ? axis[1] * sign / length : 0;
+  const nz = length ? axis[2] * sign / length : 0;
+  const z0 = Math.cos(pitch[0]) * sign;
+  const z = z0 + (Math.cos(pitch[1]) * sign - z0) * polar;
+  const radius = Math.sqrt(Math.max(0, 1 - z * z));
+  const angle = yaw[0] + (yaw[1] - yaw[0]) * azimuth;
+  const x = radius * Math.cos(angle), y = radius * Math.sin(angle);
+  const qlen = Math.hypot(nx, ny, 1 + nz);
+  const a = -ny / qlen, b = nx / qlen, d = (1 + nz) / qlen;
+  return [(1 - 2 * b * b) * x + 2 * a * b * y + 2 * b * d * z,
+    2 * a * b * x + (1 - 2 * a * a) * y - 2 * a * d * z,
+    -2 * b * d * x + 2 * a * d * y + (1 - 2 * (a * a + b * b)) * z];
 }
 
 interface WindowSpec { start: number; step: number; count: number }
@@ -133,13 +159,15 @@ function vec3Of(value: any, fallback: Vec3): Vec3 {
 // sweep and a 30 degree polar spread.
 function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate: number): ShapeSpec {
   const kind = config?.kind === 'shape' ? (config.shape_kind || 'other') : 'other';
-  const center = vec3Of(config?.center, [0, 0, 0]);
+  const center = vec3Of(config?.radial?.center ?? config?.center, [0, 0, 0]);
   const axis = vec3Of(config?.spiral?.axis ?? config?.axis, fallbackAxis);
   const frame = axisFrame(axis);
   const spec: ShapeSpec = {
-    kind: kind === 'point' || kind === 'ring' || kind === 'spiral' || kind === 'segment'
+    kind: kind === 'point' || kind === 'ring' || kind === 'spiral' || kind === 'segment' || kind === 'radial'
       ? kind : 'other',
     center,
+    radial: config?.radial ?? null,
+    cone: config?.cone ?? null,
     ...frame,
     yaw: clamp(finite(config?.spread_yaw, 360), 0, 360) * DEG,
     pitch: clamp(finite(config?.spread_pitch, 30), 0, 180) * DEG,
@@ -189,8 +217,10 @@ export class EmitterSim {
   scale0: number;
   scale1: number;
   speed: number;          // native units per tick
+  speedSlope: number;     // change in speed per tick
   spin: number;           // radians per tick
   accel: Vec3;            // native units per tick^2
+  accelSlope: Vec3;       // change in acceleration per tick
   shape: ShapeSpec;
   // schedule
   rate: number;           // spawns per second (0 = inert)
@@ -205,11 +235,36 @@ export class EmitterSim {
   birth!: Float64Array;
   px!: Float32Array; py!: Float32Array; pz!: Float32Array;
   vx!: Float32Array; vy!: Float32Array; vz!: Float32Array;
+  sx!: Float32Array; sy!: Float32Array; sz!: Float32Array;
   tail = 0;
   head = 0;
+  private _scales: EffectScales | null = null;
+  private _sizes0!: Float32Array;
+  private _sizes1!: Float32Array;
+  // Bound spawn-time properties. Sampled values are drawn per particle, in
+  // the game's evaluation order, from the same per-particle stream as
+  // sizes; literal values are already folded into the constants above.
+  private _fields: EffectFieldValues | null = null;
+  private _random = false;
+  private _perParticle = false;
+  private _sampledColour = false;
+  private _accelBasis: readonly number[] | null = null;
+  /** Number of sprite outcomes; each particle stores its uniform choice. */
+  spriteChoices = 0;
+  choice!: Uint8Array;
+  private _ax!: Float32Array; private _ay!: Float32Array; private _az!: Float32Array;
+  private _jx!: Float32Array; private _jy!: Float32Array; private _jz!: Float32Array;
+  private _spin!: Float32Array;
+  private _rot0!: Float32Array;
+  private _colours!: Float32Array;
+  private _eventWindow: EffectWindow | null = null;
+  private _windowNext = 0;
   private _lastT = NaN;
   private _dirty = true;
   private _birthPosition: readonly number[] | null = null;
+  private _facingAxis: Vec3 | null = null;
+  private _facingMode = 0;
+  nx!: Float32Array; ny!: Float32Array; nz!: Float32Array;
   private _birthDirection: readonly number[] | null = null;
   private _birthFrameSampler: EffectBirthFrameSampler | null = null;
 
@@ -236,8 +291,13 @@ export class EmitterSim {
   }
 
   constructor(system: EffectSystem, emitterIndex: number, emitter: EffectEmitter,
-    configs: Record<string, EffectConfig>, tickRate: number) {
+    configs: Record<string, EffectConfig>, tickRate: number, colorOverride?: number[]) {
     this.tickRate = tickRate;
+    const facing = emitter.facing;
+    this._facingMode = facing?.mode === 'velocity_single' ? 1
+      : facing?.mode === 'velocity_screen' ? 4 : facing?.mode === 'direction_screen' ? 5 : 0;
+    if ((facing?.mode === 'direction_single' || facing?.mode === 'direction_screen') && facing.axis?.length === 3
+      && facing.axis.every(Number.isFinite)) this._facingAxis = [...facing.axis];
     this.seed = hash32(system.slot | 0, emitterIndex | 0);
 
     this.life = Math.max(1, finite(emitter.life?.ticks, tickRate));
@@ -251,22 +311,53 @@ export class EmitterSim {
     this.color1 = Array.isArray(c1) && c1.length === 4
       ? [finite(c1[0], 1), finite(c1[1], 1), finite(c1[2], 1), finite(c1[3], 1)]
       : [...this.color0] as [number, number, number, number];
-    this.scale0 = clamp(finite(emitter.scale0?.value, 1), 0.01, 100);
-    this.scale1 = clamp(finite(emitter.scale1?.value, this.scale0), 0.01, 100);
+    if (Number.isFinite(emitter.color_override_alpha) && Array.isArray(colorOverride)
+      && colorOverride.length === 4 && colorOverride.every(Number.isFinite)) {
+      this.color0 = [colorOverride[0], colorOverride[1], colorOverride[2],
+        colorOverride[3] * emitter.color_override_alpha!];
+      this.color1 = [...this.color0];
+    }
+    // Endpoint colours are stored as normalized bytes. Quantize once before
+    // the envelope, retaining floating-point precision during fades.
+    const channel = (v: number) => Math.trunc(Math.fround(Math.fround(clamp(v, 0, 1)) * 255)) / 255;
+    this.color0 = this.color0.map(channel) as [number, number, number, number];
+    this.color1 = this.color1.map(channel) as [number, number, number, number];
+    this._scales = emitter.scales ?? null;
+    this.scale0 = finite(emitter.scale0?.value, 1);
+    this.scale1 = finite(emitter.scale1?.value, this.scale0);
     this.speed = finite(emitter.speed?.value, 0) / tickRate;
-    this.spin = finite(emitter.angular_speed?.value, 0) / tickRate;
+    this.speedSlope = (finite(emitter.speed1?.value, this.speed * tickRate) / tickRate - this.speed) / this.life;
+    this.spin = finite(emitter.angular_speed?.value, 0) * DEG / tickRate;
     const accel = vec3Of(emitter.acceleration?.v, [0, 0, 0]);
     const t2 = tickRate * tickRate;
     this.accel = [accel[0] / t2, accel[1] / t2, accel[2] / t2];
+    const accel1 = vec3Of(emitter.acceleration1?.v, accel);
+    this.accelSlope = [(accel1[0] - accel[0]) / t2 / this.life,
+      (accel1[1] - accel[1]) / t2 / this.life, (accel1[2] - accel[2]) / t2 / this.life];
+    const fields = emitter.fields ?? null;
+    const sampled = (v: unknown): boolean => Array.isArray(v) && v.length === 2 && typeof v[0] === 'number';
+    const anySampled = (v: unknown): boolean => sampled(v) || (Array.isArray(v) && v.some(sampled));
+    const colourSampled = (c: EffectColourSample | 'start' | undefined) => !!c && c !== 'start' && 'ahsl' in c;
+    this._sampledColour = !Number.isFinite(emitter.color_override_alpha) && !!fields?.color
+      && (colourSampled(fields.color.start) || colourSampled(fields.color.end));
+    this._perParticle = !!fields && (anySampled(fields.speed?.start.value) || (fields.speed?.end !== 'start' && anySampled(fields.speed?.end?.value))
+      || anySampled(fields.angularSpeed?.value) || anySampled(fields.acceleration?.start)
+      || (fields.acceleration?.end !== 'start' && anySampled(fields.acceleration?.end))
+      || (fields.rotation !== null && fields.rotation !== undefined && fields.rotation !== 0) || this._sampledColour);
+    this._fields = this._perParticle ? fields : null;
+    this.spriteChoices = emitter.sprite_choices?.sprites?.length ?? 0;
 
     const fallbackAxis = normalize(vec3Of(emitter.direction?.v, [0, 0, 1]), [0, 0, 1]);
     const shapeCfg = emitter.shape != null ? configs[String(emitter.shape)] || null : null;
     this.shape = resolveShape(shapeCfg, fallbackAxis, tickRate);
+    this._random = !!this._scales || this._perParticle || this.spriteChoices > 1
+      || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number');
 
     // Burst schedule. A missing/degenerate burst leaves the emitter inert
     // (alive stays zero); siblings are unaffected.
     const burst = emitter.burst != null ? configs[String(emitter.burst)] || null : null;
-    const rate = Math.max(0, finite(burst?.per_second, 0));
+    this._eventWindow = burst?.emission_window ?? null;
+    const rate = Math.max(0, finite(this._eventWindow?.rate ?? burst?.per_second, 0));
     this.rate = rate;
     this.step = rate > 0 ? tickRate / rate : Infinity;
     this.windows = null;
@@ -274,7 +365,7 @@ export class EmitterSim {
     this.period = null;
     this.totalCount = Infinity;
     const cycleTicks = Math.max(0, finite(system.cycle_ticks, 0));
-    if (rate > 0 && burst?.kind === 'burst_windowed' && Array.isArray(burst.windows)) {
+    if (!this._eventWindow && rate > 0 && burst?.kind === 'burst_windowed' && Array.isArray(burst.windows)) {
       const windows: WindowSpec[] = [];
       let total = 0;
       for (const pair of burst.windows) {
@@ -342,14 +433,43 @@ export class EmitterSim {
     this.k = next;
     this.capacity = capacity;
     this.birth = new Float64Array(capacity);
+    this._sizes0 = new Float32Array(capacity);
+    this._sizes1 = new Float32Array(capacity);
     this.px = new Float32Array(capacity);
     this.py = new Float32Array(capacity);
     this.pz = new Float32Array(capacity);
     this.vx = new Float32Array(capacity);
     this.vy = new Float32Array(capacity);
     this.vz = new Float32Array(capacity);
+    this.sx = new Float32Array(capacity);
+    this.sy = new Float32Array(capacity);
+    this.sz = new Float32Array(capacity);
+    this.nx = new Float32Array(capacity);
+    this.ny = new Float32Array(capacity);
+    this.nz = new Float32Array(capacity);
+    this.choice = new Uint8Array(this.spriteChoices > 1 ? capacity : 0);
+    const motion = this._perParticle ? capacity : 0;
+    this._ax = new Float32Array(motion); this._ay = new Float32Array(motion); this._az = new Float32Array(motion);
+    this._jx = new Float32Array(motion); this._jy = new Float32Array(motion); this._jz = new Float32Array(motion);
+    this._spin = new Float32Array(motion);
+    this._rot0 = new Float32Array(motion);
+    this._colours = new Float32Array(this._sampledColour ? capacity * 8 : 0);
     this.tail = 0;
     this.head = 0;
+    this._dirty = true;
+  }
+
+  /** Express acceleration (both endpoints) in another frame: a 4x4
+   *  column-major matrix whose linear part applies. Sampled values are
+   *  transformed per particle at birth. */
+  setAccelerationBasis(m: readonly number[] | null): void {
+    this._accelBasis = m ? Array.from(m) : null;
+    if (m) {
+      const apply = (v: Vec3): Vec3 => [m[0] * v[0] + m[4] * v[1] + m[8] * v[2],
+        m[1] * v[0] + m[5] * v[1] + m[9] * v[2], m[2] * v[0] + m[6] * v[1] + m[10] * v[2]];
+      this.accel = apply(this.accel);
+      this.accelSlope = apply(this.accelSlope);
+    }
     this._dirty = true;
   }
 
@@ -359,9 +479,13 @@ export class EmitterSim {
    *  a one-shot schedule. */
   spawnTick(j: number): number {
     if (!(this.rate > 0) || j < 0) return Infinity;
+    if (this._eventWindow) return j >= this.tail && j < this.head ? this.birth[j % this.capacity] : Infinity;
     const n = j * this.k;
     if (n >= this.totalCount) return Infinity;
-    if (!this.windows) return n * this.step;
+    // Birth timestamps use integral ticks. Eligibility still follows the
+    // emission counter: several particles may share a timestamp without
+    // all becoming eligible at that rounded-down time.
+    if (!this.windows) return Math.trunc(n * this.tickRate / this.rate);
     const c = this.cycleCount;
     const cycle = Math.floor(n / c);
     if (cycle > 0 && this.period == null) return Infinity;
@@ -373,6 +497,13 @@ export class EmitterSim {
     return Infinity; // unreachable: r < cycleCount by construction
   }
 
+  private _continuousEnd(T: number): number {
+    if (T < 0) return 0;
+    const counter = Math.min(0x7fffffff,
+      Math.trunc(Math.fround(Math.fround(T * this.rate) / Math.fround(this.tickRate))));
+    return Math.max(0, Math.floor(Math.min(counter, this.totalCount - 1) / this.k) + 1);
+  }
+
   // Alive kept-index range at T: spawn in (T - life, T]. Continuous streams
   // are closed-form; windowed schedules binary-search the monotone spawnTick.
   private _aliveRange(T: number): [number, number] {
@@ -380,13 +511,11 @@ export class EmitterSim {
     if (!this.windows) {
       const stepK = this.step * this.k;
       let lo = Math.max(0, Math.floor((T - this.life) / stepK) + 1);
-      let hi = Math.floor(T / stepK);
-      if (this.totalCount !== Infinity) {
-        const jMax = Math.floor((this.totalCount - 1) / this.k);
-        hi = Math.min(hi, jMax);
-      }
-      if (hi < lo) hi = lo - 1;
-      return [lo, hi + 1];
+      const end = this._continuousEnd(T);
+      // Rounded birth times can expire before the nominal counter interval.
+      while (lo < end && this.spawnTick(lo) + this.life <= T) lo++;
+      lo = Math.min(lo, end);
+      return [lo, end];
     }
     const perCycleKept = Math.max(1, Math.ceil(this.cycleCount / this.k));
     const cycles = this.period ? Math.floor(Math.max(0, T) / this.period) + 2 : 1;
@@ -411,17 +540,78 @@ export class EmitterSim {
   // Sample the j-th kept spawn's constants into its ring slot. Fixed draw
   // count and order (three draws) keeps the counter-based stream stable
   // across shape kinds.
-  private _spawn(j: number): void {
+  private _spawn(j: number, counter = j * this.k, tick = this.spawnTick(j)): void {
     const slot = j % this.capacity;
-    const rng = mulberry32(hash32(this.seed, (j * this.k) | 0));
+    const rng = mulberry32(hash32(this.seed, counter | 0));
     const r0 = rng();
     const r1 = rng();
     const r2 = rng();
-    const tick = this.spawnTick(j);
+    // Stable preview seeds keep seeks and thinning reproducible. Sampled
+    // values are drawn in the game's evaluation order (origin radius, speed,
+    // acceleration, size, rotation, spin, sprite, colour); the session's
+    // shared stream state is not implied by this per-particle preview seed.
+    const random = this._random ? new EffectRandom(BigInt(hash32(this.seed, counter | 0))) : null;
+    const draw = (v: EffectSample) => typeof v === 'number' ? v : random!.range(v[0], v[1]);
+    const radius = this.shape.radial ? draw(this.shape.radial.radius) : 0;
+    let speed = this.speed; let speedSlope = this.speedSlope;
+    const f = this._fields;
+    if (f) {
+      if (f.speed) {
+        const s0 = draw(f.speed.start.value) / f.speed.start.ticks;
+        const s1 = f.speed.end === 'start' ? s0 : draw(f.speed.end.value) / f.speed.end.ticks;
+        speed = s0; speedSlope = (s1 - s0) / this.life;
+      }
+      let a0 = this.accel; let a1 = this.accelSlope;
+      if (f.acceleration) {
+        const t2 = this.tickRate * this.tickRate;
+        const v0 = f.acceleration.start.map(draw);
+        const v1 = f.acceleration.end === 'start' ? v0 : f.acceleration.end.map(draw);
+        a0 = [v0[0] / t2, v0[1] / t2, v0[2] / t2];
+        a1 = [(v1[0] - v0[0]) / t2 / this.life, (v1[1] - v0[1]) / t2 / this.life, (v1[2] - v0[2]) / t2 / this.life];
+        const m = this._accelBasis;
+        if (m) {
+          a0 = [m[0] * a0[0] + m[4] * a0[1] + m[8] * a0[2], m[1] * a0[0] + m[5] * a0[1] + m[9] * a0[2], m[2] * a0[0] + m[6] * a0[1] + m[10] * a0[2]];
+          a1 = [m[0] * a1[0] + m[4] * a1[1] + m[8] * a1[2], m[1] * a1[0] + m[5] * a1[1] + m[9] * a1[2], m[2] * a1[0] + m[6] * a1[1] + m[10] * a1[2]];
+        }
+      }
+      this._ax[slot] = a0[0]; this._ay[slot] = a0[1]; this._az[slot] = a0[2];
+      this._jx[slot] = a1[0]; this._jy[slot] = a1[1]; this._jz[slot] = a1[2];
+    }
+    if (this._scales) {
+      this._sizes0[slot] = draw(this._scales.start);
+      this._sizes1[slot] = this._scales.end === 'start' ? this._sizes0[slot] : draw(this._scales.end);
+    }
+    if (f) {
+      // The game turns a particle's corners counter-clockwise by its initial
+      // rotation (degrees), while roll turns them the other way.
+      this._rot0[slot] = f.rotation !== null && f.rotation !== undefined ? draw(f.rotation) * DEG : 0;
+      this._spin[slot] = f.angularSpeed ? draw(f.angularSpeed.value) * DEG / f.angularSpeed.ticks : this.spin;
+    }
+    if (this.spriteChoices > 1) this.choice[slot] = random!.integer(this.spriteChoices);
+    if (this._sampledColour) {
+      const channel = (v: number) => Math.trunc(Math.fround(Math.fround(clamp(v, 0, 1)) * 255)) / 255;
+      const rgba = (c: EffectColourSample): number[] => {
+        if ('rgba' in c) return c.rgba.map(channel);
+        const [a, h, sat, l] = c.ahsl.map(draw);
+        return [...effectHslToRgb(h, sat, l), a].map(channel);
+      };
+      const colour = f!.color!;
+      const c0 = rgba(colour.start);
+      this._colours.set(c0, slot * 8);
+      this._colours.set(colour.end === 'start' ? c0 : rgba(colour.end), slot * 8 + 4);
+    }
     const s = this.shape;
     let x = s.center[0]; let y = s.center[1]; let z = s.center[2];
     let dx = s.w[0]; let dy = s.w[1]; let dz = s.w[2];
-    if (s.kind === 'segment' && s.segment) {
+    if (s.kind === 'radial' && s.radial) {
+      const radial = s.radial;
+      const yaw = (radial.yaw[0] + (radial.yaw[1] - radial.yaw[0]) * r0) * DEG;
+      const pitch = (radial.pitch[0] + (radial.pitch[1] - radial.pitch[0]) * r1) * DEG;
+      const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch);
+      x += radius * radial.axisScale[0] * cy;
+      y += radius * radial.axisScale[1] * sy;
+      dx = cy * cp; dy = sy * cp; dz = Math.sin(pitch);
+    } else if (s.kind === 'segment' && s.segment) {
       // Uniform along the authored line, so a shoreline wave breaks across the
       // whole width the game gives it rather than jetting from one end.
       const { from, to } = s.segment;
@@ -453,14 +643,9 @@ export class EmitterSim {
       y += radius * (ca * s.u[1] + sa * s.v[1]);
       z += radius * (ca * s.u[2] + sa * s.v[2]);
     } else {
-      // point / conservative fallback: cone sample about the axis
-      const yaw = r0 * s.yaw;
-      const pitch = r1 * s.pitch;
-      const cp = Math.cos(pitch); const sp = Math.sin(pitch);
-      const cy = Math.cos(yaw); const sy = Math.sin(yaw);
-      dx = cp * s.w[0] + sp * (cy * s.u[0] + sy * s.v[0]);
-      dy = cp * s.w[1] + sp * (cy * s.u[1] + sy * s.v[1]);
-      dz = cp * s.w[2] + sp * (cy * s.u[2] + sy * s.v[2]);
+      const yaw: [number, number] = s.cone ? [s.cone.yaw[0] * DEG, s.cone.yaw[1] * DEG] : [0, s.yaw];
+      const pitch: [number, number] = s.cone ? [s.cone.pitch[0] * DEG, s.cone.pitch[1] * DEG] : [0, s.pitch];
+      [dx, dy, dz] = sampleConeDirection(s.w, yaw, pitch, r0, r1);
     }
     const frames = this._birthFrameSampler?.(tick);
     const p = frames ? frames.position : this._birthPosition;
@@ -477,19 +662,52 @@ export class EmitterSim {
       dz = d[2] * dx + d[6] * dy + d[10] * dz;
       dx = tx; dy = ty;
     }
+    // Fixed sprite planes follow the direction frame at birth, independently
+    // of the point frame. Keep the raw vector until the common owner transform.
+    const n = this._facingAxis;
+    this.nx[slot] = n ? (d ? d[0] * n[0] + d[4] * n[1] + d[8] * n[2] : n[0]) : 0;
+    this.ny[slot] = n ? (d ? d[1] * n[0] + d[5] * n[1] + d[9] * n[2] : n[1]) : 0;
+    this.nz[slot] = n ? (d ? d[2] * n[0] + d[6] * n[1] + d[10] * n[2] : n[2]) : 0;
     this.birth[slot] = tick;
     this.px[slot] = x;
     this.py[slot] = y;
     this.pz[slot] = z;
-    this.vx[slot] = dx * this.speed;
-    this.vy[slot] = dy * this.speed;
-    this.vz[slot] = dz * this.speed;
+    this.vx[slot] = dx * speed;
+    this.vy[slot] = dy * speed;
+    this.vz[slot] = dz * speed;
+    this.sx[slot] = dx * speedSlope;
+    this.sy[slot] = dy * speedSlope;
+    this.sz[slot] = dz * speedSlope;
+  }
+
+  private _ensureWindow(T: number): void {
+    const schedule = this._eventWindow!;
+    const dt = T - this._lastT;
+    const end = this._continuousEnd(T);
+    if (this._dirty || !(dt >= 0 && dt <= MAX_CATCHUP_TICKS)) {
+      this.tail = this.head = 0;
+      this._windowNext = Math.max(0, Math.floor((T - this.life) / (this.step * this.k)) + 1);
+    }
+    for (let j = this._windowNext; j < end; j++) {
+      const counter = j * this.k;
+      const born = Math.trunc(counter * this.tickRate / this.rate);
+      if (born + this.life <= T) continue;
+      const phase = schedule.period === null ? born : ((born % schedule.period) + schedule.period) % schedule.period;
+      if (!schedule.windows.some(([start, finish]) => start <= phase && phase < finish)) continue;
+      this._spawn(this.head++, counter, born);
+      if (this.head - this.tail > this.capacity) this.tail = this.head - this.capacity;
+    }
+    this._windowNext = end;
+    while (this.tail < this.head && this.birth[this.tail % this.capacity] + this.life <= T) this.tail++;
+    this._dirty = false;
+    this._lastT = T;
   }
 
   /** Bring the ring up to clock T: incremental for small forward steps,
    *  full O(alive) rebuild on any discontinuity. */
   ensure(T: number): void {
     if (!(this.rate > 0)) { this._lastT = T; return; }
+    if (this._eventWindow) { this._ensureWindow(T); return; }
     const dt = T - this._lastT;
     if (this._dirty || !(dt >= 0 && dt <= MAX_CATCHUP_TICKS)) {
       const [lo, hi] = this._aliveRange(T);
@@ -499,7 +717,7 @@ export class EmitterSim {
       for (let j = from; j < hi; j++) this._spawn(j);
       this._dirty = false;
     } else if (dt > 0) {
-      while (this.spawnTick(this.head) <= T) {
+      while (this.windows ? this.spawnTick(this.head) <= T : this.head < this._continuousEnd(T)) {
         this._spawn(this.head);
         this.head++;
         if (this.head - this.tail > this.capacity) this.tail = this.head - this.capacity;
@@ -511,16 +729,25 @@ export class EmitterSim {
 
   /**
    * Closed-form evaluation of every alive particle at T:
-   *   p = p0 + v0 age + 0.5 accel age^2, roll = spin age, scale lerped by
-   *   age/life, colour and alpha shaped by the three-phase envelope below.
+   * Motion uses the two authored speed and acceleration endpoints. The
+   * acceleration-slope term is one quarter of age cubed, as defined by the
+   * particle program, rather than the one-sixth term of jerk integration.
+   * Roll = spin age; scale follows age/life and colour its three windows.
    */
   evaluate(T: number, emit: (x: number, y: number, z: number, scale: number,
-    r: number, g: number, b: number, a: number, rot: number) => void): void {
+    r: number, g: number, b: number, a: number, rot: number, nx: number, ny: number, nz: number, facingMode: number) => void,
+    choice = -1): void {
     const cap = this.capacity;
     const life = this.life;
-    const [ax, ay, az] = this.accel;
-    const [r0c, g0c, b0c, a0c] = this.color0;
-    const [r1c, g1c, b1c, a1c] = this.color1;
+    const per = this._perParticle;
+    const colours = this._sampledColour ? this._colours : null;
+    // A renderer draws each sprite outcome from its own batch; an unfiltered
+    // evaluation (choice < 0) visits every particle.
+    const filter = choice >= 0 && this.spriteChoices > 1;
+    let [ax, ay, az] = this.accel;
+    let [jx, jy, jz] = this.accelSlope;
+    let [r0c, g0c, b0c, a0c] = this.color0;
+    let [r1c, g1c, b1c, a1c] = this.color1;
     // A lifetime is three consecutive windows: fade in, hold, fade out. The
     // colour pair crosses over during the HOLD window alone, so a particle
     // reaches its second colour before it starts fading rather than over the
@@ -530,11 +757,22 @@ export class EmitterSim {
       const slot = j % cap;
       const age = T - this.birth[slot];
       if (!(age >= 0) || age >= life) continue;
+      if (filter && this.choice[slot] !== choice) continue;
+      if (per) {
+        ax = this._ax[slot]; ay = this._ay[slot]; az = this._az[slot];
+        jx = this._jx[slot]; jy = this._jy[slot]; jz = this._jz[slot];
+      }
+      if (colours) {
+        const at = slot * 8;
+        r0c = colours[at]; g0c = colours[at + 1]; b0c = colours[at + 2]; a0c = colours[at + 3];
+        r1c = colours[at + 4]; g1c = colours[at + 5]; b1c = colours[at + 6]; a1c = colours[at + 7];
+      }
       const u = age / life;
       const half = 0.5 * age * age;
-      const x = this.px[slot] + this.vx[slot] * age + ax * half;
-      const y = this.py[slot] + this.vy[slot] * age + ay * half;
-      const z = this.pz[slot] + this.vz[slot] * age + az * half;
+      const quarter = half * age * 0.5;
+      const x = this.px[slot] + this.vx[slot] * age + (ax + this.sx[slot]) * half + jx * quarter;
+      const y = this.py[slot] + this.vy[slot] * age + (ay + this.sy[slot]) * half + jy * quarter;
+      const z = this.pz[slot] + this.vz[slot] * age + (az + this.sz[slot]) * half + jz * quarter;
       const k0 = ramp(age, this.fadeIn);
       const k1 = ramp(age - this.fadeIn, hold);
       const k2 = ramp(age - this.fadeIn - hold, this.fadeOut);
@@ -551,9 +789,17 @@ export class EmitterSim {
         b = (b0c * pa0 + (b1c * pa1 - b0c * pa0) * k1) / alpha;
       }
       emit(x, y, z,
-        clamp(this.scale0 + (this.scale1 - this.scale0) * u, 0.01, 100),
+        this._scales ? this._sizes0[slot] + (this._sizes1[slot] - this._sizes0[slot]) * u
+          : this.scale0 + (this.scale1 - this.scale0) * u,
         r, g, b, alpha,
-        this.spin * age);
+        per ? this._spin[slot] * age - this._rot0[slot] : this.spin * age,
+        // Facing velocity follows the sprite program's motion vector. Its
+        // changing-acceleration coefficient differs from the derivative of
+        // the position polynomial. Supply native units per second.
+        (this._facingMode === 1 || this._facingMode === 4) ? this.tickRate * (this.vx[slot] + age * (ax + this.sx[slot] + .5 * age * jx)) : this.nx[slot],
+        (this._facingMode === 1 || this._facingMode === 4) ? this.tickRate * (this.vy[slot] + age * (ay + this.sy[slot] + .5 * age * jy)) : this.ny[slot],
+        (this._facingMode === 1 || this._facingMode === 4) ? this.tickRate * (this.vz[slot] + age * (az + this.sz[slot] + .5 * age * jz)) : this.nz[slot],
+        this._facingMode);
     }
   }
 }

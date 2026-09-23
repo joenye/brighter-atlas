@@ -51,7 +51,7 @@ import {
 import { composePlacementMatrix, DEFAULT_MESH_FORWARD_QUARTER_TURNS } from './scene.js';
 import {
   BILLBOARD_VERTEX, BILLBOARD_FRAGMENT, DEFAULT_SPRITE_DRAW,
-  spriteDrawOf, spriteUniforms, spriteColorSpace, type SpriteDraw,
+  spriteDrawOf, spriteUniforms, spriteColorSpace, spriteMaterialState, configureSpriteSampling, emitterSpriteDraws, type SpriteDraw,
 } from './effects-sprite.js';
 import type { WorldEffectsDoc, EffectSystem } from '../../extract/world/effects.js';
 
@@ -162,7 +162,8 @@ interface InstanceRec {
   // mean emitter spawn centre in the owner's local frame (see positionProxy)
   localCenter?: [number, number, number];
   movingCenter?: boolean;
-  emitters: { sim: EmitterSim; batchKey: string }[];
+  // One entry per drawn sprite outcome; a selecting emitter repeats its sim.
+  emitters: { sim: EmitterSim; batchKey: string; choice: number }[];
 }
 
 /** Mean of an instance's emitter spawn centres, in the owner's local frame.
@@ -198,6 +199,7 @@ interface Batch {
     sim: EmitterSim; anchor: Anchor; instance: InstanceRec;
     edit: EffectInstanceEdit;   // shared reference with the owning InstanceRec
     modulation: number[] | null;
+    choice: number;             // sprite outcome drawn by this member, -1 for all
   }[];
   capacity: number;
   count: number;
@@ -205,11 +207,15 @@ interface Batch {
   material: THREE.ShaderMaterial;
   mesh: THREE.Mesh;
   posSize: Float32Array;
-  color: Uint8Array;
+  color: Float32Array;
   rot: Float32Array;
   aPosSize: THREE.InstancedBufferAttribute;
   aColor: THREE.InstancedBufferAttribute;
   aRot: THREE.InstancedBufferAttribute;
+  facing: Float32Array;
+  aFacing: THREE.InstancedBufferAttribute;
+  facingMode: Float32Array;
+  aFacingMode: THREE.InstancedBufferAttribute;
   // normal-blend sort scratch (allocated lazily with the batch arrays)
   depth: Float32Array;
   order: number[];
@@ -228,7 +234,6 @@ export interface WorldEffectsLayerOptions {
   // Defaults to the scene.ts default so a caller that has not wired the
   // real value still gets a self-consistent frame.
   meshForwardQuarterTurns?: number;
-  anisotropy?: number;
 }
 
 export class WorldEffectsLayer {
@@ -240,7 +245,6 @@ export class WorldEffectsLayer {
   private _tileUnits: number;
   private _layerUnits: number;
   private _meshForwardQuarterTurns: number;
-  private _anisotropy: number;
   private _systemsBySlot: Map<number, EffectSystem>;
   private _rooms = new Map<number, InstanceRec[]>();
   private _animations = new Map<string, EffectBoneAnimation>();
@@ -282,7 +286,6 @@ export class WorldEffectsLayer {
   constructor({
     root, doc, url, textures, tileUnits, layerUnits,
     meshForwardQuarterTurns = DEFAULT_MESH_FORWARD_QUARTER_TURNS,
-    anisotropy = 8,
   }: WorldEffectsLayerOptions) {
     this.root = root;
     this.doc = doc;
@@ -292,7 +295,6 @@ export class WorldEffectsLayer {
     this._tileUnits = tileUnits;
     this._layerUnits = layerUnits;
     this._meshForwardQuarterTurns = meshForwardQuarterTurns;
-    this._anisotropy = anisotropy;
     this._systemsBySlot = new Map((doc?.systems || []).map((s) => [s.slot, s]));
     this._proxyGeometry = new THREE.SphereGeometry(1, 6, 4);
     const proxyRadius = Math.max(12, tileUnits * 0.05);
@@ -325,10 +327,8 @@ export class WorldEffectsLayer {
    *  including them would either sit permanently dark after their one-shot
    *  window passes or, worse, replay a stale burst every time proximity
    *  reactivates the room. Ambient (looping) systems are unaffected. */
-  // `modulation` is the room's ambience colour. The game multiplies every
-  // particle by a global half-range modulation fed from the room, which is
-  // what gives an effect its colour when the effect itself authors none: a
-  // candle glow is a single-channel mask with nothing of its own to tint.
+  // Optional half-range room modulation supplied by the scene. This remains
+  // a lighting approximation, separate from recovered emitter/owner colours.
   // Omitted or absent leaves particles at their authored colour.
   addRoom(roomId: number, offset: [number, number],
     opts: { loopOnly?: boolean; modulation?: number[] | null } = {}): void {
@@ -400,22 +400,16 @@ export class WorldEffectsLayer {
       // child rigs and older documents still need their own resolved frames.
       const animationSetters: ((animation: EffectBoneAnimation | null) => void)[] = [];
       system.emitters.forEach((emitter, index) => {
-        // An emitter with no material cannot be drawn: every one of the
-        // game's particle pixel shaders samples a texture, so a material of
-        // `$none` means this emitter contributes nothing visible. Whole
-        // emitter families are authored that way. Drawing them with the
-        // built-in fallback dot is what put uncoloured white-grey blobs on
-        // forager nodes and elsewhere, so they are skipped outright.
-        if (!emitter.sprite?.images?.length) return;
-        const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
+        // Missing sprite records may represent computed selections. Those
+        // draw only once their shape is bound; substituting a fallback dot
+        // would invent their appearance.
+        const draws = emitterSpriteDraws(emitter, this.doc.configs || {});
+        if (!draws.length) return;
+        const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate, att.color_override);
         // A static attachment can keep acceleration in world directions.
         // Store it relative to the common owner so final drawing does not
         // rotate it again. Rigged systems use their rig root independently.
-        if (att.rig === null && emitter.acceleration_frame?.world) {
-          const [x, y, z] = sim.accel, m = inverseOwner;
-          sim.accel = [m[0] * x + m[4] * y + m[8] * z,
-            m[1] * x + m[5] * y + m[9] * z, m[2] * x + m[6] * y + m[10] * z];
-        }
+        if (att.rig === null && emitter.acceleration_frame?.world) sim.setAccelerationBasis(inverseOwner);
         if (rigWorld && inverseOwner && system.rig_selection?.alternate === false && emitter.transform) {
           const frames = restEffectBirthFrames(emitter.transform, rigWorld, inverseOwner);
           if (frames) {
@@ -438,10 +432,12 @@ export class WorldEffectsLayer {
           });
           rec.movingCenter = true;
         }
-        const texId = Number(emitter.sprite.images[0]);
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
-        this._draws.set(texId, spriteDrawOf(emitter.sprite));
-        rec.emitters.push({ sim, batchKey: `${texId}|${blend}` });
+        for (const { sprite, choice } of draws) {
+          const texId = Number(sprite.images[0]);
+          this._draws.set(texId, spriteDrawOf(sprite));
+          rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, choice });
+        }
       });
       // The pick target has to sit ON the particles, so it is built after the
       // emitters exist and placed at their mean spawn centre rather than at
@@ -467,9 +463,9 @@ export class WorldEffectsLayer {
     }
     this._rooms.set(id, recs);
     for (const rec of recs) {
-      for (const { sim, batchKey } of rec.emitters) {
+      for (const { sim, batchKey, choice } of rec.emitters) {
         this._batchFor(batchKey).members.push({
-          sim, anchor: rec.anchor, edit: rec.edit, modulation: rec.modulation, instance: rec,
+          sim, anchor: rec.anchor, edit: rec.edit, modulation: rec.modulation, instance: rec, choice,
         });
       }
     }
@@ -547,13 +543,13 @@ export class WorldEffectsLayer {
 
   emitterCount(): number {
     let n = 0;
-    for (const recs of this._rooms.values()) for (const rec of recs) n += rec.emitters.length;
+    for (const recs of this._rooms.values()) for (const rec of recs) n += new Set(rec.emitters.map(e => e.sim)).size;
     return n;
   }
 
   liveCount(): number {
     let n = 0;
-    for (const batch of this._batches.values()) for (const m of batch.members) n += m.sim.alive;
+    for (const batch of this._batches.values()) for (const m of batch.members) if (m.choice <= 0) n += m.sim.alive;
     return n;
   }
 
@@ -637,7 +633,7 @@ export class WorldEffectsLayer {
     // sim's stale last-advanced count.
     let live = 0;
     if (!rec.edit.hidden) {
-      for (const { sim } of rec.emitters) live += sim.alive;
+      for (const { sim, choice } of rec.emitters) if (choice <= 0) live += sim.alive;
     }
     return {
       key: rec.key,
@@ -845,15 +841,10 @@ export class WorldEffectsLayer {
       vertexShader: BILLBOARD_VERTEX,
       fragmentShader: BILLBOARD_FRAGMENT,
       uniforms: {
-        ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
-        ...spriteUniforms(draw),
+        ...spriteUniforms(draw, this._tileUnits),
         map: { value: this._acquireTexture(texId) },
       },
-      fog: true,
-      transparent: true,
-      depthWrite: false,
-      depthTest: true,
-      blending: blend === 'add' ? THREE.AdditiveBlending : THREE.NormalBlending,
+      ...spriteMaterialState(blend),
       // The root mirrors world.root, whose matrix has a NEGATIVE determinant
       // (the handedness mirror), so three flips the front-face convention
       // for everything under it. Billboard corners are added in VIEW space
@@ -882,8 +873,8 @@ export class WorldEffectsLayer {
     batch = {
       key, texId, draw, blend, members: [], capacity: 0, count: 0,
       geometry, material, mesh,
-      posSize: new Float32Array(0), color: new Uint8Array(0), rot: new Float32Array(0),
-      aPosSize: null as any, aColor: null as any, aRot: null as any,
+      posSize: new Float32Array(0), color: new Float32Array(0), rot: new Float32Array(0),
+      aPosSize: null as any, aColor: null as any, aRot: null as any, facing: new Float32Array(0), aFacing: null as any, facingMode: new Float32Array(0), aFacingMode: null as any,
       depth: new Float32Array(0), order: [],
     };
     this._allocBatchArrays(batch, 4);
@@ -894,14 +885,18 @@ export class WorldEffectsLayer {
   private _allocBatchArrays(batch: Batch, capacity: number): void {
     batch.capacity = capacity;
     batch.posSize = new Float32Array(capacity * 4);
-    batch.color = new Uint8Array(capacity * 4);
+    batch.color = new Float32Array(capacity * 4);
     batch.rot = new Float32Array(capacity);
+    batch.facing = new Float32Array(capacity * 3);
+    batch.facingMode = new Float32Array(capacity);
     batch.depth = new Float32Array(capacity);
     batch.order = [];
     batch.aPosSize = new THREE.InstancedBufferAttribute(batch.posSize, 4);
-    batch.aColor = new THREE.InstancedBufferAttribute(batch.color, 4, true);
+    batch.aColor = new THREE.InstancedBufferAttribute(batch.color, 4);
     batch.aRot = new THREE.InstancedBufferAttribute(batch.rot, 1);
-    for (const attr of [batch.aPosSize, batch.aColor, batch.aRot]) {
+    batch.aFacing = new THREE.InstancedBufferAttribute(batch.facing, 3);
+    batch.aFacingMode = new THREE.InstancedBufferAttribute(batch.facingMode, 1);
+    for (const attr of [batch.aPosSize, batch.aColor, batch.aRot, batch.aFacing, batch.aFacingMode]) {
       attr.setUsage(THREE.DynamicDrawUsage);
     }
     // replacing attributes re-uploads; dropping the old GL buffers needs the
@@ -909,9 +904,13 @@ export class WorldEffectsLayer {
     batch.geometry.deleteAttribute('aPosSize');
     batch.geometry.deleteAttribute('aColor');
     batch.geometry.deleteAttribute('aRot');
+    batch.geometry.deleteAttribute('aFacing');
+    batch.geometry.deleteAttribute('aFacingMode');
     batch.geometry.setAttribute('aPosSize', batch.aPosSize);
     batch.geometry.setAttribute('aColor', batch.aColor);
     batch.geometry.setAttribute('aRot', batch.aRot);
+    batch.geometry.setAttribute('aFacing', batch.aFacing);
+    batch.geometry.setAttribute('aFacingMode', batch.aFacingMode);
     // the renderer caches its instance ceiling from the FIRST setup; drop it
     // so a capacity regrowth never silently clamps the draw
     delete (batch.geometry as any)._maxInstanceCount;
@@ -950,7 +949,7 @@ export class WorldEffectsLayer {
         // and defeat the eviction cap.
         if (!((this._textureRefCount.get(texId) || 0) > 0)) { loaded.dispose(); return; }
         loaded.colorSpace = spriteColorSpace(draw);
-        loaded.anisotropy = this._anisotropy;
+        configureSpriteSampling(loaded);
         const previous = this._textureCache.get(texId);
         this._textureCache.set(texId, loaded);
         for (const batch of this._batches.values()) {
@@ -1040,15 +1039,14 @@ export class WorldEffectsLayer {
       rootMatrix = this.root.matrixWorld;
     }
     for (const batch of this._batches.values()) {
-      const { posSize, color, rot } = batch;
+      const { posSize, color, rot, facing, facingMode } = batch;
       const cap = batch.capacity;
       let idx = 0;
       const sortable = batch.blend === 'mix' && rootMatrix != null;
       for (const member of batch.members) {
         const { sim, anchor, edit, modulation } = member;
-        // The room's ambience, applied the way the game applies it: a
-        // half-range colour whose rgb is DOUBLED, so 0.5 is neutral. Hoisted
-        // out of the per-particle loop.
+        // Half-range scene modulation: 0.5 is neutral. Its room mapping
+        // remains approximate; do not use it to infer missing emitter colours.
         const mr = modulation ? modulation[0] * 2 : 1;
         const mg = modulation ? modulation[1] * 2 : 1;
         const mb = modulation ? modulation[2] * 2 : 1;
@@ -1066,7 +1064,7 @@ export class WorldEffectsLayer {
         const Tm = this._instanceTime(member.instance);
         const m = anchor.m;
         sim.ensure(Tm);
-        sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll) => {
+        sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode) => {
           if (idx >= cap) return;
           // Owner frame applied after the independent birth transforms, rather than
           // a helper returning a tuple: no per-particle allocation, since
@@ -1081,17 +1079,21 @@ export class WorldEffectsLayer {
           posSize[at4 + 1] = wy;
           posSize[at4 + 2] = wz;
           posSize[at4 + 3] = scale * sizeScale * edit.scaleMult;
-          color[at4] = Math.round(clamp01(r * mr) * 255);
-          color[at4 + 1] = Math.round(clamp01(g * mg) * 255);
-          color[at4 + 2] = Math.round(clamp01(b * mb) * 255);
-          color[at4 + 3] = Math.round(clamp01(a) * 255);
+          color[at4] = r * mr;
+          color[at4 + 1] = g * mg;
+          color[at4 + 2] = b * mb;
+          color[at4 + 3] = a;
           rot[idx] = roll;
+          facingMode[idx] = mode;
+          facing[idx * 3] = (m[0] * nx + m[4] * ny + m[8] * nz);
+          facing[idx * 3 + 1] = (m[1] * nx + m[5] * ny + m[9] * nz);
+          facing[idx * 3 + 2] = (m[2] * nx + m[6] * ny + m[10] * nz);
           if (sortable) {
             this._scratch.set(wx, wy, wz).applyMatrix4(rootMatrix!);
             batch.depth[idx] = this._scratch.sub(this._camPos).dot(this._camFwd);
           }
           idx++;
-        });
+        }, member.choice);
       }
       if (sortable && idx > 1 && idx <= MIX_SORT_CAP) this._sortBatch(batch, idx);
       batch.count = idx;
@@ -1099,6 +1101,8 @@ export class WorldEffectsLayer {
       batch.aPosSize.needsUpdate = true;
       batch.aColor.needsUpdate = true;
       batch.aRot.needsUpdate = true;
+      batch.aFacing.needsUpdate = true;
+      batch.aFacingMode.needsUpdate = true;
       batch.mesh.visible = idx > 0;
     }
   }
@@ -1117,17 +1121,18 @@ export class WorldEffectsLayer {
     const posCopy = batch.posSize.slice(0, count * 4);
     const colCopy = batch.color.slice(0, count * 4);
     const rotCopy = batch.rot.slice(0, count);
+    const facingCopy = batch.facing.slice(0, count * 3);
+    const facingModeCopy = batch.facingMode.slice(0, count);
     for (let i = 0; i < count; i++) {
       const src = order[i];
       batch.posSize.set(posCopy.subarray(src * 4, src * 4 + 4), i * 4);
       batch.color.set(colCopy.subarray(src * 4, src * 4 + 4), i * 4);
       batch.rot[i] = rotCopy[src];
+      batch.facingMode[i] = facingModeCopy[src];
+      batch.facing.set(facingCopy.subarray(src * 3, src * 3 + 3), i * 3);
     }
   }
 }
 
-function clamp01(value: number): number {
-  return value < 0 ? 0 : value > 1 ? 1 : value;
-}
 
 export default WorldEffectsLayer;

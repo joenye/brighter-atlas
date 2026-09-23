@@ -56,8 +56,8 @@ let _stage: HTMLCanvasElement | null = null, _stageCtx: CanvasRenderingContext2D
 // destroy + reallocate its MSAA framebuffer dozens of times a second, which is
 // exactly what made transparent GIF capture crawl.
 const _rts = new Map<string, { rt: any; buf: Uint8Array }>();
-function _rtFor(w: number, h: number): { rt: any; buf: Uint8Array } {
-  const key = `${w}x${h}`;
+function _rtFor(w: number, h: number, colorSpace: any): { rt: any; buf: Uint8Array } {
+  const key = `${w}x${h}:${colorSpace}`;
   let e = _rts.get(key);
   if (e) { _rts.delete(key); _rts.set(key, e); return e; }   // refresh LRU order
   if (_rts.size >= 3) {   // sizes churn when the user edits the resolution
@@ -72,7 +72,15 @@ function _rtFor(w: number, h: number): { rt: any; buf: Uint8Array } {
     }),
     buf: new Uint8Array(w * h * 4),
   };
-  e.rt.texture.colorSpace = THREE.SRGBColorSpace;   // HW sRGB-encode -> bytes match the canvas
+  // The bundled renderer's display-target path uses shader output conversion
+  // and an ordinary RGBA8 attachment, as the canvas does. An sRGB attachment
+  // instead converts AFTER blending, which changes particle overlaps and
+  // makes transparent exports too bright when their alpha is removed.
+  // isXRRenderTarget selects that path without starting an XR session. Keep
+  // test_effect_output.ts passing when upgrading the bundled renderer.
+  e.rt.isXRRenderTarget = true;
+  e.rt.texture.internalFormat = 'RGBA8';
+  e.rt.texture.colorSpace = colorSpace;
   _rts.set(key, e);
   return e;
 }
@@ -89,21 +97,35 @@ function _rtFor(w: number, h: number): { rt: any; buf: Uint8Array } {
 export function renderCaptureFrame(scene3d: RenderSource, w: number, h: number,
   { transparent = true }: { transparent?: boolean } = {}): { data: Uint8ClampedArray<ArrayBuffer>; width: number; height: number } {
   const { renderer, scene, camera } = scene3d;
-  const { rt, buf } = _rtFor(w, h);
+  const { rt, buf } = _rtFor(w, h, renderer.outputColorSpace);
   const pTarget = renderer.getRenderTarget(), pAlpha = renderer.getClearAlpha();
-  const pBg = scene.background, pAspect = camera.aspect;
-  if (transparent) {
-    scene.background = null;            // else the background clears opaque
-    renderer.setClearAlpha(0);
-  }
-  camera.aspect = w / h; camera.updateProjectionMatrix();
-  renderer.setRenderTarget(rt);
-  renderer.clear();
-  renderer.render(scene, camera);       // MSAA resolves at render() end
+  const pBg = scene.background, pFog = scene.fog, pAspect = camera.aspect;
+  const pClear = renderer.getClearColor(new THREE.Color()).clone();
+  // Clear and fog uniforms use a separate renderer path that treats every
+  // offscreen target as linear. Supply the values it would use on the canvas.
+  const outputColor = (color: any) => {
+    const c = color.clone();
+    THREE.ColorManagement.fromWorkingColorSpace(c, renderer.outputColorSpace);
+    return c;
+  };
   const n = w * h * 4;
-  renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
-  renderer.setRenderTarget(pTarget); renderer.setClearAlpha(pAlpha);
-  scene.background = pBg; camera.aspect = pAspect; camera.updateProjectionMatrix();
+  try {
+    scene.background = transparent ? null : pBg?.isColor ? outputColor(pBg) : pBg;
+    if (pFog) {
+      scene.fog = pFog.clone();
+      scene.fog.color.copy(outputColor(pFog.color));
+    }
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(outputColor(pClear), transparent ? 0 : pAlpha);
+    renderer.clear();
+    renderer.render(scene, camera);       // MSAA resolves at render() end
+    renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+  } finally {
+    renderer.setRenderTarget(pTarget); renderer.setClearColor(pClear, pAlpha);
+    scene.background = pBg; scene.fog = pFog;
+    camera.aspect = pAspect; camera.updateProjectionMatrix();
+  }
   const out = new Uint8ClampedArray(n), row = w * 4;
   for (let y = 0; y < h; y++) {
     const s = (h - 1 - y) * row, d = y * row;   // GL bottom-up -> canvas top-down

@@ -425,12 +425,22 @@ const showTextured = async () => {
   });
   await sleep(700);
 };
-const setDye = (hex: string) => page.evaluate((value: string) => {
-  const input: any = document.querySelector('.tex-dyes input.dye-swatch');
-  if (!input) return;
-  input.value = value;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-}, hex);
+const setDye = async (hex: string) => {
+  await page.evaluate((value: string) => {
+    const input: any = document.querySelector('.tex-dyes input.dye-swatch');
+    if (!input) throw Error('Dye input missing');
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, hex);
+  // Changing dye clears this state synchronously, then reloads textures.
+  // Wait for the replacement material before measuring the rendered colour.
+  await page.waitForFunction(() => {
+    const rec = window.__bs.meshView?.texMat?.userData?.exactRecolor;
+    return rec?.applied === true && rec.sourceField === 'dye';
+  }, { timeout: 30000 });
+  await page.evaluate(() => new Promise<void>(resolve =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+};
 
 let dyeMesh: number | null = null;
 let dyeDelta = 0;
@@ -977,6 +987,7 @@ for (const probe of [
   // delta is informational and it is gated on live count + coverage + the
   // review screenshot instead. The dense fountain keeps a hard delta.
   { room: 'Twiddle Corner', focus: 'hanging_street_lantern_idle', extent: 3, aimParticles: true, clock: 5000, minLive: 0, channelMin: 8, minDiff: 0, minSum: 0, shot: 'e2e_effects_lantern.png' },
+  { room: "T & T's Explosives", focus: null, extent: 5, viewOffset: [-2, 2, -3], aimParticles: false, clock: 1800, minLive: 0, channelMin: 8, minDiff: 20, minSum: 200, shot: 'e2e_effects_bank.png' },
   { room: 'Town Square', focus: null, extent: 10, aimParticles: false, clock: 1750, minLive: 200, channelMin: 12, minDiff: 200, minSum: 5000, shot: 'e2e_effects_fountain.png' },
   // The monument's braziers are the co-location case: one system's emitters
   // must all sit in their own bowl, never split between the bowl and a point
@@ -1011,7 +1022,7 @@ for (const probe of [
     const bySlot = new Map(doc.systems.map((s) => [s.slot, s]));
     let best: any = null;
     for (const att of doc.attachments.rooms) {
-      if (att.room !== id) continue;
+      if (att.room !== id || att.default_active === false) continue;
       const sys: any = bySlot.get(att.system);
       if (sys && (!best || sys.emitters.length > best.emitters.length)) best = sys;
     }
@@ -1022,6 +1033,15 @@ for (const probe of [
   // a sparse effect's anchor can sit away from where its particles develop:
   // aim straight at the biggest live particle for the close-up measurement
   if (probe.aimParticles) await aimAtParticles();
+  // Approach the bank from inside the room; its wall otherwise hides the glow.
+  if (probe.viewOffset && focused?.startsWith('slot:')) await page.evaluate((slot, offset) => {
+    const v = window.__bs.worldView, a = v.effectsApi.anchorOf(slot);
+    if (!a) return;
+    const t = v.world.tileUnits, s = v.scene3d;
+    s.controls.target.set(a.x / t, a.z / t, a.y / t);
+    s.camera.position.set(a.x / t + offset[0], a.z / t + offset[1], a.y / t + offset[2]);
+    s.controls.update();
+  }, Number(focused.slice(5)), probe.viewOffset);
   await clickWorldCheck('Animated water');
   await waitWorldFrame();
   await page.evaluate(() => { window.__fxPixels = null; });
@@ -1321,6 +1341,85 @@ if (!rat) {
   const ratShot = path.join(SHOTS, 'e2e_effects_rat.png');
   await page.screenshot({ path: ratShot });
   console.log(`  screenshot: ${ratShot}`);
+}
+
+// A repeating particle system may still require an action to start it.
+// Pick a model/clip pair from the current data, then verify the actual model
+// transport and render buffers, including paused and backward scrubbing.
+const boundEffect = await page.evaluate(async () => {
+  const st = (window as any).__bs.app.store;
+  if (!st.manifest?.system?.models) return null;
+  const [models, doc, clips] = await Promise.all([
+    st.json(st.manifest.system.models), st.worldEffects(), st.index('anims'),
+  ]);
+  const bySlot = new Map(doc.systems.map((s: any) => [s.slot, s]));
+  const byOwner = new Map<number, Set<number>>();
+  for (const a of doc.attachments.owners) {
+    if (!byOwner.has(a.owner)) byOwner.set(a.owner, new Set());
+    byOwner.get(a.owner)!.add(a.system);
+  }
+  const keys = (s: any): string[] => s.emitters.filter((e: any) => e.sprite?.images?.length)
+    .map((e: any) => `effects-player-${e.sprite.images[0]}|${(e.blend || s.blend) === 'add' ? 'add' : 'mix'}`);
+  for (const m of models) {
+    const slots = new Set<number>(m.sources.flatMap((s: any) =>
+      [s.owner_slot, s.entity_owner_slot, s.entity_family_owner_slot].flatMap(k => [...(byOwner.get(k) || [])])));
+    const systems = [...slots].map(slot => bySlot.get(slot)).filter(Boolean) as any[];
+    const ambientKeys = new Set(systems.filter(s => !s.triggered && s.loop).flatMap(keys));
+    for (const s of systems) {
+      if (!s.triggered || !s.loop) continue;
+      const clip = s.clips.find((i: number) => clips.some((c: any) => c.i === i && c.f && c.skel === m.skel_i));
+      const uniqueKeys = keys(s).filter(k => !ambientKeys.has(k));
+      if (clip != null && uniqueKeys.length) return {id: m.id, slot: s.slot, clip, keys: uniqueKeys};
+    }
+  }
+  return null;
+});
+if (boundEffect) {
+  await page.goto(`${base}/index.html#/model/${boundEffect.id}`, {waitUntil: 'networkidle0'});
+  await page.waitForFunction(slot => (window as any).__bs.modelView?.effectsInfo?.().systems.some((s: any) => s.slot === slot),
+    {timeout: 30000}, boundEffect.slot);
+  ok(await page.evaluate(slot => {
+    const s = (window as any).__bs.modelView.effectsInfo().systems.find((s: any) => s.slot === slot);
+    return s.mode === 'timed' && s.live === 0;
+  }, boundEffect.slot), 'triggered looping model effect waits for activation');
+  await page.evaluate(slot => {
+    const v = (window as any).__bs.modelView;
+    const index = v.effectsInfo().systems.filter((s: any) => s.mode === 'timed').findIndex((s: any) => s.slot === slot);
+    const buttons = [...document.querySelectorAll('.viewer-toolbar button')]
+      .filter(b => b.title === 'Play this timed particle effect once');
+    buttons[index]?.click();
+  }, boundEffect.slot);
+  await page.waitForFunction(clip => (window as any).__bs.modelView.bar?.clipJson?.i === clip, {timeout: 20000}, boundEffect.clip);
+  const sample = () => page.evaluate(keys => {
+    const rows: any[] = [];
+    (window as any).__bs.modelView.scene.scene.traverse((o: any) => {
+      if (!keys.includes(o.material?.name)) return;
+      const g = o.geometry, n = g.instanceCount;
+      rows.push({n, pos: [...g.attributes.aPosSize.array.slice(0,n*4)],
+        color: [...g.attributes.aColor.array.slice(0,n*4)], rot: [...g.attributes.aRot.array.slice(0,n)]});
+    });
+    return rows;
+  }, boundEffect.keys);
+  const seek = async (fraction: number) => {
+    await page.evaluate(f => {
+      const bar = (window as any).__bs.modelView.bar;
+      bar.pause(); bar.t = bar.sampler.duration * f; bar.applyPose();
+    }, fraction);
+    await sleep(100);
+    return sample();
+  };
+  const first = await seek(.25);
+  ok(first.some((r: any) => r.n > 0), 'bound clip draws particle geometry');
+  await sleep(250);
+  ok(JSON.stringify(await sample()) === JSON.stringify(first), 'paused clip holds particle render buffers');
+  const later = await seek(.5);
+  ok(JSON.stringify(later) !== JSON.stringify(first), 'paused scrubbing advances the effect');
+  ok(JSON.stringify(await seek(.25)) === JSON.stringify(first), 'backward scrub reproduces particle render buffers');
+  await page.evaluate(() => (window as any).__bs.modelView.bar.clearClip());
+  await sleep(100);
+  ok((await sample()).every((r: any) => r.n === 0), 'clearing a clip removes its triggered effect');
+} else {
+  ok(true, 'bound model effect transport skipped (no compatible pair in this build)');
 }
 
 // ---- 8b. strings viewer + global search ----------------------------------------

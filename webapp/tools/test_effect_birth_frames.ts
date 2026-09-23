@@ -24,7 +24,9 @@ try {
     sim.speed = 1; sim.accel = acceleration.toArray(); sim.setBirthFrames(frames.position, frames.direction);
     const birthMatrix = primary === null ? new T.Matrix4() : owner.clone().multiply(typeof primary === 'number' && mode === 'bone' ? bones[primary] : new T.Matrix4());
     const directionMatrix = secondary === null ? new T.Matrix4() : owner.clone().multiply(typeof secondary === 'number' ? bones[secondary] : new T.Matrix4());
-    const point = position.clone().applyMatrix4(birthMatrix), direction = linear(velocity, directionMatrix), force = linear(acceleration, owner);
+    // The default cone direction is the normalized authored axis (the game
+    // builds its quaternion from the unit vector).
+    const point = position.clone().applyMatrix4(birthMatrix), direction = linear(velocity.clone().normalize(), directionMatrix), force = linear(acceleration, owner);
     assert(new T.Vector3(...sim.spawnCenter()).applyMatrix4(owner).distanceTo(point) < 1e-9);
     for (const age of [0, 3, 20, 3]) {
       sim.ensure(age); let actual: any = null;

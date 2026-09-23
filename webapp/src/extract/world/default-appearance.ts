@@ -1,7 +1,7 @@
 // Resolve the stored default only when the complete visual-owner header is
 // present. Null placeholders represent computed selections and stay unknown.
 type Field = { op: number; kind: string; node?: any; raw?: Uint8Array };
-export type StaticAppearance = { op: number; controllers: number[] };
+export type StaticAppearance = { op: number; controllers: number[]; effectColor?: [number, number, number, number] };
 
 export function readAppearanceControllers(
   node: any, deref: (node: any) => any, symbol: (index: number) => string | undefined,
@@ -43,5 +43,13 @@ export function readStaticAppearance(
   if (!header || ![0x0c, 0x0d].includes(at(fixed.op - 3)?.tag) || !at(fixed.op - 1)) return null;
   const op = fixed.op - 2;
   const controllers = readAppearanceControllers(at(op), deref, symbol);
-  return controllers ? { op, controllers } : null;
+  if (!controllers) return null;
+  // The adjacent default-appearance parameter can supply an optional colour
+  // to its selected effect instances. Keep it on the owner, not the shared system.
+  const parameter = at(op + 1);
+  const color = parameter?.tag === 0x24 && parameter.fields?.length === 1
+    ? deref(parameter.fields[0]) : null;
+  const effectColor = color?.tag === 0x15 && color.value?.length === 4
+    && color.value.every(Number.isFinite) ? [...color.value] as [number, number, number, number] : null;
+  return { op, controllers, ...(effectColor ? {effectColor} : {}) };
 }
