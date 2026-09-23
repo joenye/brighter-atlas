@@ -141,12 +141,13 @@ export const INDEX_JOBS: Record<string,
       i: number; kind: string; alpha: boolean; spreadMax: number | null;
       paramMin: number[] | null; paramMax: number[] | null; water: string | null;
       albedo: number | null; normal: number | null; parameter: number | null;
+      specular: number | null;
       sprite: SpriteMeta | null;
       subs?: [number, number][];
     } = {
       i, kind: 'other', alpha: false, spreadMax: null,
       paramMin: null, paramMax: null, water: null,
-      albedo: null, normal: null, parameter: null,
+      albedo: null, normal: null, parameter: null, specular: null,
       sprite: null,
     };
     const { tail, subs } = decodeObject(3, raw);
@@ -222,6 +223,9 @@ export const INDEX_JOBS: Record<string,
       out.albedo = roles.albedo;
       out.normal = roles.normal;
       out.parameter = roles.parameter;
+      // The first parameter plane after the normal map feeds the specular
+      // sampler; the last (the same plane when there is one) the recolour one.
+      out.specular = roles.parameters.length ? roles.parameters[0] : null;
       if (extra?.warmPngBase && Number.isInteger(extra?.ord) && typeof caches !== 'undefined') {
         await warmWorldTexturePngs({
           base: extra.warmPngBase, ord: extra.ord, entries, subs, roles, decodedRgba,

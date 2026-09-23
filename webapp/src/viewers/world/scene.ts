@@ -1212,6 +1212,12 @@ export class WorldScene {
     return entry ? entry.slice(0, 4) : null;
   }
 
+  /** The two recolour tints (half range) of a placed part, when known. */
+  _partTints(shard: any, row: any[]): number[][] | null {
+    const entry = this._partColourEntry(shard, row);
+    return entry && entry.length >= 12 ? [entry.slice(4, 8), entry.slice(8, 12)] : null;
+  }
+
   _partColourEntry(shard: any, row: any[]): number[] | null {
     const column = this.placementColumns?.part_colour;
     if (column === undefined) return null;
@@ -1248,6 +1254,7 @@ export class WorldScene {
         category: batch.category,
         mesh: Number(batch.mesh), material: Number(batch.material), renderTexture: Number(batch.renderTexture),
         payload, matrices, tints: batch.entries.map((entry) => this._partColour(room.shard, entry.row) ?? batch.recolors?.[0] ?? null),
+        recolours: batch.entries.map((entry) => this._partTints(room.shard, entry.row)),
         water: waterInfo ? { kind: waterInfo.kind, style: waterInfo.style, opacity: waterInfo.opacity, window: waterInfo.window } : null,
       });
     }

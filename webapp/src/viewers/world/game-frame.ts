@@ -41,6 +41,8 @@ export interface GameBatchSource {
   payload: any;
   matrices: THREE.Matrix4[];     // native frame, raw mesh
   tints: (number[] | null)[];
+  /** Per instance: the two recolour tints (half range RGBA), or null for neutral. */
+  recolours?: (number[][] | null)[];
   water: null | { kind: 'surface' | 'curtain'; style: number; opacity: number; window: [number, number] };
 }
 
@@ -256,7 +258,7 @@ export class GameFrame {
     const byte = (v: number) => Math.min(255, Math.max(0, Math.floor(f32(f32(v) * 255))));
     const geometry = bakeGameGeometry({
       payload: batch.payload,
-      instances: batch.matrices.map((matrix, k) => ({ matrix, tint: batch.tints[k] })),
+      instances: batch.matrices.map((matrix, k) => ({ matrix, tint: batch.tints[k], recolours: batch.recolours?.[k] ?? null })),
       elements: program.elements, attributes: program.translated.attributes,
       specular: material?.specular ?? [0, 0, 0],
       opacity: batch.water ? batch.water.opacity : (material?.opacity ?? 1),
@@ -381,8 +383,12 @@ export class GameFrame {
         }
       } else if (batch.renderTexture >= 0) {
         const meta = this.room!.textureMeta(batch.renderTexture);
+        // The first parameter plane after the normal map carries the specular
+        // and cutout channels, the last the recolour masks (red, green); a
+        // material with one parameter plane uses it for both.
         const role = name === 'v_texture_albedo_plane' ? meta?.albedo : name === 'v_texture_normal_plane' ? meta?.normal
-          : name === 'v_texture_specular_plane' ? meta?.parameter : null;
+          : name === 'v_texture_specular_plane' ? meta?.specular ?? meta?.parameter
+          : name === 'v_texture_recol_plane' ? meta?.parameter : null;
         if (role != null) texture = await this.texturePlane(batch.renderTexture, this.planeSubs(meta, role), name === 'v_texture_albedo_plane');
       }
       if (texture) out[slot] = texture;
