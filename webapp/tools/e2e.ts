@@ -1340,7 +1340,24 @@ if (!rat) {
   ok(live > 0, `Giant Rat aura renders live particles (live=${live})`);
   const ratShot = path.join(SHOTS, 'e2e_effects_rat.png');
   await page.screenshot({ path: ratShot });
-  console.log(`  screenshot: ${ratShot}`);
+  console.log(`  screenshot: ${ratShot}`);  // The toolbar's Particles toggle hides the effects, remembers the choice
+  // across a reload, and shows them again.
+  const particles = () => page.evaluate(() => {
+    const btn: any = [...document.querySelectorAll('.viewer-toolbar button')].find((b: any) => b.textContent.includes('Particles'));
+    return btn ? { pressed: btn.getAttribute('aria-pressed'), visible: (window as any).__bs.modelView.effectsVisible() } : null;
+  });
+  const clickParticles = () => page.evaluate(() => {
+    ([...document.querySelectorAll('.viewer-toolbar button')].find((b: any) => b.textContent.includes('Particles')) as any)?.click();
+  });
+  ok(JSON.stringify(await particles()) === JSON.stringify({ pressed: 'true', visible: true }), 'model particles toggle starts on');
+  await clickParticles();
+  ok(JSON.stringify(await particles()) === JSON.stringify({ pressed: 'false', visible: false }), 'particles toggle hides the effects');
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => typeof (window as any).__bs.modelView?.effectsVisible === 'function'
+    && [...document.querySelectorAll('.viewer-toolbar button')].some((b: any) => b.textContent.includes('Particles')), { timeout: 30000 });
+  ok(JSON.stringify(await particles()) === JSON.stringify({ pressed: 'false', visible: false }), 'particles stay off after a reload');
+  await clickParticles();
+  ok(JSON.stringify(await particles()) === JSON.stringify({ pressed: 'true', visible: true }), 'particles toggle shows them again');
 }
 
 // A repeating particle system may still require an action to start it.

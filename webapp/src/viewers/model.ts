@@ -355,6 +355,9 @@ function systemsForModel(doc: WorldEffectsDoc, slots: Set<number>): EffectSystem
     .sort((a, b) => a.slot - b.slot);
 }
 
+// The model viewer's particles toggle, remembered per browser.
+const PARTICLES_KEY = 'bs.model.particles';
+
 function effectSystemLabel(system: EffectSystem): string {
   return system.names[0]?.name || `effect #${system.slot}`;
 }
@@ -482,7 +485,24 @@ export function createModelView(app: any, model: ModelRecord) {
       chips.push(btn);
     }
     effectsPlayer = player;
-    if (chips.length) toolbar.append(el('span', { class: 'sep' }), ...chips);
+    // Particles on or off, remembered in this browser. Off hides the effects
+    // and pauses their clock; on resumes where they left off.
+    const particlesBtn = el('button', {
+      class: 'btn', type: 'button', text: '✦ Particles',
+      title: 'Show or hide this model\'s particle effects', 'aria-pressed': 'true',
+    });
+    const setParticles = (on: boolean): void => {
+      effectsRoot.visible = on;
+      player.setRunning(on);
+      particlesBtn.classList.toggle('active', on);
+      particlesBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      try { localStorage.setItem(PARTICLES_KEY, on ? '1' : '0'); } catch { /* storage unavailable */ }
+    };
+    particlesBtn.addEventListener('click', () => setParticles(!effectsRoot.visible));
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(PARTICLES_KEY); } catch { /* storage unavailable */ }
+    setParticles(saved !== '0');
+    toolbar.append(el('span', { class: 'sep' }), particlesBtn, ...chips);
   }
 
   const parts = modelParts(model);
@@ -638,6 +658,7 @@ export function createModelView(app: any, model: ModelRecord) {
         (window as any).__bs.modelView = {
           model, skelEntry: null, rig: null, bar: null, active: null, scene, meshRows,
           effectsInfo: () => (effectsPlayer ? effectsPlayer.info() : { systems: [], live: 0 }),
+          effectsVisible: () => !!effectsAnchor?.visible,
         };
       }
       return;
@@ -777,6 +798,7 @@ export function createModelView(app: any, model: ModelRecord) {
       (window as any).__bs.modelView = {
         model, skelEntry, rig, bar, active, scene, meshRows, get mode() { return getMode(); },
         effectsInfo: () => (effectsPlayer ? effectsPlayer.info() : { systems: [], live: 0 }),
+          effectsVisible: () => !!effectsAnchor?.visible,
       };
     }
   })();
