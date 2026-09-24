@@ -128,6 +128,18 @@ const REQUIRED_SPAWN_MEMBERSHIP_COLUMNS = Object.freeze([
  *  are simply absent: reads yield undefined, exactly as the lookups expect). */
 export type ColumnMap = Readonly<Record<string, number>>;
 
+/** Editor gizmos: free-standing placements whose material is authored empty
+ *  (effect direction arrows, sound, dig and combat markers) draw as solid
+ *  flat shapes in one marker colour; authored-empty ground keeps a faint
+ *  wireframe in its category colour. */
+export const GIZMO_SWATCH = '#e05ad0';
+export function gizmoMaterial(category: string, groundColour: number | undefined): THREE.Material {
+  if (category === 'terrain') {
+    return new THREE.MeshBasicMaterial({ color: groundColour ?? 0xd87dc0, wireframe: true, transparent: true, opacity: 0.24, depthWrite: false });
+  }
+  return new THREE.MeshBasicMaterial({ color: GIZMO_SWATCH, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+}
+
 export interface WorldPlacementFlags {
   authoredEmpty: number;
   alpha: number;
@@ -817,12 +829,7 @@ export class WorldScene {
     ]);
     return cachedPromise(this._materialPromises, key, async () => {
       if (this.disposed) throw new Error('WorldScene is disposed');
-      if (authoredEmpty) {
-        return new THREE.MeshBasicMaterial({
-          color: CATEGORY_COLOURS[category], wireframe: true,
-          transparent: true, opacity: 0.24, depthWrite: false,
-        });
-      }
+      if (authoredEmpty) return gizmoMaterial(category, CATEGORY_COLOURS[category]);
       if (renderTexture < 0) {
         // Native meshes author reverse faces where required. Rendering those
         // triangles again as DoubleSide flips their lighting normal and makes

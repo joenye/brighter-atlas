@@ -801,9 +801,9 @@ async function worldSuite(browser: any, base: string) {
   await page.evaluate(() => document.querySelector('.world-panel .wp-zlist input[data-z="1"]').click());
 
   // authored-empty toggle shows the wireframe placement
-  await panelCheck('Empty materials');
+  await panelCheck('Editor gizmos');
   ok((await visibleCount()) === 8, `authored-empty toggle shows the wireframe (${await visibleCount()})`);
-  await panelCheck('Empty materials');
+  await panelCheck('Editor gizmos');
 
   // ---- Advanced accordion: closed by default, hosts the tuning sections ------
   const advRoom = await page.evaluate(() => {
@@ -1444,14 +1444,14 @@ async function worldSuite(browser: any, base: string) {
       return !!w && w.collisionVisible && w.collision === 1;
     }, { timeout: 20000 });
     ok(true, 'collision extents render standalone under merged (graph released)');
-    await panelCheck('Empty materials');
+    await panelCheck('Editor gizmos');
     await page.waitForFunction(() => {
       const w = window.__bs.worldView.wireInfo();
       return !!w && w.emptyVisible && w.emptyInstances === 1;
     }, { timeout: 20000 });
     ok(true, 'authored-empty wireframes render standalone under merged');
     await panelCheck('Collision extents');
-    await panelCheck('Empty materials');
+    await panelCheck('Editor gizmos');
     ok(await page.evaluate(() => {
       const w = window.__bs.worldView.wireInfo();
       return !!w && !w.collisionVisible && !w.emptyVisible;

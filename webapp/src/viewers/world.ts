@@ -35,7 +35,7 @@ import { Scene3D, getRenderer, mountImmersiveControls } from './three-common.js'
 import * as THREE from '../../vendor/three.module.js';
 import { OrbitControls } from '../../vendor/OrbitControls.js';
 import WorldScene, {
-  WORLD_CATEGORIES, CATEGORY_COLOURS, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection,
+  WORLD_CATEGORIES, CATEGORY_COLOURS, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection, GIZMO_SWATCH, gizmoMaterial,
 } from './world/scene.js';
 import { FlyControls } from './world/fly-controls.js';
 import {
@@ -799,8 +799,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     check('untextured', 'Untextured fills', applyToggles,
       { swatch: '#6a7d55', title: 'Placements with no decodable texture, drawn in flat category colours' }),
     check('collision', 'Collision extents', applyToggles, { swatch: '#79a9c9' }),
-    check('empty', 'Empty materials', applyToggles,
-      { swatch: '#d87dc0', title: 'Placements whose material is authored empty, as wireframes' }),
+    check('empty', 'Editor gizmos', applyToggles,
+      { swatch: GIZMO_SWATCH, title: 'Untextured markers placed for the game\'s editor (effect direction arrows, sound, dig and combat markers). The game does not show them.' }),
     check('effects', 'Effects', applyEffects,
       { swatch: '#e8b04c', title: 'Ambient particle effects recovered from this game version' }),
     allMode ? check('names', 'Room names', () => applyNames(),
@@ -4456,10 +4456,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           geometry = (await world._meshGeometry(batch.mesh, batch.reflect)).clone();
         } catch { continue; }
         if (destroyed) { geometry.dispose(); return null; }
-        const material = new THREE.MeshBasicMaterial({
-          color: CATEGORY_COLOURS[batch.category] ?? 0xd87dc0, wireframe: true,
-          transparent: true, opacity: 0.24, depthWrite: false,
-        });
+        const material = gizmoMaterial(batch.category, CATEGORY_COLOURS[batch.category]);
         geometries.push(geometry);
         materials.push(material);
         const instanced = new THREE.InstancedMesh(geometry, material, batch.matrices.length);
