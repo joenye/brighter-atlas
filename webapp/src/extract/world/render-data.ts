@@ -35,6 +35,13 @@ export interface RenderDecodeData {
     light: {field: number; colour: number; intensity: number};
     avatarZ: string;
     overrides: {roomRuntime: number; presetOffset: number}[];
+    /** Rooms whose environment follows a quest: the quest variable and, from
+     *  each of its states on, the preset shown ([state, preset offset], -1:
+     *  the room's own); with the fields that name the quest. */
+    story?: {
+      fields: {variableQuest: number; variableStates: number; questName: number; questRegion: number; regionName: number};
+      rooms: {roomRuntime: number; variable: number; steps: [number, number][]}[];
+    };
   };
   shadow: {size: number; lightViewOffset: number; normalOffsetTexels: number; borderTexels: number; marginTiles: number; layerHeight: number};
   ssao: {unit: number; radius: number; falloff: number; padDivisor: number; temporalBase: number; temporalDivisor: number; frameMs: number;
@@ -72,6 +79,11 @@ export function validRenderData(d: any): d is RenderDecodeData {
     || !['sky', 'ground', 'sun', 'vignette', 'height', 'floor'].every(s => index(e.slots?.[s]))
     || !['field', 'colour', 'intensity'].every(s => index(e.light?.[s])) || typeof e.avatarZ !== 'string'
     || !Array.isArray(e.overrides) || !e.overrides.every((o: any) => index(o?.roomRuntime) && index(o?.presetOffset))) return false;
+  if (e.story !== undefined && (!e.story?.fields
+    || !['variableQuest', 'variableStates', 'questName', 'questRegion', 'regionName'].every(k => index(e.story.fields[k]))
+    || !Array.isArray(e.story.rooms) || !e.story.rooms.every((r: any) => index(r?.roomRuntime) && index(r?.variable)
+      && Array.isArray(r.steps) && r.steps.length > 0 && r.steps.every((st: any) => Array.isArray(st) && st.length === 2
+        && index(st[0]) && (st[1] === -1 || index(st[1])))))) return false;
   if (d.scene !== undefined && !index(d.scene?.dynamicField)) return false;
   const s = d.shadow, a = d.ssao, c = d.camera, v = d.vignette;
   return !!d.lighting && index(d.lighting.directionOffset) && finite(d.lighting.gamma) && finite(d.lighting.fade)
@@ -99,6 +111,14 @@ export interface RenderMaterial {
 }
 
 /** Light values of one scene environment (colours authored, before the 2.2 power). */
+/** A room whose lighting follows a quest: the quest's name, its number of
+ *  states, and the environment shown from each state on. */
+export interface StoryEnvironment {
+  quest: string;
+  states: number;
+  steps: {from: number; environment: RenderEnvironment}[];
+}
+
 export interface RenderEnvironment {
   sky: number[]; ground: number[]; sun: number[];   // [r, g, b, intensity]
   vignette: number[];                                // [r, g, b, a]

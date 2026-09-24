@@ -228,6 +228,9 @@ export class GameFrame {
   private passPrograms = new Map<number, GameProgram>();
   /** Test switch: draw the frame without its water. */
   skipWater = false;
+  /** The room's lighting at a chosen story step, in place of its own
+   *  story-complete one (null: the room's own). */
+  environmentOverride: GameRenderIndex['environments'][string] | null = null;
   /** The last frame's vertex constant words per pass (test readback). */
   lastConstants: Record<string, Uint32Array> = {};
 
@@ -517,7 +520,7 @@ export class GameFrame {
     const projection = gameProjection(camera.fov, aspect, near, far);
     const viewProjection = projection.clone().multiply(view);
     const t = this.ensureTargets(camera.width, camera.height);
-    const env = idx.environments[String(this.room.roomId)] ?? null;
+    const env = this.environmentOverride ?? idx.environments[String(this.room.roomId)] ?? null;
 
     // Shadow receiver fit over the scene box.
     const { inner, outer, layers } = this.room.bounds;

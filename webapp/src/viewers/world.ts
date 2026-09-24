@@ -929,6 +929,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (destroyed) return;
       gameFrame = frame;
       applyGameShading();
+      setupStory(room.id);
     } catch (error) {
       renderer.resetState();
       console.warn('game shading unavailable for this room', error);
@@ -1252,9 +1253,37 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const onControlsChange = () => updateSunShadow();
   scene3d.controls.addEventListener('change', onControlsChange);
 
+  // Story progress: rooms whose lighting follows a quest get a slider over
+  // that quest's steps (game shading only), starting at the story's end.
+  const storyBox = el('div', { class: 'wp-range', hidden: true });
+  function setupStory(roomId: number): void {
+    clear(storyBox);
+    storyBox.hidden = true;
+    const story = world.index?.render?.story?.[String(roomId)];
+    if (!story || !gameFrame) return;
+    const out = el('span', { class: 'dim small' });
+    const input = el('input', { type: 'range', min: '1', max: String(story.states), step: '1', value: String(story.states),
+      'aria-label': `Story progress: ${story.quest}` }) as HTMLInputElement;
+    const changes = story.steps.slice(1).map((st: any) => st.from + 1).join(', ');
+    const apply = () => {
+      const step = Number(input.value) - 1;
+      const active = [...story.steps].reverse().find((st: any) => st.from <= step);
+      if (gameFrame) gameFrame.environmentOverride = active?.environment ?? null;
+      out.textContent = `step ${step + 1} of ${story.states}`;
+    };
+    input.addEventListener('input', apply);
+    apply();
+    append(storyBox,
+      el('div', { class: 'wp-range-head' }, el('span', { text: 'Story progress', title: `${story.quest}: this room's lighting changes at step ${changes}` }), out),
+      el('div', { class: 'dim small', text: story.quest }),
+      input);
+    storyBox.hidden = false;
+  }
+
   const lightSection = section('Lighting & effects',
     check('game', 'Game shading', () => applyGameShading(),
       { swatch: '#c9a86a', title: "Draw the room with the game's own lights, shadows, shading and water (single room)" }),
+    storyBox,
     range('ambient', 'Ambient / sky', 0, 2.5, 0.05, (v) => v.toFixed(2), applyLights),
     range('sun', 'Sun', 0, 3, 0.05, (v) => v.toFixed(2), applyLights),
     check('shadows', 'Shadows', applyShadows, { swatch: '#5f6670' }),

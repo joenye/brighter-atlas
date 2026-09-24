@@ -20,7 +20,7 @@ import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
 import {readWorldWater, type WorldWater} from './water-materials.js';
-import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, type RenderEnvironment} from './render-data.js';
+import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
 import {b64FromTyped} from '../b64.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
@@ -656,25 +656,48 @@ export async function extractWorld({
     if (render) {
       const decode = effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any;
       const environments: Record<string, RenderEnvironment> = {};
+      const story: Record<string, StoryEnvironment> = {};
+      const field = (slot: number, op: number) => {
+        const f = slot >= 0 && rows[slot] ? decode(slot)?.find((x: any) => x.op === op) : null;
+        return f?.kind === 'G' ? resolveValue(pool.values, f.node) : null;
+      };
+      const text = (n: PoolNode | null) => (n?.tag === 0x0e && Array.isArray(n.values) ? String.fromCodePoint(...(n.values as number[])) : null);
+      const ref = (n: PoolNode | null) => (n && (n.tag === 0x26 || n.tag === 0x02) && Number.isInteger(n.value) ? n.value as number : -1);
       for (const roomId of new Set([...environmentSlots.keys(), ...environmentPresets.keys()])) {
         const slot = environmentSlots.get(roomId) ?? -1;
         const owner = roomMetadata.get(roomId)?.owner;
-        const override = render.environment.overrides.find(o => rows[owner as number]?.runtime === o.roomRuntime);
-        let preset = null;
-        if (override) preset = archivedValue(ab0, profile, override.presetOffset);
-        else if (environmentPresets.has(roomId)) preset = environmentPresets.get(roomId)!;
-        else if (rows[slot]?.runtime === render.environment.family) {
-          const f = decode(slot)?.find((x: any) => x.op === render.environment.field);
-          preset = f?.kind === 'G' ? resolveValue(pool.values, f.node) : null;
-        }
-        const env = readEnvironmentPreset(render, preset, rows, decode, pool.values, dt.symbols);
+        const runtime = rows[owner as number]?.runtime;
+        const override = render.environment.overrides.find(o => runtime === o.roomRuntime);
+        // The room's own environment: held inline, or in its environment record.
+        let own: PoolNode | null = null;
+        if (environmentPresets.has(roomId)) own = environmentPresets.get(roomId)!;
+        else if (rows[slot]?.runtime === render.environment.family) own = field(slot, render.environment.field);
+        const read = (p: PoolNode | null) => readEnvironmentPreset(render, p, rows, decode, pool.values, dt.symbols);
+        const env = read(override ? archivedValue(ab0, profile, override.presetOffset) : own);
         if (env) environments[roomId] = env;
+        // Rooms whose lighting follows a quest: every step, named by the quest
+        // and its region ("Main Story (Hopeforest)").
+        const s = render.environment.story;
+        const entry = s?.rooms.find(r => r.roomRuntime === runtime);
+        if (s && entry) {
+          const f = s.fields;
+          const states = field(entry.variable, f.variableStates);
+          const quest = ref(field(entry.variable, f.variableQuest));
+          const name = text(field(quest, f.questName));
+          const region = text(field(ref(field(quest, f.questRegion)), f.regionName));
+          const steps = entry.steps.map(([from, offset]) => ({from, environment: read(offset < 0 ? own : archivedValue(ab0, profile, offset))}));
+          const count = Array.isArray(states?.values) ? states!.values.length : entry.steps[entry.steps.length - 1][0] + 1;
+          if (name && steps.every(st => st.environment)) {
+            story[roomId] = {quest: region ? `${name} (${region})` : name, states: count, steps: steps as StoryEnvironment['steps']};
+          }
+        }
       }
       worldIndex.render = {
         programs: render.programs, vertexShaders: render.vertexShaders, pixelShaders: render.pixelShaders,
         samplers: render.samplers, blends: render.blends, waterPrograms: render.waterPrograms,
         materials: readRenderMaterials(render, rows, decode, pool.values, dt.symbols),
         environments,
+        ...(Object.keys(story).length ? {story} : {}),
         lighting: {direction: archivedFloats(ab0, profile, render.lighting.directionOffset, 0x22, 3),
           gamma: render.lighting.gamma, fade: render.lighting.fade},
         shadow: {...render.shadow, lightView: archivedFloats(ab0, profile, render.shadow.lightViewOffset, 0x30, 12)},
