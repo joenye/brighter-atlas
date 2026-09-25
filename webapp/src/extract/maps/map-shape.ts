@@ -223,18 +223,34 @@ export function labelFontCandidates(
   return {title, annotation};
 }
 
-/** The record of a font type, by its type table id: exactly one record of
- *  that type, reading as a font. */
+/** The one record of the type with this type table id, or null. */
+export function recordOfType(objects: ConstructorRecord[], types: TypeTable, id: string): number | null {
+  const found = typesWithId(types, id);
+  if (found.length !== 1) return null;
+  let slot: number | null = null;
+  for (let i = 0; i < objects.length; i++) {
+    if (objects[i]?.values?.[TYPE_VALUE] !== found[0]) continue;
+    if (slot !== null) return null;
+    slot = i;
+  }
+  return slot;
+}
+
+/** The record of a font type, when it reads as a font. */
 export function fontOfType(
   rows: FillRow[], objects: ConstructorRecord[], types: TypeTable, pool: PoolNode[], bytes: Uint8Array, profile: WorldProfile, id: string,
 ): number | null {
-  const found = typesWithId(types, id);
-  if (found.length !== 1) return null;
-  const slots = objects.flatMap((o, slot) => o?.values?.[TYPE_VALUE] === found[0] ? [slot] : []);
-  if (slots.length !== 1) return null;
-  try { mapFontReader(rows, pool, bytes, profile).font(slots[0]); } catch { return null; }
-  return slots[0];
+  const slot = recordOfType(objects, types, id);
+  if (slot === null) return null;
+  try { mapFontReader(rows, pool, bytes, profile).font(slot); } catch { return null; }
+  return slot;
 }
+
+/** The label images: the rounded whole-label panel, the title and annotation
+ *  panel, the connector and the badge, each the one record of its type. */
+export const MAP_SPRITE_TYPES = {round: '4c144ea26b6e4541', panel: '34b2268bc1fb84da',
+  connector: '16097c154bb99301', badge: '5dd19547238e15a9'} as const;
+export type MapSpriteName = keyof typeof MAP_SPRITE_TYPES;
 
 export interface MapFacts {
   records: Map<number, MapRoomRecord>;
@@ -242,6 +258,7 @@ export interface MapFacts {
   styles: MapStyleDictionary | null;
   atlas: number | null;
   fonts: {title: number | null; annotation: number | null};
+  sprites: Partial<Record<MapSpriteName, number>>;
   form: 'single' | 'dual' | null;
 }
 
@@ -269,5 +286,9 @@ export async function deriveMapFacts(src: {
   return {records, annotationTable: table, styles: styles.length === 1 ? styles[0] : null,
     atlas: atlases.length === 1 ? atlases[0] : null,
     fonts: {title: pick(fonts.title, 'title'), annotation: pick(fonts.annotation, 'annotation')},
+    sprites: Object.fromEntries(Object.entries(MAP_SPRITE_TYPES).flatMap(([name, id]) => {
+      const slot = recordOfType(src.objects, src.types, id);
+      return slot === null ? [] : [[name, slot]];
+    })),
     form: labelForm(records.values())};
 }

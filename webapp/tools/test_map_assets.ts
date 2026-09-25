@@ -13,7 +13,8 @@ try {
   await build({stdin: {contents: ['palette','bindings','fonts','decode-data','map-shape'].map(n => `export * from './src/extract/maps/${n}.ts';`).join('\n'),
     resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
   const {evaluateMapColor, resolveMapPalette, decodeMapBinding, decodeMapAnnotationTable, extractMapFonts, readMapDecodeData,
-    readDictionaries, styleDictionaryCandidates, annotationTableCandidates, fleckAtlasCandidates, labelFontCandidates, labelForm} = await import(pathToFileURL(file).href);
+    readDictionaries, styleDictionaryCandidates, annotationTableCandidates, fleckAtlasCandidates, labelFontCandidates, labelForm,
+    recordOfType, MAP_SPRITE_TYPES} = await import(pathToFileURL(file).href);
   assert.equal(evaluateMapColor({kind:'rgb',color:0,multiply:[1,2,1]}, [[0.5,0.25,0]], 0), 16896);
   assert.equal(evaluateMapColor({kind:'hsl',color:0,multiply:[1,1,2]}, [[0.5,0,0]], 0), 31744);
   for (const [rgb, expected] of [[[0,0,0],0], [[1,1,1],32767], [[1,0,0],31744], [[0,1,0],992],
@@ -113,12 +114,17 @@ try {
   assert.deepEqual(styleDictionaryCandidates(rows,objects,types,[],bytes,profile,dictionaries,[8]),[]);
   objects[colorSlot].values[2]=2;
   assert.deepEqual(styleDictionaryCandidates(rows,objects,types,[],bytes,profile,dictionaries,[7]),[]);
+  // A label image is the one record of its type.
+  const spriteTypes={ends:Int32Array.from([0,0]),ids:Uint8Array.from([0x4c,0x14,0x4e,0xa2,0x6b,0x6e,0x45,0x41,...Array(8).fill(0)])};
+  assert.equal(recordOfType([{values:[0,0,1]},{values:[0,0,0]}] as any,spriteTypes,MAP_SPRITE_TYPES.round),1);
+  assert.equal(recordOfType([{values:[0,0,0]},{values:[0,0,0]}] as any,spriteTypes,MAP_SPRITE_TYPES.round),null);
+  assert.equal(recordOfType([{values:[0,0,0]}] as any,spriteTypes,MAP_SPRITE_TYPES.panel),null);
   assert.throws(()=>decodeMapBinding(bytes,[],profile,{offset:bytes.length,tag:28}),/outside/);
   assert.throws(()=>decodeMapBinding(bytes,[],profile,{...binding,tag:38}),/type/);
   // The decode data's optional code facts; anything malformed is left out.
-  const sprite={offset:3,tag:2},mapData={kind:'brighter-atlas-map-decode',format:1,
-    bindings:{labelRound:sprite,styleDictionary:binding,annotationStar:{offset:-1,tag:14}},palette:{base:{},rooms:rules}};
-  assert.deepEqual(readMapDecodeData(mapData),{bindings:{labelRound:sprite},rooms:rules});
+  const star={offset:3,tag:14},mapData={kind:'brighter-atlas-map-decode',format:1,
+    bindings:{annotationStar:star,labelRound:{offset:4,tag:2},styleDictionary:binding,levelMinorGlyph:{offset:-1,tag:115}},palette:{base:{},rooms:rules}};
+  assert.deepEqual(readMapDecodeData(mapData),{bindings:{annotationStar:star},rooms:rules});
   assert.deepEqual(readMapDecodeData(undefined),{bindings:{},rooms:null});
   assert.deepEqual(readMapDecodeData({...mapData,kind:'other'}),{bindings:{},rooms:null});
   assert.equal(readMapDecodeData({...mapData,palette:{rooms:{101:{0:{kind:'constant',value:1e6}}}}}).rooms,null);

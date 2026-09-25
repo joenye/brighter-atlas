@@ -5,8 +5,7 @@ import {resolveValue} from '../world/room-metadata.js';
 import type {PoolNode} from '../world/value-pool.js';
 import type {FillRow} from '../world/replay.js';
 import type {WorldProfile} from '../world/profile.js';
-import {decodeMapBinding} from './bindings.js';
-import type {MapBindingName, MapDecodeData} from './decode-data.js';
+import type {MapSpriteName} from './map-shape.js';
 
 export interface MapBitmap {width: number; height: number; rgba: Uint8Array}
 export interface MapSprite {
@@ -15,19 +14,13 @@ export interface MapSprite {
   rotated: boolean; sourceRect: number[]; nominalSize: number[];
   dimensions: number[]; sourceBorder?: number; width?: number;
 }
-// The fleck atlas is found by shape (map-shape.ts). Label panels, the
-// connector and the badge come from the decode data; any it does not name
-// are left out and labels draw without them.
+// The fleck atlas and the label images are found by shape (map-shape.ts);
+// any label image not found is left out and labels draw without it.
 export async function extractMapImages(
-  rows: FillRow[], pool: PoolNode[], bytes: Uint8Array, profile: WorldProfile, data: MapDecodeData,
-  atlasImage: number, readImage: (id: number) => Promise<Uint8Array>,
+  rows: FillRow[], pool: PoolNode[], bytes: Uint8Array, profile: WorldProfile,
+  atlasImage: number, spriteSlots: Partial<Record<MapSpriteName, number>>, readImage: (id: number) => Promise<Uint8Array>,
 ): Promise<{atlas: MapBitmap[]; images: Record<string, MapBitmap>; sprites: Record<string, MapSprite>}> {
   const decode = makeRegistryRowDecoder(rows, bytes, profile);
-  const binding = (name: MapBindingName, tag: number) => {
-    const b = data.bindings[name];
-    if (!b || b.tag !== tag) return null;
-    try {return decodeMapBinding(bytes, pool, profile, b).value as number;} catch {return null;}
-  };
   const imageLevels = async (id: number) => {
     const raw = await readImage(id), meta = parseImageMeta(splitAb3(raw).tail), decoded = decodeObject(3, raw);
     return meta.map((m, i) => {
@@ -41,11 +34,9 @@ export async function extractMapImages(
     throw Error('invalid map terrain atlas');
   }
   const images: Record<string,MapBitmap> = {}, sprites: Record<string,MapSprite> = {};
-  const named: [string, MapBindingName][] = [['round','labelRound'],['panel','labelPanel'],
-    ['connector','labelConnector'],['badge','annotationBadge']];
-  for (const [name,key] of named) {
-    const slot = binding(key,2);
-    if (slot === null) continue;
+  for (const name of ['round','panel','connector','badge'] as const) {
+    const slot = spriteSlots[name];
+    if (slot === undefined) continue;
     // A sprite the data does not describe correctly is left out as well.
     const sprite = async (): Promise<[MapSprite, MapBitmap]> => {
       const fields = (decode(slot) ?? []).flatMap(op => op.kind === 'G' ? [resolveValue(pool,op.node)] : []);

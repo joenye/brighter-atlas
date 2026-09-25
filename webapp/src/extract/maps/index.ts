@@ -13,7 +13,7 @@ import {deriveMapFacts} from './map-shape.js';
 import {hashText} from '../hash.js';
 import {extractMapRoomData} from './room-data.js';
 
-// Everything but each room type's own colours and the label images is read
+// Everything but each room type's own colours and the badge glyphs is read
 // from the user's bundles by shape (map-shape.ts); the per-build decode data
 // adds those when it has them.
 export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>{},signal,includeRoomData=false}: {
@@ -70,7 +70,7 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
     const b=await sub3(id);return decodeFontGlyphs(b,parseDatafileRecords(b,dt.textureDir[id].n));
   }));
   progress('textures');
-  const {atlas:mips,images,sprites}=await extractMapImages(rows,pool,ab0,profile,data,atlas,raw3);
+  const {atlas:mips,images,sprites}=await extractMapImages(rows,pool,ab0,profile,atlas,facts.sprites,raw3);
   const scene={rooms,shingles,labelFonts:fonts,labelBackgrounds:sprites,atlas:{width:mips[0].width,height:mips[0].height}};
   const doc={format:1,scene,terrainMips:mips,images:{...images,glyphs:sheet},
     roomData:roomData?{file:'maps/room-data.json',records:roomData.rooms.reduce((n,r)=>n+r.occurrences.length+r.actors.length+r.volumes.length,0)}:null};
