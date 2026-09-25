@@ -5,8 +5,8 @@ import type {PoolNode} from '../world/value-pool.js';
 import type {WorldProfile} from '../world/profile.js';
 
 export interface MapBadge {text: string; size: number; runs?: {text: string; color: number[]}[]}
-// Badge glyphs and colours come from the decode data; a badge whose glyphs
-// are not known is left out.
+// Badge glyphs and colours come from the decode data; a star whose glyphs are
+// not known is left out.
 export function mapBadgeFormatter(bytes: Uint8Array, pool: PoolNode[], profile: WorldProfile,
   data: MapDecodeData, charset: ArrayLike<string>, fixed: boolean): (marker: MapValue) => MapBadge | null {
   const read = (name: MapBindingName) => {
@@ -32,7 +32,9 @@ export function mapBadgeFormatter(bytes: Uint8Array, pool: PoolNode[], profile: 
     const value=marker.value as number;
     if (!Number.isInteger(value) || value<0) throw Error('invalid map level');
     if (fixed) return {text:String(value),size:Math.fround(57.6)};
-    if (!parts) return null;
+    // Builds without the level glyphs draw the level as a plain number, at
+    // the same size and in the text's own colour.
+    if (!parts) return {text:String(value),size:48};
     const major=Math.floor(value/50),minor=value%50,runs: {text:string;color:number[]}[]=[];
     if (major) runs.push({text:String(major)+parts.Major.suffix,color:parts.Major.color});
     if (!major || minor) runs.push({text:(major?String(minor).padStart(2,'0'):String(minor))+parts.Minor.suffix,color:parts.Minor.color});
