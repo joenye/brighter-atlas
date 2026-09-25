@@ -1085,6 +1085,47 @@ for (const probe of [
   console.log(`  screenshot: ${fxShot}`);
 }
 
+// ---- 7f. how the game draws, read from the user's own bundles ----------------
+// Every build draws with the game's own shading: the program tables, material
+// program maps, room environments and the stored sun/shadow values are read
+// from the bundles (extract/world/render-shape.ts), so they must exist even
+// where the per-build decode data carries only the quest-lit rooms. Rooms,
+// heights, water and tiles likewise (placement-shape.ts). A regression here is
+// silent in the viewer (it falls back to plain shading), so assert it directly.
+const drawData = await page.evaluate(async () => {
+  const store = window.__bs.app.store;
+  const index = await store.worldIndex();
+  const r = index?.render;
+  const poses = await store.worldIdlePoses?.().catch(() => null);
+  return r ? {
+    programs: r.programs?.length ?? 0, materials: Object.keys(r.materials ?? {}).length,
+    environments: Object.keys(r.environments ?? {}).length, story: Object.keys(r.story ?? {}).length,
+    rooms: index.rooms.length, water: !!index.water, poses: Object.keys(poses?.poses ?? {}).length,
+  } : null;
+});
+ok(!!drawData && drawData.programs > 800 && drawData.materials > 5000,
+  `render tables and material programs come from the bundles (${JSON.stringify(drawData)})`);
+ok(!!drawData && drawData.environments >= 0.95 * drawData.rooms,
+  `nearly every room has its scene environment (${drawData?.environments}/${drawData?.rooms})`);
+ok(!!drawData && drawData.story >= 20, `quest-lit rooms follow the story (${drawData?.story} rooms)`);
+ok(!!drawData && drawData.water, 'the game’s water materials are read from the bundles');
+ok(!!drawData && drawData.poses > 100, `actors rest in their own animation (${drawData?.poses} idle poses)`);
+const beachId = rooms.find((r) => r.name === 'East Beach')?.id ?? null;
+if (beachId == null) ok(true, 'East Beach shading check skipped (room name absent)');
+else {
+  await page.goto(`${base}/index.html#/world/${beachId}`, { waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 180000 });
+  const gameReady = await page.waitForFunction(() => window.__bs.worldView?.gameApi?.ready?.() === true, { timeout: 60000 })
+    .then(() => true).catch(() => false);
+  ok(gameReady, 'East Beach draws with the game’s own shaders');
+  await sleep(2500);
+  const beachCov = await paintCoverage(page);
+  ok(beachCov > 0.05, `East Beach paints with game shading (coverage ${(beachCov * 100).toFixed(1)}% > 5%)`);
+  const beachShot = path.join(SHOTS, 'e2e_world_east_beach.png');
+  await page.screenshot({ path: beachShot });
+  console.log(`  screenshot: ${beachShot}`);
+}
+
 // ---- 8. Models list: the system catalog arrived with the World extraction -----
 await page.goto(`${base}/index.html#/models`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('#list-host .vrow', { timeout: 30000 });
@@ -1442,6 +1483,68 @@ if (boundEffect) {
 } else {
   ok(true, 'bound model effect transport skipped (no compatible pair in this build)');
 }
+
+// ---- 8a5. card pictures and Show in world ------------------------------------
+// Card constants are found in the user's bundle (card-data.ts); a build whose
+// shapes drift loses every card silently, so render one. "Show in world" must
+// list the rooms a model stands in and open one with the model pinned.
+const bearId = await page.evaluate(async () => {
+  const models = await window.__bs.app.loadSystemModels();
+  const hit = models.filter((m) => m.name === 'Bear');
+  return hit.length ? hit[0].id : null;
+});
+const cardCount = await page.evaluate(async () => {
+  const doc = await window.__bs.app.store.modelCards?.().catch(() => null);
+  return doc?.cards ? (Array.isArray(doc.cards) ? doc.cards.length : Object.keys(doc.cards).length) : 0;
+});
+ok(cardCount > 300, `card pictures stored for the models (${cardCount})`);
+if (!bearId) ok(true, 'card and Show in world checks skipped (Bear absent)');
+else {
+  await page.goto(`${base}/index.html#/models/${encodeURIComponent(bearId)}`, { waitUntil: 'networkidle0' });
+  const cardBtn = await page.waitForFunction(() => [...document.querySelectorAll('button')]
+    .some((b) => /Card$/.test(b.textContent.trim()) && b.style.display !== 'none'), { timeout: 30000 }).then(() => true).catch(() => false);
+  ok(cardBtn, 'the Bear model offers its card picture');
+  if (cardBtn) {
+    await page.evaluate(() => ([...document.querySelectorAll('button')].find((b) => /Card$/.test(b.textContent.trim())) as any).click());
+    await page.waitForSelector('.modal-overlay img, .modal-overlay canvas', { timeout: 60000 }).catch(() => null);
+    await sleep(2000);
+    const lit = await page.evaluate(() => {
+      const el = document.querySelector('.modal-overlay img, .modal-overlay canvas') as any;
+      if (!el) return 0;
+      const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+      const g = c.getContext('2d')!; g.drawImage(el, 0, 0, 64, 64);
+      const d = g.getImageData(0, 0, 64, 64).data; let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - d[i + 1]) + Math.abs(d[i + 1] - d[i + 2]) > 12) n++;
+      return n / 4096;
+    });
+    ok(lit > 0.05, `the card picture draws the model in colour (${(lit * 100).toFixed(1)}% coloured)`);
+    await page.evaluate(() => document.querySelectorAll('.modal-overlay').forEach((o) => o.remove()));
+  }
+  await page.evaluate(() => ([...document.querySelectorAll('button')].find((b) => /Show in world/.test(b.textContent)) as any)?.click());
+  const listed = await page.waitForFunction(() => {
+    const t = document.querySelector('.model-rooms')?.parentElement?.querySelector('p')?.textContent || '';
+    return /^Placed in|not placed/.test(t) ? t : false;
+  }, { timeout: 120000 }).then((h) => h.jsonValue()).catch(() => null);
+  ok(typeof listed === 'string' && /^Placed in/.test(listed), `Show in world lists the Bear's rooms (${listed})`);
+  if (typeof listed === 'string' && /^Placed in/.test(listed)) {
+    await page.evaluate(() => (document.querySelector('.model-rooms .model-room') as any).click());
+    await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 180000 });
+    const pinned = await page.waitForFunction(() => {
+      const r = document.querySelector('.wp-readout.pinned') as any;
+      return r && !r.hidden ? r.textContent : false;
+    }, { timeout: 60000 }).then((h) => h.jsonValue()).catch(() => null);
+    ok(typeof pinned === 'string' && /Bear/.test(pinned), 'the room opens with the Bear pinned in inspect mode');
+  }
+}
+
+// ---- 8a6. names from the game's own records ------------------------------------
+// Record names (names.ts) replace internal ids and weak labels; anchor on names
+// that have been stable across builds.
+const namedModels = await page.evaluate(async () => {
+  const names = new Set((await window.__bs.app.loadSystemModels()).map((m) => m.name));
+  return ['Bear', 'Crab', 'Guard', 'Street Hag'].filter((n) => names.has(n));
+});
+ok(namedModels.length === 4, `well-known models carry the game's names (${namedModels.join(', ')})`);
 
 // ---- 8b. strings viewer + global search ----------------------------------------
 await page.goto(`${base}/index.html#/strings`, { waitUntil: 'networkidle0' });
