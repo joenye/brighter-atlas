@@ -697,6 +697,26 @@ export function createModelView(app: any, model: ModelRecord) {
       tickModelEffects(dt, bar);
     });
     void attachModelEffects(effectsAnchor, bar, clips, rig, skelJson);
+    // Open resting the way the game rests this actor: the first of the
+    // model's source actors with a recovered resting clip on this rig.
+    void (async () => {
+      let idle: any = null;
+      try { idle = await app.store.animIdle?.(); } catch { idle = null; }
+      if (destroyed || !idle?.actors) return;
+      // A merged model spans several placed actors; rest the way most of
+      // them do (a lone quest-state actor must not set the default).
+      const votes = new Map<number, number>();
+      for (const slot of modelOwnerSlots(model)) {
+        const clip = Number(idle.actors[String(slot)]?.clip);
+        if (Number.isInteger(clip) && clips.some((c: IndexEntry) => c.i === clip && c.f)) votes.set(clip, (votes.get(clip) ?? 0) + 1);
+      }
+      const best = [...votes].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0];
+      const entry = best ? clips.find((c: IndexEntry) => c.i === best[0] && c.f) : null;
+      if (!entry || bar.select.value !== '-1') return;   // nothing known, or the user got there first
+      bar.select.value = String(entry.i);
+      const loaded = await bar.loadClip(entry);
+      if (loaded && !destroyed) bar.play();
+    })();
 
     const active = new Map<string, any>();
     const meshCountLbl = el('b', { text: '0' });

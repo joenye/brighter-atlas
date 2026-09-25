@@ -78,7 +78,7 @@ export function restWorldMatrices(bones: SkeletonBone[]): number[][] {
 
 // THREE.Matrix4.multiply (this = a * b), reimplemented dependency-free
 // (column-major 16-element arrays, standard 4x4 affine composition).
-function multiplyMatrices(ae: number[], be: number[]): number[] {
+export function multiplyMatrices(ae: number[], be: number[]): number[] {
   const a11 = ae[0]; const a12 = ae[4]; const a13 = ae[8]; const a14 = ae[12];
   const a21 = ae[1]; const a22 = ae[5]; const a23 = ae[9]; const a24 = ae[13];
   const a31 = ae[2]; const a32 = ae[6]; const a33 = ae[10]; const a34 = ae[14];

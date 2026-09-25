@@ -52,6 +52,8 @@ import {annotateObjectCatalog,appendObjectMeshNames} from './object-names.js';
 import { inferMeshSlots, type RigSkeleton } from './mesh-slots.js';
 import * as effectsMod from './effects.js';
 import { decodeSkeleton, restWorldMatrices } from '../skeleton.js';
+import { decodeAnim } from '../anim.js';
+import { idlePosePalette, encodeIdlePose, idlePoseKey, IDLE_POSES_FORMAT, type IdlePosesDoc } from './idle-poses.js';
 
 
 // default JSON fetch for world data files (same contract as profile.js):
@@ -368,6 +370,7 @@ export async function extractWorld({
     assetMaps,             // shared pure derivations (computed once above)
     materialAssets,
     enemyDefs,
+    animDir: dt.animDir,
   });
   // Jigsaw connector meshes, resolved to this build's ab5 ordinals by content
   // hash. Missing pieces (no meshes index, or a stale-cached stitch.js from a
@@ -479,6 +482,10 @@ export async function extractWorld({
   // pass. The spawn graph's caches are already warm from the shard loop, so
   // this is a cheap replay.
   const spawnActorsBySlot = new Map<number, { owner_slot: number; label: string | null; meshes: number[] }>();
+  // Resting clips per actor (actor-idle.js), for the Models view, and the
+  // distinct (rig, clip) pairs whose first frame the world poses statically.
+  const idleActors: Record<string, { clip: number; source: string; label: string | null }> = {};
+  const idlePairs = new Map<string, { rig: number; clip: number }>();
   for (const roomId of ctx.roomIds) {
     const roomRow = ctx.roomRows.get(roomId);
     if (!roomRow) continue;
@@ -491,8 +498,45 @@ export async function extractWorld({
         label: actor.label,
         meshes: [...meshes],
       });
+      if (actor.idle_clip !== null && actor.idle_source) {
+        idleActors[String(actor.record)] = { clip: actor.idle_clip, source: actor.idle_source, label: actor.label };
+        for (const mesh of meshes) {
+          const sref = dt.meshDir[mesh]?.sref ?? 0;
+          if (sref >= 2) idlePairs.set(idlePoseKey(sref - 2, actor.idle_clip), { rig: sref - 2, clip: actor.idle_clip });
+        }
+      }
     }
   }
+  await sink.derivedPut(versionId, 'anim:idle', { format: 1, actors: idleActors });
+  // Frame-0 skin palettes need the clips themselves (assetBundle1), which the
+  // World category only uses when it was supplied; without them the world
+  // keeps drawing rigged actors in their bind pose.
+  step('idle poses', 0, 1);
+  if (files[1] && frames[1] && idlePairs.size) {
+    try {
+      const ab1 = new Uint8Array(await files[1].arrayBuffer());
+      const skeletons = new Map<number, any>();
+      const ab6 = files[6] && frames[6] ? new Uint8Array(await files[6].arrayBuffer()) : null;
+      const poses: IdlePosesDoc['poses'] = {};
+      for (const [key, { rig, clip }] of idlePairs) {
+        bail();
+        try {
+          if (!skeletons.has(rig)) {
+            const e6 = frames[6]?.entries[rig];
+            skeletons.set(rig, ab6 && e6 ? decodeSkeleton(decodeObject(6, ab6.subarray(e6.offset, e6.offset + e6.length)), { i: rig }).bones : null);
+          }
+          const bones = skeletons.get(rig);
+          const e1 = frames[1].entries[clip];
+          if (!bones || !e1) continue;
+          const anim = decodeAnim(decodeObject(1, ab1.subarray(e1.offset, e1.offset + e1.length)), { i: clip, skel: rig, flags: dt.animDir[clip]?.flags });
+          const palette = idlePosePalette(bones, anim);
+          if (palette) poses[key] = encodeIdlePose(palette);
+        } catch { /* a malformed clip or rig simply stays unposed */ }
+      }
+      await sink.derivedPut(versionId, 'world:idle-poses', { format: IDLE_POSES_FORMAT, poses } as IdlePosesDoc);
+    } catch { /* bundle unreadable: no poses this time */ }
+  }
+  step('idle poses', 1, 1);
 
   // ---- recovered particle effect systems ------------------------------------
   // Structural per-build detection over the replayed rows + value pool (see

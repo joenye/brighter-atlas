@@ -162,6 +162,20 @@ export class ClientStore extends EventTarget implements AppStore {
     return this._indexes.get('world:effects')!;
   }
 
+  // Single-doc accessors for the resting-clip data World extraction writes
+  // ('anim:idle', 'world:idle-poses'), cached like world:effects; older
+  // extractions have neither doc and every consumer treats null as "none".
+  animIdle(): Promise<any> { return this._doc('anim:idle'); }
+  worldIdlePoses(): Promise<any> { return this._doc('world:idle-poses'); }
+  private _doc(key: string): Promise<any> {
+    if (!this._indexes.has(key)) {
+      this._indexes.set(key, derivedGet(this.versionId, key)
+        .then((doc) => doc || null)
+        .catch((e) => { this._indexes.delete(key); throw e; }));
+    }
+    return this._indexes.get(key)!;
+  }
+
   // Effects gate for the UI. An empty doc (the stage ran and recovered
   // nothing, audit kept for inspection) must gate exactly like an absent
   // one, so the probe checks stored systems, not bare key existence. The

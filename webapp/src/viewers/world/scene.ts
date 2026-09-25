@@ -10,6 +10,7 @@ import {
   type GameWaterShared, type GameWaterStyleUniforms,
 } from './game-water.js';
 import { buildMeshGeometry } from '../mesh-geometry.js';
+import { b64ToF32, idlePoseKey, skinVertices } from '../../extract/world/idle-poses.js';
 import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
 import type { AppStore } from '../../store.js';
@@ -192,6 +193,8 @@ interface WorldBatch {
   z: any;
   reflectLocalX: boolean;
   depthRank: number;
+  /** spawn batches: the AB1 clip the actor rests in (-1 = bind pose) */
+  idleClip: number;
   entries: WorldBatchEntry[];
 }
 
@@ -442,6 +445,7 @@ export class WorldScene {
   }>;
   _roomGenerations: Map<number, number>;
   _geometryPromises: Map<string, Promise<THREE.BufferGeometry>>;
+  _idlePosesPromise: Promise<any> | null;
   _texturePromises: Map<any, Promise<WorldTextureSet>>;
   _parameterPromises: Map<any, Promise<THREE.Texture | null>>;
   _materialPromises: Map<string, Promise<THREE.Material>>;
@@ -515,6 +519,7 @@ export class WorldScene {
     this._roomPromises = new Map();
     this._roomGenerations = new Map();
     this._geometryPromises = new Map();
+    this._idlePosesPromise = null;
     this._texturePromises = new Map();
     this._parameterPromises = new Map();
     this._materialPromises = new Map();
@@ -684,6 +689,65 @@ export class WorldScene {
     return !this.disposed
       && generation === this._generation
       && roomGeneration === this._roomGeneration(roomId);
+  }
+
+  /** The frame-0 skin palettes World extraction wrote ('world:idle-poses'),
+   *  or null: an older extraction, or one without the clips to pose from. */
+  _idlePoses(): Promise<any> {
+    if (!this._idlePosesPromise) {
+      this._idlePosesPromise = Promise.resolve(this.store.worldIdlePoses?.() ?? null)
+        .then((doc) => (doc && typeof doc.poses === 'object' ? doc : null))
+        .catch(() => null);
+    }
+    return this._idlePosesPromise;
+  }
+
+  /** A batch's geometry: a rigged spawn resting in a clip is posed at that
+   *  clip's first frame when its palette is known, else the bind pose. */
+  _batchGeometry(batch: { mesh: any; reflectLocalX?: boolean; idleClip?: number; sourceKind?: string }): Promise<THREE.BufferGeometry> {
+    if (batch.sourceKind === 'spawn' && Number.isInteger(batch.idleClip) && batch.idleClip! >= 0) {
+      return this._posedGeometry(batch.mesh, batch.idleClip!);
+    }
+    return this._meshGeometry(batch.mesh, !!batch.reflectLocalX);
+  }
+
+  /** The mesh skinned into the first frame of `clip` (a separate cached
+   *  geometry per mesh and clip); the bind-pose geometry when the mesh is
+   *  not skinned or the palette is missing. Never throws for a missing pose. */
+  _posedGeometry(meshId: number | string, clip: number): Promise<THREE.BufferGeometry> {
+    const cacheKey = `${meshId}:idle${clip}`;
+    return cachedPromise(this._geometryPromises, cacheKey, async () => {
+      if (this.disposed) throw new Error('WorldScene is disposed');
+      const base = await this._meshGeometry(meshId, false);
+      const skinIndex = base.getAttribute('skinIndex');
+      const skinWeight = base.getAttribute('skinWeight');
+      if (!skinIndex || !skinWeight) return base;
+      const payload = await this.store.payload(`meshes/${pad5(meshId)}.json`);
+      const rig = Number(payload?.skel);
+      const doc = await this._idlePoses();
+      const pose = rig >= 0 ? doc?.poses?.[idlePoseKey(rig, clip)] : null;
+      if (!pose?.m) return base;
+      let palette: Float32Array;
+      try { palette = b64ToF32(pose.m); } catch { return base; }
+      if (palette.length !== Number(pose.bones) * 12 || !palette.length) return base;
+      const geo = base.clone();
+      const positions = geo.getAttribute('position');
+      const normals = geo.getAttribute('normal');
+      const tangents = geo.getAttribute('tangent');
+      skinVertices(palette, skinIndex.array as any, skinWeight.array as any,
+        positions.array as Float32Array, normals ? normals.array as Float32Array : null,
+        tangents ? tangents.array as Float32Array : null);
+      positions.needsUpdate = true;
+      if (normals) normals.needsUpdate = true;
+      if (tangents) tangents.needsUpdate = true;
+      geo.computeBoundingBox();
+      geo.computeBoundingSphere();
+      if (this.disposed) {
+        geo.dispose();
+        throw new Error('WorldScene was disposed while posing a mesh');
+      }
+      return geo;
+    });
   }
 
   _meshGeometry(meshId: number | string, reflectLocalX = false): Promise<THREE.BufferGeometry> {
@@ -1184,6 +1248,14 @@ export class WorldScene {
     });
   }
 
+  /** The clip a spawn row rests in, or -1 (older shards carry no column). */
+  _spawnIdleClip(spawn: any[]): number {
+    const sc = this.spawnColumns;
+    if (!sc || sc.idle_clip === undefined) return -1;
+    const clip = Number(spawn[sc.idle_clip]);
+    return Number.isInteger(clip) && clip >= 0 ? clip : -1;
+  }
+
   _spawnMatrix(shard: any, part: any, target: THREE.Matrix4): THREE.Matrix4 {
     const pc = this.spawnPartColumns!;
     const sc = this.spawnColumns!;
@@ -1284,13 +1356,14 @@ export class WorldScene {
 
   _batchRows(shard: any): WorldBatch[] {
     const batches = new Map<string, WorldBatch>();
-    const add = ({ category, sourceKind, row, placementIndex, columns: pc, z }: {
+    const add = ({ category, sourceKind, row, placementIndex, columns: pc, z, idleClip = -1 }: {
       category: string;
       sourceKind: string;
       row: any;
       placementIndex: number;
       columns: ColumnMap;
       z: any;
+      idleClip?: number;
     }) => {
       const mesh = row[pc.mesh];
       const material = row[pc.material];
@@ -1311,13 +1384,13 @@ export class WorldScene {
         ? this._coplanarRank(shard, row[pc.occurrence]) : 0;
       const key = JSON.stringify([
         category, sourceKind, mesh, material, texture, renderTexture, z,
-        visualFlags, recolors, reflectLocalX, depthRank,
+        visualFlags, recolors, reflectLocalX, depthRank, idleClip,
       ]);
       let batch = batches.get(key);
       if (!batch) {
         batch = {
           key, category, sourceKind, mesh, material, texture, renderTexture,
-          flags, recolorIndex, recolors, z, reflectLocalX, depthRank, entries: [],
+          flags, recolorIndex, recolors, z, reflectLocalX, depthRank, idleClip, entries: [],
         };
         batches.set(key, batch);
       }
@@ -1350,6 +1423,7 @@ export class WorldScene {
         add({
           category: 'spawns', sourceKind: 'spawn', row, placementIndex,
           columns: spawnPartColumns, z: spawn[spawnColumns.z],
+          idleClip: this._spawnIdleClip(spawn),
         });
       }
     }
@@ -1482,7 +1556,7 @@ export class WorldScene {
         // queued batches must not keep fetching payloads and decoding textures.
         if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
         const [geometry, material] = await Promise.all([
-          this._meshGeometry(batch.mesh, batch.reflectLocalX),
+          this._batchGeometry(batch),
           this._material(
             batch.category, batch.material, batch.renderTexture, batch.flags,
             batch.recolors, batch.depthRank,
@@ -1525,6 +1599,7 @@ export class WorldScene {
           untextured: !authoredEmpty && Number(batch.renderTexture) < 0,
           reflectLocalX: !!batch.reflectLocalX,
           depthRank: batch.depthRank,
+          idleClip: batch.idleClip,
           z: batch.z,
           placementIndices: batch.entries.map((entry) => entry.placementIndex),
           placementRows: batch.entries.map((entry) => entry.row),
@@ -2001,6 +2076,8 @@ export class WorldScene {
       heightRoom: optionalFinite(spawn[sc.height_room]),
       authoredHeight: optionalFinite(spawn[sc.authored_height]),
       rotationQuarters: spawn[sc.rotation_quarters],
+      // the clip the actor rests in (-1 / absent column -> null)
+      defaultClip: this._spawnIdleClip(spawn) >= 0 ? this._spawnIdleClip(spawn) : null,
       parts: Object.freeze(parts),
     });
   }

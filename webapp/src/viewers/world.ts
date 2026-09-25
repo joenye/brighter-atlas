@@ -120,6 +120,7 @@ const DEFAULT_STATE = Object.freeze({
   water: true,
   game: true,
   effects: true,
+  idle: true,
   wcolor: 'auto',
   wopacity: 50,
   ambient: 1.85,
@@ -143,7 +144,7 @@ interface WorldState {
   terrain: boolean; models: boolean; spawns: boolean; components: boolean;
   untextured: boolean; collision: boolean; empty: boolean; names: boolean;
   spawnnames: boolean;
-  inspect: boolean; water: boolean; game: boolean; effects: boolean;
+  inspect: boolean; water: boolean; game: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
   shadows: boolean; flatten: boolean; merged: boolean;
   scale: number; cull: boolean; culld: number;
@@ -546,6 +547,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           // stream's loaded/unloaded events, which fire for every one of the
           // (possibly 451) streamed rooms regardless of where the camera is.
           if (!allMode) effectsRoomLoaded(room.id);
+          if (!allMode) idleRoomLoaded(room).catch(() => { /* best-effort */ });
         }
         syncStatus();
       }
@@ -554,6 +556,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           roomWaterCurtains.delete(Number(id));
           disposeRoomWaterSheets(Number(id));
           if (!allMode) effectsRoomUnloaded(Number(id));
+          if (!allMode) idleRoomUnloaded(Number(id));
         }
       }
     },
@@ -803,6 +806,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       { swatch: GIZMO_SWATCH, title: 'Untextured markers placed for the game\'s editor (effect direction arrows, sound, dig and combat markers). The game does not show them.' }),
     check('effects', 'Effects', applyEffects,
       { swatch: '#e8b04c', title: 'Ambient particle effects recovered from this game version' }),
+    allMode ? null : check('idle', 'Resting animations', applyIdle,
+      { swatch: '#c9a0dc', title: 'NPCs, enemies and animals play the animation they rest in (standing, sitting, lying in wait). Off: each holds its resting pose.' }),
     allMode ? check('names', 'Room names', () => applyNames(),
       { swatch: '#e8e4d8', title: 'Floating name labels at each room\'s stitched position' }) : null,
     check('spawnnames', 'NPC names', () => applySpawnNames(),
@@ -2611,7 +2616,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const keys = new Set<string>();
     for (const part of sa.parts || []) {
       let geometry;
-      try { geometry = await world._meshGeometry(Number(part.mesh), false); } catch { continue; }
+      try {
+        geometry = await world._batchGeometry({ mesh: Number(part.mesh), sourceKind: sa.info?.sourceKind,
+          idleClip: sa.info?.defaultClip ?? -1 });
+      } catch { continue; }
       if (destroyed) return;
       const classified = merged.classifyBucket({
         category: sa.category,
@@ -2748,6 +2756,14 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     });
     spawnAnim.bar = bar;
     bar.select.addEventListener('change', () => onSpawnClipChange(token));
+    // A spawn resting in a known clip opens on it (the whole-world view has
+    // no live idles, so pinning one is how it starts breathing there).
+    const defaultClip = spawnAnim.info?.defaultClip;
+    if (spawnAnim.category === 'spawns' && Number.isInteger(defaultClip) && defaultClip >= 0
+        && resolved.clips.some((c: any) => c.i === defaultClip && c.f)) {
+      bar.select.value = String(defaultClip);
+      bar.select.dispatchEvent(new Event('change'));
+    }
     if (pinnedCtx && currentSpawnKey() === spawnAnim.key) showReadout(pinnedCtx.info, true);
   }
 
@@ -2781,6 +2797,100 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       return;
     }
     await mountSpawnPicker(token, resolved);
+  }
+
+  // --- resting animations (single-room view) ---------------------------------
+  // Every rigged spawn that rests in a known clip plays it from the moment its
+  // room loads, as a parked entry of persistentAnims (so pinning it adopts the
+  // running player, and unpinning parks it again). The static posed instance
+  // is hidden while the player runs; turning the toggle off or unloading the
+  // room disposes the entry and shows the posed static again. Without the
+  // Animations category there is nothing to play: the posed static stays.
+  const idleRooms = new Map<number, { token: number }>();
+  let idleToken = 0;
+  async function idleRoomLoaded(room: any): Promise<void> {
+    if (!state.idle || destroyed || allMode) return;
+    const roomId = Number(room.id);
+    if (idleRooms.has(roomId)) return;
+    const owner = { token: ++idleToken };
+    idleRooms.set(roomId, owner);
+    const shard = room.shard || await spawnShard(roomId);
+    if (!shard?.spawns?.length || destroyed || idleRooms.get(roomId) !== owner) return;
+    for (let index = 0; index < shard.spawns.length; index++) {
+      if (destroyed || idleRooms.get(roomId) !== owner || !state.idle) return;
+      const key = `${roomId}|spawn|${index}`;
+      if (persistentAnims.has(key) || spawnAnim?.key === key) continue;
+      let info;
+      try { info = world._describeSpawn({ id: roomId, shard }, index); } catch { continue; }
+      const clip = info?.defaultClip;
+      if (!info?.parts?.length || !Number.isInteger(clip) || clip < 0) continue;
+      try { await startIdleAnim(roomId, shard, info, key, clip, owner); } catch { /* one actor at a time */ }
+    }
+  }
+  function idleRoomUnloaded(roomId: number): void {
+    idleRooms.delete(roomId);
+    for (const [key, parked] of [...persistentAnims]) {
+      if (!parked.idle || !key.startsWith(`${roomId}|spawn|`)) continue;
+      persistentAnims.delete(key);
+      disposeSpawnAnim(parked);
+    }
+  }
+  async function startIdleAnim(roomId: number, shard: any, info: any, key: string, clip: number, owner: { token: number }): Promise<void> {
+    const live = () => !destroyed && idleRooms.get(roomId) === owner && state.idle;
+    const resolved = await resolveSpawnAnim({ store: app.store, parts: info.parts });
+    if (!live() || resolved.kind !== 'ready') return;
+    const entry = resolved.clips.find((c: any) => c.i === clip && c.f);
+    if (!entry) return;
+    const skelJson = await app.store.json(resolved.skelEntry.f);
+    if (!live() || persistentAnims.has(key) || spawnAnim?.key === key) return;
+    const rig = new Rig(skelJson);
+    const composite = new SpawnAnimComposite({ world, rig });
+    const box = el('div', { class: 'wp-anim' });
+    box.appendChild(el('div', { class: 'wp-anim-title', text: 'Animate this entity' }));
+    const sa: any = {
+      token: -1, key, info, box, rig, composite, bar: null, resolved, shard,
+      active: false, partsLoaded: false, parts: info.parts, category: 'spawns', members: null,
+      skeletonJson: skelJson, idle: true,
+    };
+    const bar = new PlaybackBar({
+      host: box, clips: resolved.clips, store: app.store, rig,
+      onApplied: () => { /* the render loop poses the skinned mesh */ },
+      onError: () => { /* a resting clip that fails to load simply stays static */ },
+    });
+    sa.bar = bar;
+    bar.select.value = String(entry.i);
+    // Once adopted by a pin, clip changes go through the pinned-anim path.
+    bar.select.addEventListener('change', () => {
+      if (spawnAnim === sa) onSpawnClipChange(sa.token);
+    });
+    const loaded = await bar.loadClip(entry);
+    if (!loaded || !live() || persistentAnims.has(key) || spawnAnim?.key === key) { disposeSpawnAnim(sa); return; }
+    bar.play();
+    await composite.loadParts({
+      parts: info.parts, shard, category: 'spawns', skinnedSet: resolved.skinnedSet,
+      isDestroyed: () => !live(),
+    });
+    if (!live() || persistentAnims.has(key) || spawnAnim?.key === key) { disposeSpawnAnim(sa); return; }
+    spawnAnimRoot.add(composite.group);
+    sa.partsLoaded = true;
+    const matrix = computeSpawnBaseMatrix(info, shard);   // room offset included
+    if (matrix) composite.setBaseMatrix(matrix);
+    hideSpawnStatic(sa);
+    composite.group.visible = true;
+    sa.active = true;
+    persistentAnims.set(key, sa);
+  }
+  function applyIdle(): void {
+    if (state.idle) {
+      for (const room of world.rooms.values()) idleRoomLoaded(room).catch(() => { /* best-effort */ });
+      return;
+    }
+    idleRooms.clear();
+    for (const [key, parked] of [...persistentAnims]) {
+      if (!parked.idle) continue;
+      persistentAnims.delete(key);
+      disposeSpawnAnim(parked);
+    }
   }
 
   // A playing/posed animation persists for the whole session, decoupled from
@@ -3114,7 +3224,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             ? `t${batch.renderTexture}` : `f${batch.category}`;
           if (!cellKeys.some((key) => key.includes(`|${token}|`))) continue;
           let geometry = null;
-          try { geometry = await world._meshGeometry(batch.mesh, batch.reflectLocalX); } catch { continue; }
+          try { geometry = await world._batchGeometry(batch); } catch { continue; }
           if (destroyed) return;
           const classified = merged.classifyBucket({
             category: batch.category,

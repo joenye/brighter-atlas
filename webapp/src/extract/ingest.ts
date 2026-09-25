@@ -60,7 +60,7 @@ export const BUNDLE_LABEL: Record<number, string> = {
 // world view draws with the game's own shaders when both shader bundles are
 // present (Windows builds only; the viewer checks the format itself).
 export const OPTIONAL_CAT_BUNDLES: Record<string, number[]> = {
-  world: [4, 7],
+  world: [4, 7, 1],
 };
 
 export function requiredBundles(cats: string[]): number[] {

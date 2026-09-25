@@ -69,6 +69,7 @@ export const SPAWN_CONFIDENCE: Record<string, number> = {
   exact_spawn_scalar_fields: 0,
   exact_spawn_parallel_series: 1,
   exact_roster_owner_appearance: 2,
+  idle_prop: 3,   // a prop the resting animation hands the actor (actor-idle.js)
 };
 export const SPAWN_MEMBERSHIP_KIND: Record<string, number> = { generic: 0, direct: 1, default_room: 2 };
 export const SPAWN_RECOLOR_SCOPE: Record<string, number> = {
@@ -121,7 +122,10 @@ export const SPAWN_COLUMNS = [
   'room_field_op', 'origin', 'centre_offset', 'centre_field_op',
   'default_room_record', 'default_room_field_op', 'authored_label',
   'height_source', 'height_room', 'authored_height',
+  'idle_clip', 'idle_source', 'idle_field_op',
 ];
+// How a spawn's resting clip was recovered (actor-idle.js); -1 = no clip.
+export const SPAWN_IDLE_SOURCE: Record<string, number> = { animatic: 0, portrait: 1, rig_single: 2 };
 export const SPAWN_PART_COLUMNS = [
   'spawn', 'mesh', 'material', 'texture', 'render_texture', 'flags',
   'recolor', 'part_index', 'mesh_def_slot', 'mesh_field_op',
@@ -142,6 +146,8 @@ export const COORDINATE_SYSTEM = {
   scenery_trim_revision: 1,
   // 1: occurrences carry `dynamic` and placements a per-tile `part_colour`
   draw_order_revision: 1,
+  // 1: spawns carry their resting clip (idle_clip / idle_source)
+  spawn_idle_revision: 1,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,
   layer_units: LAYER_UNITS,
@@ -178,6 +184,7 @@ export const ENUMS = {
   spawn_membership_kind: SPAWN_MEMBERSHIP_KIND,
   spawn_recolor_scope: SPAWN_RECOLOR_SCOPE,
   spawn_origin: SPAWN_ORIGIN,
+  spawn_idle_source: SPAWN_IDLE_SOURCE,
   part_kind: PART_KIND,
   confidence: CONFIDENCE,
   link_direction: { parent: 0, child: 1 },
@@ -208,6 +215,8 @@ export const SEMANTICS = {
   spawn_coordinates: 'spawn x/y do not receive the class-351 map_offset; raw z is the authored navigation layer. surface_z is placement height in game units: height_source=room_tiles uses the packed room height and ordered linked-room lookup, including zero; surface_estimate uses triangles at the actor centre. authored_height and height_room retain the exact lookup result and supplying room where available',
   spawn_memberships: 'room-row generic/direct references and actor default-room references are retained; repeated memberships of one registry actor slot produce one spawn row',
   spawn_origin: 'new rows use origin=actor and retain authored coordinates; legacy roster and roster_center values are reserved only for reading older extractions',
+  spawn_idle_props: 'spawn parts with confidence idle_prop are what the resting animation puts in the actor\'s hands (skinned to the actor\'s rig, drawn with its clip); they are not part of the authored appearance and the model catalog ignores them',
+  spawn_idle: 'idle_clip is the AB1 clip the actor rests in, on the rig of its own meshes, or -1: animatic = the actor\'s own animation reference (a clip, a controller, or a set whose direct reference names the resting controller; an intro/loop/outro triple rests in its longest clip), portrait = the clip of the actor\'s inspection record, rig_single = the only clip on the rig; idle_field_op is the source field (-1 for rig_single)',
   spawn_recolors: 'two exact actor tint fields are paired by part index when serialized as series, or applied actor-wide when both fields are scalar; the actor schema has implicit neutral output modulation rather than a fabricated third stored colour',
   placement_recolors: 'three values are tint1/tint2/half-range output modulation; a two-value placement with uniform_luminance_tint stores the compact ground schema\'s exact tint/output-modulation pair because its unused second tint is absent rather than fabricated',
   part_colour: 'index into part_colours: twelve numbers, the colour the game gives the part at its tile (full range RGBA, its vertex colour is half of it) then the two recolour tints its recoloured textures use (half range RGBA each); the colour is two authored colours blended by a per-tile fraction hashed from the room seed and the tile x, y, or for the top faces of varied ground blocks one colour with a per-tile lightness shift; -1 where it is not known',
@@ -588,6 +597,8 @@ export interface ShardContextOptions {
   enemyDefs?: EnemyDefinition[] | null;
   // Constructor values per registry slot (replay.js replayConstructors).
   objects?: { values: number[] }[] | null;
+  /** ab0 clip directory: lets spawns carry their resting clip */
+  animDir?: { skel: number; dur?: number }[] | null;
 }
 
 // Context factory: everything the per-room builder needs, resolved once.
@@ -600,10 +611,10 @@ export interface ShardContextOptions {
 //   profile      : optional per-build decode data (provenance in the index)
 export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
-  charset = null, symbols, bytes, enemyDefs = null, placement = null, objects = null,
+  charset = null, symbols, bytes, enemyDefs = null, placement = null, objects = null, animDir = null,
 }: ShardContextOptions): ShardContext {
   const graph = new AssetGraph(rows, pool, undefined, { bytes, profile, symbols, defaultGround: placement?.tiles?.defaultGround ?? null });
-  const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs });
+  const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs, animDir, meshDir });
   const roomIds = Array.from(rooms.keys()).sort((a, b) => a - b);
   const roomRows = spawnGraph.discoverRoomRows(roomIds);
   const actorHeight=createActorHeightReader({data:placement,rooms,roomRows,rows,pool,bytes,profile});
@@ -897,6 +908,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       actor.room_field_op, SPAWN_ORIGIN.actor, actor.centre_offset, actor.centre_field_op,
       actor.default_room_record, actor.default_room_field_op, actor.authored_label,
       authoredHeight?'room_tiles':'surface_estimate',authoredHeight?.room??null,authoredHeight?.height??null,
+      actor.idle_clip ?? -1, actor.idle_source ? SPAWN_IDLE_SOURCE[actor.idle_source] : -1, actor.idle_field_op,
     ]);
     for (const membership of actor.memberships) {
       spawnMembershipRows.push([
@@ -905,7 +917,8 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       ]);
     }
     if (!actor.parts.length) inc(counts, 'spawn_unrendered');
-    for (const part of actor.parts) {
+    if (actor.idle_props?.length) inc(counts, 'spawn_idle_props', actor.idle_props.length);
+    for (const part of [...actor.parts, ...(actor.idle_props ?? [])]) {
       const meshId = part.mesh;
       roomMeshes.add(meshId);
       const textureId = part.texture;

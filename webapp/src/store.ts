@@ -43,6 +43,12 @@ export interface AppStore extends EventTarget {
    *  extraction). Optional and multi-MB: callers defer this until an effects
    *  surface first needs it; null means the version has no doc. */
   worldEffects?(): Promise<WorldEffectsDoc | null>;
+  /** Actors' resting clips ('anim:idle', written by World extraction):
+   *  registry slot -> { clip, source, label }. null when absent. */
+  animIdle?(): Promise<any>;
+  /** Frame-0 skin palettes for those clips ('world:idle-poses'). null when
+   *  the extraction had no clips to pose from. */
+  worldIdlePoses?(): Promise<any>;
   /** Cheap effects-doc probe (manifest flag / key existence, never the doc
    *  itself), for gating effects UI without pulling the payload. */
   hasWorldEffects?(): Promise<boolean>;

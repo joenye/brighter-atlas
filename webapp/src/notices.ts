@@ -56,6 +56,19 @@ const pre040Extraction = (app: any) => engineOlderThan(app, 1);
 
 const NOTICES: Notice[] = [
   {
+    id: 'world-idle-1',
+    title: 'People and creatures strike their poses',
+    paras: [
+      'NPCs, enemies and animals in the World and Models views now rest the way they do in the game: standing and breathing, sitting at tables, lying in wait, instead of the stiff pose they used to hold. Single rooms play the resting animation; the whole-world view shows each one held in it.',
+      'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.',
+    ],
+    when: async (app: any) => {
+      if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
+      const index = await app.store.worldIndex();
+      return !!index && (index.coordinate_system?.spawn_idle_revision ?? 0) < 1;
+    },
+  },
+  {
     id: 'world-effects-water-1',
     title: 'More faithful effects, water and ground',
     paras: [

@@ -6,6 +6,8 @@
 // records.
 
 import { makeRegistryRowDecoder } from './effects.js';
+import { ActorIdleResolver, type ActorIdle } from './actor-idle.js';
+import { makePoolRegistryRefs } from './models.js';
 import type { FillRow } from './replay.js';
 import type { WorldProfile } from './profile.js';
 import type { AssetGraph, DecodedField, PoolNode, RegistryRow } from './graph.js';
@@ -70,6 +72,15 @@ export interface SpawnRecord {
   label_field_op: number;
   parts: Record<string, any>[];
   appearance_confidence: string | null;
+  // The clip the actor rests in (actor-idle.js); null when the build's data
+  // supports none, or when the graph has no clip directory to check rigs.
+  idle_clip: number | null;
+  idle_source: ActorIdle['source'] | null;
+  idle_field_op: number;
+  // Props the resting controller hands the actor (a book, a tankard): extra
+  // parts on the actor's own rig, confidence 'idle_prop', never part of the
+  // authored appearance.
+  idle_props: Record<string, any>[];
 }
 
 export interface SpawnMembership {
@@ -96,6 +107,9 @@ export interface SpawnDecodeOptions {
   profile?: WorldProfile;
   charset?: ArrayLike<string> | null;
   enemyDefs?: { slot: number; name: string; targets: number[] }[] | null;
+  /** ab0 clip directory + mesh directory: both needed to resolve idle clips */
+  animDir?: { skel: number; dur?: number }[] | null;
+  meshDir?: { sref: number }[] | null;
 }
 
 // Pure structural resolver for room-owned gameplay actor instances.
@@ -111,6 +125,8 @@ export class SpawnGraph {
   private _charset: ArrayLike<string> | null;
   private _enemyDefinitions = new Map<number, { record: number; name: string }[]>();
   private _defaultActors = new Map<number, number[]>();
+  private _idle: ActorIdleResolver | null = null;
+  private _meshDir: { sref: number }[] | null;
 
   constructor(rows: RegistryRow[], pool: PoolNode[], assetGraph: AssetGraph, options: SpawnDecodeOptions = {}) {
     this.rows = rows;
@@ -128,6 +144,16 @@ export class SpawnGraph {
     this._locationCache = new Map();
     this._directionCache = new Map();
     this._spawnCache = new Map();
+    this._meshDir = options.meshDir ?? null;
+    if (options.animDir && options.meshDir) {
+      this._idle = new ActorIdleResolver(rows as FillRow[], pool, assetGraph, options.animDir, {
+        // A location value marks an actor row cheaply and without recursion
+        // (spawn() itself is what calls the resolver).
+        isActor: (slot) => this._location(slot) !== null,
+        decode: this._decode ? (slot) => this._decode!(slot) as any : null,
+        poolRegistryRefs: makePoolRegistryRefs(pool),
+      });
+    }
   }
 
   // Recursively decoded nodes below one value, following pool refs acyclically.
@@ -450,6 +476,9 @@ export class SpawnGraph {
   }
 
   // One exact actor record, or null for a non-actor row.
+  /** The resting-clip resolver (null without animation data). */
+  get idleResolver(): ActorIdleResolver | null { return this._idle; }
+
   spawn(ownerSlot: number): SpawnRecord | null {
     if (this._spawnCache.has(ownerSlot)) return this._spawnCache.get(ownerSlot)!;
     const location = this._location(ownerSlot);
@@ -504,7 +533,40 @@ export class SpawnGraph {
       label_field_op: labelOp,
       parts: appearance === null ? [] : appearance.parts,
       appearance_confidence: appearance === null ? null : appearance.confidence,
+      idle_clip: null,
+      idle_source: null,
+      idle_field_op: -1,
+      idle_props: [],
     };
+    // The resting clip must belong to the rig of the actor's own meshes.
+    if (this._idle && appearance !== null) {
+      const rigs = new Set<number>();
+      for (const part of appearance.parts) {
+        const sref = this._meshDir?.[part.mesh]?.sref;
+        if (typeof sref === 'number' && sref >= 2) rigs.add(sref - 2);
+      }
+      const idle = this._idle.resolve(ownerSlot, rigs);
+      if (idle) {
+        result.idle_clip = idle.clip;
+        result.idle_source = idle.source;
+        result.idle_field_op = idle.field_op;
+        const meshRig = (mesh: number) => { const sref = this._meshDir?.[mesh]?.sref; return typeof sref === 'number' && sref >= 2 ? sref - 2 : null; };
+        result.idle_props = this._idle.props(idle.controller, rigs, meshRig).map((prop, index) => ({
+          mesh_def_slot: prop.mesh_def_slot,
+          mesh: prop.mesh,
+          material_slot: prop.material_slot,
+          texture: prop.texture,
+          part_index: appearance.parts.length + index,
+          mesh_field_op: -1,
+          material_field_op: -1,
+          confidence: 'idle_prop',
+          recolors: prop.recolors,
+          recolor_field_ops: [-1, -1],
+          recolor_scope: prop.recolors ? 'actor_scalar' : null,
+          local_matrix: prop.local_matrix,
+        }));
+      }
+    }
     this._spawnCache.set(ownerSlot, result);
     return result;
   }
