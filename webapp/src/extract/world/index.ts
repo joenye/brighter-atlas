@@ -19,7 +19,7 @@ import {createEffectFacingReader} from './effect-facing.js';
 import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
-import {readWorldWater, type WorldWater} from './water-materials.js';
+import {readWorldWater, type WorldWater, type WaterDecodeData} from './water-materials.js';
 import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, recordField, recordRef, validRenderData, type RenderDecodeData, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
 import {deriveRenderData, shaderFacts, type ShaderFacts} from './render-shape.js';
 import {b64FromTyped} from '../b64.js';
@@ -32,6 +32,7 @@ import { validateMapDecodeData } from '../maps/decode-data.js';
 import { decodeGlyphText, deriveRoomMetadata, resolveValue } from './room-metadata.js';
 import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader,type PlacementDecodeData} from './placement.js';
 import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape.js';
+import {effectLayout} from './effect-shape.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
@@ -183,9 +184,11 @@ export async function extractWorld({
   // per-build decode data; absent or unreadable data leaves water to the
   // viewer's plain surfaces.
   const shapeRegistry = { rows, objects, pool: pool.values, decode: rowDecoder, types: dt.types };
+  let waterFields: WaterDecodeData | null = null;
   let worldWater: WorldWater | null = null;
   try {
-    worldWater = readWorldWater(waterLayout(shapeRegistry) ?? undefined, rows, rowDecoder, pool.values);
+    waterFields = waterLayout(shapeRegistry);
+    worldWater = readWorldWater(waterFields ?? undefined, rows, rowDecoder, pool.values);
   } catch { /* unreadable water data: plain surfaces */ }
   // How the game draws this build (render-shape.ts): from the bundles, with
   // the per-build decode data's quest-lit rooms. Needs both shader bundles.
@@ -318,9 +321,22 @@ export async function extractWorld({
   const owners = roomOwners(shapeRegistry, new Set(layersById.keys()));
   const roomFields = roomLayout(shapeRegistry, layersById, owners);
   const tileFields = tileLayout(shapeRegistry, profile, owners);
-  const placementBindings: PlacementDecodeData | null = roomFields ? {
+  // Where effects keep their values (effect-shape.ts). The per-build decode
+  // data, produced offline purely from analysis of the game's own files,
+  // never by inspecting or modifying a running game process or its memory,
+  // adds the computed colours, sprite choices and the other origins.
+  let effectShapes: ReturnType<typeof effectLayout> = {};
+  try {
+    effectShapes = effectLayout({ rows, objects, symbols: dt.symbols, types: dt.types,
+      extras: effectsMod.makeRowDecoder(rows, pool.values, ab0, profile, dt.charset, dt.symbols) }, waterFields);
+  } catch { /* no derived effect fields: the decode data's, if any */ }
+  const fileOrigins = (placementData?.effectOrigins ?? []).filter((b) => b.kind === 'radial' || b.kind === 'segment');
+  const shapeOrigins = (effectShapes.effectOrigins ?? []).filter((b) => !fileOrigins.some((f) => f.instance === b.instance));
+  const origins = [...shapeOrigins, ...fileOrigins].sort((a, b) => a.instance - b.instance);
+  const placementBindings: PlacementDecodeData | null = roomFields || Object.keys(effectShapes).length ? {
     ...(placementData ?? { kind: 'brighter-atlas-placement-decode', format: 1, bundle0_raw_sha256: profile.bundle0!.raw_sha256! }),
-    ...roomFields, ...(tileFields ? { tiles: tileFields } : {}),
+    ...(roomFields ?? {}), ...(tileFields ? { tiles: tileFields } : {}),
+    ...effectShapes, ...(origins.length ? { effectOrigins: origins } : {}),
   } : placementData;
 
   const roomMetadata = deriveRoomMetadata(rows, pool.values, ab0, profile, dt.charset, rooms.map(r => r.idx));

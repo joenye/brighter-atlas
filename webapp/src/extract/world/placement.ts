@@ -27,8 +27,8 @@ export interface PlacementDecodeData {
   kind: 'brighter-atlas-placement-decode';
   format: 1;
   bundle0_raw_sha256: string;
-  rooms: {fieldCount:number; width:number; height:number; origin:number; words:number; links:number};
-  actors: {parent:number};
+  rooms?: {fieldCount:number; width:number; height:number; origin:number; words:number; links:number};
+  actors?: {parent:number};
   defaultAppearances?: {runtime:number; start:number; end:number}[];
   appearanceCandidates?: {runtime:number; fields:number[]}[];
   effectScales?: EffectScaleBinding[];
@@ -198,6 +198,7 @@ export function createActorHeightReader({data,rooms,roomRows,rows,pool,bytes,pro
   if(!data?.rooms)return null;
   validatePlacementData(data,profile.bundle0?.raw_sha256??'');
   if(!bytes)throw Error('placement decoding needs the source registry');
+  const actorParent=data.actors!.parent;
   const decode=makeRegistryRowDecoder(rows as FillRow[],bytes,profile);
   const byOwner=new Map([...roomRows].map(([id,r])=>[r.record,id]));
   const grids=new Map<number,{width:number;height:number;origin:number[];words:number[];links:number[]}>();
@@ -226,7 +227,7 @@ export function createActorHeightReader({data,rooms,roomRows,rows,pool,bytes,pro
   return (room,actor)=>{
     const grid=grids.get(room),owner=roomRows.get(room)?.record;
     if(!grid||owner===undefined)throw Error(`missing actor height grid ${room}`);
-    const parent=rows[actor.record]?.v?.find(v=>v[0]===data.actors.parent&&v[1]==='U')?.[2];
+    const parent=rows[actor.record]?.v?.find(v=>v[0]===actorParent&&v[1]==='U')?.[2];
     if(parent!==owner||actor.default_room_record!==owner)throw Error(`actor ${actor.record} has a different height parent`);
     const [x,y,layer]=actor.position;
     let height=at(grid,x,y,layer);
