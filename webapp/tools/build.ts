@@ -35,6 +35,7 @@ const jobs: BuildOptions[] = [
       'js/main': 'src/main.ts',
       'js/extract/worker': 'src/extract/worker.ts',
       'js/extract/pool-worker': 'src/extract/pool-worker.ts',
+      'js/extract/maps-worker': 'src/extract/maps/worker.ts',
       'js/viewers/fit-worker': 'src/viewers/fit-worker.ts',
       'js/viewers/world/bake-worker': 'src/viewers/world/bake-worker.ts',
     },

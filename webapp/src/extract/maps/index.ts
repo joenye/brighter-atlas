@@ -42,8 +42,12 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   const raw3=async(id:number)=>{bail();if(!frames[3].entries[id])throw Error('missing map image');return read3(frames[3].entries[id]);};
   const object2=async(id:number)=>{bail();return decodeObject(2,await read2(frames[2].entries[id]));};
   const sub3=async(id:number)=>decodeObject(3,await raw3(id)).subs[0];
+  // Room lookups are small and scattered through the image bundle: read each
+  // on its own rather than through the sequential slab reader.
+  const lookup=async(id:number)=>{bail();const e=frames[3].entries[id];if(!e)throw Error('missing map image');
+    return decodeObject(3,new Uint8Array(await files[3].slice(e.offset,e.offset+e.length).arrayBuffer())).subs[0];};
   const shingles=await extractMapGeometry(records.values(),dt.textureDir,
-    sub3,owner=>{
+    lookup,owner=>{
       const r=byOwner.get(owner)!;
       const keys=new Set(r.terrain.styles.flatMap(w=>[0,8,16,24].map(s=>w>>>s&255)));
       return resolveMapPalette(rows[owner].runtime,keys,r.terrain.baseColors,styles.defaults,data.rooms);

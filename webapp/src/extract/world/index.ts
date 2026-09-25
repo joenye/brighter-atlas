@@ -95,6 +95,9 @@ export interface ExtractWorldOptions {
   onProgress?: (p: { stage: string; step: string; done: number; total: number }) => void;
   signal?: AbortSignal;
   fetchJson?: FetchJson;
+  /** called once the texture workers are done: from here on this thread
+   *  works alone, so other work can use the idle cores */
+  onTexturesDone?: () => void;
 }
 
 // ab0: decompressed assetBundle0 bytes; dt: parseDatatable(ab0) result;
@@ -106,7 +109,7 @@ export interface ExtractWorldOptions {
 // worldIndex ('world:index') and attachedSystem (system:models/bindings).
 export async function extractWorld({
   ab0, dt, files, frames, shas, versionId, indexes, ab2Objects,
-  sink, onProgress = () => {}, signal, fetchJson,
+  sink, onProgress = () => {}, signal, fetchJson, onTexturesDone,
 }: ExtractWorldOptions): Promise<{ attachedSystem: any; roomsCount: number; worldIndex: any }> {
   const bail = () => { if (signal?.aborted) throw new Error('cancelled'); };
   const step = (s: string, done: number, total: number) => onProgress({ stage: 'world', step: s, done, total });
@@ -528,6 +531,7 @@ export async function extractWorld({
       });
     }
   }
+  onTexturesDone?.();
   bail();
 
   // Jigsaw connector meshes, resolved to this build's ab5 ordinals by content

@@ -465,6 +465,41 @@ async function ingest({
   // data. A failure here (unknown build, stage
   // module drift) must not sink the rest of the ingest: the error is reported
   // and the category is marked failed.
+  // ---- 2D Maps: in their own worker, started once World's texture workers
+  // are done (World then works on this thread alone and the cores are free);
+  // without World, or without workers, they run here after World.
+  let mapsRun: Promise<any> | null = null;
+  const runMaps = async () => {
+    const { extractMaps } = await import('./maps/index.js');
+    const inline = () => extractMaps({ab0,dt,files,frames,fetchJson:fetchJson??undefined,onProgress,signal,includeRoomData:true});
+    if (typeof Worker !== 'function') return inline();
+    const { loadWorldProfile } = await import('./world/profile.js');
+    const { profile } = await loadWorldProfile(ab0, { fetchJson: fetchJson ?? undefined });
+    if (!profile) return inline();   // reports why there is no data
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL(import.meta.url.replace(/\/js\/.*$/, '/js/extract/maps-worker.js')), { type: 'module' });
+    } catch { return inline(); }
+    let onAbort: (() => void) | null = null;
+    try {
+      return await new Promise<any>((resolve, reject) => {
+        onAbort = () => reject(new Error('cancelled'));
+        signal?.addEventListener('abort', onAbort, { once: true });
+        worker.onerror = (ev) => { ev.preventDefault?.(); resolve(null); };   // the worker did not start
+        worker.onmessage = (ev) => ev.data.type === 'done' ? resolve(ev.data.result) : reject(new Error(ev.data.message));
+        worker.postMessage({ ab0, files: { 2: files[2], 3: files[3] }, frames: { 2: frames[2], 3: frames[3] }, profile, includeRoomData: true });
+      }) ?? await inline();
+    } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
+      worker.terminate();
+    }
+  };
+  const startMaps = () => {
+    if (mapsRun || !cats.includes('maps')) return;
+    mapsRun = runMaps();
+    mapsRun.catch(() => {});   // surfaced where it is awaited
+  };
+
   let worldOutcome = null;   // { attachedSystem?, roomsCount, worldIndex }
   let worldError = null;
   if (cats.includes('world')) {
@@ -481,6 +516,7 @@ async function ingest({
         ab0, dt, files, frames, shas, versionId, indexes,
         ab2Objects: ab2Shared,
         sink, onProgress, signal, fetchJson: fetchJson as any,
+        onTexturesDone: () => { if (typeof Worker === 'function') startMaps(); },
       });
       // a user-supplied catalog file (validated above) outranks the generated one
       if (worldOutcome.attachedSystem && !attachedSystem) {
@@ -493,11 +529,12 @@ async function ingest({
     }
   }
 
-  let mapsOutcome = null, mapsError = null;
+  let mapsOutcome: any = null, mapsError = null;
   if (cats.includes('maps')) {
     try {
-      const {extractMaps} = await import('./maps/index.js');
-      mapsOutcome = await extractMaps({ab0,dt,files,frames,fetchJson:fetchJson??undefined,onProgress,signal,includeRoomData:true});
+      onProgress({stage:'index',cat:'maps',done:0,total:1});
+      startMaps();
+      mapsOutcome = await mapsRun;
       indexes.maps = mapsOutcome.index;
     } catch (err) {
       if (signal?.aborted || err?.message === 'cancelled') throw err;
