@@ -353,9 +353,13 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
         status.textContent = msg.skipped ? `${label}: already stored, skipped` : `${label}…`;
       } else if (msg.type === 'done') {
         worker.terminate();
-        const stages: Record<string, number> = {};
-        for (const [k, t] of stageT) stages[k] = +((t.t1 - t.t0) / 1000).toFixed(2);
-        console.log(`[perf] extract ${JSON.stringify({ seconds: msg.result.seconds, stages })}`);
+        const stages: Record<string, number> = {}, starts: Record<string, number> = {};
+        const first = Math.min(...[...stageT.values()].map((t) => t.t0));
+        for (const [k, t] of stageT) {
+          stages[k] = +((t.t1 - t.t0) / 1000).toFixed(2);
+          starts[k] = +((t.t0 - first) / 1000).toFixed(2);
+        }
+        console.log(`[perf] extract ${JSON.stringify({ seconds: msg.result.seconds, stages, starts })}`);
         renderDone(msg.result, cats);
       } else if (msg.type === 'error') {
         worker.terminate();
