@@ -1,3 +1,11 @@
+/* The interface's symbols (arrows, shapes, check marks) from a tiny bundled
+   font, so every system draws them: many lack some of these characters and
+   show an empty box instead. Used only where the system fonts have no glyph.
+   Noto Sans Symbols, Symbols 2 and Math subsets (vendor/LICENSE.noto-fonts.txt). */
+@font-face { font-family: "BA UI Symbols"; src: url("../vendor/fonts/ui-symbols.woff2") format("woff2"); unicode-range: U+20E0,U+2190,U+2191,U+2192,U+2193,U+2302,U+266A,U+26F0,U+26F6,U+2922; font-display: swap; }
+@font-face { font-family: "BA UI Symbols"; src: url("../vendor/fonts/ui-math.woff2") format("woff2"); unicode-range: U+21A9,U+21BA,U+21BB,U+21C4,U+2205,U+2229,U+222A,U+223F,U+2248,U+2260,U+2261,U+2264,U+2265,U+22EF,U+233E,U+27F3; font-display: swap; }
+@font-face { font-family: "BA UI Symbols"; src: url("../vendor/fonts/ui-symbols2.woff2") format("woff2"); unicode-range: U+21E9,U+2212,U+2316,U+2318,U+2443,U+25A3,U+25A4,U+25A6,U+25B6,U+25B8,U+25BE,U+25C6,U+25C9,U+25CB,U+25CF,U+25EE,U+26A0,U+270E,U+2713,U+2715,U+2726,U+2733,U+2756,U+275A,U+2B71,U+2B73; font-display: swap; }
+
 /* Brighter Shores asset viewer: dark theme */
 :root {
   --bg0: #0d0f13;        /* page */
@@ -15,8 +23,8 @@
   --warn: #e8b45a;
   --bad: #e87070;
   --sel: #223349;
-  --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-  --sans: -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, Consolas, "BA UI Symbols", monospace;
+  --sans: -apple-system, "Segoe UI", system-ui, Roboto, "BA UI Symbols", sans-serif;
   --radius: 8px;
 }
 * { box-sizing: border-box; }

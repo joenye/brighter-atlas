@@ -16,6 +16,7 @@ const MIME: Record<string, string> = {
   '.wav': 'audio/wav',
   '.md': 'text/markdown; charset=utf-8',
   '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
 };
 
 // Optional CSP header, matching the one served in production: set BS_CSP to

@@ -218,9 +218,9 @@ async function fixtureSuite(browser: any, base: string) {
   await sleep(200);
   ok(true, 'bone-influence + rig overlay toggles');
 
-  // lighting overlay: 💡 opens the panel, ranges drive the shared rig, and the
+  // lighting overlay: the Lighting button opens the panel, ranges drive the shared rig, and the
   // adjustment persists across a full reload (prefs-backed)
-  await page.$$eval('.viewer-toolbar .btn', (b) => b.find((x) => x.textContent === '💡')?.click());
+  await page.$$eval('.viewer-toolbar .btn', (b) => b.find((x) => x.textContent === 'Lighting')?.click());
   await page.waitForSelector('.light-overlay:not([hidden])', { timeout: 5000 });
   await page.$$eval('.light-overlay input[type=range]', (rs) => {
     rs[1].value = '0.8';
@@ -232,11 +232,11 @@ async function fixtureSuite(browser: any, base: string) {
   await page.waitForFunction(() => window.__bs?.meshView, { timeout: 20000 });
   const sunPersist = await page.evaluate(() => window.__bs.meshView.scene.key.intensity);
   ok(Math.abs(sunPersist - 0.8) < 1e-6, `viewer lighting persists across reload (sun=${sunPersist})`);
-  await page.$$eval('.viewer-toolbar .btn', (b) => b.find((x) => x.textContent === '💡')?.click());
+  await page.$$eval('.viewer-toolbar .btn', (b) => b.find((x) => x.textContent === 'Lighting')?.click());
   await page.$$eval('.light-overlay .btn', (bs) => bs.find((x) => x.textContent === 'reset')?.click());
   ok(await page.evaluate(() => window.__bs.meshView.scene.key.intensity === 2.0
     && window.__bs.meshView.scene.hemi.intensity === 1.1), 'lighting reset restores the defaults');
-  await page.$$eval('.viewer-toolbar .btn', (b) => b.find((x) => x.textContent === '💡')?.click());
+  await page.$$eval('.viewer-toolbar .btn', (b) => b.find((x) => x.textContent === 'Lighting')?.click());
 
   // scrub pauses playback
   await page.$eval('.anim-bar input[type=range]', (n) => { n.value = '500'; n.dispatchEvent(new Event('input')); });
@@ -572,6 +572,21 @@ async function fixtureSuite(browser: any, base: string) {
     && (glbSkinned.json.nodes || []).length >= 3,
   'skinned mesh GLB carries its rig + skin');
   await fs.rm(dlDir, { recursive: true, force: true });
+
+  // The interface's symbols come from the bundled font wherever the system
+  // fonts lack them (a missing glyph draws as an empty box): every one loads.
+  const symbolFaces = await page.evaluate(async () => {
+    const sample = '\u2443\u2B73\u2713\u223F\u2302\u26F6';
+    const faces = await document.fonts.load('13px "BA UI Symbols"', sample);
+    return { faces: faces.length, ok: document.fonts.check('13px "BA UI Symbols"', sample) };
+  });
+  ok(symbolFaces.ok && symbolFaces.faces === 3, `the bundled symbol font loads all its faces (${symbolFaces.faces}/3)`);
+  // ...and text laid out at first paint uses it too: the page preloads every
+  // face (without that, static text such as the top bar's export icon keeps
+  // the box it was first drawn with)
+  const preloads = await page.$$eval('link[rel=preload][as=font]', (ls) => ls.map((l) => l.getAttribute('href')));
+  ok(['ui-symbols', 'ui-symbols2', 'ui-math'].every((n) => preloads.some((h) => h?.endsWith(`/${n}.woff2`))),
+    `the page preloads the symbol font's faces (${preloads.length})`);
 
   ok(errors.length === 0, `zero console errors in fixtures suite${errors.length ? `:\n    ${errors.join('\n    ')}` : ''}`);
   await page.close();
