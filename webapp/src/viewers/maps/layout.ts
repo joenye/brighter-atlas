@@ -17,8 +17,10 @@ export function labelLayout(room:any) {
   const fixed=room.labels.layout==='fixed',count=room.labels.annotations.length,rowHeight=fixed?95:83;
   const height=fixed?room.labels.metrics[0][4]:titleHeight+5+count*rowHeight;
   const [dx,dy]=room.labels.offsets[0];
+  // Badge width read from the stored label sizes; scenes without it use the
+  // width of its label form.
   return {x:(room.roomSize[0]*64-width)/2+dx,y:(room.roomSize[1]*64-height)/2+dy,
-    width,height,titleWidth,titleHeight,annotationWidth,rowHeight,fixed};
+    width,height,titleWidth,titleHeight,annotationWidth,rowHeight,fixed,badgeWidth:room.badgeWidth??(fixed?90:200)};
 }
 function annotationPanelColor(floor:number[],palette:number[]) {
   const [r,g,b]=floor,hi=Math.max(r,g,b),lo=Math.min(r,g,b),delta=hi-lo,light=(hi+lo)/2;
@@ -58,7 +60,7 @@ export function annotationRowGeometry(bounds:any,index=0) {
   const f=Math.fround,left=f(f(f(f(bounds.width)-f(bounds.annotationWidth))*.5)+f(bounds.x));
   let y=f(f(f(bounds.titleHeight)+f(bounds.y))-15);
   for(let i=0;i<index;i++)y=f(y+f(bounds.rowHeight));
-  const width=bounds.fixed?90:200;
+  const width=bounds.badgeWidth??(bounds.fixed?90:200);
   return {textLeft:f(left+(bounds.fixed?15:10)),badgeX:f(f(f(f(bounds.annotationWidth)+left)-width)-5),y,badgeWidth:width,badgeHeight:bounds.rowHeight-5};
 }
 export function labelConnector(room:any,bounds:any) {

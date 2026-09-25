@@ -236,6 +236,49 @@ export function recordOfType(objects: ConstructorRecord[], types: TypeTable, id:
   return slot;
 }
 
+/** The badge width of the annotation rows: rooms whose annotations all have a
+ *  badge store their text advance plus the badge and the margin; rooms with
+ *  none store the advance plus the margin (in two-mode labels, the badge-free
+ *  mode gives the margin when no such room exists). The engine's width is a
+ *  whole number of units. */
+export function labelBadgeWidth(
+  rows: FillRow[], pool: PoolNode[], bytes: Uint8Array, profile: WorldProfile, records: Iterable<MapRoomRecord>, annotationFont: number,
+): number | null {
+  const rooms = [...records].filter(r => r.labels.annotations.length), form = labelForm(rooms);
+  if (!form || !rooms.length) return null;
+  const reader = mapFontReader(rows, pool, bytes, profile);
+  let font: ReturnType<typeof reader.font>;
+  try { font = reader.font(annotationFont); } catch { return null; }
+  const advance = (glyphs: number[], size: number) => {
+    let x = 0, previous: number[] | undefined;
+    for (const g of glyphs) {
+      const m = reader.glyph(font.table.lookup!, g).metrics;
+      x += (previous ? Math.max(...[6, 8, 10, 12].map(i => previous![i] - m[i - 1])) + .01 : m[3]) * size;
+      previous = m;
+    }
+    return x + (previous?.[4] ?? 0) * size;
+  };
+  // The one stored-minus-advance value of these rooms, or null.
+  const lane = (subset: MapRoomRecord[], record: number, size: number) => {
+    let value: number | null = null;
+    for (const r of subset) {
+      let v;
+      try { v = r.labels.metrics[record][2] - Math.max(...r.labels.annotations.map(a => advance(a.glyphs, size))); } catch { return null; }
+      if (value !== null && Math.abs(v - value) >= TOLERANCE) return null;
+      value ??= v;
+    }
+    return value;
+  };
+  const size = form === 'single' ? 64 : 48;
+  const badged = rooms.filter(r => r.labels.annotations.every(a => hasBadge(a.marker)));
+  const plain = rooms.filter(r => r.labels.annotations.every(a => !hasBadge(a.marker)));
+  const full = badged.length ? lane(badged, 0, size) : null;
+  const margin = plain.length ? lane(plain, 0, size) : form === 'dual' ? lane(rooms, 1, 64) : null;
+  if (full === null || margin === null) return null;
+  const width = Math.round(full - margin);
+  return Math.abs(full - margin - width) < TOLERANCE && width > 0 ? width : null;
+}
+
 /** The record of a font type, when it reads as a font. */
 export function fontOfType(
   rows: FillRow[], objects: ConstructorRecord[], types: TypeTable, pool: PoolNode[], bytes: Uint8Array, profile: WorldProfile, id: string,
@@ -259,6 +302,7 @@ export interface MapFacts {
   atlas: number | null;
   fonts: {title: number | null; annotation: number | null};
   sprites: Partial<Record<MapSpriteName, number>>;
+  badgeWidth: number | null;
   form: 'single' | 'dual' | null;
 }
 
@@ -283,12 +327,14 @@ export async function deriveMapFacts(src: {
     const typed = fontOfType(rows, src.objects, src.types, pool, ab0, profile, FONT_TYPE[kind]);
     return typed !== null && (!found.length || found.includes(typed)) ? typed : null;
   };
+  const annotationFont = pick(fonts.annotation, 'annotation');
   return {records, annotationTable: table, styles: styles.length === 1 ? styles[0] : null,
     atlas: atlases.length === 1 ? atlases[0] : null,
-    fonts: {title: pick(fonts.title, 'title'), annotation: pick(fonts.annotation, 'annotation')},
+    fonts: {title: pick(fonts.title, 'title'), annotation: annotationFont},
     sprites: Object.fromEntries(Object.entries(MAP_SPRITE_TYPES).flatMap(([name, id]) => {
       const slot = recordOfType(src.objects, src.types, id);
       return slot === null ? [] : [[name, slot]];
     })),
+    badgeWidth: annotationFont === null ? null : labelBadgeWidth(rows, pool, ab0, profile, records.values(), annotationFont),
     form: labelForm(records.values())};
 }

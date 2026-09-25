@@ -71,7 +71,8 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   }));
   progress('textures');
   const {atlas:mips,images,sprites}=await extractMapImages(rows,pool,ab0,profile,atlas,facts.sprites,raw3);
-  const scene={rooms,shingles,labelFonts:fonts,labelBackgrounds:sprites,atlas:{width:mips[0].width,height:mips[0].height}};
+  const scene={rooms,shingles,labelFonts:fonts,labelBackgrounds:sprites,atlas:{width:mips[0].width,height:mips[0].height},
+    ...(facts.badgeWidth!==null?{labelBadgeWidth:facts.badgeWidth}:{})};
   const doc={format:1,scene,terrainMips:mips,images:{...images,glyphs:sheet},
     roomData:roomData?{file:'maps/room-data.json',records:roomData.rooms.reduce((n,r)=>n+r.occurrences.length+r.actors.length+r.volumes.length,0)}:null};
   const index=[{i:0,name:'Full world',room:null,rooms:rooms.length,h:hashText(rawSha256),f:'maps/scene.json'},

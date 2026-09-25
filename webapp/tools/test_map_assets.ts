@@ -14,7 +14,7 @@ try {
     resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
   const {evaluateMapColor, resolveMapPalette, decodeMapBinding, decodeMapAnnotationTable, extractMapFonts, readMapDecodeData,
     readDictionaries, styleDictionaryCandidates, annotationTableCandidates, fleckAtlasCandidates, labelFontCandidates, labelForm,
-    recordOfType, MAP_SPRITE_TYPES} = await import(pathToFileURL(file).href);
+    recordOfType, MAP_SPRITE_TYPES, labelBadgeWidth} = await import(pathToFileURL(file).href);
   assert.equal(evaluateMapColor({kind:'rgb',color:0,multiply:[1,2,1]}, [[0.5,0.25,0]], 0), 16896);
   assert.equal(evaluateMapColor({kind:'hsl',color:0,multiply:[1,1,2]}, [[0.5,0,0]], 0), 31744);
   for (const [rgb, expected] of [[[0,0,0],0], [[1,1,1],32767], [[1,0,0],31744], [[0,1,0],992],
@@ -84,6 +84,14 @@ try {
   assert.equal(labelForm([label(51.16,51.28)]),'dual');
   assert.deepEqual(labelFontCandidates(rows,[],Uint8Array.from(data),profile,[label(51.16,51.28)]),{title:[font],annotation:[]});
   assert.deepEqual(labelFontCandidates(rows,[],Uint8Array.from(data),profile,[label(51.16,52)]),{title:[],annotation:[]});
+  // The badge width: rooms whose annotations all have badges store it on top
+  // of the margin that rooms without badges store.
+  const annotated=(marker:any,w48:number)=>({labels:{glyphs:[0],metrics:[[0,0,w48,0],[0,0,20.64,0]],
+    annotations:[{glyphs:[0,1],marker}]}});
+  const none={tag:15,symbol:'$none'},levelMarker={tag:10,value:7};
+  assert.equal(labelBadgeWidth(rows,[],Uint8Array.from(data),profile,[annotated(levelMarker,160.48),annotated(none,20.48)],font),140);
+  assert.equal(labelBadgeWidth(rows,[],Uint8Array.from(data),profile,[annotated(levelMarker,220.48)],font),200);
+  assert.equal(labelBadgeWidth(rows,[],Uint8Array.from(data),profile,[annotated(levelMarker,160.48),annotated(levelMarker,220.48)],font),null);
   const glyphs=result.fonts.title.glyphs;
   assert.equal(glyphs.length,5);assert.deepEqual(glyphs[0].variants,[0,null]);assert(!glyphs[4].bitmap);
   assert.deepEqual(glyphs.slice(0,4).map(g=>g.bitmap.correctionDegrees),[90,0,-90,-90]);

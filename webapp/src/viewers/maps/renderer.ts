@@ -102,7 +102,7 @@ function makeLabels(scene:any,images:Record<string,MapBitmap>){
  const textures=['connector','round','panel','panel','badge','glyphs','glyphs'].map(name=>images[name]?name:'glyphs');
  if(!scene.labelFonts.title)return passes.map((rows,i)=>({texture:textures[i],rows:new Float32Array(rows)}));
  for(const r of scene.rooms){
-  const room={...r,labelFonts:scene.labelFonts};
+  const room={...r,labelFonts:scene.labelFonts,badgeWidth:scene.labelBadgeWidth};
   const bounds=labelLayout(room),composition=labelComposition(room,bounds),offset=r.mapPosition.map((v:number)=>v*64);
   const connector=labelConnector(room,bounds);
   if(connector&&images.connector){const {anchor,edge,width,length}=connector,dx=(edge[0]-anchor[0])/length,dy=(edge[1]-anchor[1])/length;
