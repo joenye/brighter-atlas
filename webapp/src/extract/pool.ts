@@ -28,6 +28,17 @@ export function poolSize(): number {
 // enough to amortize the postMessage round-trip and keep reads slab-friendly
 const CHUNK_JOBS = 128;
 
+// Chunks each worker holds at once. The ingest thread hands chunks out, so
+// through a long synchronous stretch on it a worker only gets through what it
+// already holds: raise the depth for such a stretch, then restore 1 so the
+// pass's tail levels out across the fleet again.
+let queueDepth = 1;
+const topUps = new Set<() => void>();
+export function poolQueueDepth(depth: number): void {
+  queueDepth = Math.max(1, depth);
+  for (const topUp of topUps) topUp();
+}
+
 // ---- worker fleet -----------------------------------------------------------
 
 let fleet: Worker[] = [];
@@ -135,7 +146,8 @@ async function pooled({ file, n, kind, jobs, workers, onProgress, signal }: {
       let completed = 0; // jobs whose results have landed
       let active = 0;    // chunks in flight
       let settled = false;
-      const inflight = new Map<Worker, number>(); // partial progress of the current chunk
+      const held = new Map<Worker, number>();     // chunks each worker holds
+      const inflight = new Map<number, number>(); // chunk base -> partial progress
       const report = () => {
         let done = completed;
         for (const d of inflight.values()) done += d;
@@ -146,6 +158,7 @@ async function pooled({ file, n, kind, jobs, workers, onProgress, signal }: {
         if (settled) return;
         settled = true;
         activePasses.delete(finish);
+        topUps.delete(topUp);
         signal?.removeEventListener('abort', onAbort);
         for (const w of fleetWorkers) { w.onmessage = null; w.onerror = null; }
         if (err) reject(err); else resolve();
@@ -157,13 +170,18 @@ async function pooled({ file, n, kind, jobs, workers, onProgress, signal }: {
           if (active === 0) finish();
           return;
         }
-        const base = cursor;
-        const chunk = jobs.slice(base, Math.min(base + CHUNK_JOBS, total));
-        cursor += chunk.length;
-        active++;
-        inflight.set(worker, 0);
-        worker.postMessage({ pass, base, file, n, kind, jobs: chunk });
+        while (cursor < total && (held.get(worker) ?? 0) < queueDepth) {
+          const base = cursor;
+          const chunk = jobs.slice(base, Math.min(base + CHUNK_JOBS, total));
+          cursor += chunk.length;
+          active++;
+          held.set(worker, (held.get(worker) ?? 0) + 1);
+          inflight.set(base, 0);
+          worker.postMessage({ pass, base, file, n, kind, jobs: chunk });
+        }
       };
+      const topUp = () => { for (const worker of fleetWorkers) feed(worker); };
+      topUps.add(topUp);
       signal?.addEventListener('abort', onAbort, { once: true });
       for (const worker of fleetWorkers) {
         worker.onerror = (ev) => {
@@ -173,17 +191,18 @@ async function pooled({ file, n, kind, jobs, workers, onProgress, signal }: {
         worker.onmessage = (ev) => {
           const msg = ev.data;
           if (msg.pass !== pass) return; // stale chunk from an earlier failed pass
-          if (msg.type === 'progress') { inflight.set(worker, msg.done); report(); return; }
+          if (msg.type === 'progress') { inflight.set(msg.base, msg.done); report(); return; }
           // absolute-index write-back preserves entry order across chunks
           for (let k = 0; k < msg.results.length; k++) results[msg.base + k] = msg.results[k];
           completed += msg.results.length;
-          inflight.delete(worker);
+          inflight.delete(msg.base);
+          held.set(worker, held.get(worker)! - 1);
           active--;
           report();
           feed(worker);
         };
       }
-      for (const worker of fleetWorkers) feed(worker);
+      topUp();
     });
   } finally {
     release();

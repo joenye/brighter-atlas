@@ -33,11 +33,12 @@ import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
+import { SpawnGraph } from './spawns.js';
 import { decodeObject, makeSlabReader } from '../bundles.js';
 import { hashObject } from '../hash.js';
 
 const UTF8_ENCODER = new TextEncoder();
-import { poolMap } from '../pool.js';
+import { poolMap, poolQueueDepth } from '../pool.js';
 import { attachPortableSystemCatalog } from '../system-catalog.js';
 import * as roomMod from './room.js';
 import * as stitchMod from './stitch.js';
@@ -170,6 +171,9 @@ export async function extractWorld({
   // ---- (c) interned value pool ---------------------------------------------
   step('pool', 0, 1);
   const pool = decodePool(ab0, profile);
+  // A macrotask turn: the texture pool's messages are handled between the
+  // long synchronous passes that run while it works.
+  const breathe = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   // One registry row's full fields, re-decoded per call (nothing is kept
   // between calls), shared by every reader below.
   const rowDecoder = effectsMod.makeRegistryRowDecoder(rows, ab0, profile);
@@ -308,21 +312,11 @@ export async function extractWorld({
   // known once shard placements exist.
   bail();
 
-  // ---- (e, results) worldtex verdicts, started right after replay above.
-  // Awaited here because per-placement flags (alpha, authored-empty,
-  // unrenderable) come from these verdicts: the shard context below is the
-  // first consumer, and a texture-stage failure must throw before shards.
-  if (texPromise) {
-    const results = await texPromise;
-    for (let k = 0; k < results.length; k++) {
-      const { i, err, ...meta } = results[k] || {};
-      // a decode failure is an honest 'other'
-      texMeta.set(texIds[k], err ? { kind: 'other', error: err } : {
-        spreadMax: null, paramMin: null, paramMax: null, ...meta,
-      });
-    }
-  }
-  bail();
+  // Everything from here to the texture verdicts needs none of them, so it
+  // runs while the texture workers are still busy. This thread hands the
+  // workers their chunks, so they hold a deeper queue through these long
+  // synchronous passes, and each pass is followed by a turn to top it up.
+  poolQueueDepth(5);
 
   // ---- shared pure derivations, computed ONCE and threaded through ----------
   // traceAssetMaps (a full registry-row scan), materialMap (a leaves() walk
@@ -345,6 +339,7 @@ export async function extractWorld({
     strings: poolStrings, poolRegistryRefs, entityVariantRecords,
   });
   bail();
+  await breathe();
 
   // ---- (f) shard context -> per-room shards + world index -------------------
   const { createShardContext, buildRoomShard, buildWorldIndex, roomContentSignature } = shardsMod;
@@ -381,6 +376,7 @@ export async function extractWorld({
     const hit = enemyByInternal.get(label) ?? enemyByInternal.get(label.replace(/^q\d+_\d+s?_/, ''));
     return hit ? hit.name : label;
   };
+  await breathe();
   const ctx = createShardContext({
     displayLabel,
     rows,
@@ -399,6 +395,82 @@ export async function extractWorld({
     enemyDefs,             // shared pure derivation (computed once above)
     animDir: dt.animDir,
   });
+  await breathe();
+
+  // ---- card pictures (cards.ts): each model's card, drawn by the viewer ------
+  // Card constants found in this bundle (card-data.ts); the lights need the
+  // render data, else the viewer's default lights apply.
+  const renderData = placementData?.render ?? null;
+  let cards: ReturnType<typeof readCards> | null = null;
+  const cardData = deriveCardData({ rows, pool: pool.values, charset: dt.charset, decode: rowDecoder });
+  if (cardData) {
+    const meshRig = (mesh: number) => { const sref = (dt.meshDir as any)?.[mesh]?.sref; return Number.isInteger(sref) && sref >= 2 ? sref - 2 : null; };
+    const clipRig = (clip: number) => { const skel = (dt.animDir as any)?.[clip]?.skel; return Number.isInteger(skel) ? skel : null; };
+    const clipDuration = (clip: number) => { const d = (dt.animDir as any)?.[clip]?.dur; return Number.isFinite(d) && d > 0 ? d : 0; };
+    // Graphs of its own: the shard loop's must not be warmed out of room order.
+    const graph = new graphMod.AssetGraph(rows, pool.values, {
+      meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
+    }, { bytes: ab0, profile, symbols: dt.symbols, defaultGround: placementData?.tiles?.defaultGround ?? null });
+    await breathe();
+    cards = readCards({
+      rows, pool: pool.values, symbols: dt.symbols, charset: dt.charset, decode: rowDecoder,
+      cards: cardData, render: renderData, meshBySlot: graph.meshBySlot, texturesByMaterial: graph.texturesByMaterial,
+      meshRig, clipRig, clipDuration, enemyNames,
+      spawnGraph: new SpawnGraph(rows, pool.values, graph, { bytes: ab0, profile, charset: dt.charset, enemyDefs, animDir: dt.animDir, meshDir: dt.meshDir }),
+      nameOf: (slot: number) => { const n = recNames.nameOf(slot); return n ? n.singular ?? n.name : null; },
+    });
+  }
+  await breathe();
+
+  // Icon names (display-names.ts), applied to the catalog in the package stage.
+  const materialsOf = (slot: number): number[] => {
+    const out: number[] = [];
+    for (const f of rowDecoder(slot) ?? []) {
+      if (f.kind !== 'G') continue;
+      const n = resolveValue(pool.values, f.node);
+      if (n?.tag === 0x02 && Number.isInteger(n.value)) out.push(n.value as number);
+    }
+    return out;
+  };
+  const iconNames = iconImageNames(rows, poolStrings, ctx.graph.texturesByMaterial, indexes.images ?? [], materialsOf);
+  bail();
+  await breathe();
+
+  // AB2 structural records: occurrence-qualified terrain/block texture
+  // bindings, appended to the catalog records before packaging. A FRESH graph
+  // is required: face-base learning is order-sensitive, and this structural
+  // stage must run on its own AssetGraph, not the room exporter's. Only the
+  // constructor's pure row scan is shared (the maps are frozen at
+  // construction and never written afterwards); every lazy cache, including
+  // the order-sensitive face-base learning, starts empty here.
+  const structuralGraph = new graphMod.AssetGraph(rows, pool.values, {
+    meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
+  }, { bytes: ab0, profile });
+  const occurrenceGroups: [number, any][] = [];
+  for (const roomId of layersById.keys()) {
+    // the deterministic occupancy the shard loop reuses (read-only)
+    occurrenceGroups.push([roomId, ctx.occupancy(roomId).occurrences]);
+  }
+  const structuralRecords = structuralGraph.structuralBindingRecords(occurrenceGroups);
+  poolQueueDepth(1);
+
+  // ---- (e, results) worldtex verdicts, started right after replay above.
+  // Awaited here because per-placement flags (alpha, authored-empty,
+  // unrenderable) come from these verdicts: the shard loop below is the first
+  // consumer (the context reads them lazily), and a texture-stage failure
+  // must throw before shards.
+  if (texPromise) {
+    const results = await texPromise;
+    for (let k = 0; k < results.length; k++) {
+      const { i, err, ...meta } = results[k] || {};
+      // a decode failure is an honest 'other'
+      texMeta.set(texIds[k], err ? { kind: 'other', error: err } : {
+        spreadMax: null, paramMin: null, paramMax: null, ...meta,
+      });
+    }
+  }
+  bail();
+
   // Jigsaw connector meshes, resolved to this build's ab5 ordinals by content
   // hash. Missing pieces (no meshes index, or a stale-cached stitch.js from a
   // mid-session update) degrade to the plain door-tile stitch: the connector
@@ -787,26 +859,10 @@ export async function extractWorld({
     entityVariantRecords,
   });
   bail();
-  // AB2 structural records: occurrence-qualified terrain/block texture
-  // bindings appended before catalog packaging. A FRESH graph is required:
-  // face-base learning is order-sensitive, and this structural stage must run
-  // on its own AssetGraph, not the room exporter's warmed one. Only the
-  // constructor's pure row scan is shared (the maps are frozen at
-  // construction and never written afterwards); every lazy cache, including
-  // the order-sensitive face-base learning, starts empty here.
   // Own step key: this phase follows the row-scale 'catalog' pass and would
   // otherwise rewind its finished 240k-row bar to 0/1 on the same line.
   step('package', 0, 1);
-  const structuralGraph = new graphMod.AssetGraph(rows, pool.values, {
-    meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
-  }, { bytes: ab0, profile });
-  const occurrenceGroups: [number, any][] = [];
-  for (const roomId of layersById.keys()) {
-    // same deterministic occupancy the shard loop already computed (read-only)
-    occurrenceGroups.push([roomId, ctx.occupancy(roomId).occurrences]);
-  }
-  core.records.push(...structuralGraph.structuralBindingRecords(occurrenceGroups));
-  bail();
+  core.records.push(...structuralRecords);
   // The format-2 artifact embeds per-bundle signatures: they are what
   // buildPortableCatalog re-checks and attachPortableSystemCatalog validates
   // against this exact build.
@@ -837,16 +893,6 @@ export async function extractWorld({
   // Display names from the records behind each model (display-names.ts):
   // enemy type names, item records' own names, and the one name every
   // named record using an appearance agrees on. Names and aliases only.
-  const materialsOf = (slot: number): number[] => {
-    const out: number[] = [];
-    for (const f of rowDecoder(slot) ?? []) {
-      if (f.kind !== 'G') continue;
-      const n = resolveValue(pool.values, f.node);
-      if (n?.tag === 0x02 && Number.isInteger(n.value)) out.push(n.value as number);
-    }
-    return out;
-  };
-  const iconNames = iconImageNames(rows, poolStrings, ctx.graph.texturesByMaterial, indexes.images ?? [], materialsOf);
   const labelOf = (slot: number): string | null => {
     const spawn = spawnActorsBySlot.get(slot) as any;
     if (typeof spawn?.label === 'string' && spawn.label.trim()) return spawn.label;
@@ -856,23 +902,7 @@ export async function extractWorld({
   nameFromRecords(catalog, (slot) => { const n = recNames.nameOf(slot); return n ? { name: n.singular ?? n.name, base: n.base } : null; });
   await sink.derivedPut(versionId, 'image:names', { format: iconNames.format, images: iconNames.images });
 
-  // ---- card pictures (cards.ts): each model's card, drawn by the viewer ------
-  // Card constants found in this bundle (card-data.ts); the lights need the
-  // render data, else the viewer's default lights apply.
-  const renderData = placementData?.render ?? null;
-  const cardData = deriveCardData({ rows, pool: pool.values, charset: dt.charset, decode: rowDecoder });
-  if (cardData) {
-    const meshRig = (mesh: number) => { const sref = (dt.meshDir as any)?.[mesh]?.sref; return Number.isInteger(sref) && sref >= 2 ? sref - 2 : null; };
-    const clipRig = (clip: number) => { const skel = (dt.animDir as any)?.[clip]?.skel; return Number.isInteger(skel) ? skel : null; };
-    const clipDuration = (clip: number) => { const d = (dt.animDir as any)?.[clip]?.dur; return Number.isFinite(d) && d > 0 ? d : 0; };
-    const cards = readCards({
-      rows, pool: pool.values, symbols: dt.symbols, charset: dt.charset, decode: rowDecoder,
-      cards: cardData, render: renderData, meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
-      meshRig, clipRig, clipDuration, spawnGraph: ctx.spawnGraph, enemyNames,
-      nameOf: (slot: number) => { const n = recNames.nameOf(slot); return n ? n.singular ?? n.name : null; },
-    });
-    await sink.derivedPut(versionId, 'model:cards', { format: MODEL_CARDS_FORMAT, cards: assignModelCards(catalog.models as any[], cards) });
-  }
+  if (cards) await sink.derivedPut(versionId, 'model:cards', { format: MODEL_CARDS_FORMAT, cards: assignModelCards(catalog.models as any[], cards) });
   // "Set catalog.profile to the checkedBundleProfile() result first" (catalog.js)
   catalog.profile = catalogMod.checkedBundleProfile(
     assetModels, bundleSignatures,

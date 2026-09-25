@@ -3,6 +3,7 @@
 // ingest worker (nested workers) and REUSED across chunks and passes.
 //
 //   pool -> worker: { pass, base, file, n, kind, jobs: [{ i, offset, length, extra? }] }
+//                   (chunks queue and run in arrival order)
 //                   { kind:'blobhash', file }         (whole-blob sha256)
 //   worker -> pool: { type:'progress', pass, base, done }   (every PROGRESS_EVERY)
 //                   { type:'done', pass, base, results }    (per-object results;
@@ -40,8 +41,12 @@ function chunkSlabReader(
   };
 }
 
-ctx.onmessage = async (e: MessageEvent) => {
-  const msg = e.data;
+// Chunks run one at a time, in the order they arrive: the pool may queue
+// several with a worker (poolQueueDepth).
+let queue: Promise<void> = Promise.resolve();
+ctx.onmessage = (e: MessageEvent) => { queue = queue.then(() => handle(e.data)); };
+
+async function handle(msg: any): Promise<void> {
   if (msg.kind === 'blobhash') {
     try {
       const sha = await hashBlob(msg.file, (done: number, total: number) =>
@@ -66,4 +71,4 @@ ctx.onmessage = async (e: MessageEvent) => {
     if ((k + 1) % PROGRESS_EVERY === 0) ctx.postMessage({ type: 'progress', pass, base, done: k + 1 });
   }
   ctx.postMessage({ type: 'done', pass, base, results });
-};
+}
