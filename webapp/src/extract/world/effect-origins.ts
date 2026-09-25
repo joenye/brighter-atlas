@@ -12,7 +12,8 @@ export interface RadialOriginBinding {
   resample: number;
   center: number;
   radius: number;
-  axisScale: [number, number];
+  /** Absent on builds whose radial shapes are not scaled per axis (scale 1). */
+  axisScale?: [number, number];
   yaw: [number, number];
   pitch: [number, number];
   samples: [number, number];
@@ -81,7 +82,7 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
   return validBindingList(v, b => bindingIndex(b.uniformClass)
     && [b.yaw, b.pitch].every(pair) && (b.kind === 'radial'
-      ? pair(b.samples) && [b.resample, b.center, b.radius].every(bindingIndex) && pair(b.axisScale) && pair(b.overrides)
+      ? pair(b.samples) && [b.resample, b.center, b.radius].every(bindingIndex) && (b.axisScale === undefined || pair(b.axisScale)) && pair(b.overrides)
       : b.kind === 'point' ? pair(b.samples) && bindingIndex(b.position) && bindingIndex(b.axis)
       : b.kind === 'position' ? bindingIndex(b.position) && bindingIndex(b.axis)
       : b.kind === 'segment' && [b.start, b.end, b.axis].every(bindingIndex)));
@@ -134,7 +135,7 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     const radiusField = fields.get(b.radius);
     const radius = effectScalar(radiusField) ?? effectRange(radiusField, b.uniformClass);
     if (!center || radius === null) return null;
-    const scales = b.axisScale.map(op => effectScalar(fields.get(op)));
+    const scales = b.axisScale ? b.axisScale.map(op => effectScalar(fields.get(op))) : [1, 1];
     if (scales.some(n => n === null)) return null;
     const yaw = angles(b.yaw, b.samples[0]), pitch = angles(b.pitch, b.samples[1]);
     if (!yaw || !pitch) return null;
