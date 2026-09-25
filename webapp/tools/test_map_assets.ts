@@ -1,5 +1,6 @@
 // Synthetic colour and font cases, including square icons whose rotation
-// cannot be inferred from their aspect ratio.
+// cannot be inferred from their aspect ratio, and the shape rules that find
+// the map's shared values.
 import assert from 'node:assert/strict';
 import {mkdtemp, rm} from 'node:fs/promises';
 import os from 'node:os';
@@ -9,9 +10,10 @@ import {build} from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-map-assets-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({stdin: {contents: ['palette','bindings','fonts','decode-data'].map(n => `export * from './src/extract/maps/${n}.ts';`).join('\n'),
+  await build({stdin: {contents: ['palette','bindings','fonts','decode-data','map-shape'].map(n => `export * from './src/extract/maps/${n}.ts';`).join('\n'),
     resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
-  const {evaluateMapColor, resolveMapPalette, decodeMapStyleDefaults, decodeMapBinding, decodeMapAnnotationTable, extractMapFonts, validateMapDecodeData} = await import(pathToFileURL(file).href);
+  const {evaluateMapColor, resolveMapPalette, decodeMapBinding, decodeMapAnnotationTable, extractMapFonts, readMapDecodeData,
+    readDictionaries, styleDictionaryCandidates, annotationTableCandidates, fleckAtlasCandidates, labelFontCandidates, labelForm} = await import(pathToFileURL(file).href);
   assert.equal(evaluateMapColor({kind:'rgb',color:0,multiply:[1,2,1]}, [[0.5,0.25,0]], 0), 16896);
   assert.equal(evaluateMapColor({kind:'hsl',color:0,multiply:[1,1,2]}, [[0.5,0,0]], 0), 31744);
   for (const [rgb, expected] of [[[0,0,0],0], [[1,1,1],32767], [[1,0,0],31744], [[0,1,0],992],
@@ -20,11 +22,13 @@ try {
   }
   assert.equal(evaluateMapColor({kind:'hsl',color:0,multiply:[1,0,1]}, [[1,0,0]], 0), 16912);
   assert.equal(evaluateMapColor({kind:'rgb',color:0,multiply:[1,1,1]}, [[-1,2,0]], 0), 992);
-  const rules = {base:{0:{kind:'default'},1:{kind:'rgb',color:0,multiply:[1,1,1]}},rooms:{101:{},102:{1:{kind:'constant',value:7}}}};
-  assert.deepEqual([...resolveMapPalette(101,[0,1],[[1,0,0]],new Map([[0,9],[1,10]]),rules)],[[0,9],[1,31744]]);
+  // Shared rules: key 0 tints the room's first colour, key 1 keeps its default.
+  const rules = {101:{},102:{1:{kind:'constant',value:7}}};
+  assert.deepEqual([...resolveMapPalette(101,[0,1],[[1,0,0]],new Map([[0,9],[1,10]]),rules)],[[0,31744],[1,10]]);
   assert.equal(resolveMapPalette(102,[1],[],new Map([[1,10]]),rules).get(1),7);
-  assert.throws(()=>resolveMapPalette(103,[0],[],new Map([[0,9]]),rules),/unsupported/);
-  assert.throws(()=>resolveMapPalette(101,[2],[],new Map([[2,9]]),rules),/unresolved/);
+  assert.equal(resolveMapPalette(103,[1],[],new Map([[1,10]]),rules).get(1),10);
+  assert.equal(resolveMapPalette(102,[1],[],new Map([[1,10]]),null).get(1),10);
+  assert.throws(()=>resolveMapPalette(101,[2],[[1,0,0],[0,1,0]],new Map([[0,9]]),rules),/unresolved/);
   assert.throws(()=>evaluateMapColor({kind:'default'},[],32768),/invalid/);
   assert.throws(()=>evaluateMapColor({kind:'rgb',color:1,multiply:[1,1,1]},[[1,1,1]],0),/invalid/);
 
@@ -67,6 +71,18 @@ try {
       {selector:atlasSelector,uvTablesField:1},readTable,async(id:number)=>{assert.equal(id,9);bankReads++;return bank;});
   const result=await extract();
   assert.equal(tableReads,1);assert.equal(bankReads,1);
+  assert.deepEqual(result.schema,{selector:atlasSelector,uvTablesField:1});
+  // The atlas record kind and its UV table list found by shape: the other list
+  // (geometry) does not parse as one entry per face glyph.
+  const found=await extractMapFonts(rows,[],Uint8Array.from(data),profile,['A','B','C','D',' '],{title:{slot:font,glyphs:[0,1]}},{},
+    async(id:number)=>id===77?makeTable():Uint8Array.from([9,1]),async()=>bank);
+  assert.deepEqual(found.schema,{selector:atlasSelector,uvTablesField:1});
+  // Fonts found by the stored label sizes: the advance at each mode's size,
+  // plus the title margin, and the font's line metrics.
+  const label=(w58:number,w64:number)=>({labels:{glyphs:[0,1],annotations:[],metrics:[[w58,58,0,0],[w64,64,0,0]]}});
+  assert.equal(labelForm([label(51.16,51.28)]),'dual');
+  assert.deepEqual(labelFontCandidates(rows,[],Uint8Array.from(data),profile,[label(51.16,51.28)]),{title:[font],annotation:[]});
+  assert.deepEqual(labelFontCandidates(rows,[],Uint8Array.from(data),profile,[label(51.16,52)]),{title:[],annotation:[]});
   const glyphs=result.fonts.title.glyphs;
   assert.equal(glyphs.length,5);assert.deepEqual(glyphs[0].variants,[0,null]);assert(!glyphs[4].bitmap);
   assert.deepEqual(glyphs.slice(0,4).map(g=>g.bitmap.correctionDegrees),[90,0,-90,-90]);
@@ -79,21 +95,41 @@ try {
   await assert.rejects(()=>extract(undefined,[8]),/missing default glyph/);
   await assert.rejects(()=>extract(async()=>makeTable(true)),/dimensions/);
 
-  // A dictionary binding is a byte offset, not a copied style colour table.
-  const colorSlot=add([int(1234)]),bindingOffset=data.length;
+  // The style dictionary: after the constructor stream, before the pool; the
+  // one whose records are all of one kind with a single colour, keyed by the
+  // styles rooms use.
+  const colorSlot=add([int(1234)]),other=add([int(5),int(6)]),bindingOffset=data.length;
   data.push(0x1c,0);profile.stream.object_count=rows.length;profile.stream.constructor_end=data.length;
-  data.push(1,7,...uint(colorSlot));
-  const bytes=Uint8Array.from(data),binding={offset:bindingOffset,tag:0x1c};
-  assert.deepEqual([...decodeMapStyleDefaults(rows,[],bytes,profile,binding)],[[7,1234]]);
+  data.push(1,7,...uint(colorSlot),2,0,1,...uint(other),...uint(other));
+  const bytes=Uint8Array.from(data),binding={offset:bindingOffset,tag:0x1c},poolFrame={countOffset:bytes.length,end:bytes.length};
+  const dictionaries=readDictionaries(bytes,profile,poolFrame);
+  assert.deepEqual(dictionaries,[{keys:[7],slots:[colorSlot]},{keys:[0,1],slots:[other,other]}]);
+  assert.deepEqual(readDictionaries(bytes,profile,{countOffset:bytes.length-1}),[{keys:[7],slots:[colorSlot]}]);
+  // Style records' types lie under the terrain style type (type 0 here).
+  const types={ends:Int32Array.from([1,1,2]),ids:Uint8Array.from([0x20,0x84,0x27,0x60,0x8d,0x62,0x0d,0xb3,...Array(16).fill(0)])};
+  const objects:any[]=rows.map(()=>({values:[0,0,2]}));objects[colorSlot].values[2]=1;
+  const styles=styleDictionaryCandidates(rows,objects,types,[],bytes,profile,dictionaries,[7]);
+  assert.equal(styles.length,1);assert.equal(styles[0].index,0);assert.deepEqual([...styles[0].defaults],[[7,1234]]);
+  assert.deepEqual(styleDictionaryCandidates(rows,objects,types,[],bytes,profile,dictionaries,[8]),[]);
+  objects[colorSlot].values[2]=2;
+  assert.deepEqual(styleDictionaryCandidates(rows,objects,types,[],bytes,profile,dictionaries,[7]),[]);
   assert.throws(()=>decodeMapBinding(bytes,[],profile,{offset:bytes.length,tag:28}),/outside/);
   assert.throws(()=>decodeMapBinding(bytes,[],profile,{...binding,tag:38}),/type/);
-  const hash='a'.repeat(64),mapData={kind:'brighter-atlas-map-decode',format:1,bundle0_raw_sha256:hash,
-    bindings:{styleDictionary:binding,titleFont:binding,annotationFont:binding},
-    fontAtlas:{selector:atlasSelector,uvTablesField:1},palette:rules};
-  assert.equal(validateMapDecodeData(mapData,hash),mapData);
-  assert.throws(()=>validateMapDecodeData(mapData,'b'.repeat(64)),/different/);
-  assert.throws(()=>validateMapDecodeData({...mapData,fontAtlas:null},hash),/incomplete/);
-  assert.throws(()=>validateMapDecodeData({...mapData,bindings:{}},hash),/missing/);
+  // The decode data's optional code facts; anything malformed is left out.
+  const sprite={offset:3,tag:2},mapData={kind:'brighter-atlas-map-decode',format:1,
+    bindings:{labelRound:sprite,styleDictionary:binding,annotationStar:{offset:-1,tag:14}},palette:{base:{},rooms:rules}};
+  assert.deepEqual(readMapDecodeData(mapData),{bindings:{labelRound:sprite},rooms:rules});
+  assert.deepEqual(readMapDecodeData(undefined),{bindings:{},rooms:null});
+  assert.deepEqual(readMapDecodeData({...mapData,kind:'other'}),{bindings:{},rooms:null});
+  assert.equal(readMapDecodeData({...mapData,palette:{rooms:{101:{0:{kind:'constant',value:1e6}}}}}).rooms,null);
+  // The fleck atlas: the referenced texture twelve 40-pixel cells wide whose
+  // smaller levels halve.
+  const level=(w:number,h:number)=>[0x16,w>>8,w&255,h>>8,h&255,0,0,0,0,0,0,0,0];
+  const tails:Record<number,number[]>={5:[...level(480,880),...level(240,440),...level(120,220)],6:[...level(480,880),...level(100,100)],
+    7:[...level(480,880),...level(240,440)]};
+  const atlasRows=[{g:[[1,0,71,5],[2,0,71,6],[3,1,71,7]]}];
+  assert.deepEqual(await fleckAtlasCandidates(atlasRows,[],{5:{flags:0,n:3},6:{flags:0,n:2},7:{flags:0,n:2}},
+    async(id:number,length:number)=>{assert.equal(length,tails[id].length);return Uint8Array.from(tails[id]);}),[5]);
   // The compiled table contains all keys followed by all value lists. Reject
   // duplicate owners and malformed values instead of silently losing labels.
   const table=(nodes:number[][])=>Uint8Array.from([44,...uint(nodes.length/2),...nodes.flat()]);
@@ -104,7 +140,9 @@ try {
     [ref(38,rows.length),list([])], [ref(38,1),int(7)]]) {
     assert.throws(()=>decodeMapAnnotationTable(table(nodes),[],profile,tableBinding),/annotation/);
   }
-  assert.throws(()=>validateMapDecodeData({...mapData,labels:{layout:'fixed'}},hash),/annotation/);
-  assert.equal(validateMapDecodeData({...mapData,labels:{layout:'fixed'},bindings:{...mapData.bindings,annotationTable:tableBinding}},hash).labels.layout,'fixed');
-  console.log('Map colour operations, strict bindings, glyph metrics, nullable variants and stored A8/RGBA rotations passed');
+  // Found by shape between the pool and the fill stream: keys are all rooms.
+  const tableBytes=Uint8Array.from([0x2c,1,0x26,5,32,0,...table([ref(38,1),ref(38,2),list([int(7)]),list([])])]);
+  const shaped=annotationTableCandidates(tableBytes,[],{...profile,stream:{...profile.stream,fill_start:tableBytes.length}},{end:0},new Set([1,2]));
+  assert.deepEqual(shaped.map((t:any)=>t.offset),[6]);assert.equal(shaped[0].entries.get(1)[0].value,7);
+  console.log('Map colour operations, strict bindings, glyph metrics, nullable variants, stored A8/RGBA rotations and shape rules passed');
 } finally {await rm(tmp,{recursive:true,force:true});}

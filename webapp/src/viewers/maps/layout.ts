@@ -50,8 +50,8 @@ export function labelComposition(room:any,bounds:any) {
   const textHeight=(title.ascent+title.descent+(lines-1)*lineHeight)*titleSize;
   const titleBaseline=titleY-2+(bounds.titleHeight-textHeight)/2+title.ascent*titleSize;
   const annotation=room.labelFonts.annotation;
-  const annotationBaseline=bounds.y+bounds.titleHeight-15+
-    (bounds.fixed?0:(bounds.rowHeight-5-(annotation.ascent+annotation.descent)*annotationSize)/2)+annotation.ascent*annotationSize;
+  const annotationBaseline=annotation?bounds.y+bounds.titleHeight-15+
+    (bounds.fixed?0:(bounds.rowHeight-5-(annotation.ascent+annotation.descent)*annotationSize)/2)+annotation.ascent*annotationSize:0;
   return {panels,titleBaseline,annotationBaseline,titleLineStep:lineHeight*titleSize,titleSize,annotationSize};
 }
 export function annotationRowGeometry(bounds:any,index=0) {

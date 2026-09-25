@@ -1,35 +1,48 @@
 // Per-build decode data is produced offline, purely from analysis of the
-// game's own files. No running game process or its memory is inspected or
-// modified. Bindings point into user-supplied files; no glyph pixels or room
-// palettes are included here.
+// game's own files, never by inspecting or modifying a running game process or
+// its memory. For maps it carries only what the user's bundles cannot tell:
+// each room type's own terrain colour rules, and where the label panels, the
+// connector, the badge and the badge glyphs are kept. Every part is optional:
+// without it the map draws with the shared colour rules, and labels without
+// those images. Bindings point into user-supplied files; no glyph pixels or
+// room palettes are included here.
 import type {MapBinding} from './bindings.js';
-import type {MapFontAtlasSchema} from './fonts.js';
-import type {MapPaletteRules} from './palette.js';
+import type {MapColorRule, MapRoomRules} from './palette.js';
+
+export const MAP_BINDINGS = ['labelRound', 'labelPanel', 'labelConnector', 'annotationBadge', 'annotationStar',
+  'levelMinorGlyph', 'levelMajorGlyph', 'levelMinorColor', 'levelMajorColor'] as const;
+export type MapBindingName = typeof MAP_BINDINGS[number];
 
 export interface MapDecodeData {
-  kind: 'brighter-atlas-map-decode';
-  format: 1;
-  bundle0_raw_sha256: string;
-  bindings: Record<string, MapBinding>;
-  fontAtlas: MapFontAtlasSchema;
-  palette: MapPaletteRules;
-  labels?: {layout:'fixed'};
+  bindings: Partial<Record<MapBindingName, MapBinding>>;
+  rooms: MapRoomRules | null;
 }
 
-export function validateMapDecodeData(value: unknown, hash: string): MapDecodeData {
-  const data = value as MapDecodeData | null;
-  if (data?.kind !== 'brighter-atlas-map-decode' || data.format !== 1) throw Error('unsupported map decode data');
-  if (!/^[0-9a-f]{64}$/.test(hash) || data.bundle0_raw_sha256 !== hash) throw Error('map decode data is for a different game build');
-  for (const name of ['styleDictionary','titleFont','annotationFont']) {
-    const binding = data.bindings?.[name];
-    if (!binding || !Number.isInteger(binding.offset) || binding.offset < 0 || !Number.isInteger(binding.tag)) {
-      throw Error(`missing map binding ${name}`);
-    }
+const integer = (v: unknown, max = 0xffffffff): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= max;
+const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function validRule(v: unknown): v is MapColorRule {
+  if (!object(v)) return false;
+  if (v.kind === 'default') return true;
+  if (v.kind === 'constant') return integer(v.value, 0x7fff);
+  return (v.kind === 'rgb' || v.kind === 'hsl') && integer(v.color, 3)
+    && Array.isArray(v.multiply) && v.multiply.length === 3 && v.multiply.every(Number.isFinite);
+}
+
+/** The usable parts of a build's map decode data. Never throws: a missing or
+ *  malformed part is left out, and the map draws without it. */
+export function readMapDecodeData(value: unknown): MapDecodeData {
+  const out: MapDecodeData = {bindings: {}, rooms: null};
+  if (!object(value) || value.kind !== 'brighter-atlas-map-decode' || value.format !== 1) return out;
+  const bindings = object(value.bindings) ? value.bindings : {};
+  for (const name of MAP_BINDINGS) {
+    const b = bindings[name];
+    if (object(b) && integer(b.offset) && integer(b.tag, 255)) out.bindings[name] = {offset: b.offset, tag: b.tag};
   }
-  if (!Number.isInteger(data.fontAtlas?.selector) || data.fontAtlas.selector < 0
-    || !Number.isInteger(data.fontAtlas.uvTablesField) || data.fontAtlas.uvTablesField < 0
-    || !data.palette?.base || !data.palette.rooms) throw Error('incomplete map decode data');
-  if(data.labels&&data.labels.layout!=='fixed')throw Error('unsupported map label layout');
-  if(data.labels?.layout==='fixed'&&!data.bindings.annotationTable)throw Error('missing compiled map annotations');
-  return data;
+  const rooms = object(value.palette) ? value.palette.rooms : undefined;
+  if (object(rooms) && Object.entries(rooms).every(([k, r]) => /^\d+$/.test(k) && object(r)
+    && Object.entries(r).every(([key, rule]) => /^\d+$/.test(key) && validRule(rule)))) {
+    out.rooms = rooms as MapRoomRules;
+  }
+  return out;
 }

@@ -95,19 +95,24 @@ function nineSlice(list:number[],image:any,source:any,panel:any,offset:number[])
   [offset[0]+dx[x],offset[1]+dy[y],dx[x+1]-dx[x],dy[y+1]-dy[y]],
   [xs[x],ys[y],xs[x+1]-xs[x],ys[y+1]-ys[y]],panelTint(panel.color));
 }
+// Labels need their fonts. Without a panel image a label sits on a plain panel
+// of the same colour; a missing connector or badge image is left out.
 function makeLabels(scene:any,images:Record<string,MapBitmap>){
- const passes=Array.from({length:7},()=>[] as number[]),textures=['connector','round','panel','panel','badge','glyphs','glyphs'];
+ const passes=Array.from({length:7},()=>[] as number[]);
+ const textures=['connector','round','panel','panel','badge','glyphs','glyphs'].map(name=>images[name]?name:'glyphs');
+ if(!scene.labelFonts.title)return passes.map((rows,i)=>({texture:textures[i],rows:new Float32Array(rows)}));
  for(const r of scene.rooms){
   const room={...r,labelFonts:scene.labelFonts};
   const bounds=labelLayout(room),composition=labelComposition(room,bounds),offset=r.mapPosition.map((v:number)=>v*64);
   const connector=labelConnector(room,bounds);
-  if(connector){const {anchor,edge,width,length}=connector,dx=(edge[0]-anchor[0])/length,dy=(edge[1]-anchor[1])/length;
+  if(connector&&images.connector){const {anchor,edge,width,length}=connector,dx=(edge[0]-anchor[0])/length,dy=(edge[1]-anchor[1])/length;
    quad(passes[0],images.connector,[offset[0]+anchor[0]-dy*width/2,offset[1]+anchor[1]+dx*width/2,width,length],
     [0,0,images.connector.width,images.connector.height],[1,1,1,1],1,0,[dy*width,-dx*width,dx*length,dy*length]);
   }
   for(const [i,panel] of composition.panels.entries()){
    const pass=panel.kind==='round'?1:i===(r.labels.annotations.length?1:0)?2:3;
-   nineSlice(passes[pass],images[panel.kind],scene.labelBackgrounds[panel.kind],panel,offset);
+   if(images[panel.kind]&&scene.labelBackgrounds[panel.kind])nineSlice(passes[pass],images[panel.kind],scene.labelBackgrounds[panel.kind],panel,offset);
+   else quad(passes[pass],{width:1,height:1},[offset[0]+panel.x,offset[1]+panel.y,panel.width,panel.height],[0,0,1,1],panelTint(panel.color),4);
   }
   function paint(pass:number,font:MapFont,text:string,size:number,tracking:number,baseline:number,color:number[],{left,center=bounds.x+bounds.width/2,runs,badge=false}:{left?:number;center?:number;runs?:any[];badge?:boolean}={}){
    const line=textLine(font,text,size,tracking);left??=center-line.width/2;
@@ -119,11 +124,12 @@ function makeLabels(scene:any,images:Record<string,MapBitmap>){
    }
   }
   r.labels.title.split('\n').forEach((line:string,i:number)=>paint(6,scene.labelFonts.title,line,composition.titleSize,.02,composition.titleBaseline+i*composition.titleLineStep,[255,255,255]));
+  if(!scene.labelFonts.annotation)continue;
   r.labels.annotations.forEach((a:any,i:number)=>{
    const row=annotationRowGeometry(bounds,i);
    paint(5,scene.labelFonts.annotation,a.text,composition.annotationSize,.01,composition.annotationBaseline+i*bounds.rowHeight,[0,0,0],{left:row.textLeft});
    if(bounds.fixed){
-    if(a.marker.symbol!=='$none')quad(passes[4],images.badge,
+    if(a.marker.symbol!=='$none'&&images.badge)quad(passes[4],images.badge,
      [offset[0]+row.badgeX,offset[1]+row.y,row.badgeWidth,row.badgeHeight],[0,0,images.badge.width,images.badge.height],a.palette[0]);
     if(a.badge)paint(5,scene.labelFonts.annotation,a.badge.text,a.badge.size,.01,
      row.y+Math.fround(6.3)+scene.labelFonts.annotation.ascent*a.badge.size,a.palette[0].slice(0,3).map((v:number)=>v*255),
@@ -131,9 +137,12 @@ function makeLabels(scene:any,images:Record<string,MapBitmap>){
     return;
    }
    if(a.badge){
-    const source=scene.labelBackgrounds.badge,[width,height]=source.dimensions,cut=source.sourceBorder,destCut=cut*source.scale;
-    const xs=[0,cut,width-cut,width],dx=[row.badgeX,row.badgeX+destCut,row.badgeX+row.badgeWidth-destCut,row.badgeX+row.badgeWidth];
-    for(let j=0;j<3;j++)quad(passes[4],images.badge,[offset[0]+dx[j],offset[1]+row.y,dx[j+1]-dx[j],row.badgeHeight],[xs[j],0,xs[j+1]-xs[j],height],[...a.palette[2].slice(0,3),.8]);
+    const source=scene.labelBackgrounds.badge;
+    if(source&&images.badge){
+     const [width,height]=source.dimensions,cut=source.sourceBorder,destCut=cut*source.scale;
+     const xs=[0,cut,width-cut,width],dx=[row.badgeX,row.badgeX+destCut,row.badgeX+row.badgeWidth-destCut,row.badgeX+row.badgeWidth];
+     for(let j=0;j<3;j++)quad(passes[4],images.badge,[offset[0]+dx[j],offset[1]+row.y,dx[j+1]-dx[j],row.badgeHeight],[xs[j],0,xs[j+1]-xs[j],height],[...a.palette[2].slice(0,3),.8]);
+    }
     paint(5,scene.labelFonts.annotation,a.badge.text,a.badge.size,.01,
      row.y+Math.fround(Math.fround(row.badgeHeight)*Math.fround(.11))+scene.labelFonts.annotation.ascent*a.badge.size,[255,255,255],{center:row.badgeX+row.badgeWidth/2,runs:a.badge.runs,badge:true});
    }
@@ -159,7 +168,7 @@ export interface MapMarker {
 }
 export interface MapView {cx:number;cy:number;scale:number;width:number;height:number;dpr?:number;labels?:boolean;markers?:MapMarker[]}
 function makeMarkers(view:MapView,doc:MapDocument) {
-  const rows:number[]=[],unit=64/view.scale,glyphs=new Map(doc.scene.labelFonts.annotation.glyphs.map(g=>[g.glyph,g]));
+  const rows:number[]=[],unit=64/view.scale,glyphs=new Map((doc.scene.labelFonts.annotation?.glyphs??[]).map(g=>[g.glyph,g]));
   const colors={region:[.706,.631,.812],actor:[.49,.812,1],enemy:[1,.671,.471],object:[.502,.882,.729],other:[.788,.827,.875]};
   const solid=(rect:number[],color:number[],shape=0)=>quad(rows,{width:1,height:1},rect,[0,0,1,1],color,4,0,null,[shape,0,0,0]);
   const outline=(x:number,y:number,w:number,h:number,color:number[],thickness=unit)=>{

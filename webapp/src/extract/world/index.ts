@@ -26,9 +26,7 @@ import {b64FromTyped} from '../b64.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
-import { deriveMapRoomRecords } from '../maps/records.js';
-import { decodeMapAnnotationTable } from '../maps/bindings.js';
-import { validateMapDecodeData } from '../maps/decode-data.js';
+import { mapRoomRecords } from '../maps/map-shape.js';
 import { decodeGlyphText, deriveRoomMetadata, resolveValue } from './room-metadata.js';
 import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader,type PlacementDecodeData} from './placement.js';
 import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape.js';
@@ -340,14 +338,8 @@ export async function extractWorld({
   } : placementData;
 
   const roomMetadata = deriveRoomMetadata(rows, pool.values, ab0, profile, dt.charset, rooms.map(r => r.idx));
-  let annotationTable;
-  try {
-    const hash=profile.bundle0!.raw_sha256!;
-    const data=validateMapDecodeData(profile.maps,hash);
-    const binding=data.bindings.annotationTable;
-    if(binding)annotationTable={offset:binding.offset,entries:decodeMapAnnotationTable(ab0,pool.values,profile,binding)};
-  } catch { /* Optional annotation data may be unavailable for this build. */ }
-  const mapRecords = deriveMapRoomRecords(rows, pool.values, ab0, profile, dt.charset, dt.symbols, roomMetadata,annotationTable);
+  // Room annotations: in the rooms, or in a room annotation table found by shape.
+  const mapRecords = mapRoomRecords(rows, pool.values, ab0, profile, pool.frame, dt.charset, dt.symbols, roomMetadata).records;
   // Historical naming remains a fallback for rooms without a complete header.
   // Direct titles always win over shipped or cross-build name suggestions.
   const names = roomMod.deriveRoomNames(ab0, dt.charset, rooms.filter(r => !roomMetadata.has(r.idx)).map(r => r.idx));

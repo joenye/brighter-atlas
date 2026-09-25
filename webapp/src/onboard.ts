@@ -251,14 +251,11 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
           syncWorldLock();
           syncTotal();
         }
+        // Maps read everything they need from the bundles once the build's
+        // world data is known; its optional map section only adds detail.
         const maps=rowParts.maps;
         if(maps&&!doneCats.has('maps')) {
-          let supported=false;
-          if(entry)try {
-            const {validateMapDecodeData}=await import('./extract/maps/decode-data.js');
-            validateMapDecodeData(entry.maps,rawSha256);supported=true;
-          }catch{/* this build has no map support yet */}
-          if(!supported){
+          if(!entry){
             checks.maps.checked=false;checks.maps.disabled=true;maps.row.classList.add('missing');maps.est.textContent='unsupported';
             maps.text.append(el('span',{class:'dim small',text:'. 2D maps are not supported for these game files yet.'}));syncTotal();
           }

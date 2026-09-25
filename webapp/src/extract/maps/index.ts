@@ -3,17 +3,19 @@ import {replayGraph} from '../world/replay.js';
 import {decodePool} from '../world/value-pool.js';
 import {makeSlabReader, decodeObject, type BundleFrames} from '../bundles.js';
 import {decodeFontGlyphs, parseDatafileRecords} from '../image.js';
-import {deriveMapRoomRecords} from './records.js';
 import {extractMapGeometry} from './geometry.js';
-import {decodeMapBinding, decodeMapStyleDefaults, decodeMapAnnotationTable} from './bindings.js';
-import {validateMapDecodeData} from './decode-data.js';
+import {readMapDecodeData} from './decode-data.js';
 import {resolveMapPalette} from './palette.js';
-import {extractMapFonts} from './fonts.js';
+import {extractMapFonts, type MapFont, type MapFontSheet} from './fonts.js';
 import {extractMapImages} from './images.js';
 import {mapBadgeFormatter} from './badges.js';
+import {deriveMapFacts} from './map-shape.js';
 import {hashText} from '../hash.js';
 import {extractMapRoomData} from './room-data.js';
 
+// Everything but each room type's own colours and the label images is read
+// from the user's bundles by shape (map-shape.ts); the per-build decode data
+// adds those when it has them.
 export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>{},signal,includeRoomData=false}: {
   ab0:Uint8Array; dt:any; files:Record<number,Blob>; frames:Record<number,BundleFrames>;
   fetchJson?:FetchJson; onProgress?:(ev:any)=>void; signal?:AbortSignal; includeRoomData?:boolean;
@@ -23,16 +25,18 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   progress('decode data');
   const {profile,rawSha256,error}=await loadWorldProfile(ab0,{fetchJson});
   if(!profile)throw Error(error);
-  let data;
-  try {data=validateMapDecodeData(profile.maps,rawSha256);}
-  catch {throw Error('2D maps are not supported for this game build yet');}
+  const data=readMapDecodeData(profile.maps);
   progress('room records');
-  const {rows}=replayGraph(ab0,profile),pool=decodePool(ab0,profile).values;
-  const annotationBinding=data.bindings.annotationTable;
-  const annotationTable=annotationBinding?{offset:annotationBinding.offset,
-    entries:decodeMapAnnotationTable(ab0,pool,profile,annotationBinding)}:undefined;
-  const records=deriveMapRoomRecords(rows,pool,ab0,profile,dt.charset,dt.symbols,undefined,annotationTable);
-  const defaults=decodeMapStyleDefaults(rows,pool,ab0,profile,data.bindings.styleDictionary);
+  const {rows,objects}=replayGraph(ab0,profile),{values:pool,frame:poolFrame}=decodePool(ab0,profile);
+  const readTail=async(id:number,length:number)=>{
+    const e=frames[3].entries[id];if(!e||e.length<length)return null;
+    return new Uint8Array(await files[3].slice(e.offset+e.length-length,e.offset+e.length).arrayBuffer());
+  };
+  const facts=await deriveMapFacts({ab0,profile,rows,objects,types:dt.types,pool,poolFrame,charset:dt.charset,symbols:dt.symbols,textures:dt.textureDir,readTail});
+  const {records,styles,atlas,form}=facts;
+  if(!styles||atlas===null)throw Error('2D maps are not supported for this game build yet');
+  if(!form)throw Error('unsupported map label layout');
+  const fixed=form==='single';
   const byOwner=new Map([...records.values()].map(r=>[r.owner,r]));
   const read2=makeSlabReader(files[2]),read3=makeSlabReader(files[3]);
   const raw3=async(id:number)=>{bail();if(!frames[3].entries[id])throw Error('missing map image');return read3(frames[3].entries[id]);};
@@ -42,12 +46,10 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
     sub3,owner=>{
       const r=byOwner.get(owner)!;
       const keys=new Set(r.terrain.styles.flatMap(w=>[0,8,16,24].map(s=>w>>>s&255)));
-      return resolveMapPalette(rows[owner].runtime,keys,r.terrain.baseColors,defaults,data.palette);
+      return resolveMapPalette(rows[owner].runtime,keys,r.terrain.baseColors,styles.defaults,data.rooms);
     });
-  const badge=mapBadgeFormatter(ab0,pool,profile,data,dt.charset);
+  const badge=mapBadgeFormatter(ab0,pool,profile,data,dt.charset,fixed);
   const rooms=[...records.values()].map(r=>{
-    const fixed=data.labels?.layout==='fixed';
-    if(r.labels.metrics.length!==(fixed?1:2) || r.labels.metrics.some(m=>m.length!==(fixed?5:4)))throw Error('unsupported map label layout');
     return {room:r.room,owner:r.owner,name:r.name,episode:r.episode,mapPosition:r.mapPosition,roomSize:r.mapSize,
       colors:r.terrain.baseColors,labels:{...r.labels,...(fixed?{layout:'fixed' as const}:{}),background:r.labels.background.symbol,
         connector:r.labels.connector.symbol??r.labels.connector,annotations:r.labels.annotations.map(a=>({...a,badge:badge(a.marker)}))}};
@@ -59,16 +61,18 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   const titleGlyphs=rooms.flatMap(r=>r.labels.glyphs),annotationGlyphs=rooms.flatMap(r=>r.labels.annotations.flatMap(a=>[
     ...a.glyphs,...Array.from(a.badge?.text??'',ch=>dt.charset.indexOf(ch))]));
   for(const r of roomData?.resources??[])if(r.glyph!==null)annotationGlyphs.push(r.glyph);
-  const fontSlot=(name:string)=>decodeMapBinding(ab0,pool,profile,data.bindings[name]).value;
-  const {fonts,sheet}=await extractMapFonts(rows,pool,ab0,profile,dt.charset,
-    {title:{slot:fontSlot('titleFont'),glyphs:titleGlyphs},annotation:{slot:fontSlot('annotationFont'),glyphs:annotationGlyphs}},
-    data.fontAtlas,object2,async id=>{
-      const b=await sub3(id);return decodeFontGlyphs(b,parseDatafileRecords(b,dt.textureDir[id].n));
-    });
+  // Labels need their fonts: a build whose fonts are not found draws its
+  // terrain alone.
+  const requests={...(facts.fonts.title!==null?{title:{slot:facts.fonts.title,glyphs:titleGlyphs}}:{}),
+    ...(facts.fonts.title!==null&&facts.fonts.annotation!==null?{annotation:{slot:facts.fonts.annotation,glyphs:annotationGlyphs}}:{})};
+  let fonts:Record<string,MapFont>={},sheet:MapFontSheet={width:1,height:1,rgba:new Uint8Array(4)};
+  if(Object.keys(requests).length)({fonts,sheet}=await extractMapFonts(rows,pool,ab0,profile,dt.charset,requests,{},object2,async id=>{
+    const b=await sub3(id);return decodeFontGlyphs(b,parseDatafileRecords(b,dt.textureDir[id].n));
+  }));
   progress('textures');
-  const {atlas,images,sprites}=await extractMapImages(rows,pool,ab0,profile,data,raw3);
-  const scene={rooms,shingles,labelFonts:fonts,labelBackgrounds:sprites,atlas:{width:atlas[0].width,height:atlas[0].height}};
-  const doc={format:1,scene,terrainMips:atlas,images:{...images,glyphs:sheet},
+  const {atlas:mips,images,sprites}=await extractMapImages(rows,pool,ab0,profile,data,atlas,raw3);
+  const scene={rooms,shingles,labelFonts:fonts,labelBackgrounds:sprites,atlas:{width:mips[0].width,height:mips[0].height}};
+  const doc={format:1,scene,terrainMips:mips,images:{...images,glyphs:sheet},
     roomData:roomData?{file:'maps/room-data.json',records:roomData.rooms.reduce((n,r)=>n+r.occurrences.length+r.actors.length+r.volumes.length,0)}:null};
   const index=[{i:0,name:'Full world',room:null,rooms:rooms.length,h:hashText(rawSha256),f:'maps/scene.json'},
     ...rooms.map(r=>({i:r.room+1,room:r.room,name:r.name,episode:r.episode,w:r.roomSize[0],hTiles:r.roomSize[1],

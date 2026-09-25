@@ -7,12 +7,22 @@ export type MapColorRule =
   | {kind: 'constant'; value: number}
   | {kind: 'rgb' | 'hsl'; color: number; multiply: [number, number, number]};
 
-export interface MapPaletteRules {
-  base: Record<string, MapColorRule>;
-  rooms: Record<string, Record<string, MapColorRule>>;
-}
+/** Each room type's own colour rules, by style key. */
+export type MapRoomRules = Record<string, Record<string, MapColorRule>>;
 
 const f = Math.fround;
+
+/** The shared rules every room applies unless its type has its own: tints of
+ *  the room's base colours for five style keys. Other keys keep the style's
+ *  stored colour. These are the same in every build. */
+export const MAP_BASE_RULES: Readonly<Record<string, MapColorRule>> = {
+  0: {kind: 'rgb', color: 0, multiply: [f(1.2), f(1.4), f(1.2)]},
+  2: {kind: 'hsl', color: 1, multiply: [1, f(1.4), f(1.6)]},
+  7: {kind: 'hsl', color: 0, multiply: [1, f(1.6), f(1.3)]},
+  8: {kind: 'rgb', color: 0, multiply: [f(1.2), 1, 1]},
+  10: {kind: 'hsl', color: 2, multiply: [1, 1, f(1.5)]},
+};
+const DEFAULT_RULE: MapColorRule = {kind: 'default'};
 const unit = (v: number): number => Math.max(0, Math.min(1, f(v)));
 
 function rgbToHsl(rgb: readonly number[]): [number, number, number] {
@@ -62,15 +72,17 @@ export function evaluateMapColor(
   return packMapColor(rule.kind === 'hsl' ? hslToRgb(scaled) : scaled);
 }
 
+// A room type without rules of its own (or a build without them) uses the
+// shared rules alone.
 export function resolveMapPalette(
   runtime: number, keys: Iterable<number>, colors: readonly (readonly number[])[],
-  defaults: ReadonlyMap<number, number>, rules: MapPaletteRules,
+  defaults: ReadonlyMap<number, number>, rooms: MapRoomRules | null,
 ): Map<number, number> {
-  if (!Object.hasOwn(rules.rooms, runtime)) throw Error(`unsupported map palette for room type ${runtime}`);
-  const overrides = rules.rooms[runtime], palette = new Map<number, number>();
+  const overrides = (rooms && Object.hasOwn(rooms, runtime) ? rooms[runtime] : null) ?? {};
+  const palette = new Map<number, number>();
   for (const key of keys) {
-    const rule = overrides[key] ?? rules.base[key], fallback = defaults.get(key);
-    if (!rule || fallback === undefined) throw Error(`unresolved map style ${key}`);
+    const rule = overrides[key] ?? MAP_BASE_RULES[key] ?? DEFAULT_RULE, fallback = defaults.get(key);
+    if (fallback === undefined) throw Error(`unresolved map style ${key}`);
     palette.set(key, evaluateMapColor(rule, colors, fallback));
   }
   return palette;
