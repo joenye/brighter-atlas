@@ -161,12 +161,14 @@ export function renderTables(g: GraphicsHeader, vs: ShaderFacts[], ps: ShaderFac
 
 /** The archived sun direction and shadow light view: the one orthonormal
  *  rotation (tag 0x30) whose second row points against a stored direction
- *  (tag 0x22). Byte offsets of both values, or null unless exactly one pair. */
-export function lightOffsets(ab0: Uint8Array): { direction: number; lightView: number } | null {
+ *  (tag 0x22). Byte offsets of both values, or null unless exactly one pair.
+ *  Both are global values, stored between the constructor and fill streams
+ *  (every build so far); the scan keeps to [from, to). */
+export function lightOffsets(ab0: Uint8Array, from = 0, to = ab0.length): { direction: number; lightView: number } | null {
   const view = new DataView(ab0.buffer, ab0.byteOffset, ab0.byteLength);
   const f = (at: number) => view.getFloat32(at, false);
   const rotations: { at: number; y: number[] }[] = [];
-  for (let at = 0; at + 49 <= ab0.length; at++) {
+  for (let at = from; at + 49 <= to; at++) {
     if (ab0[at] !== 0x30) continue;
     const m: number[] = [];
     for (let k = 0; k < 12; k++) m.push(f(at + 1 + 4 * k));
@@ -181,7 +183,7 @@ export function lightOffsets(ab0: Uint8Array): { direction: number; lightView: n
   }
   if (!rotations.length) return null;
   const pairs: { direction: number; lightView: number }[] = [];
-  for (let at = 0; at + 13 <= ab0.length; at++) {
+  for (let at = from; at + 13 <= to; at++) {
     if (ab0[at] !== 0x22) continue;
     const d = [f(at + 1), f(at + 5), f(at + 9)];
     const length = Math.hypot(d[0], d[1], d[2]);
@@ -277,13 +279,14 @@ export function materialLayout(reg: Registry): RenderDecodeData['materials'] | n
   // float in [0, 1] (opacity), at the same ops in nearly every material.
   const slots = [...new Set(families.flatMap((rt) => [...(rowsOf.get(`${rt}:${programsOp}`) ?? [])]))];
   const fields = slots.map((s) => fieldsOf(reg, s));
-  const everywhere = (op: number, test: (n: PoolNode) => boolean) =>
-    fields.filter((f) => { const n = f.get(op); return !!n && test(n); }).length >= 0.95 * fields.length;
   const byte = (n: PoolNode) => n.tag === 0x0a && Number.isInteger(n.value) && (n.value as number) >= 0 && (n.value as number) <= 255;
   const unit = (n: PoolNode) => n.tag === 0x0b && Array.isArray(n.value) && n.value.length === 1 && n.value[0] >= 0 && n.value[0] <= 1;
+  const bytes = new Map<number, number>(), units = new Map<number, number>();
+  for (const f of fields) for (const [op, n] of f) { if (byte(n)) tally(bytes, op); else if (unit(n)) tally(units, op); }
+  const everywhere = (m: Map<number, number>, op: number) => (m.get(op) ?? 0) >= 0.95 * fields.length;
   const ops = [...new Set(fields.flatMap((f) => [...f.keys()]))].sort((a, b) => a - b);
-  const specular = ops.find((op) => [op, op + 1, op + 2].every((o) => everywhere(o, byte)));
-  const opacity = ops.find((op) => everywhere(op, unit));
+  const specular = ops.find((op) => [op, op + 1, op + 2].every((o) => everywhere(bytes, o)));
+  const opacity = ops.find((op) => everywhere(units, op));
   if (specular === undefined || opacity === undefined) return null;
   return {
     families, keys: ENGINE.keys,
@@ -355,11 +358,11 @@ export function storyFields(reg: Registry, variable: number, charsetText: (n: Po
  *  chosen from the rooms (environment.assetValue, set by the caller). */
 export function deriveRenderData(src: {
   graphics: GraphicsHeader | null; vertex: ShaderFacts[] | null; pixel: ShaderFacts[] | null;
-  ab0: Uint8Array; reg: Registry; text: (n: PoolNode | null) => string | null;
+  ab0: Uint8Array; globals?: [number, number]; reg: Registry; text: (n: PoolNode | null) => string | null;
 }, build: RenderBuildData | null): RenderDecodeData | null {
   if (!src.graphics || !src.vertex || !src.pixel || src.vertex.some((f) => !f) || src.pixel.some((f) => !f)) return null;
   const tables = renderTables(src.graphics, src.vertex, src.pixel);
-  const lights = lightOffsets(src.ab0);
+  const lights = lightOffsets(src.ab0, ...(src.globals ?? []));
   const materials = materialLayout(src.reg);
   const environment = environmentLayout(src.reg);
   if (!tables || !lights || !materials || !environment) return null;

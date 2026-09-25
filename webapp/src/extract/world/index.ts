@@ -173,6 +173,11 @@ export async function extractWorld({
   }
 
   // ---- (c) interned value pool ---------------------------------------------
+  // Everything from here to the texture verdicts needs none of them, so it
+  // runs while the texture workers are still busy. This thread hands the
+  // workers their chunks, so they hold a deeper queue through these long
+  // synchronous passes, and each pass is followed by a turn to top it up.
+  poolQueueDepth(5);
   step('pool', 0, 1);
   const pool = decodePool(ab0, profile);
   // A macrotask turn: the texture pool's messages are handled between the
@@ -191,6 +196,7 @@ export async function extractWorld({
     waterFields = waterLayout(shapeRegistry);
     worldWater = readWorldWater(waterFields ?? undefined, rows, rowDecoder, pool.values);
   } catch { /* unreadable water data: plain surfaces */ }
+  await breathe();
   // How the game draws this build (render-shape.ts): from the bundles, with
   // the per-build decode data's quest-lit rooms. Needs both shader bundles.
   let renderData: RenderDecodeData | null = null;
@@ -203,11 +209,12 @@ export async function extractWorld({
     };
     const [vertex, pixel] = [await facts(7), await facts(4)];
     renderData = deriveRenderData({
-      graphics: dt.graphics, vertex, pixel, ab0,
+      graphics: dt.graphics, vertex, pixel, ab0, globals: [profile.stream.constructor_end, profile.stream.fill_start],
       reg: { rows, pool: pool.values, decode: rowDecoder, symbols: dt.symbols },
       text: (n) => decodeGlyphText(n, dt.charset),
     }, placementData?.render ?? null);
   } catch { renderData = null; }
+  await breathe();
   step('pool', 1, 1);
   bail();
 
@@ -319,9 +326,11 @@ export async function extractWorld({
   environmentCandidates.clear();
   // Where rooms, heights and tiles keep their values (placement-shape.ts),
   // with the per-build decode data's other sections.
+  await breathe();
   const owners = roomOwners(shapeRegistry, new Set(layersById.keys()));
   const roomFields = roomLayout(shapeRegistry, layersById, owners);
   const tileFields = tileLayout(shapeRegistry, profile, owners);
+  await breathe();
   // Where effects keep their values (effect-shape.ts). The per-build decode
   // data, produced offline purely from analysis of the game's own files,
   // never by inspecting or modifying a running game process or its memory,
@@ -331,6 +340,7 @@ export async function extractWorld({
     effectShapes = effectLayout({ rows, objects, symbols: dt.symbols, types: dt.types,
       extras: effectsMod.makeRowDecoder(rows, pool.values, ab0, profile, dt.charset, dt.symbols) }, waterFields);
   } catch { /* no derived effect fields: the decode data's, if any */ }
+  await breathe();
   const fileOrigins = (placementData?.effectOrigins ?? []).filter((b) => b.kind === 'radial' || b.kind === 'segment');
   const shapeOrigins = (effectShapes.effectOrigins ?? []).filter((b) => !fileOrigins.some((f) => f.instance === b.instance));
   const origins = [...shapeOrigins, ...fileOrigins].sort((a, b) => a.instance - b.instance);
@@ -374,12 +384,6 @@ export async function extractWorld({
   // that calibrate room joins (stitch.js CONNECTOR_MESH_HASHES) are only
   // known once shard placements exist.
   bail();
-
-  // Everything from here to the texture verdicts needs none of them, so it
-  // runs while the texture workers are still busy. This thread hands the
-  // workers their chunks, so they hold a deeper queue through these long
-  // synchronous passes, and each pass is followed by a turn to top it up.
-  poolQueueDepth(5);
 
   // ---- shared pure derivations, computed ONCE and threaded through ----------
   // traceAssetMaps (a full registry-row scan), materialMap (a leaves() walk
