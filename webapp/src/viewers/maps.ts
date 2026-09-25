@@ -2,6 +2,7 @@ import {el} from '../ui.js';
 import {download} from '../asset-export.js';
 import {MapRenderer} from './maps/renderer.js';
 import {createMapInspection} from './maps/inspection.js';
+import {attachPanZoom,fitCamera} from './maps/pan-zoom.js';
 import type {MapDocument} from '../extract/maps/index.js';
 import type {IndexEntry} from '../store.js';
 
@@ -19,59 +20,23 @@ export function createMapView(app:any,entry:IndexEntry|null) {
     el('label',{},labels,'Labels'),episode,roomSelect,el('label',{},'PNG long edge ',pixels,' px'),exportButton);
   const workspace=el('div',{class:'map-workspace'},host);root.append(bar,workspace,status);
   document.body.classList.add('map-active');
-  let renderer:MapRenderer|null=null,doc:MapDocument|null=null,dead=false,exporting=false,raf=0,cx=0,cy=0,scale=1;
-  const pointers=new Map<number,{x:number;y:number}>();
+  let renderer:MapRenderer|null=null,doc:MapDocument|null=null,dead=false,exporting=false,raf=0;
+  const camera={cx:0,cy:0,scale:1};
   const draw=()=>{
     raf=0;if(dead||exporting||!renderer)return;
-    const view={cx,cy,scale,width:host.clientWidth,height:host.clientHeight,dpr:devicePixelRatio,labels:labels.checked};
+    const view={...camera,width:host.clientWidth,height:host.clientHeight,dpr:devicePixelRatio,labels:labels.checked};
     renderer.draw({...view,markers:inspection.markers(view)});
-    canvas.dataset.scale=String(scale);canvas.dataset.center=`${cx},${cy}`;
+    canvas.dataset.scale=String(camera.scale);canvas.dataset.center=`${camera.cx},${camera.cy}`;
     root.dataset.matches=String(inspection.count);root.dataset.markers=String(renderer.stats.markers);
   };
   const requestDraw=()=>{if(!raf&&!dead)raf=requestAnimationFrame(draw);};
-  const inspection=createMapInspection(app,requestDraw,(x,y)=>{if(!Number.isFinite(x)||!Number.isFinite(y))return;cx=x;cy=y;scale=Math.max(25,scale);requestDraw();});
+  const inspection=createMapInspection(app,requestDraw,(x,y)=>{if(!Number.isFinite(x)||!Number.isFinite(y))return;camera.cx=x;camera.cy=y;camera.scale=Math.max(25,camera.scale);requestDraw();});
   bar.append(inspection.toolbar);workspace.append(inspection.panel);
   function fit() {
-    if(!renderer)return;const b=inspection.bounds(renderer.bounds(labels.checked));
-    cx=b.x+b.width/2;cy=b.y+b.height/2;scale=Math.max(.01,Math.min(host.clientWidth/b.width,host.clientHeight/b.height)*.95);requestDraw();
+    if(!renderer)return;fitCamera(camera,inspection.bounds(renderer.bounds(labels.checked)),host.clientWidth,host.clientHeight);requestDraw();
   }
-  function zoom(factor:number,x=host.clientWidth/2,y=host.clientHeight/2) {
-    const next=Math.max(.01,Math.min(512,scale*factor));
-    cx+=(x-host.clientWidth/2)*(1/scale-1/next);cy+=(y-host.clientHeight/2)*(1/scale-1/next);scale=next;requestDraw();
-  }
-  const point=(event:PointerEvent|WheelEvent)=>{const b=host.getBoundingClientRect();return {x:event.clientX-b.left,y:event.clientY-b.top};};
-  const gesture=()=>{
-    const p=[...pointers.values()].slice(0,2);
-    return p.length===2?{x:(p[0].x+p[1].x)/2,y:(p[0].y+p[1].y)/2,distance:Math.hypot(p[1].x-p[0].x,p[1].y-p[0].y)}:{...p[0],distance:0};
-  };
-  let moved=false,startPoint:{x:number;y:number}|null=null,tapPoint:{x:number;y:number}|null=null;
-  canvas.addEventListener('pointerdown',e=>{
-    if(e.pointerType==='mouse'&&e.button!==0)return;
-    if(!pointers.size){moved=false;startPoint=point(e);}else moved=true;
-    tapPoint=null;pointers.set(e.pointerId,point(e));canvas.setPointerCapture(e.pointerId);canvas.focus();
-  });
-  canvas.addEventListener('pointermove',e=>{
-    if(!pointers.has(e.pointerId))return;
-    const old=gesture(),oldScale=scale;pointers.set(e.pointerId,point(e));const next=gesture();
-    if(startPoint&&Math.hypot(next.x-startPoint.x,next.y-startPoint.y)>4)moved=true;
-    if(old.distance>0&&next.distance>0)scale=Math.max(.01,Math.min(512,scale*next.distance/old.distance));
-    cx+=(old.x-host.clientWidth/2)/oldScale-(next.x-host.clientWidth/2)/scale;
-    cy+=(old.y-host.clientHeight/2)/oldScale-(next.y-host.clientHeight/2)/scale;requestDraw();
-  });
-  for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,e=>{
-    const event=e as PointerEvent;if(!pointers.has(event.pointerId))return;
-    tapPoint=name==='pointerup'&&!moved&&pointers.size===1?point(event):null;
-    pointers.delete(event.pointerId);if(name!=='pointerup')moved=true;
-  });
-  canvas.addEventListener('click',()=>{if(tapPoint){inspection.hit(cx+(tapPoint.x-host.clientWidth/2)/scale,cy+(tapPoint.y-host.clientHeight/2)/scale,scale);tapPoint=null;}});
-  canvas.addEventListener('wheel',e=>{e.preventDefault();const p=point(e);zoom(Math.exp(-e.deltaY*.002),p.x,p.y);},{passive:false});
-  canvas.addEventListener('dblclick',e=>{const b=host.getBoundingClientRect();zoom(2,e.clientX-b.left,e.clientY-b.top);});
-  canvas.addEventListener('keydown',e=>{
-    if(e.key==='+'||e.key==='=')zoom(1.5);else if(e.key==='-')zoom(1/1.5);else if(e.key==='0')fit();
-    else if(e.key==='ArrowLeft')cx-=host.clientWidth/scale*.1;else if(e.key==='ArrowRight')cx+=host.clientWidth/scale*.1;
-    else if(e.key==='ArrowUp')cy-=host.clientHeight/scale*.1;else if(e.key==='ArrowDown')cy+=host.clientHeight/scale*.1;else return;
-    e.preventDefault();requestDraw();
-  });
+  const panZoom=attachPanZoom(canvas,host,camera,{changed:requestDraw,fit,tap:(x,y)=>inspection.hit(x,y,camera.scale)});
+  const zoom=panZoom.zoom;
   labels.addEventListener('change',requestDraw);
   const resize=new ResizeObserver(()=>requestDraw());resize.observe(host);
   function selectRooms() {
@@ -134,5 +99,5 @@ export function createMapView(app:any,entry:IndexEntry|null) {
       roomSelect.value=String(entry?.i??0);selectRooms();root.dataset.ready='true';
     }catch(e){if(!dead)status.textContent=(e as Error).message;}
   })();
-  return {root,exportPng,destroy(){dead=true;resize.disconnect();inspection.destroy();if(raf)cancelAnimationFrame(raf);renderer?.destroy();document.body.classList.remove('map-active');}};
+  return {root,exportPng,destroy(){dead=true;panZoom.destroy();resize.disconnect();inspection.destroy();if(raf)cancelAnimationFrame(raf);renderer?.destroy();document.body.classList.remove('map-active');}};
 }
