@@ -193,10 +193,14 @@ ok(Array.isArray(capeSn) && capeSn.includes('Easter Warden Cape'),
 // Regular (non-cosmetic) profession/guard gear is recovered too, via the gear
 // item family's typed-ref hub-join. The Horned Helmet mesh (stable content
 // hash) must carry its name AND its equip slot 'head'.
+// The anchored mesh changes when a game update edits it (the 21-Sep-2026 build
+// replaced it), so fall back to any mesh the join names Horned Helmet: the
+// anchor then still proves the name and the slot travel together.
 const horned = await page.evaluate(async () => {
   const idx = await window.__bs.app.store.index('meshes');
-  const m = idx.find((e) => e.h === '225c54275e933e07');
-  return m ? { sn: m.sn || null, slot: m.slot || null } : null;
+  const m = idx.find((e) => e.h === '225c54275e933e07')
+    ?? idx.find((e) => Array.isArray(e.sn) && e.sn.includes('Horned Helmet'));
+  return m ? { h: m.h, sn: m.sn || null, slot: m.slot || null } : null;
 });
 ok(horned && Array.isArray(horned.sn) && horned.sn.includes('Horned Helmet') && horned.slot === 'head',
   `Horned Helmet mesh carries its gear name + equip slot (${JSON.stringify(horned)})`);
