@@ -14,7 +14,9 @@ ctx.onmessage = async (e: MessageEvent) => {
   try {
     const result = await extractMaps({ ab0, dt: parseDatatable(ab0), files, frames,
       fetchJson: async () => profile, includeRoomData });
-    ctx.postMessage({ type: 'done', result });
+    // the room data as JSON text: its many small records would cost the
+    // ingest thread far more to receive and store as objects
+    ctx.postMessage({ type: 'done', result: { ...result, roomData: result.roomData && JSON.stringify(result.roomData) } });
   } catch (err) {
     ctx.postMessage({ type: 'error', message: err?.message || String(err) });
   }

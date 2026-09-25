@@ -536,6 +536,7 @@ async function ingest({
       startMaps();
       mapsOutcome = await mapsRun;
       indexes.maps = mapsOutcome.index;
+      onProgress({stage:'index',cat:'maps',done:1,total:1});
     } catch (err) {
       if (signal?.aborted || err?.message === 'cancelled') throw err;
       mapsError = err?.message || String(err); errors.push(`maps: ${mapsError}`);
@@ -613,7 +614,10 @@ async function ingest({
   for (const [cat, idx] of Object.entries(indexes)) derivedEntries.push([`index:${cat}`, idx]);
   if (worldOutcome) derivedEntries.push(['world:index', worldOutcome.worldIndex]);
   if (mapsOutcome) derivedEntries.push(['maps:scene', mapsOutcome.doc]);
-  if (mapsOutcome?.roomData) derivedEntries.push(['maps:room-data',mapsOutcome.roomData]);
+  // stored as JSON text: cloning the many small records into the store would
+  // cost this thread about half a second (the maps worker writes the text)
+  if (mapsOutcome?.roomData) derivedEntries.push(['maps:room-data',typeof mapsOutcome.roomData === 'string'
+    ? mapsOutcome.roomData : JSON.stringify(mapsOutcome.roomData)]);
   if (attachedSystem) {
     derivedEntries.push(['system:models', attachedSystem.models]);
     derivedEntries.push(['system:bindings', attachedSystem.bindings]);

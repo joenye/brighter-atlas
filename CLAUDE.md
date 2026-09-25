@@ -79,7 +79,10 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   thread also hands the pool its chunks, so it keeps a deeper queue
   (`poolQueueDepth`) through long synchronous passes. That window is full:
   new extraction work goes in its own worker (the 2D map runs beside World)
-  or must be measured against the previous release. Never read scattered
+  or must be measured against the previous release. A large derived record
+  made of many small objects costs the ingest thread its structured clone
+  twice (worker message, then store): hand it over as JSON text built off
+  that thread (the 2D map's room data). Never read scattered
   bundle objects through the sequential slab reader (a fresh 16 MB slab per
   object); read them individually.
 - **The production host serves a Content-Security-Policy** that must stay in

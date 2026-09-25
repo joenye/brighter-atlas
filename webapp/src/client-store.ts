@@ -312,7 +312,10 @@ export class ClientStore extends EventTarget implements AppStore {
 
   private async _resolveJson(rel: string): Promise<any> {
     if (rel === 'maps/scene.json') return (await derivedGet(this.versionId,'maps:scene')) || null;
-    if (rel === 'maps/room-data.json') return (await derivedGet(this.versionId,'maps:room-data')) || null;
+    if (rel === 'maps/room-data.json') {
+      const data = await derivedGet(this.versionId, 'maps:room-data');   // JSON text (objects in older stores)
+      return (typeof data === 'string' ? JSON.parse(data) : data) || null;
+    }
     if (rel === 'datatable/symbols.json') return (await derivedGet(this.versionId, 'datatable:symbols')) || [];
     if (rel === 'datatable/strings.json') return (await derivedGet(this.versionId, 'datatable:strings')) || [];
     if (rel === this.manifest?.system?.models) {
