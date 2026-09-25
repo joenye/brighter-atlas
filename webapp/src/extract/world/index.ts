@@ -30,7 +30,8 @@ import { deriveMapRoomRecords } from '../maps/records.js';
 import { decodeMapAnnotationTable } from '../maps/bindings.js';
 import { validateMapDecodeData } from '../maps/decode-data.js';
 import { decodeGlyphText, deriveRoomMetadata, resolveValue } from './room-metadata.js';
-import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
+import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader,type PlacementDecodeData} from './placement.js';
+import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
@@ -181,9 +182,10 @@ export async function extractWorld({
   // Water materials resolved from the user's bundle through the optional
   // per-build decode data; absent or unreadable data leaves water to the
   // viewer's plain surfaces.
+  const shapeRegistry = { rows, objects, pool: pool.values, decode: rowDecoder, types: dt.types };
   let worldWater: WorldWater | null = null;
   try {
-    worldWater = readWorldWater(placementData?.water, rows, rowDecoder, pool.values);
+    worldWater = readWorldWater(waterLayout(shapeRegistry) ?? undefined, rows, rowDecoder, pool.values);
   } catch { /* unreadable water data: plain surfaces */ }
   // How the game draws this build (render-shape.ts): from the bundles, with
   // the per-build decode data's quest-lit rooms. Needs both shader bundles.
@@ -311,6 +313,15 @@ export async function extractWorld({
     }
   }
   environmentCandidates.clear();
+  // Where rooms, heights and tiles keep their values (placement-shape.ts),
+  // with the per-build decode data's other sections.
+  const owners = roomOwners(shapeRegistry, new Set(layersById.keys()));
+  const roomFields = roomLayout(shapeRegistry, layersById, owners);
+  const tileFields = tileLayout(shapeRegistry, profile, owners);
+  const placementBindings: PlacementDecodeData | null = roomFields ? {
+    ...(placementData ?? { kind: 'brighter-atlas-placement-decode', format: 1, bundle0_raw_sha256: profile.bundle0!.raw_sha256! }),
+    ...roomFields, ...(tileFields ? { tiles: tileFields } : {}),
+  } : placementData;
 
   const roomMetadata = deriveRoomMetadata(rows, pool.values, ab0, profile, dt.charset, rooms.map(r => r.idx));
   let annotationTable;
@@ -430,7 +441,7 @@ export async function extractWorld({
     loadMeshBytes,
     profile,
     charset: dt.charset,
-    placement:placementData,
+    placement: placementBindings,
     objects,
     bytes: ab0,
     enemyDefs,             // shared pure derivation (computed once above)
@@ -450,7 +461,7 @@ export async function extractWorld({
     // Graphs of its own: the shard loop's must not be warmed out of room order.
     const graph = new graphMod.AssetGraph(rows, pool.values, {
       meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
-    }, { bytes: ab0, profile, symbols: dt.symbols, defaultGround: placementData?.tiles?.defaultGround ?? null });
+    }, { bytes: ab0, profile, symbols: dt.symbols, defaultGround: placementBindings?.tiles?.defaultGround ?? null });
     await breathe();
     cards = readCards({
       rows, pool: pool.values, symbols: dt.symbols, charset: dt.charset, decode: rowDecoder,
@@ -723,9 +734,9 @@ export async function extractWorld({
   // only cancellation). Byte-identity of every existing output is untouched:
   // the stage only reads shared state and writes one new key.
   step('effects', 0, 1);
-  const defaultAppearances=decodeDefaultAppearances(placementData,ab0,profile,pool.values,dt.symbols,rows.length);
-  const appearanceCandidates=createAppearanceCandidateReader(placementData,rows,ab0,profile,pool.values,dt.symbols);
-  const effectMotion=createEffectMotionReader(placementData,rows,ab0,profile,pool.values,dt.symbols);
+  const defaultAppearances=decodeDefaultAppearances(placementBindings,ab0,profile,pool.values,dt.symbols,rows.length);
+  const appearanceCandidates=createAppearanceCandidateReader(placementBindings,rows,ab0,profile,pool.values,dt.symbols);
+  const effectMotion=createEffectMotionReader(placementBindings,rows,ab0,profile,pool.values,dt.symbols);
   try {
     const effects = effectsMod.extractWorldEffects(rows, pool.values, ab0, profile, {
       charset: dt.charset, symbols: dt.symbols, strings: poolStrings, poolRegistryRefs,
@@ -738,20 +749,20 @@ export async function extractWorld({
       drawOccurrence: (hit) => ctx.graph.drawOccurrence(hit as any) as any,
       staticAppearance: (slot) => defaultAppearances.get(rows[slot]?.runtime) ?? ctx.graph.staticAppearance(slot),
       appearanceCandidates,
-      effectScales: createEffectScaleReader(placementData?.effectScales, objects),
-      effectWindow: createEffectWindowReader(placementData?.effectWindows, objects),
-      effectSprites: createEffectSpriteReader(placementData?.effectSprites, objects, ab0, profile, pool.values),
-      effectFacing: createEffectFacingReader(placementData?.effectFacings, objects),
-      effectOrigin: createEffectOriginReader(placementData?.effectOrigins, objects),
-      effectProperties: createEffectPropertyReader(placementData?.effectProperties,objects,ab0,profile,pool.values),
-      effectFields: createEffectFieldReader(placementData?.effectFields, objects),
-      effectWave: createEffectWaveReader(placementData?.effectWaves, objects, rowDecoder, pool.values),
+      effectScales: createEffectScaleReader(placementBindings?.effectScales, objects),
+      effectWindow: createEffectWindowReader(placementBindings?.effectWindows, objects),
+      effectSprites: createEffectSpriteReader(placementBindings?.effectSprites, objects, ab0, profile, pool.values),
+      effectFacing: createEffectFacingReader(placementBindings?.effectFacings, objects),
+      effectOrigin: createEffectOriginReader(placementBindings?.effectOrigins, objects),
+      effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
+      effectFields: createEffectFieldReader(placementBindings?.effectFields, objects),
+      effectWave: createEffectWaveReader(placementBindings?.effectWaves, objects, rowDecoder, pool.values),
       effectMotion: (controller,hit,roomId) => {
         const motion=effectMotion(controller);
-        if(!motion||!placementData)return null;
+        if(!motion||!placementBindings?.rooms)return null;
         const room=layersById.get(roomId),dimensions=ctx.graph.dimensions3i(hit.resource);
         if(!room||!dimensions)return null;
-        const source=roomMod.deref(room.top.slice(room.table.length)[placementData.rooms.origin],room.table);
+        const source=roomMod.deref(room.top.slice(room.table.length)[placementBindings.rooms.origin],room.table);
         if(source.tag!==46||source.value?.length!==2||!source.value.every(Number.isInteger))return null;
         const turn=(hit.rotationQuarters??0)&1;
         return {...motion,footprint:[dimensions[turn],dimensions[turn^1]],origin:[source.value[0]|0,source.value[1]|0]};

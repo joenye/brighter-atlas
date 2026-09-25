@@ -41,6 +41,7 @@ export interface Datatable {
   objStart: number;
   /** How the game draws (graphics.ts); null when it does not parse exactly. */
   graphics: GraphicsHeader | null;
+  types: TypeTable;
 }
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true }); // strict UTF-8
@@ -103,15 +104,37 @@ function parseSymbols(u8: Uint8Array, off: number): { symbols: string[]; end: nu
 // Region 4 is {u8 tag 0x00, varint count, count x {varint, u64 BE}}. Content not
 // needed here (the viewer keys assets off content hashes), but it must be walked
 // exactly to find where region 5 starts.
-function skipHashes(u8: Uint8Array, off: number): number {
+// Record types: per type, its descendant count (its subtree is the types
+// [i, i + count]) and an 8-byte id that stays the same from build to build.
+export interface TypeTable { ends: Int32Array; ids: Uint8Array }
+
+function parseTypes(u8: Uint8Array, off: number): { types: TypeTable; end: number } {
   if (u8[off] !== 0x00) throw new Error(`ab0: hash table tag ${u8[off]} != 0`);
   let [n, i] = readVarint(u8, off + 1);
+  if (i + 9 * n > u8.length) throw new Error('ab0: hash table overruns file');
+  const ends = new Int32Array(n), ids = new Uint8Array(8 * n);
   for (let k = 0; k < n; k++) {
-    [, i] = readVarint(u8, i);
+    let count;
+    [count, i] = readVarint(u8, i);
+    ends[k] = k + count;
+    ids.set(u8.subarray(i, i + 8), 8 * k);
     i += 8;
   }
   if (i > u8.length) throw new Error('ab0: hash table overruns file');
-  return i;
+  return { types: { ends, ids }, end: i };
+}
+
+/** Type indices with this id (16 hex digits). */
+export function typesWithId(t: TypeTable, hex: string): number[] {
+  const want = new Uint8Array(8);
+  for (let k = 0; k < 8; k++) want[k] = parseInt(hex.slice(2 * k, 2 * k + 2), 16);
+  const out: number[] = [];
+  for (let i = 0; i < t.ends.length; i++) {
+    let k = 0;
+    while (k < 8 && t.ids[8 * i + k] === want[k]) k++;
+    if (k === 8) out.push(i);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- scan-located tables
@@ -392,7 +415,7 @@ export function parseDatatable(u8: Uint8Array): Datatable {
   const cs = parseCharset(u8, 0);
   const audio = parseVarintArray(u8, cs.end);
   const sym = parseSymbols(u8, audio.end);
-  const e4 = skipHashes(u8, sym.end);
+  const { types, end: e4 } = parseTypes(u8, sym.end);
 
   // regions 6+8+9: scan past the undecoded grid, chain-validated
   let tex: { dir: TextureDirEntry[]; end: number } | null = null;
@@ -429,5 +452,6 @@ export function parseDatatable(u8: Uint8Array): Datatable {
     audioDir: audio.values.map((v) => ({ samples: v })),
     objStart, // extra: where the registry/heap begins (the string-sweep range start)
     graphics: parseGraphicsHeader(u8, tex.end, meshStart, mesh.anim.end, classStart),
+    types,
   };
 }

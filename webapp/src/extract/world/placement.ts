@@ -53,12 +53,16 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data?.kind!=='brighter-atlas-placement-decode'||data.format!==1||data.bundle0_raw_sha256!==hash)
     throw Error('placement decode data does not match this build');
   const integer=(n:any)=>Number.isInteger(n)&&n>=0&&n<65536;
-  if(!data.rooms||!data.actors||!integer(data.rooms.fieldCount)||data.rooms.fieldCount<1
-    ||!['width','height','origin','words','links'].every(k=>integer(data.rooms[k]))||!integer(data.actors.parent))
-    throw Error('invalid placement field bindings');
-  const fields=['width','height','origin','words'].map(k=>data.rooms[k]);
-  if(new Set(fields).size!==fields.length||fields.some(n=>n>=data.rooms.fieldCount))
-    throw Error('invalid room placement fields');
+  // Room and actor fields are read from the bundles (placement-shape.ts);
+  // older data carries them too.
+  if(data.rooms!==undefined||data.actors!==undefined){
+    if(!data.rooms||!data.actors||!integer(data.rooms.fieldCount)||data.rooms.fieldCount<1
+      ||!['width','height','origin','words','links'].every(k=>integer(data.rooms[k]))||!integer(data.actors.parent))
+      throw Error('invalid placement field bindings');
+    const fields=['width','height','origin','words'].map(k=>data.rooms[k]);
+    if(new Set(fields).size!==fields.length||fields.some(n=>n>=data.rooms.fieldCount))
+      throw Error('invalid room placement fields');
+  }
   if(data.defaultAppearances!==undefined){
     const values=data.defaultAppearances;
     if(!Array.isArray(values)||values.length>65536||values.some(v=>!v||!integer(v.runtime)
@@ -191,7 +195,7 @@ export function createActorHeightReader({data,rooms,roomRows,rows,pool,bytes,pro
   roomRows:Map<number,RoomRowRef>;
   rows:RegistryRow[];pool:any[];bytes?:Uint8Array;profile:WorldProfile;
 }):((room:number,actor:SpawnRecord)=>ActorHeight)|null {
-  if(!data)return null;
+  if(!data?.rooms)return null;
   validatePlacementData(data,profile.bundle0?.raw_sha256??'');
   if(!bytes)throw Error('placement decoding needs the source registry');
   const decode=makeRegistryRowDecoder(rows as FillRow[],bytes,profile);
