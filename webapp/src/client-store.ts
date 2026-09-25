@@ -69,6 +69,7 @@ export class ClientStore extends EventTarget implements AppStore {
           const arr = (idx || []).filter(Boolean);
           if (cat === 'anims') return this._annotateAnimNames(arr);
           if (cat === 'meshes') return this._annotateMeshes(arr);
+          if (cat === 'images') return this._annotateImageNames(arr);
           // fix sr/dur for audio indexes built before the bslpc 24 kHz change
           return cat === 'audio' ? arr.map(correctAudioRate) : arr;
         })
@@ -88,6 +89,23 @@ export class ClientStore extends EventTarget implements AppStore {
       if (!clips || typeof clips !== 'object') return arr;
       for (const entry of arr) {
         const names = clips[String(entry.i)]?.names;
+        if (Array.isArray(names) && names.length) (entry as any).sn = names;
+      }
+    } catch { /* recovered names are optional */ }
+    return arr;
+  }
+
+  // Recovered item icon names ('image:names', written by World extraction):
+  // an item's card shows a stored icon picture, named here by the items that
+  // use it. Merged as `sn`, the same display/search layer as meshes and anims;
+  // hash-keyed user names still outrank it. Older extractions have no doc.
+  private async _annotateImageNames(arr: IndexEntry[]): Promise<IndexEntry[]> {
+    try {
+      const doc = await derivedGet(this.versionId, 'image:names');
+      const images = doc?.images;
+      if (!images || typeof images !== 'object') return arr;
+      for (const entry of arr) {
+        const names = images[String(entry.i)]?.names;
         if (Array.isArray(names) && names.length) (entry as any).sn = names;
       }
     } catch { /* recovered names are optional */ }

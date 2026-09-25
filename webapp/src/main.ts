@@ -1064,7 +1064,7 @@ class App {
     switch (cat) {
       case 'meshes': return `${it.i} ${it.sk ? 'skinned' : 'static'} ${bodySlot(it) || ''} ${((it.sn || []) as string[]).join(' ')} ${extra}`.toLowerCase();
       case 'audio': return `${it.i} ${it.codec} ${extra}`;
-      case 'images': return `${it.i} ${it.cat || ''} ${extra}`;
+      case 'images': return `${it.i} ${it.cat || ''} ${((it.sn || []) as string[]).join(' ').toLowerCase()} ${extra}`;
       case 'anims': return `${it.i} skel ${it.skel} ${((it.sn || []) as string[]).join(' ').toLowerCase()} ${extra}`;
       case 'rigs': return `${it.i} ${it.bones} ${extra}`;
       case 'strings': return `${it.i} ${it.src || ''} ${it.text} ${it.h || ''}`.toLowerCase();
@@ -1189,6 +1189,11 @@ class App {
           thumb,
           rid(item),
           main(item.cat || 'image'),
+          // recovered item name (world extraction): display layer only, the
+          // hash-keyed user name (rid) still outranks it
+          item.sn?.length ? el('span', {
+            class: 'r-meta', text: item.sn[0], title: item.sn.join('\n'),
+          }) : null,
           el('span', { class: 'r-meta', text: metaTxt, title: sizesTip }));
         break;
       }
@@ -1458,6 +1463,10 @@ class App {
     } else if (cat === 'images') {
       pairs = [
         ['index', `#${e.i}`], ['category', e.cat],
+        ['item icon', e.sn?.length ? el('span', {
+          title: 'The item(s) whose card shows this picture, recovered from the game data by the World extraction; your own names still override it in lists.',
+          text: e.sn.join(' · '),
+        }) : null],
         ['resolutions', e.n],
         ['formats', (e.entries || []).map((s: any) => s.fmt).filter((v: any, i: number, a: any[]) => a.indexOf(v) === i).join(', ') || '-'],
         ['sizes', imgSizesDesc(e).slice(0, 8).map((s: any) => `${s.w}×${s.h}`).join(', ') || '-'],

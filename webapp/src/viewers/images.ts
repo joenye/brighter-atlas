@@ -25,6 +25,12 @@ export function createImageView(app: any, entry: IndexEntry) {
     badge(entry.cat || 'image', CAT_BADGE[entry.cat] || ''),
     el('span', { class: 'dim small', text: `${entry.n} resolution${entry.n === 1 ? '' : 's'}` }),
   );
+  if ((entry as any).sn?.length) {
+    toolbar.append(el('span', {
+      class: 'small', text: `item icon: ${(entry as any).sn.join(' · ')}`,
+      title: 'The item(s) whose card shows this picture, recovered from the game data by the World extraction.',
+    }));
+  }
 
   const isData = !entry.entries || entry.entries.length === 0;
   if (!entry.f || !entry.f.length) {
@@ -181,7 +187,9 @@ export function createImageGrid(app: any, initialItems: IndexEntry[]) {
       const it = items[i];
       const cell = el('div', { class: 'img-cell' },
         el('div', { class: 'ic-box' }, it.f?.length ? null : el('span', { class: 'dim small', text: it.cat === 'font' ? 'font' : it.cat === 'lut' ? 'lut' : '∅' })),
-        el('div', { class: 'small mono dim', text: `#${it.i} ${it.cat || ''}${it.n > 1 ? ` ×${it.n}` : ''}` }));
+        el('div', { class: 'small mono dim', text: `#${it.i} ${it.cat || ''}${it.n > 1 ? ` ×${it.n}` : ''}` }),
+        // the item(s) whose card shows this icon (world extraction)
+        (it as any).sn?.length ? el('div', { class: 'small ic-name', text: (it as any).sn[0], title: (it as any).sn.join('\n') }) : null);
       if (it.f?.length) {
         cell.dataset.src = app.store.url(it.f[0]);
         io.observe(cell);

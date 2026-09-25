@@ -250,6 +250,8 @@ export interface SurfaceMesh {
 
 export interface ShardContext {
   graph: AssetGraph;
+  /** The label a placed actor shows (its authored label, or a better name). */
+  displayLabel: (label: string | null, record?: number) => string | null;
   spawnGraph: SpawnGraph;
   rooms: Map<number, any>;
   roomRows: Map<number, RoomRowRef>;
@@ -597,6 +599,9 @@ export interface ShardContextOptions {
   enemyDefs?: EnemyDefinition[] | null;
   // Constructor values per registry slot (replay.js replayConstructors).
   objects?: { values: number[] }[] | null;
+  // A placed actor's shown label from its authored one (e.g. an enemy type's
+  // display name for its internal name). Absent: the authored label.
+  displayLabel?: ((label: string | null, record?: number) => string | null) | null;
   /** ab0 clip directory: lets spawns carry their resting clip */
   animDir?: { skel: number; dur?: number }[] | null;
 }
@@ -612,6 +617,7 @@ export interface ShardContextOptions {
 export function createShardContext({
   rows, pool, meshDir, texMeta, rooms, names = null, loadMeshBytes, profile = null,
   charset = null, symbols, bytes, enemyDefs = null, placement = null, objects = null, animDir = null,
+  displayLabel = null,
 }: ShardContextOptions): ShardContext {
   const graph = new AssetGraph(rows, pool, undefined, { bytes, profile, symbols, defaultGround: placement?.tiles?.defaultGround ?? null });
   const spawnGraph = new SpawnGraph(rows, pool, graph, { bytes, profile, charset, enemyDefs, animDir, meshDir });
@@ -634,6 +640,7 @@ export function createShardContext({
   const occupancyCache = new Map<number, ReturnType<typeof roomOccupancy>>();
   const ctx: ShardContext = {
     graph,
+    displayLabel: displayLabel ?? ((label) => label),
     spawnGraph,
     rooms,
     roomRows,
@@ -902,7 +909,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     spawnRows.push([
       actor.record, actor.room_record, x, y, z, surfaceZ,
       actor.rotation_quarters, actor.direction_resource,
-      actor.label, actor.label_field_op,
+      ctx.displayLabel(actor.label, actor.record), actor.label_field_op,
       actor.location_field_op, actor.location_series_index,
       actor.location_class, actor.direction_field_op,
       actor.room_field_op, SPAWN_ORIGIN.actor, actor.centre_offset, actor.centre_field_op,

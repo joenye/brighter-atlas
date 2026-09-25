@@ -48,6 +48,8 @@ import * as catalogMod from './catalog.js';
 import * as animNamesMod from './anim-names.js';
 import * as meshNamesMod from './mesh-names.js';
 import {objectDescriptionReader} from './object-descriptors.js';
+import {recordNames} from './names.js';
+import {annotateDisplayNames, nameFromRecords, byInternal as enemyByInternal, enemyDisplayNames, iconImageNames, referrerIndex} from './display-names.js';
 import {annotateObjectCatalog,appendObjectMeshNames} from './object-names.js';
 import { inferMeshSlots, type RigSkeleton } from './mesh-slots.js';
 import * as effectsMod from './effects.js';
@@ -353,7 +355,31 @@ export async function extractWorld({
     if (!e) throw new Error(`mesh ${meshId} is outside assetBundle5`);
     return decodeObject(5, ab5.subarray(e.offset, e.offset + e.length));
   };
+  // Record names (names.ts): the name the game shows for each record. They
+  // override the enemy names and internal-id table the naming passes use, and
+  // name placed actors: the actor record's own name, else its authored label
+  // mapped through the internal ids ("glinteye_deathcrow", or quest-prefixed
+  // "q2_0_giant_two_headed_bear").
+  const rowDecoder = effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any;
+  const recNames = recordNames({ rows, pool: pool.values, charset: dt.charset, symbols: dt.symbols, decode: rowDecoder });
+  const enemyNames = enemyDisplayNames(rows, poolStrings, poolRegistryRefs);
+  // enemy definitions keep their slots; the record names correct their text
+  for (const [slot, e] of enemyNames) {
+    const n = recNames.nameOf(slot);
+    if (n) enemyNames.set(slot, { name: n.singular ?? n.name, base: n.base ?? e.base });
+  }
+  for (const [internal, name] of recNames.byInternal) {
+    enemyByInternal.set(internal, { name, base: enemyByInternal.get(internal)?.base ?? name });
+  }
+  const displayLabel = (label: string | null, record?: number) => {
+    const own = record !== undefined ? recNames.nameOf(record) : null;
+    if (own) return own.singular ?? own.name;
+    if (!label || !/^[a-z0-9]+(?:_[a-z0-9]+)+$/.test(label)) return label;
+    const hit = enemyByInternal.get(label) ?? enemyByInternal.get(label.replace(/^q\d+_\d+s?_/, ''));
+    return hit ? hit.name : label;
+  };
   const ctx = createShardContext({
+    displayLabel,
     rows,
     symbols: dt.symbols,
     pool: pool.values,
@@ -816,6 +842,27 @@ export async function extractWorld({
   );
   const describeObject=objectDescriptionReader(rows,pool.values,ab0,profile,dt.charset);
   annotateObjectCatalog(catalog,describeObject);
+  // Display names from the records behind each model (display-names.ts):
+  // enemy type names, item records' own names, and the one name every
+  // named record using an appearance agrees on. Names and aliases only.
+  const materialsOf = (slot: number): number[] => {
+    const out: number[] = [];
+    for (const f of rowDecoder(slot) ?? []) {
+      if (f.kind !== 'G') continue;
+      const n = resolveValue(pool.values, f.node);
+      if (n?.tag === 0x02 && Number.isInteger(n.value)) out.push(n.value as number);
+    }
+    return out;
+  };
+  const iconNames = iconImageNames(rows, poolStrings, ctx.graph.texturesByMaterial, indexes.images ?? [], materialsOf);
+  const labelOf = (slot: number): string | null => {
+    const spawn = spawnActorsBySlot.get(slot) as any;
+    if (typeof spawn?.label === 'string' && spawn.label.trim()) return spawn.label;
+    try { return describeObject(slot)?.descriptors?.[0]?.name ?? null; } catch { return null; }
+  };
+  annotateDisplayNames(catalog, enemyNames, iconNames.rowNames, { referrers: referrerIndex(rows, poolRegistryRefs), labelOf });
+  nameFromRecords(catalog, (slot) => { const n = recNames.nameOf(slot); return n ? { name: n.singular ?? n.name, base: n.base } : null; });
+  await sink.derivedPut(versionId, 'image:names', { format: iconNames.format, images: iconNames.images });
   // "Set catalog.profile to the checkedBundleProfile() result first" (catalog.js)
   catalog.profile = catalogMod.checkedBundleProfile(
     assetModels, bundleSignatures,
