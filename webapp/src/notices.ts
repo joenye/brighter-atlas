@@ -62,40 +62,24 @@ const worldStale = (stale: (system: any) => boolean) => async (app: any): Promis
   const index = await app.store.worldIndex();
   return !!index && stale(index.coordinate_system ?? {});
 };
+// The World index revisions 0.7.0 extractions carry.
+const WORLD_070: Record<string, number> = {
+  owner_alignment_revision: 2, room_world_position_revision: 1, occurrence_draw_revision: 2,
+  effect_anchor_revision: 8, effect_property_revision: 5, water_revision: 1, scenery_trim_revision: 1,
+  draw_order_revision: 1, spawn_idle_revision: 1,
+};
 const WORLD_UPDATE = 'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.';
 
 const NOTICES: Notice[] = [
   {
-    id: 'world-idle-1',
-    title: 'People and creatures strike their poses',
+    id: 'world-0.7.0',
+    title: 'Brighter Atlas 0.7.0: the world as the game draws it',
     paras: [
-      'NPCs, enemies and animals in the World and Models views now rest the way they do in the game: standing and breathing, sitting at tables, lying in wait, instead of the stiff pose they used to hold. Single rooms play the resting animation; the whole-world view shows each one held in it.',
-      WORLD_UPDATE,
+      'Rooms now use the game’s own lighting and materials, seas and rivers move and reflect the sky, people and creatures rest in their own animations, and effects and room pieces sit where the game puts them. Models also gain their in-game information card picture and the names the game gives them.',
+      'All of this is worked out when your game files are read, so your saved World data still has the old version. ' + WORLD_UPDATE,
+      'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
     ],
-    when: worldStale((s) => (s.spawn_idle_revision ?? 0) < 1),
-  },
-  {
-    id: 'world-effects-water-1',
-    title: 'More faithful effects, water and ground',
-    paras: [
-      'Effects now follow the game much more closely. Fountains spray and spill water properly, waves splash along the shore as they come in, street lanterns glow, bank sparkles use each bank’s own colour, and many effects have corrected colours, speeds, sizes, spin and spray patterns.',
-      'Seas, rivers and pools now rise and fall with the waves, ripple and reflect the sky the way they do in the game, and the ground takes on each area’s own colours, so beaches blend from sand into the sea.',
-      WORLD_UPDATE,
-    ],
-    when: worldStale((s) => (s.effect_property_revision ?? 0) < 5 || (s.water_revision ?? 0) < 1),
-  },
-  {
-    id: 'world-positioning-1',
-    title: 'More accurate rooms and objects',
-    paras: [
-      'Room objects now use corrected alignment, so connected pieces such as pipes fit together properly. Effects and connected rooms also use improved positions from the game files. Isolated rooms remain separate from the connected layout.',
-      WORLD_UPDATE,
-    ],
-    when: worldStale((s) => (s.room_world_position_revision ?? 0) < 1
-      || (s.owner_alignment_revision ?? 0) < 2
-      || (s.occurrence_draw_revision ?? 0) < 2
-      || (s.effect_anchor_revision ?? 0) < 8
-      || (s.scenery_trim_revision ?? 0) < 1),
+    when: worldStale((s) => Object.entries(WORLD_070).some(([key, revision]) => (s[key] ?? 0) < revision)),
   },
   {
     id: 'extraction-engine-3-equipment',
