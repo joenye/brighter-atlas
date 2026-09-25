@@ -65,6 +65,23 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   `builds/<hash16>.json`; new build-specific data extends it rather than adding
   a file, and anything computable from the user's bundles is computed at
   extraction instead of shipped.
+- **Derive by shape.** Build-specific values the user's bundles can tell are
+  found by data shape at extraction, the same rule on every build:
+  `extract/world/render-shape.ts` (draw tables, materials, environments),
+  `placement-shape.ts` (rooms, water, tiles), `effect-shape.ts`,
+  `card-data.ts`, `extract/maps/map-shape.ts`. Anchor record types by the type
+  table's ids (`typesWithId`), which stay the same across builds; never by
+  runtime class numbers, which change every build. A regression here is
+  silent (the viewer falls back to plain drawing), so the e2e asserts the
+  derived data directly.
+- **Extraction timing.** The texture pass runs in pooled workers while the
+  ingest thread does every pass that needs no texture results; the ingest
+  thread also hands the pool its chunks, so it keeps a deeper queue
+  (`poolQueueDepth`) through long synchronous passes. That window is full:
+  new extraction work goes in its own worker (the 2D map runs beside World)
+  or must be measured against the previous release. Never read scattered
+  bundle objects through the sequential slab reader (a fresh 16 MB slab per
+  object); read them individually.
 - **The production host serves a Content-Security-Policy** that must stay in
   sync with the app's loading behavior. Verify the app runs clean under a
   policy locally: `BS_CSP="<policy>" node tools/smoke.ts`.
