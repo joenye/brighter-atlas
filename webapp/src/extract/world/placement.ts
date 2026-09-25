@@ -17,7 +17,7 @@ import {makeRegistryRowDecoder} from './effects.js';
 import {resolveValue} from './room-metadata.js';
 import type {RegistryRow} from './graph.js';
 import type {FillRow} from './replay.js';
-import type {FetchJson, WorldProfile} from './profile.js';
+import type {WorldProfile} from './profile.js';
 import type {RoomRowRef, SpawnRecord} from './spawns.js';
 import {PoolDecoder} from './value-pool.js';
 import {readAppearanceControllers} from './default-appearance.js';
@@ -172,10 +172,11 @@ export function decodeDefaultAppearances(data:PlacementDecodeData|null,bytes:Uin
   return result;
 }
 
-export async function loadPlacementData(hash:string,get:FetchJson):Promise<PlacementDecodeData|null> {
-  let data:any;
-  try{data=await get(`builds/${hash.slice(0,16)}.placement.json`);}catch{return null;}
-  return validatePlacementData(data,hash);
+/** The profile's placement section (the one per-build file carries it), or
+ *  null when the build has none. */
+export function placementDataOf(profile:WorldProfile):PlacementDecodeData|null {
+  if(profile.placement===undefined)return null;
+  return validatePlacementData(profile.placement,profile.bundle0?.raw_sha256??'');
 }
 
 // A zero result is meaningful. Only a positive result stops the ordered

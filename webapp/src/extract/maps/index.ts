@@ -23,13 +23,8 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   progress('decode data');
   const {profile,rawSha256,error}=await loadWorldProfile(ab0,{fetchJson});
   if(!profile)throw Error(error);
-  const get=fetchJson??(async(rel:string)=>{
-    const response=await fetch(new URL('../../../'+rel,import.meta.url),{cache:'no-cache'});
-    if(!response.ok)throw Error('Map decode data is unavailable for this build');
-    return response.json();
-  });
   let data;
-  try {data=validateMapDecodeData(await get(`builds/${rawSha256.slice(0,16)}.maps.json`),rawSha256);}
+  try {data=validateMapDecodeData(profile.maps,rawSha256);}
   catch {throw Error('2D maps are not supported for this game build yet');}
   progress('room records');
   const {rows}=replayGraph(ab0,profile),pool=decodePool(ab0,profile).values;

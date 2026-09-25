@@ -29,7 +29,7 @@ import { deriveMapRoomRecords } from '../maps/records.js';
 import { decodeMapAnnotationTable } from '../maps/bindings.js';
 import { validateMapDecodeData } from '../maps/decode-data.js';
 import { deriveRoomMetadata, resolveValue } from './room-metadata.js';
-import {loadPlacementData,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
+import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
@@ -113,7 +113,7 @@ export async function extractWorld({
   step('profile', 0, 1);
   const { profile, error } = await loadWorldProfile(ab0, { fetchJson });
   if (!profile) throw new Error(error || 'no world decode profile for this game build yet');
-  const placementData=await loadPlacementData(profile.bundle0!.raw_sha256!,fetchJson??defaultFetchJson);
+  const placementData=placementDataOf(profile);
   step('profile', 1, 1);
   bail();
 
@@ -269,7 +269,7 @@ export async function extractWorld({
   let annotationTable;
   try {
     const hash=profile.bundle0!.raw_sha256!;
-    const data=validateMapDecodeData(await (fetchJson??defaultFetchJson)(`builds/${hash.slice(0,16)}.maps.json`),hash);
+    const data=validateMapDecodeData(profile.maps,hash);
     const binding=data.bindings.annotationTable;
     if(binding)annotationTable={offset:binding.offset,entries:decodeMapAnnotationTable(ab0,pool.values,profile,binding)};
   } catch { /* Optional annotation data may be unavailable for this build. */ }

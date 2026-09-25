@@ -61,6 +61,10 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   offline purely from analysis of the game's own files: no running game
   process is ever inspected or modified. Any public copy that mentions this
   data must stress that fact.
+- **One per-build file (AGENTS.md).** Build-specific decode data is one file,
+  `builds/<hash16>.json`; new build-specific data extends it rather than adding
+  a file, and anything computable from the user's bundles is computed at
+  extraction instead of shipped.
 - **The production host serves a Content-Security-Policy** that must stay in
   sync with the app's loading behavior. Verify the app runs clean under a
   policy locally: `BS_CSP="<policy>" node tools/smoke.ts`.

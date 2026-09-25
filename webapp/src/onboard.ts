@@ -255,9 +255,8 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
         if(maps&&!doneCats.has('maps')) {
           let supported=false;
           if(entry)try {
-            const response=await fetch(new URL(`../builds/${rawSha256.slice(0,16)}.maps.json`,import.meta.url),{cache:'no-cache'});
             const {validateMapDecodeData}=await import('./extract/maps/decode-data.js');
-            validateMapDecodeData(await response.json(),rawSha256);supported=true;
+            validateMapDecodeData(entry.maps,rawSha256);supported=true;
           }catch{/* this build has no map support yet */}
           if(!supported){
             checks.maps.checked=false;checks.maps.disabled=true;maps.row.classList.add('missing');maps.est.textContent='unsupported';

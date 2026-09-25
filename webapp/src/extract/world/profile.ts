@@ -138,6 +138,7 @@ export async function matchWorldProfileEntryByHash(
       bundle0_raw_sha256: rawSha256,
     };
     if (profile.label) entry.label = profile.label;
+    if (profile.maps !== undefined) entry.maps = profile.maps;
     return { entry, rawSha256 };
   } catch {
     return { entry: null, rawSha256, error: NO_DATA_ERROR };
