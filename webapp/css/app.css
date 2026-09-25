@@ -1199,6 +1199,9 @@ html.mgate-on #app { display: none; }
   .map-options label { min-height: 40px; }
   .map-status { font-size: 11px; }
 }
+/* "Show in world": the model's rooms */
+.model-rooms { display: flex; flex-wrap: wrap; gap: 6px; max-height: 50vh; overflow-y: auto; margin: 8px 0; }
+.model-rooms .model-room { text-align: left; }
 /* the model card picture modal */
 .card-preview { display: flex; justify-content: center; margin: 8px 0; }
 .card-preview canvas { max-width: 100%; height: auto; border-radius: 6px; }

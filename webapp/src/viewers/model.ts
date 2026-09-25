@@ -339,6 +339,20 @@ function cardButton(app: any, model: ModelRecord): HTMLElement {
   return btn;
 }
 
+/** "Show in world": the rooms this model stands in (game models with World data). */
+function worldButton(app: any, model: ModelRecord): HTMLElement {
+  const btn = el('button', { class: 'btn', text: '⌖ Show in world', title: 'Pick a room this model stands in and open it with the model selected' });
+  btn.style.display = 'none';
+  if ((model as any).source === 'system') {
+    Promise.resolve(app.store.worldIndex?.()).then((index: any) => { if (index?.rooms?.length) btn.style.display = ''; }).catch(() => {});
+  }
+  btn.addEventListener('click', async () => {
+    const { openModelRoomsModal } = await import('./model-rooms.js');
+    openModelRoomsModal(app, model);
+  });
+  return btn;
+}
+
 function modelOwnerSlots(model: ModelRecord): Set<number> {
   const slots = new Set<number>();
   const sources = Array.isArray(model.sources) ? model.sources : [];
@@ -664,7 +678,7 @@ export function createModelView(app: any, model: ModelRecord) {
           },
         });
       });
-      toolbar.append(el('span', { class: 'sep' }), staticShot, cardButton(app, model), el('span', { class: 'sep' }), ...exportGroup(app, model, []));
+      toolbar.append(el('span', { class: 'sep' }), staticShot, cardButton(app, model), worldButton(app, model), el('span', { class: 'sep' }), ...exportGroup(app, model, []));
       scene.addTick((dt: number) => tickModelEffects(dt, null));
       void attachModelEffects(effectsAnchor, null, []);
       if ((window as any).__bs) {
@@ -822,7 +836,7 @@ export function createModelView(app: any, model: ModelRecord) {
       if (!active.size) { app.banner('this model has no loaded meshes'); return; }
       openVideoWizard({ app, scene, bar, clips, entry: capEntry, activeSize: active.size });
     });
-    toolbar.append(makeGridToggle(scene), makeLightToggle(scene), el('span', { class: 'sep' }), shotBtn, vidBtn, cardButton(app, model), el('span', { class: 'sep' }), ...exportGroup(app, model, clips));
+    toolbar.append(makeGridToggle(scene), makeLightToggle(scene), el('span', { class: 'sep' }), shotBtn, vidBtn, cardButton(app, model), worldButton(app, model), el('span', { class: 'sep' }), ...exportGroup(app, model, clips));
 
     // load the fixed mesh set
     await enableMany(meshRows.filter((m) => m.f));

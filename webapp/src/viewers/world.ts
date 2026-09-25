@@ -47,6 +47,7 @@ import { updateGameWaterLights } from './world/game-water.js';
 import { EffectsClock } from './world/effects-sim.js';
 import { GameFrame } from './world/game-frame.js';
 import { renderCard, type CardSubject, type CardView } from './world/card.js';
+import { REVEAL_KEY } from './model-rooms.js';
 import { MergedWorld } from './world/merged.js';
 import { createWorldHud, classifyGpu } from './world/hud.js';
 import {
@@ -3804,6 +3805,24 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return false;
   }
 
+  // "Show in world" handoff (model-rooms.ts): open with that model pinned in
+  // inspect mode and the camera on it.
+  function revealModel(): void {
+    let ask: any = null;
+    try { ask = JSON.parse(sessionStorage.getItem(REVEAL_KEY) || 'null'); sessionStorage.removeItem(REVEAL_KEY); } catch { return; }
+    if (!ask?.ref || !world.rooms.has(Number(ask.ref.room))) return;
+    setInspect(true);
+    pinByRef(ask.ref).then((pinned) => {
+      if (!pinned || destroyed || !highlight?.parent) return;
+      highlight.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(highlight);
+      const centre = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+      focusExtent(centre.x, centre.z, Math.max(size.x, size.y, size.z) * 3);
+      scene3d.controls.target.y = centre.y;
+      scene3d.controls.update();
+    }).catch(() => { /* the room is open either way */ });
+  }
+
   function showInspection(hit: any, pinned: boolean): void {
     const info = world.describeInstance(hit.object, hit.instanceId);
     if (!info) { clearInspection(true); return; }
@@ -4885,6 +4904,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
     ready = true;
     syncStatus();
+    if (!allMode) revealModel();
   })().catch((error) => {
     if (destroyed) return;
     console.warn('world view load failed:', error);
