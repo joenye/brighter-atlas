@@ -63,7 +63,19 @@ export class GameGL {
     gl.getExtension('EXT_color_buffer_float');
   }
 
+  /** Buffers created while this list is set are appended to it (so a
+   *  caller can free one scene's buffers without touching the others). */
+  collect: WebGLBuffer[] | null = null;
+  private readonly compiledPrograms = new WeakMap<TranslatedProgram, GameGLProgram>();
+
+  /** A linked program per translated program, built once. */
   compile(translated: TranslatedProgram): GameGLProgram {
+    let p = this.compiledPrograms.get(translated);
+    if (!p) { p = this.link(translated); this.compiledPrograms.set(translated, p); }
+    return p;
+  }
+
+  private link(translated: TranslatedProgram): GameGLProgram {
     const gl = this.gl;
     const shader = (type: number, source: string) => {
       const s = gl.createShader(type)!;
@@ -207,6 +219,7 @@ export class GameGL {
     const target = index ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER;
     gl.bindBuffer(target, b);
     gl.bufferData(target, data, gl.STATIC_DRAW);
+    this.collect?.push(b);
     return b;
   }
 

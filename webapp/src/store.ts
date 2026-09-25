@@ -49,6 +49,9 @@ export interface AppStore extends EventTarget {
   /** Frame-0 skin palettes for those clips ('world:idle-poses'). null when
    *  the extraction had no clips to pose from. */
   worldIdlePoses?(): Promise<any>;
+  /** Each model's card picture ('model:cards': the card record and its
+   *  subject, drawn by viewers/model-cards.ts). null without World. */
+  modelCards?(): Promise<any>;
   /** Cheap effects-doc probe (manifest flag / key existence, never the doc
    *  itself), for gating effects UI without pulling the payload. */
   hasWorldEffects?(): Promise<boolean>;

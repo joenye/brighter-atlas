@@ -46,6 +46,7 @@ import {
 import { updateGameWaterLights } from './world/game-water.js';
 import { EffectsClock } from './world/effects-sim.js';
 import { GameFrame } from './world/game-frame.js';
+import { renderCard, type CardSubject, type CardView } from './world/card.js';
 import { MergedWorld } from './world/merged.js';
 import { createWorldHud, classifyGpu } from './world/hud.js';
 import {
@@ -5118,6 +5119,41 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         renderer.resetState();
         gameFrame!.skipWater = false;
         return out ? { width: out.width, height: out.height, rgba: out.data, canvas, targets, constants } : null;
+      },
+    },
+    // Card picture test handle: a loaded spawn's parts (with its recolours) and
+    // a card render of a subject through the game's programs (card.ts).
+    cardApi: {
+      spawnParts(record: number, withProps = false) {
+        const sc = world.spawnColumns, pc = world.spawnPartColumns;
+        if (!sc || !pc) return null;
+        for (const room of world.rooms.values()) {
+          const shard = room.shard;
+          const index = (shard?.spawns || []).findIndex((row: any[]) => Number(row[sc.record]) === record);
+          if (index < 0) continue;
+          const spawn = shard.spawns[index];
+          const parts = (shard.spawn_parts || []).filter((row: any[]) => Number(row[pc.spawn]) === index
+            && (withProps || Number(row[pc.confidence]) !== 3)).map((row: any[]) => {
+            const recolours = Number(row[pc.recolor]) >= 0 ? shard.recolors?.[Number(row[pc.recolor])] ?? null : null;
+            return { mesh: Number(row[pc.mesh]), material: Number(row[pc.material]), renderTexture: Number(row[pc.render_texture]),
+              recolours: recolours ? recolours.slice(0, 2).map((c: any[]) => c.map(Number)) : null, tint: null };
+          });
+          return { room: room.id, idleClip: sc.idle_clip !== undefined ? Number(spawn[sc.idle_clip]) : -1, parts };
+        }
+        return null;
+      },
+      async render(subject: CardSubject, view: CardView, scale = 1) {
+        const gl = renderer.getContext();
+        if (!(gl instanceof WebGL2RenderingContext) || !world.index?.render) return null;
+        try {
+          const out = await renderCard({
+            gl, url: (rel: string) => app.store.url(rel), payload: (rel: string) => app.store.payload(rel),
+            render: world.index.render, tileUnits: world.tileUnits, textureMeta: (id: number) => world.textureMeta(id),
+          }, subject, view, scale);
+          return { width: out.width, height: out.height, rgba: Array.from(out.rgba) };
+        } finally {
+          renderer.resetState();
+        }
       },
     },
     // Effects debug/test handle: live counts, the frozen-clock controls the

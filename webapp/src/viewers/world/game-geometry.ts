@@ -96,11 +96,14 @@ interface DecodedMesh {
   source: Uint16Array | Uint32Array; count: number;
 }
 
+// A stream is base64 in a stored payload, or already decoded (a posed copy).
+const floats = (v: any): Float32Array => (v instanceof Float32Array ? v : b64f32(v));
+
 function decodeMesh(payload: any): DecodedMesh {
-  const positions = b64f32(payload.positions);
+  const positions = floats(payload.positions);
   return {
-    positions, normals: b64f32(payload.normals), uvs: b64f32(payload.uvs),
-    tangents: payload.tangents ? b64f32(payload.tangents) : null,
+    positions, normals: floats(payload.normals), uvs: floats(payload.uvs),
+    tangents: payload.tangents ? floats(payload.tangents) : null,
     source: payload.idx_dtype === 'u32' ? b64u32(payload.indices) : b64u16(payload.indices),
     count: positions.length / 3,
   };

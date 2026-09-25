@@ -65,6 +65,8 @@ export interface GameCamera {
   fov: number;                    // vertical degrees
   width: number;
   height: number;
+  /** The camera's up (native frame); z when absent. */
+  up?: THREE.Vector3;
 }
 
 interface Draw {
@@ -101,9 +103,9 @@ export function gameProjection(fovDeg: number, aspect: number, near: number, far
 
 /** World to the game's view space (x right, y out of the screen, z up). The
  *  native frame is left handed (x east, y south, z up), so right is z x f. */
-export function gameView(eye: THREE.Vector3, target: THREE.Vector3): THREE.Matrix4 {
+export function gameView(eye: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3 | null = null): THREE.Matrix4 {
   const f = target.clone().sub(eye).normalize();
-  const r = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 0, 1), f).normalize();
+  const r = new THREE.Vector3().crossVectors(up ?? new THREE.Vector3(0, 0, 1), f).normalize();
   const u = new THREE.Vector3().crossVectors(f, r);
   return new THREE.Matrix4().set(
     r.x, r.y, r.z, -r.dot(eye),
@@ -231,17 +233,53 @@ export class GameFrame {
   /** The room's lighting at a chosen story step, in place of its own
    *  story-complete one (null: the room's own). */
   environmentOverride: GameRenderIndex['environments'][string] | null = null;
+  /** A presentation frame (a card picture): its own light direction (native
+   *  frame, towards the scene), the neutral vignette, no shadow map or ambient
+   *  occlusion, and the image shifted by `shift` pixels (x right, y down).
+   *  null: the room frame. */
+  card: { direction: number[]; shift: [number, number] } | null = null;
   /** The last frame's vertex constant words per pass (test readback). */
   lastConstants: Record<string, Uint32Array> = {};
+
+  private roomBuffers: WebGLBuffer[] = [];
 
   async setRoom(room: GameRoomSource): Promise<void> {
     const p = this.index.ssao.programs;
     for (const index of [...p.mips, p.sao, p.blurH, p.blurV]) {
       if (!this.passPrograms.has(index)) this.passPrograms.set(index, await this.shaders.program(index, 'clip'));
     }
+    this.releaseRoom();
     this.room = room;
+    this.gl.collect = this.roomBuffers;
+    try {
+      await this.buildDraws(room);
+    } finally {
+      this.gl.collect = null;
+    }
+  }
+
+  /** Free the current scene's vertex arrays and buffers (programs and
+   *  textures stay cached for the next scene). */
+  releaseRoom(): void {
+    const gl = this.context;
+    for (const d of [...this.draws, ...this.waterDraws]) {
+      gl.deleteVertexArray(d.vao);
+      if (d.depth) gl.deleteVertexArray(d.depth.vao);
+    }
+    for (const b of this.roomBuffers) gl.deleteBuffer(b);
+    this.roomBuffers = [];
     this.draws = [];
     this.waterDraws = [];
+  }
+
+  /** Free the cached textures too (the frame stays usable). */
+  releaseTextures(): void {
+    const textures = [...this.textures.values()];
+    this.textures.clear();
+    for (const p of textures) p.then((t) => { if (t) this.context.deleteTexture(t.texture); }).catch(() => {});
+  }
+
+  private async buildDraws(room: GameRoomSource): Promise<void> {
     for (const group of drawGroups(room.batches)) {
       const draw = await this.buildDraw(group).catch((error) => {
         console.warn('game shading: group skipped', group.batch.material, group.batch.renderTexture, error);
@@ -516,8 +554,17 @@ export class GameFrame {
     const idx = this.index;
     const { near, far } = idx.camera;
     const aspect = camera.width / camera.height;
-    const view = gameView(camera.eye, camera.target);
+    const view = gameView(camera.eye, camera.target, camera.up ?? null);
     const projection = gameProjection(camera.fov, aspect, near, far);
+    const card = this.card;
+    if (card) {
+      // pixel shift after the projection: clip x,y move by 2*shift/size times w
+      projection.premultiply(new THREE.Matrix4().set(
+        1, 0, 0, 2 * card.shift[0] / camera.width,
+        0, 1, 0, -2 * card.shift[1] / camera.height,
+        0, 0, 1, 0,
+        0, 0, 0, 1));
+    }
     const viewProjection = projection.clone().multiply(view);
     const t = this.ensureTargets(camera.width, camera.height);
     const env = this.environmentOverride ?? idx.environments[String(this.room.roomId)] ?? null;
@@ -570,7 +617,7 @@ export class GameFrame {
     gl.viewport(0, 0, size, size);
     gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
     const casterWords = vsWords(casterClip, null, 0, true);
-    for (const d of this.draws) {
+    for (const d of card ? [] : this.draws) {
       if (!d.depth) continue;
       this.gl.applyState(this.state(d.depth.program, { colourWrite: false }));
       this.gl.bindResources(d.depth.gl, { [d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs']: casterWords },
@@ -596,7 +643,7 @@ export class GameFrame {
     gl.viewport(0, 0, t.wa, t.ha);
     gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
     const prepassWords = vsWords(prepassClip, null, 0, true);
-    for (const d of this.draws) {
+    for (const d of card ? [] : this.draws) {
       if (!d.depth) continue;
       this.gl.applyState(this.state(d.depth.program, { colourWrite: false }));
       this.gl.bindResources(d.depth.gl, { [d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs']: prepassWords },
@@ -658,6 +705,13 @@ export class GameFrame {
     this.ssaoPrevious = current_;
     fullscreen(ssao.programs.blurH, t.blur1Fb, t.wa, t.ha, () => ({}), { 0: t.ao[current_] });
     fullscreen(ssao.programs.blurV, t.blur3Fb, t.wa, t.ha, () => ({}), { 0: t.blur1 });
+    if (card) {
+      // no occlusion: the occlusion the main pass reads is 1 everywhere
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.blur3Fb);
+      gl.viewport(0, 0, t.wa, t.ha);
+      gl.colorMask(true, true, true, true);
+      gl.clearColor(1, 1, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    }
     this.lastView = view.clone();
     const ssaoOffsetScale = [
       t.pad / (t.w / camera.width), t.pad / (t.h / camera.height),
@@ -675,7 +729,8 @@ export class GameFrame {
       const v = c ?? fallback;
       return [0, 1, 2].map((k) => f32(f32(Math.pow(v[k], idx.lighting.gamma)) * v[3] * idx.lighting.fade));
     };
-    const dir = new THREE.Vector3(idx.lighting.direction[0], idx.lighting.direction[1], idx.lighting.direction[2]).normalize();
+    const d0 = card?.direction ?? idx.lighting.direction;
+    const dir = new THREE.Vector3(d0[0], d0[1], d0[2]).normalize();
     const psLight = [
       camera.eye.x, camera.eye.y, camera.eye.z, 0,
       ...light(env?.ground, [0.4314, 0.2863, 0.1529, 1]), 1,
@@ -685,7 +740,7 @@ export class GameFrame {
       ...ssaoOffsetScale,
       idx.lighting.fade, 0, 0, 0,
     ];
-    const mainWords = vsWords(viewProjection, shadow.receiver, shadow.offset);
+    const mainWords = vsWords(viewProjection, shadow.receiver, shadow.offset, !!card);
     this.lastConstants = { caster: casterWords, prepass: prepassWords, main: mainWords };
     const waterVsWords = vsWords(viewProjection, shadow.receiver, shadow.offset, true);
     const shadowSampler = this.gl.sampler([0x95, 3, 3, 3, 4, 0, 15, 0, 1]);

@@ -20,7 +20,7 @@ import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
 import {readWorldWater, type WorldWater} from './water-materials.js';
-import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
+import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, validRenderData, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
 import {b64FromTyped} from '../b64.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
@@ -50,6 +50,8 @@ import * as meshNamesMod from './mesh-names.js';
 import {objectDescriptionReader} from './object-descriptors.js';
 import {recordNames} from './names.js';
 import {annotateDisplayNames, nameFromRecords, byInternal as enemyByInternal, enemyDisplayNames, iconImageNames, referrerIndex} from './display-names.js';
+import {readCards, assignModelCards, MODEL_CARDS_FORMAT} from './cards.js';
+import {deriveCardData} from './card-data.js';
 import {annotateObjectCatalog,appendObjectMeshNames} from './object-names.js';
 import { inferMeshSlots, type RigSkeleton } from './mesh-slots.js';
 import * as effectsMod from './effects.js';
@@ -863,6 +865,24 @@ export async function extractWorld({
   annotateDisplayNames(catalog, enemyNames, iconNames.rowNames, { referrers: referrerIndex(rows, poolRegistryRefs), labelOf });
   nameFromRecords(catalog, (slot) => { const n = recNames.nameOf(slot); return n ? { name: n.singular ?? n.name, base: n.base } : null; });
   await sink.derivedPut(versionId, 'image:names', { format: iconNames.format, images: iconNames.images });
+
+  // ---- card pictures (cards.ts): each model's card, drawn by the viewer ------
+  // Card constants found in this bundle (card-data.ts); the lights need the
+  // render data, else the viewer's default lights apply.
+  const renderData = placementData?.render && validRenderData(placementData.render) ? placementData.render : null;
+  const cardData = deriveCardData({ rows, pool: pool.values, charset: dt.charset, decode: rowDecoder });
+  if (cardData) {
+    const meshRig = (mesh: number) => { const sref = (dt.meshDir as any)?.[mesh]?.sref; return Number.isInteger(sref) && sref >= 2 ? sref - 2 : null; };
+    const clipRig = (clip: number) => { const skel = (dt.animDir as any)?.[clip]?.skel; return Number.isInteger(skel) ? skel : null; };
+    const clipDuration = (clip: number) => { const d = (dt.animDir as any)?.[clip]?.dur; return Number.isFinite(d) && d > 0 ? d : 0; };
+    const cards = readCards({
+      rows, pool: pool.values, symbols: dt.symbols, charset: dt.charset, decode: rowDecoder,
+      cards: cardData, render: renderData, meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
+      meshRig, clipRig, clipDuration, spawnGraph: ctx.spawnGraph as any, enemyNames,
+      nameOf: (slot: number) => { const n = recNames.nameOf(slot); return n ? n.singular ?? n.name : null; },
+    });
+    await sink.derivedPut(versionId, 'model:cards', { format: MODEL_CARDS_FORMAT, cards: assignModelCards(catalog.models as any[], cards) });
+  }
   // "Set catalog.profile to the checkedBundleProfile() result first" (catalog.js)
   catalog.profile = catalogMod.checkedBundleProfile(
     assetModels, bundleSignatures,

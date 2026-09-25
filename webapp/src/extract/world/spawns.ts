@@ -479,6 +479,15 @@ export class SpawnGraph {
   /** The resting-clip resolver (null without animation data). */
   get idleResolver(): ActorIdleResolver | null { return this._idle; }
 
+  /** An actor's appearance and label without a placement (a card subject that
+   *  is never placed: quest, shop and cut-scene actors). */
+  unplacedAppearance(ownerSlot: number): { label: string | null; parts: any[] } | null {
+    const appearance = this._appearance(ownerSlot, Number.MAX_SAFE_INTEGER);
+    if (!appearance?.parts?.length) return null;
+    const [label] = this._label(ownerSlot, appearance.mesh_field_op);
+    return { label, parts: appearance.parts };
+  }
+
   spawn(ownerSlot: number): SpawnRecord | null {
     if (this._spawnCache.has(ownerSlot)) return this._spawnCache.get(ownerSlot)!;
     const location = this._location(ownerSlot);

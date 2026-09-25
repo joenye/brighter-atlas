@@ -9,6 +9,7 @@
 // each mesh's texture resolves from the model's pinned image hash, not the
 // global override.
 
+import { modelCards } from './model-cards.js';
 import { renderTransparentFrame, SHOT_RES, captureTiledPng } from './capture-common.js';
 import { Scene3D, THREE, getRenderer, makeGridToggle, makeLightToggle, mountImmersiveControls, savedLights } from './three-common.js';
 import { Rig, SkeletonViz, PlaybackBar } from './rig.js';
@@ -326,6 +327,18 @@ async function renderVariantThumb(app: any, model: any, v: number): Promise<stri
 // slot the effects doc's owner attachments reference, so the join checks
 // their union. User-authored models carry no `sources`, so this is empty
 // for them and the model page simply shows no effects.
+/** The card picture button: shown when the model has a card (World extraction). */
+function cardButton(app: any, model: ModelRecord): HTMLElement {
+  const btn = el('button', { class: 'btn', text: '▤ Card', title: 'The picture the game shows on this model\u2019s information card: view it full size and download it' });
+  btn.style.display = 'none';
+  modelCards(app.store).card((model as any).id).then((card) => { if (card) btn.style.display = ''; });
+  btn.addEventListener('click', async () => {
+    const { openCardModal } = await import('./card-modal.js');
+    openCardModal(app, model as any);
+  });
+  return btn;
+}
+
 function modelOwnerSlots(model: ModelRecord): Set<number> {
   const slots = new Set<number>();
   const sources = Array.isArray(model.sources) ? model.sources : [];
@@ -651,7 +664,7 @@ export function createModelView(app: any, model: ModelRecord) {
           },
         });
       });
-      toolbar.append(el('span', { class: 'sep' }), staticShot, el('span', { class: 'sep' }), ...exportGroup(app, model, []));
+      toolbar.append(el('span', { class: 'sep' }), staticShot, cardButton(app, model), el('span', { class: 'sep' }), ...exportGroup(app, model, []));
       scene.addTick((dt: number) => tickModelEffects(dt, null));
       void attachModelEffects(effectsAnchor, null, []);
       if ((window as any).__bs) {
@@ -809,7 +822,7 @@ export function createModelView(app: any, model: ModelRecord) {
       if (!active.size) { app.banner('this model has no loaded meshes'); return; }
       openVideoWizard({ app, scene, bar, clips, entry: capEntry, activeSize: active.size });
     });
-    toolbar.append(makeGridToggle(scene), makeLightToggle(scene), el('span', { class: 'sep' }), shotBtn, vidBtn, el('span', { class: 'sep' }), ...exportGroup(app, model, clips));
+    toolbar.append(makeGridToggle(scene), makeLightToggle(scene), el('span', { class: 'sep' }), shotBtn, vidBtn, cardButton(app, model), el('span', { class: 'sep' }), ...exportGroup(app, model, clips));
 
     // load the fixed mesh set
     await enableMany(meshRows.filter((m) => m.f));

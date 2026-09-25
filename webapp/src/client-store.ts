@@ -185,6 +185,7 @@ export class ClientStore extends EventTarget implements AppStore {
   // extractions have neither doc and every consumer treats null as "none".
   animIdle(): Promise<any> { return this._doc('anim:idle'); }
   worldIdlePoses(): Promise<any> { return this._doc('world:idle-poses'); }
+  modelCards(): Promise<any> { return this._doc('model:cards'); }
   private _doc(key: string): Promise<any> {
     if (!this._indexes.has(key)) {
       this._indexes.set(key, derivedGet(this.versionId, key)

@@ -1,6 +1,7 @@
 // App shell: category tabs, virtualized sidebar list, hash router, details
 // panel, status bar, error banners, keyboard navigation, global search.
 
+import { modelCards } from './viewers/model-cards.js';
 import { createStore } from './client-store.js';
 import { openHelpModal } from './help.js';
 import { buildVersionLabel, buildInfoReady } from './build-info.js';
@@ -1134,7 +1135,11 @@ class App {
     switch (cat) {
       case 'models': {
         const variants = modelVariantCount(item);
+        // the model's card picture (world extraction), drawn when the row shows
+        const card = item.source === 'system' ? el('span', { class: 'r-thumb r-card', title: 'Card picture' }) : null;
+        if (card) modelCards(this.store).attachThumbnail(card, item.id);
         append(row,
+          card,
           el('span', { class: 'r-id r-model-id', text: item.source === 'system' ? '❖ˢ' : '❖', title: item.id }),
           el('span', { class: `r-main${item.name ? '' : ' dim'}`, text: item.name || 'Untitled model', title: item.name || '' }),
           el('span', {

@@ -10,6 +10,7 @@ import type {FillRow} from './replay.js';
 import {PoolDecoder, type PoolNode} from './value-pool.js';
 import type {WorldProfile} from './profile.js';
 
+
 export interface RenderDecodeData {
   /** [vertex, pixel, depth comparison (0: none), depth write, blend (-1: none), cull (-1: none), index format]. */
   programs: number[][];
