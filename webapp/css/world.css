@@ -1,0 +1,44 @@
+/* The world map page (world.html): layout only. Colours, the top bar,
+   buttons and the map's canvas come from css/app.css, as in the app. */
+.world { display: flex; flex-direction: column; height: 100%; padding-bottom: env(safe-area-inset-bottom, 0px); }
+.world-title { color: var(--fg1); font-weight: 600; }
+.world-toolbar { gap: 8px 14px; }
+.world-pick { display: flex; align-items: center; gap: 6px; }
+.world-release { min-width: 128px; font-variant-numeric: tabular-nums; }
+.world-labels { margin-left: 6px; }
+.world-slider { position: relative; flex: 1; min-width: 200px; height: 32px; display: flex; align-items: center; }
+.world-slider input[type=range] { width: 100%; margin: 0; cursor: pointer; }
+.world-ticks { position: absolute; left: 8px; right: 8px; top: 2px; height: 6px; pointer-events: none; }
+.world-ticks span { position: absolute; top: 0; width: 1px; height: 6px; background: var(--fg2); opacity: .6; }
+.world-ticks span.year { height: 10px; top: -2px; background: var(--fg1); opacity: .9; }
+.world-map { flex: 1; }
+.world-map canvas { outline: none; }
+.map-status.error { color: var(--bad); }
+
+.world-picker[hidden] { display: none; }
+.world-picker { position: fixed; inset: 0; z-index: 50; background: rgba(5, 7, 10, .6); display: flex; align-items: center; justify-content: center; }
+.world-picker-card { width: min(460px, calc(100% - 24px)); max-height: 75%; display: flex; flex-direction: column;
+  background: var(--bg1); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.world-picker-head { display: flex; gap: 8px; }
+.world-picker-head input { flex: 1; min-width: 0; background: var(--bg3); color: var(--fg0); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; }
+.world-list { list-style: none; margin: 10px 0 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; }
+.world-list button { width: 100%; display: flex; justify-content: space-between; gap: 12px; text-align: left; background: none; border: 0;
+  border-radius: 6px; padding: 8px 10px; cursor: pointer; color: var(--fg1); font-variant-numeric: tabular-nums; }
+.world-list button:hover, .world-list button.current { background: var(--bg3); color: var(--fg0); }
+.world-list .when { color: var(--fg2); font-family: var(--mono); font-size: 11px; }
+.world-list .empty { color: var(--fg2); padding: 8px 10px; }
+
+/* phones: the toolbar stacks (update controls, then the slider), bigger targets */
+@media (max-width: 640px) {
+  #topbar .world-title { display: none; }
+  .world-toolbar { padding: 8px 10px; }
+  .world-toolbar .btn { min-height: 36px; }
+  .world-pick { width: 100%; }
+  .world-release { flex: 1; }
+  .world-slider { min-width: 0; width: 100%; flex: none; }
+  .world-picker { align-items: flex-end; }
+  .world-picker-card { width: 100%; border-radius: var(--radius) var(--radius) 0 0; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
+}
+
+/* a capture view (#ui=0): the map alone, for scripted time-lapses */
+.world.bare #topbar, .world.bare .world-toolbar, .world.bare .map-status { display: none; }

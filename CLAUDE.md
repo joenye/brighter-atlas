@@ -3,7 +3,11 @@
 A fully client-side viewer for the **Brighter Shores** asset bundles
 (engine "mahogany", Fen Research). Users provide their own `assetBundle0` to
 `assetBundle8` cache files; everything decodes in-browser. **No game data is
-committed or distributed, ever.**
+committed, ever, and none is distributed, with one exception:** the world map
+page (`world.html`, served at `/world`) draws every game update's 2D map
+(terrain, room labels and their artwork)
+from data the site serves under `world-data/`. Nothing else from the game is
+served; widening that is the maintainer's decision (AGENTS.md).
 
 ## Layout
 - `webapp/`: the app. TypeScript in `src/`, bundled by esbuild
@@ -12,6 +16,10 @@ committed or distributed, ever.**
   libraries (npm devDeps exist only for their types). `defaults/` ships the
   shared room-name override table (no user annotations). `data-fixtures/` is
   the committed synthetic dataset the smoke test runs against.
+- `world.html` + `src/world-atlas/` + `css/world.css`: the world map page,
+  a separate entry (`js/world.js`) that needs no game files. It reuses the
+  Maps renderer and camera (`viewers/maps/renderer.ts`, `pan-zoom.ts`);
+  `tools/test_world.ts` (run by smoke) covers it on synthetic data.
 - Hosting, deployment and release tooling are **not part of this repo**: it
   builds a static site and deliberately knows nothing about where or how
   that site is served.

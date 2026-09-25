@@ -211,12 +211,19 @@ export class MapRenderer {
   readonly stats={terrainTiles:0,markers:0};
   private onLost=(e:Event)=>{e.preventDefault();this.lost=true;};
   private onRestored=()=>{this.lost=false;this.setup();this.upload();if(this.view)this.draw(this.view);};
-  constructor(readonly canvas:HTMLCanvasElement,readonly doc:MapDocument) {
+  constructor(readonly canvas:HTMLCanvasElement,public doc:MapDocument) {
     const gl=canvas.getContext('webgl2',{alpha:true,antialias:false,depth:true,premultipliedAlpha:true});
     if(!gl)throw Error('2D maps require WebGL 2.');
     this.gl=gl;this.scene=doc.scene;this.setup();
     canvas.addEventListener('webglcontextlost',this.onLost);
     canvas.addEventListener('webglcontextrestored',this.onRestored);
+  }
+  /** Show another map. Textures upload again only when its images differ. */
+  setDoc(doc:MapDocument) {
+    const art=doc.images!==this.doc.images||doc.terrainMips!==this.doc.terrainMips;
+    this.doc=doc;this.scene=doc.scene;
+    if(art&&!this.lost)this.setup();
+    this.setRooms(null);
   }
   setRooms(ids:Set<number>|null) {
     const rooms=ids?this.doc.scene.rooms.filter(r=>ids.has(r.room)):this.doc.scene.rooms;

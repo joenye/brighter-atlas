@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Brighter Atlas: World map</title>
+<meta name="description" content="The Brighter Shores world map for every game update. Slide through the dates to watch the world change. No game files needed.">
+<meta name="theme-color" content="#12151b">
+<meta name="color-scheme" content="dark">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Brighter Atlas: World map">
+<meta property="og:description" content="The Brighter Shores world map for every game update. Slide through the dates to watch the world change.">
+<meta name="twitter:card" content="summary">
+<!-- the app's own look (css/app.css); css/world.css only lays this page out -->
+<link rel="preload" href="vendor/fonts/ui-symbols.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="vendor/fonts/ui-symbols2.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/world.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231b2130'/%3E%3Cpath d='M4 11.5 8 3l4 8.5-4-2z' fill='%2378b7ff'/%3E%3C/svg%3E">
+</head>
+<body>
+<div id="world" class="world">
+  <header id="topbar">
+    <div class="brand">
+      <a class="brand-link" href="./" title="Brighter Atlas: home">
+        <span class="brand-mark">◮</span>
+        <span class="brand-name">Brighter</span>
+        <span class="brand-sub">atlas</span>
+      </a>
+      <span class="world-title">World map</span>
+    </div>
+    <div class="top-right">
+      <a class="btn-mini top-world" href="./" title="Open Brighter Atlas with your own game files: models, rooms in 3D, sounds and more">Open Brighter Atlas</a>
+    </div>
+  </header>
+  <div class="map-toolbar world-toolbar">
+    <div class="world-pick">
+      <button id="world-prev" class="btn" type="button" aria-label="Previous update" title="Previous update">&lsaquo;</button>
+      <button id="world-release" class="btn world-release" type="button" aria-haspopup="dialog" aria-controls="world-picker" title="Choose a game update">Loading...</button>
+      <button id="world-next" class="btn" type="button" aria-label="Next update" title="Next update">&rsaquo;</button>
+      <label class="world-labels"><input id="world-labels" type="checkbox" checked> Labels</label>
+    </div>
+    <div class="world-slider">
+      <div id="world-ticks" class="world-ticks" aria-hidden="true"></div>
+      <input id="world-date" type="range" min="0" max="1" step="1" value="1" aria-label="Game update date">
+    </div>
+  </div>
+  <div class="map-canvas-host world-map"><canvas id="world-canvas" tabindex="0" aria-label="World map. Drag to pan, pinch or scroll to zoom."></canvas></div>
+  <p id="world-status" class="map-status dim" role="status"></p>
+  <div id="world-picker" class="world-picker" role="dialog" aria-modal="true" aria-label="Choose a game update" hidden>
+    <div class="world-picker-card">
+      <div class="world-picker-head">
+        <input id="world-search" type="search" placeholder="Search updates, for example Sep 2026" aria-label="Search game updates" autocomplete="off">
+        <button id="world-picker-close" class="btn" type="button" aria-label="Close">&times;</button>
+      </div>
+      <ul id="world-list" class="world-list"></ul>
+    </div>
+  </div>
+</div>
+<script type="module" src="js/world.js"></script>
+</body>
+</html>

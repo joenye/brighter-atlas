@@ -115,6 +115,9 @@ button { font: inherit; color: inherit; }
 /* community/source links (Discord, GitHub): neutral .btn-mini that lines its
    icon up with the label and lights up on hover, no loud solid fill */
 .top-social { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
+/* the world map page (no game files needed) */
+.top-world { display: inline-flex; align-items: center; text-decoration: none; }
+.top-world:hover { background: var(--bg3); border-color: var(--accent); }
 .top-social svg { display: block; }
 .top-social:hover { background: var(--bg3); border-color: var(--accent); }
 .top-social.discord:hover { color: #5865f2; border-color: #5865f2; }

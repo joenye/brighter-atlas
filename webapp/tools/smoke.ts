@@ -14,6 +14,7 @@
 //
 import puppeteer from 'puppeteer-core';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { existsSync, readFileSync, promises as fs } from 'node:fs';
 import { serve } from './serve.ts';
@@ -2114,6 +2115,10 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       await worldSuite(browser, base);
       await onboardingSuite(browser);
       await mobileGateSuite(browser);
+      // the hosted world map (/world), on its own synthetic data
+      console.log('\n== world map (tools/test_world.ts)');
+      const world = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_world.ts')], { encoding: 'utf8' });
+      ok(world.status === 0, `world map page${world.status === 0 ? '' : `:\n    ${(world.stderr || world.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
     }
     if (realData && existsSync(path.join(WEBAPP, realData, 'manifest.json'))) {
       await realSuite(browser, base, realData);

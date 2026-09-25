@@ -50,7 +50,7 @@ export function requireBuild(name: string): void {
 // not symlinks (symlinks need admin rights on Windows). Caller cleans up.
 export async function shimWebroot(prefix = 'bs-webroot-'): Promise<{ root: string; cleanup: () => Promise<void> }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  for (const name of ['index.html', 'sw.js', 'js', 'css', 'vendor', 'defaults', 'assets', 'version.json']) {
+  for (const name of ['index.html', 'world.html', 'sw.js', 'js', 'css', 'vendor', 'defaults', 'assets', 'version.json']) {
     const src = path.join(WEBAPP, name);
     if (existsSync(src)) await fs.cp(src, path.join(root, name), { recursive: true });
   }

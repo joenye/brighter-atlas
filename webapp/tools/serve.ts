@@ -17,6 +17,7 @@ const MIME: Record<string, string> = {
   '.md': 'text/markdown; charset=utf-8',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
+  '.bin': 'application/octet-stream',
 };
 
 // Optional CSP header, matching the one served in production: set BS_CSP to
@@ -41,6 +42,8 @@ export function serve(root: string, port = 0): Promise<{ server: http.Server; po
       if (rel === '' || rel === '.') rel = 'index.html';
       let data: Buffer | null = null;
       let file = '';
+      // an extensionless page path serves its .html file (/world is world.html)
+      if (!path.extname(rel)) { try { await fs.access(path.join(root, `${rel}.html`)); rel = `${rel}.html`; } catch { /* not a page */ } }
       for (const base of [root, ...EXTRA_ROOTS]) {
         const candidate = path.join(base, rel);
         if (!candidate.startsWith(base)) { res.writeHead(403); res.end(); return; }

@@ -8,7 +8,15 @@ browser.
 
 **Fan-made and fully client-side.** You bring your own game files; nothing is
 uploaded anywhere and no game data ships with, or is distributed by, this
-project. Live at [brighteratlas.com](https://brighteratlas.com/).
+project, with one exception: the world map page (below). Live at
+[brighteratlas.com](https://brighteratlas.com/).
+
+**World map, no game files needed.** [brighteratlas.com/world](https://brighteratlas.com/world)
+shows the game's 2D world map, with its room labels, for every game update.
+Pick an update from the list or slide
+through the dates to watch the world change. Built for phones. This page,
+alone, draws from map data the site serves (the map's terrain, labels and
+their artwork, for each update).
 
 ## How it works
 
