@@ -64,8 +64,31 @@ function head(e: ChangelogEntry): HTMLElement {
 // The player-facing summary only. Commit lists are technical detail and are
 // deliberately never rendered in-app (the notes convention: written for
 // non-technical players).
+// Blank lines separate blocks; a block's lines starting "- " are list items
+// (their wrapped lines continue them), any other line is a paragraph.
 function details(e: ChangelogEntry): HTMLElement[] {
-  return e.summary ? [el('p', { class: 'wn-summary', text: e.summary })] : [];
+  if (!e.summary) return [];
+  const out: HTMLElement[] = [];
+  for (const block of e.summary.split(/\n\s*\n/)) {
+    let list: HTMLElement | null = null, text: string[] = [], item: string[] | null = null;
+    const flushText = () => {   // a line ending in a colon heads the list below it
+      if (text.length) { const t = text.join(' '); out.push(el('p', { class: t.endsWith(':') ? 'wn-summary wn-heading' : 'wn-summary', text: t })); }
+      text = [];
+    };
+    const flushItem = () => { if (item && list) list.appendChild(el('li', { text: item.join(' ') })); item = null; };
+    for (const raw of block.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (line.startsWith('- ')) {
+        flushText(); flushItem();
+        if (!list) { list = el('ul', { class: 'wn-list' }); out.push(list); }
+        item = [line.slice(2)];
+      } else if (item && /^\s/.test(raw)) item.push(line);   // an item's wrapped line
+      else { flushItem(); list = null; text.push(line); }
+    }
+    flushItem(); flushText();
+  }
+  return out;
 }
 
 // latest release: shown in full and prominent
