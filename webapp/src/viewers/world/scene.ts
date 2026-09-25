@@ -1021,17 +1021,18 @@ export class WorldScene {
   updateGameWater(ticks: number): void {
     const water = this.index?.water;
     if (!water) return;
-    this.root.updateMatrixWorld();
+    this.root.updateWorldMatrix(true, false);   // the root's own matrix: every frame, so never the whole scene below it
     this.gameWater.uWorldFromNative.value.copy(this.root.matrixWorld);
     this.gameWater.uNativeFromWorld.value.copy(this.root.matrixWorld).invert();
     this.gameWater.uLevel.value.set(water.level, 0);
     for (const [index, uniforms] of this._waterStyles) updateStyleUniforms(uniforms, water.styles[index], ticks);
   }
 
-  /** Switch every loaded room between the game's water and plain surfaces. */
-  setGameWaterEnabled(enabled: boolean): void {
+  /** Switch loaded rooms (every one, or just these) between the game's water
+   *  and plain surfaces. */
+  setGameWaterEnabled(enabled: boolean, rooms: Iterable<any> = this.rooms.values()): void {
     this.gameWaterEnabled = !!enabled;
-    for (const room of this.rooms.values()) {
+    for (const room of rooms) {
       for (const mesh of room.meshes) {
         const water = mesh.userData.gameWater;
         if (!water) continue;

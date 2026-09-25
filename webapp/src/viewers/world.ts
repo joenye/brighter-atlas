@@ -1027,7 +1027,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   function applyRoomWater(room: any): void {
     const id = Number(room.id);
-    if (gameWaterAvailable()) { applyWater(); return; }
+    // a room just loaded: switch its own water (applyWater over every loaded
+    // room, once per room, grows with the square of the room count)
+    if (gameWaterAvailable()) { world.setGameWaterEnabled(!!state.water, [room]); return; }
     if (!roomWaterCurtains.has(id)) {
       roomWaterCurtains.set(id, room.meshes.filter((mesh: any) => {
         const exact = mesh.userData.exact;
