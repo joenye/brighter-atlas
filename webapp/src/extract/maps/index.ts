@@ -36,8 +36,10 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   const byOwner=new Map([...records.values()].map(r=>[r.owner,r]));
   const read2=makeSlabReader(files[2]),read3=makeSlabReader(files[3]);
   const raw3=async(id:number)=>{bail();if(!frames[3].entries[id])throw Error('missing map image');return read3(frames[3].entries[id]);};
+  const object2=async(id:number)=>{bail();return decodeObject(2,await read2(frames[2].entries[id]));};
+  const sub3=async(id:number)=>decodeObject(3,await raw3(id)).subs[0];
   const shingles=await extractMapGeometry(records.values(),dt.textureDir,
-    async id=>decodeObject(3,await raw3(id)).subs[0],owner=>{
+    sub3,owner=>{
       const r=byOwner.get(owner)!;
       const keys=new Set(r.terrain.styles.flatMap(w=>[0,8,16,24].map(s=>w>>>s&255)));
       return resolveMapPalette(rows[owner].runtime,keys,r.terrain.baseColors,defaults,data.palette);
@@ -51,7 +53,7 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
         connector:r.labels.connector.symbol??r.labels.connector,annotations:r.labels.annotations.map(a=>({...a,badge:badge(a.marker)}))}};
   });
   const roomData=includeRoomData?await extractMapRoomData({rows,pool,bytes:ab0,profile,charset:dt.charset,
-    rooms:records.values(),readRoom:async id=>{bail();return decodeObject(2,await read2(frames[2].entries[id]));},
+    rooms:records.values(),readRoom:object2,
     onRoom:(done,total)=>{bail();onProgress({stage:'index',cat:'maps',done,total,note:'additional room placements'});}}):null;
   progress('glyphs');
   const titleGlyphs=rooms.flatMap(r=>r.labels.glyphs),annotationGlyphs=rooms.flatMap(r=>r.labels.annotations.flatMap(a=>[
@@ -60,8 +62,8 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
   const fontSlot=(name:string)=>decodeMapBinding(ab0,pool,profile,data.bindings[name]).value;
   const {fonts,sheet}=await extractMapFonts(rows,pool,ab0,profile,dt.charset,
     {title:{slot:fontSlot('titleFont'),glyphs:titleGlyphs},annotation:{slot:fontSlot('annotationFont'),glyphs:annotationGlyphs}},
-    data.fontAtlas,async id=>{bail();return decodeObject(2,await read2(frames[2].entries[id]));},async id=>{
-      const b=decodeObject(3,await raw3(id)).subs[0];return decodeFontGlyphs(b,parseDatafileRecords(b,dt.textureDir[id].n));
+    data.fontAtlas,object2,async id=>{
+      const b=await sub3(id);return decodeFontGlyphs(b,parseDatafileRecords(b,dt.textureDir[id].n));
     });
   progress('textures');
   const {atlas,images,sprites}=await extractMapImages(rows,pool,ab0,profile,data,raw3);

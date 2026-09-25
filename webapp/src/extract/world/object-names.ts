@@ -77,10 +77,9 @@ export function appendObjectMeshNames(doc:MeshNamesDoc,meshOwners:Iterable<[numb
   for(const [mesh,owner] of meshOwners) {
     const owners=ownersByMesh.get(mesh)??new Set<number>();owners.add(owner);ownersByMesh.set(mesh,owners);
   }
-  let contextualMeshes=0;
   for(const [mesh,owners] of ownersByMesh) {
     const labels=labelsFor(owners,describe);if(!labels.length)continue;
-    const entry=doc.meshes[String(mesh)]??={names:[],sources:[]};contextualMeshes++;
+    const entry=doc.meshes[String(mesh)]??={names:[],sources:[]};
     // Existing item names keep their order and equipment-slot semantics.
     for(const label of labels) {
       if(!entry.names.includes(label.label))entry.names.push(label.label);
@@ -90,5 +89,4 @@ export function appendObjectMeshNames(doc:MeshNamesDoc,meshOwners:Iterable<[numb
   }
   doc.meshes_named=Object.keys(doc.meshes).length;
   doc.names_attached=new Set(Object.values(doc.meshes).flatMap(m=>m.names)).size;
-  return contextualMeshes;
 }

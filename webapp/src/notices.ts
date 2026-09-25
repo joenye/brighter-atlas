@@ -54,19 +54,25 @@ async function engineOlderThan(app: any, generation: number): Promise<boolean> {
 
 const pre040Extraction = (app: any) => engineOlderThan(app, 1);
 
+// World notices: only for data on the current engine (older data is already
+// sent to re-extract by the engine notices below) whose saved World index
+// predates a coordinate_system revision.
+const worldStale = (stale: (system: any) => boolean) => async (app: any): Promise<boolean> => {
+  if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
+  const index = await app.store.worldIndex();
+  return !!index && stale(index.coordinate_system ?? {});
+};
+const WORLD_UPDATE = 'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.';
+
 const NOTICES: Notice[] = [
   {
     id: 'world-idle-1',
     title: 'People and creatures strike their poses',
     paras: [
       'NPCs, enemies and animals in the World and Models views now rest the way they do in the game: standing and breathing, sitting at tables, lying in wait, instead of the stiff pose they used to hold. Single rooms play the resting animation; the whole-world view shows each one held in it.',
-      'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.',
+      WORLD_UPDATE,
     ],
-    when: async (app: any) => {
-      if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
-      const index = await app.store.worldIndex();
-      return !!index && (index.coordinate_system?.spawn_idle_revision ?? 0) < 1;
-    },
+    when: worldStale((s) => (s.spawn_idle_revision ?? 0) < 1),
   },
   {
     id: 'world-effects-water-1',
@@ -74,31 +80,22 @@ const NOTICES: Notice[] = [
     paras: [
       'Effects now follow the game much more closely. Fountains spray and spill water properly, waves splash along the shore as they come in, street lanterns glow, bank sparkles use each bank’s own colour, and many effects have corrected colours, speeds, sizes, spin and spray patterns.',
       'Seas, rivers and pools now rise and fall with the waves, ripple and reflect the sky the way they do in the game, and the ground takes on each area’s own colours, so beaches blend from sand into the sea.',
-      'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.',
+      WORLD_UPDATE,
     ],
-    when: async (app: any) => {
-      if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
-      const index = await app.store.worldIndex();
-      const system = index?.coordinate_system;
-      return !!index && ((system?.effect_property_revision ?? 0) < 5 || (system?.water_revision ?? 0) < 1);
-    },
+    when: worldStale((s) => (s.effect_property_revision ?? 0) < 5 || (s.water_revision ?? 0) < 1),
   },
   {
     id: 'world-positioning-1',
     title: 'More accurate rooms and objects',
     paras: [
       'Room objects now use corrected alignment, so connected pieces such as pipes fit together properly. Effects and connected rooms also use improved positions from the game files. Isolated rooms remain separate from the connected layout.',
-      'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.',
+      WORLD_UPDATE,
     ],
-    when: async (app: any) => {
-      if (!app.store.versionId || await engineOlderThan(app, 3)) return false;
-      const index = await app.store.worldIndex();
-      return !!index && ((index.coordinate_system?.room_world_position_revision ?? 0) < 1
-        || (index.coordinate_system?.owner_alignment_revision ?? 0) < 2
-        || (index.coordinate_system?.occurrence_draw_revision ?? 0) < 2
-        || (index.coordinate_system?.effect_anchor_revision ?? 0) < 8
-        || (index.coordinate_system?.scenery_trim_revision ?? 0) < 1);
-    },
+    when: worldStale((s) => (s.room_world_position_revision ?? 0) < 1
+      || (s.owner_alignment_revision ?? 0) < 2
+      || (s.occurrence_draw_revision ?? 0) < 2
+      || (s.effect_anchor_revision ?? 0) < 8
+      || (s.scenery_trim_revision ?? 0) < 1),
   },
   {
     id: 'extraction-engine-3-equipment',

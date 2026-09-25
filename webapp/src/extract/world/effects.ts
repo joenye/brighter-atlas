@@ -1,6 +1,3 @@
-import type {createEffectScaleReader, EffectScales} from './effect-scales.js';
-import type {EffectWindow, createEffectWindowReader} from './effect-windows.js';
-import type {createEffectSpriteReader} from './effect-sprites.js';
 // Particle-effect recovery over the replayed registry. Detection is
 // structural and per build: systems are rows whose series children all point
 // back at them through an op-0 scalar; child and config fields are re-decoded
@@ -32,13 +29,15 @@ import type {createEffectSpriteReader} from './effect-sprites.js';
 // iteration everywhere, floats only from the bundle bytes via DataView, no
 // timestamps.
 
+import type {createEffectScaleReader, EffectScales} from './effect-scales.js';
+import type {EffectWindow, createEffectWindowReader} from './effect-windows.js';
+import type {createEffectSpriteReader} from './effect-sprites.js';
 import type {EffectFacing, createEffectFacingReader} from './effect-facing.js';
 import type {RadialOrigin, createEffectOriginReader} from './effect-origins.js';
 import type {EffectFieldValues, createEffectFieldReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
-
-import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type createEffectPropertyReader} from './effect-properties.js';
+import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader} from './effect-properties.js';
 import { PoolDecoder } from './value-pool.js';
 import type { PoolNode } from './value-pool.js';
 import type { WorldProfile, WorldProfileSelector } from './profile.js';
@@ -249,18 +248,18 @@ export interface WorldEffectsShared {
   // Mesh-frame placement + rig-binding inputs (see attachments.rooms above).
   // meshSkeletonRef: ab0 mesh directory region 8 index [3] (0 = static).
   // roomPlacements: the SAME occurrence/mesh join buildRoomShard uses to
-  // fill placement rows (shards.ts), reused here read-only so mesh ordinals
-  // and local matrices never drift from what the room actually renders.
+  // fill placement rows (shards.ts), reused here read-only for its mesh
+  // ordinals so rig detection never drifts from what the room renders.
   // occurrenceAnchor: the exact owner-dimensions centre scene.ts's
   // _placementAnchor stores per occurrence (tileUnits/meshForwardQuarterTurns
   // are baked in by the caller, matching the build's coordinate_system).
   // rigBoneTranslations: rig id (ab6 object index, == skeleton_ref-2) ->
   // rest-WORLD bone translations, precomputed once per build; a rig absent
   // from this map could not be decoded (missing bundle, malformed skeleton)
-  // and every reference to it must degrade to bone:null (root) placement.
+  // and every reference to it stays unresolved (`rig` omitted, root frame).
   meshSkeletonRef: (meshId: number) => number;
   roomPlacements: (occurrences: RoomOccurrence[]) =>
-    { occurrence: RoomOccurrence; part: { mesh: number; local_matrix_game?: number[] | null } }[];
+    { occurrence: RoomOccurrence; part: { mesh: number } }[];
   occurrenceAnchor: (hit: RoomOccurrence) => [number, number, string];
   drawOccurrence?: (hit: RoomOccurrence) => RoomOccurrence | null;
   staticAppearance?: (slot: number) => { controllers: number[]; effectColor?: [number, number, number, number] } | null;
@@ -329,6 +328,7 @@ export type ReparsedOp =
   | { op: number; kind: 'S'; refs: number[] };
 
 interface ParseAudit { parse_failures: number; parse_mismatches: number }
+interface RoleTemplate { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null; pairs?: EffectPropertyPairs }
 
 // One row re-decoded from its own byte span by walking the selector's fill
 // program. Series counts come from the row's already-replayed series events
@@ -1048,7 +1048,6 @@ function extractEffects(
   }
 
   // ---- E5: per-family role templates (order within tag type, voted) ---------
-  interface RoleTemplate { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null; pairs?: EffectPropertyPairs }
   const roleTemplates = new Map<number, RoleTemplate>();
   for (const family of [...families.keys()].sort((a, b) => a - b)) {
     const via = familyVia.get(family)!;
@@ -1276,17 +1275,18 @@ function extractEffects(
       for (const ref of refs) {
         if (seen.has(ref) || !accepted(ref)) continue;
         seen.add(ref);
-        emitters.push(buildEmitter(rows[ref], decoded.get(ref)!, sysSlot,
+        const ops = decoded.get(ref)!;
+        const emitter = buildEmitter(rows[ref], ops, sysSlot,
           roleTemplates.get(rows[ref].runtime) ?? { fades: 'none', confidence: 'order' },
           classifyConfig, shippedConfigs, shared.textureSlots, shared.spriteMeta,
           shared.effectProperties?.(ref, sysOps ?? []) ?? null,
-          shared.effectFacing?.(ref, decoded.get(ref)!) ?? null,
-          shared.effectSprites?.(ref) ?? null));
-        const fields = shared.effectFields?.(ref, decoded.get(ref)!);
-        if (fields) applyEffectFields(emitters[emitters.length - 1], fields);
-        const scales = fields?.scale ?? shared.effectScales?.(ref, decoded.get(ref)!);
+          shared.effectFacing?.(ref, ops) ?? null,
+          shared.effectSprites?.(ref) ?? null);
+        emitters.push(emitter);
+        const fields = shared.effectFields?.(ref, ops);
+        if (fields) applyEffectFields(emitter, fields);
+        const scales = fields?.scale ?? shared.effectScales?.(ref, ops);
         if (scales) {
-          const emitter = emitters[emitters.length - 1];
           emitter.scales = scales;
           // A sampled range has no single literal endpoint. Do not retain a
           // scalar inferred from an unrelated field beside the range.
@@ -1436,23 +1436,20 @@ function extractEffects(
     // Every rendered mesh part for this room, joined back to its owning
     // occurrence: the SAME join buildRoomShard uses to fill placement rows
     // (shards.ts), reused read-only to find the rig-bearing mesh ordinals. A
-    // resolution failure degrades every occurrence in the room to no parts
-    // (bones stay null, matrix stays null: root-anchored placement, the
-    // graceful default), never fails the room.
+    // resolution failure degrades every occurrence in the room to no meshes
+    // (rig and bones stay null: root-anchored placement, the graceful
+    // default), never fails the room.
     const occIndexOf = new Map<RoomOccurrence, number>();
     occurrences.forEach((hit, index) => occIndexOf.set(hit, index));
-    const partsByOcc = new Map<number, { mesh: number }[]>();
+    const meshesByOcc = new Map<number, number[]>();
     try {
       for (const { occurrence, part } of shared.roomPlacements(occurrences)) {
         const index = occIndexOf.get(occurrence);
         if (index === undefined) continue;
-        const entry = {
-          mesh: Number(part.mesh),
-        };
-        const list = partsByOcc.get(index);
-        if (list) list.push(entry); else partsByOcc.set(index, [entry]);
+        const list = meshesByOcc.get(index);
+        if (list) list.push(Number(part.mesh)); else meshesByOcc.set(index, [Number(part.mesh)]);
       }
-    } catch { /* placement join failed: every occurrence below keeps no parts */ }
+    } catch { /* placement join failed: every occurrence below keeps no meshes */ }
 
     for (let index = 0; index < occurrences.length; index++) {
       const sourceHit = occurrences[index];
@@ -1471,21 +1468,16 @@ function extractEffects(
         }
       } catch { /* keep the tile-centre default */ }
       const packedFlags = hit.packedFlags ?? 0;
-      const parts = partsByOcc.get(index) || [];
-      // The effect instance uses its controller's root frame. At rest this
-      // is the occurrence owner frame; no visual-part matrix participates.
-      // Choosing a representative part would make effects move whenever
-      // the component list changes, even when the owner itself does not.
-      const matrix = null;
+      const meshes = meshesByOcc.get(index) || [];
       // RIGGED discrimination: any part's mesh with a nonzero skeleton_ref
       // (ab0 mesh directory region 8 index [3]) marks the whole occurrence
       // rigged. Validate agreement across all parts before choosing a rig.
       // Translation provenance and full matrices share that same selection.
       let bones: number[][] | null = null;
       const rigIds = new Set<number>();
-      for (const part of parts) {
+      for (const mesh of meshes) {
         let skeletonRef = 0;
-        try { skeletonRef = shared.meshSkeletonRef(part.mesh); } catch { skeletonRef = 0; }
+        try { skeletonRef = shared.meshSkeletonRef(mesh); } catch { skeletonRef = 0; }
         if (skeletonRef >= 2) {
           rigIds.add(skeletonRef - 2);
         }
@@ -1515,7 +1507,7 @@ function extractEffects(
             resource: slot,
             rot: hit.rotationQuarters ?? 0,
             via, system, controller,
-            center, packedFlags, matrix, bones, rig: motion ? 'transform' : rig,
+            center, packedFlags, matrix: null, bones, rig: motion ? 'transform' : rig,
             ...(motion ? {motion} : {}),
             ...(selected?.effectColor && selected.controllers.includes(controller ?? system)
               ? {color_override: selected.effectColor} : {}),
@@ -1602,14 +1594,13 @@ function extractEffects(
 
 // -------------------------------------------------------------- emitter roles
 
-// One accepted emitter row -> its doc record. Roles bind by order within tag
-// type over the row's own top-level decoded fields; the family template only
-// decides whether fade roles exist. Ops not consumed by a role or a known
-// payload are retained in `extra`; classified fields are never duplicated
-// there.
+// One accepted emitter row -> its doc record. The family template supplies
+// fade roles, endpoint pairs, transform layout and acceleration frame;
+// `properties` and `$<role>0` symbols bind by op; remaining roles bind by
+// order within tag type. Ops no role consumes are retained in `extra`.
 function buildEmitter(
   row: FillRow, ops: EffectExtra[], ownerSlot: number,
-  template: { fades: 'none' | 'two' | 'three'; confidence: 'vote' | 'order'; transform?: EffectTransformLayout | null; accelerationFrameOp?: number | null; pairs?: EffectPropertyPairs },
+  template: RoleTemplate,
   classifyConfig: (slot: number) => { kind: EffectConfig['kind'] } | null,
   shippedConfigs: Set<number>,
   textureSlots: Map<number, number[]>,
@@ -1626,6 +1617,10 @@ function buildEmitter(
   const vec3s: { v: [number, number, number]; op: number; i: number }[] = [];
   let blend: 'add' | 'mix' | null = null;
   let sprite: EffectEmitter['sprite'] = null;
+  const spriteOf = (material: number): NonNullable<EffectEmitter['sprite']> => {
+    const images = textureSlots.get(material) ?? [];
+    return { material, images, draw: images.length ? spriteMeta(images[0]) : null };
+  };
   for (let i = 0; i < ops.length; i++) {
     const e = ops[i];
     if (e.kind === 'duration') durations.push({ ticks: e.ticks, op: e.op, i });
@@ -1638,11 +1633,7 @@ function buildEmitter(
       blend = 'add';   // the emitter's own blend override; other symbols stay data
       consumed.add(i);
     } else if (e.kind === 'scalar' && e.tag === 0x02 && sprite === null) {
-      const images = textureSlots.get(e.value) ?? [];
-      sprite = {
-        material: e.value, images,
-        draw: images.length ? spriteMeta(images[0]) : null,
-      };
+      sprite = spriteOf(e.value);
       consumed.add(i);
     } else if (e.kind === 'scalar' && e.tag === -85 && e.op === 0 && e.value === ownerSlot) {
       consumed.add(i);   // the op-0 owner backpointer (negated letter code), consumed by detection
@@ -1699,7 +1690,7 @@ function buildEmitter(
   // retain their existing handling until an explicit binding resolves them.
   const scalar = (e: EffectExtra | null) => e?.kind === 'float'
     || (e?.kind === 'fixed' && e.floats?.length === 1);
-  const pair = (role: 'scale' | 'speed' | 'acceleration') => {
+  const pair = (role: PropertyRole) => {
     const p = readEffectPropertyPair(ops, template.pairs ?? {}, role);
     const readable = (e: EffectExtra | null) => role === 'scale' ? scalar(e)
       : e?.kind === (role === 'speed' ? 'rate' : 'vec3');
@@ -1764,10 +1755,7 @@ function buildEmitter(
   return {
     slot: row.slot, family: row.runtime,
     burst, shape, bone, transform, sprite, blend, facing,
-    sprite_choices: spriteChoices ? {kind: 'uniform', sprites: spriteChoices.map(material => {
-      const images = [...(textureSlots.get(material) ?? [])];
-      return {material, images, draw: images.length ? spriteMeta(images[0]) : null};
-    })} : null,
+    sprite_choices: spriteChoices ? {kind: 'uniform', sprites: spriteChoices.map(spriteOf)} : null,
     life: life && { ticks: life.ticks, op: life.op },
     fade_in: fadeIn && { ticks: fadeIn.ticks, op: fadeIn.op },
     fade_out: fadeOut && { ticks: fadeOut.ticks, op: fadeOut.op },

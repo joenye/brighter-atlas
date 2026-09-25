@@ -10,8 +10,8 @@ import {build} from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-actor-idle-'));
 try {
   const file = path.join(tmp, 'idle.mjs');
-  await build({stdin:{contents:"export {ActorIdleResolver} from './src/extract/world/actor-idle.ts'; export {idlePosePalette, skinVertices, encodeIdlePose, b64ToF32} from './src/extract/world/idle-poses.ts';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
-  const {ActorIdleResolver, idlePosePalette, skinVertices, encodeIdlePose, b64ToF32} = await import(pathToFileURL(file).href);
+  await build({stdin:{contents:"export {ActorIdleResolver} from './src/extract/world/actor-idle.ts'; export {idlePosePalette, skinVertices, encodeIdlePose} from './src/extract/world/idle-poses.ts'; export {b64f32} from './src/extract/b64.ts';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
+  const {ActorIdleResolver, idlePosePalette, skinVertices, encodeIdlePose, b64f32} = await import(pathToFileURL(file).href);
 
   // ---- registry: clip records 10..14, controllers, a set, a room, actors ---
   // clip ordinals: 100 (rig 7), 101 (rig 7, long loop), 102 (rig 7), 103 (rig 9), 104 (rig 7)
@@ -98,16 +98,7 @@ try {
   r = propResolver([G(16, {tag: 0x20, values: [{tag: 0x26, value: 60}, {tag: 0x26, value: 60}]}), G(17, {tag: 0x20, values: [{tag: 2, value: 70}]})]);
   assert.deepEqual(r.props(20, rig7, meshRig), []);
   assert.deepEqual(r.props(null, rig7, meshRig), []);
-  // the resolved idle names its controller: set -> R controller; bare clip record -> none
-  fieldsBySlot.set(50, [G(26, {tag: 0x26, value: 23})]);
-  assert.equal(resolver().resolve(50, rig7).controller, 21);
-  fieldsBySlot.set(50, [G(26, {tag: 0x26, value: 12})]);
-  assert.equal(resolver().resolve(50, rig7).controller, null);
-
-  // rig 9 carries exactly one clip: single-clip fallback applies
-  fieldsBySlot.set(50, []);
-  assert.deepEqual(resolver().resolve(50, new Set([9])), {clip: 103, source: 'rig_single', field_op: -1, controller: null});
-  assert.equal(resolver().resolve(50, new Set()), null);
+  assert.equal(resolver().resolve(50, new Set()), null);   // no rig: no resting clip
 
   // ---- pose palettes: rest clip -> identity; a moved root moves vertices ---
   const bones = [
@@ -128,7 +119,7 @@ try {
   assert.deepEqual([...normals], [0, 0, 1, 0, 0, 1]);
   const encoded = encodeIdlePose(moved);
   assert.equal(encoded.bones, 2);
-  assert.deepEqual([...b64ToF32(encoded.m)], [...moved]);
+  assert.deepEqual([...b64f32(encoded.m)], [...moved]);
   assert.equal(idlePosePalette(bones, {frames: 1, bones: [{present: false}]}), null);  // bone count mismatch
   console.log('actor idle: ok');
 } finally {

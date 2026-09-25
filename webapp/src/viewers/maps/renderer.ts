@@ -98,9 +98,9 @@ function nineSlice(list:number[],image:any,source:any,panel:any,offset:number[])
 function makeLabels(scene:any,images:Record<string,MapBitmap>){
  const passes=Array.from({length:7},()=>[] as number[]),textures=['connector','round','panel','panel','badge','glyphs','glyphs'];
  for(const r of scene.rooms){
-  const fixture={...r,labelFonts:scene.labelFonts,labelBackgrounds:scene.labelBackgrounds};
-  const bounds=labelLayout(fixture),composition=labelComposition(fixture,bounds),offset=r.mapPosition.map((v:number)=>v*64);
-  const connector=labelConnector(fixture,bounds);
+  const room={...r,labelFonts:scene.labelFonts};
+  const bounds=labelLayout(room),composition=labelComposition(room,bounds),offset=r.mapPosition.map((v:number)=>v*64);
+  const connector=labelConnector(room,bounds);
   if(connector){const {anchor,edge,width,length}=connector,dx=(edge[0]-anchor[0])/length,dy=(edge[1]-anchor[1])/length;
    quad(passes[0],images.connector,[offset[0]+anchor[0]-dy*width/2,offset[1]+anchor[1]+dx*width/2,width,length],
     [0,0,images.connector.width,images.connector.height],[1,1,1,1],1,0,[dy*width,-dx*width,dx*length,dy*length]);
@@ -124,10 +124,10 @@ function makeLabels(scene:any,images:Record<string,MapBitmap>){
    paint(5,scene.labelFonts.annotation,a.text,composition.annotationSize,.01,composition.annotationBaseline+i*bounds.rowHeight,[0,0,0],{left:row.textLeft});
    if(bounds.fixed){
     if(a.marker.symbol!=='$none')quad(passes[4],images.badge,
-     [offset[0]+row.badgeX,offset[1]+row.y,90,90],[0,0,images.badge.width,images.badge.height],a.palette[0]);
+     [offset[0]+row.badgeX,offset[1]+row.y,row.badgeWidth,row.badgeHeight],[0,0,images.badge.width,images.badge.height],a.palette[0]);
     if(a.badge)paint(5,scene.labelFonts.annotation,a.badge.text,a.badge.size,.01,
      row.y+Math.fround(6.3)+scene.labelFonts.annotation.ascent*a.badge.size,a.palette[0].slice(0,3).map((v:number)=>v*255),
-     {center:row.badgeX+45,badge:true});
+     {center:row.badgeX+row.badgeWidth/2,badge:true});
     return;
    }
    if(a.badge){
@@ -135,7 +135,7 @@ function makeLabels(scene:any,images:Record<string,MapBitmap>){
     const xs=[0,cut,width-cut,width],dx=[row.badgeX,row.badgeX+destCut,row.badgeX+row.badgeWidth-destCut,row.badgeX+row.badgeWidth];
     for(let j=0;j<3;j++)quad(passes[4],images.badge,[offset[0]+dx[j],offset[1]+row.y,dx[j+1]-dx[j],row.badgeHeight],[xs[j],0,xs[j+1]-xs[j],height],[...a.palette[2].slice(0,3),.8]);
     paint(5,scene.labelFonts.annotation,a.badge.text,a.badge.size,.01,
-     row.y+Math.fround(Math.fround(row.badgeHeight)*Math.fround(.11))+scene.labelFonts.annotation.ascent*a.badge.size,[255,255,255],{center:row.badgeX+100,runs:a.badge.runs,badge:true});
+     row.y+Math.fround(Math.fround(row.badgeHeight)*Math.fround(.11))+scene.labelFonts.annotation.ascent*a.badge.size,[255,255,255],{center:row.badgeX+row.badgeWidth/2,runs:a.badge.runs,badge:true});
    }
   });
  }
@@ -199,13 +199,13 @@ export class MapRenderer {
   private uniforms:Record<string,WebGLUniformLocation|null>={};
   private view:MapView|null=null;
   private lost=false;
-  readonly stats={terrainTiles:0,labelQuads:0,markers:0,renderer:'WebGL2 map primitives'};
+  readonly stats={terrainTiles:0,markers:0};
   private onLost=(e:Event)=>{e.preventDefault();this.lost=true;};
-  private onRestored=()=>{this.lost=false;this.initialize();if(this.view)this.draw(this.view);};
+  private onRestored=()=>{this.lost=false;this.setup();this.upload();if(this.view)this.draw(this.view);};
   constructor(readonly canvas:HTMLCanvasElement,readonly doc:MapDocument) {
     const gl=canvas.getContext('webgl2',{alpha:true,antialias:false,depth:true,premultipliedAlpha:true});
     if(!gl)throw Error('2D maps require WebGL 2.');
-    this.gl=gl;this.scene=doc.scene;this.setRooms(null);
+    this.gl=gl;this.scene=doc.scene;this.setup();
     canvas.addEventListener('webglcontextlost',this.onLost);
     canvas.addEventListener('webglcontextrestored',this.onRestored);
   }
@@ -215,8 +215,7 @@ export class MapRenderer {
     this.scene={...this.doc.scene,rooms,shingles:this.doc.scene.shingles.filter(s=>owners.has(s.room))};
     this.geometry=makeTerrain(this.scene);this.labels=makeLabels(this.scene,this.doc.images);
     this.stats.terrainTiles=this.geometry.length/STRIDE;
-    this.stats.labelQuads=this.labels.reduce((n,p)=>n+p.rows.length/STRIDE,0);
-    if(!this.lost)this.initialize();
+    if(!this.lost)this.upload();
   }
   bounds(labels=true) {
     let x=Infinity,y=Infinity,right=-Infinity,bottom=-Infinity;
@@ -229,13 +228,17 @@ export class MapRenderer {
     if(!Number.isFinite(x))return {x:0,y:0,width:1,height:1};
     return {x:x/64-1,y:y/64-1,width:(right-x)/64+2,height:(bottom-y)/64+2};
   }
+  private releaseBuffers() {
+    for(const b of this.buffers){this.gl.deleteBuffer(b.buffer);this.gl.deleteVertexArray(b.vao);}this.buffers=[];
+  }
   private release() {
-    const gl=this.gl;
-    for(const b of this.buffers){gl.deleteBuffer(b.buffer);gl.deleteVertexArray(b.vao);}this.buffers=[];
+    const gl=this.gl;this.releaseBuffers();
     for(const t of this.textures.values())gl.deleteTexture(t.texture);this.textures.clear();
     if(this.program)gl.deleteProgram(this.program);this.program=null;
   }
-  private initialize() {
+  // Program and textures are built once per context; room changes only
+  // replace the vertex buffers.
+  private setup() {
     this.release();const gl=this.gl,p=this.program=program(gl);gl.useProgram(p);
     this.uniforms=Object.fromEntries(['camera','viewport','scale','lod','texel'].map(k=>[k,gl.getUniformLocation(p,k)]));
     gl.uniform1i(gl.getUniformLocation(p,'atlas'),0);gl.disable(gl.DITHER);gl.disable(gl.CULL_FACE);
@@ -257,6 +260,9 @@ export class MapRenderer {
       surface.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(image.rgba),image.width,image.height),0,0);
       texture(name,image.width,image.height);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,surface);
     }
+  }
+  private upload() {
+    this.releaseBuffers();const gl=this.gl;
     for(const [i,rows] of [this.geometry,...this.labels.map(p=>p.rows),new Float32Array()].entries()){
       const vao=gl.createVertexArray()!,buffer=gl.createBuffer()!;gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,rows,gl.STATIC_DRAW);
       let offset=0;for(const [j,size] of [2,4,4,4,4,2].entries()){
@@ -266,7 +272,7 @@ export class MapRenderer {
     }
   }
   draw(view:MapView) {
-    this.view=view;if(this.lost)return;
+    this.view=view;if(this.lost||!this.buffers.length)return;
     const {cx,cy,scale,width,height,dpr=1,labels=true}=view,gl=this.gl,u=this.uniforms;
     const w=Math.round(width*dpr),h=Math.round(height*dpr);if(!w||!h)return;
     if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}

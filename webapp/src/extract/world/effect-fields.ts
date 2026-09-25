@@ -4,6 +4,7 @@
 // every value is read from the user's bundle.
 import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
+import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
 
 // null marks a property whose value the game computes elsewhere.
 export interface EffectFieldBinding {
@@ -40,37 +41,39 @@ export interface EffectFieldValues {
   color?: EffectEndpoints<EffectColourSample> | null;
 }
 
+/** A finite float, or a fixed value holding exactly one. */
+export function effectScalar(e: EffectExtra | undefined): number | null {
+  const n = e?.kind === 'float' ? e.value : e?.kind === 'fixed' && e.floats?.length === 1 ? e.floats[0] : null;
+  return n !== null && Number.isFinite(n) ? n : null;
+}
+/** A uniform range: an instance of `cls` holding two scalars. */
+export function effectRange(e: EffectExtra | undefined, cls: number): [number, number] | null {
+  if (e?.kind !== 'typed' || e.class !== cls || e.fields.length !== 2) return null;
+  const lo = effectScalar(e.fields[0]), hi = effectScalar(e.fields[1]);
+  return lo !== null && hi !== null ? [lo, hi] : null;
+}
+export function effectVec3(e: EffectExtra | undefined): [number, number, number] | null {
+  return e?.kind === 'vec3' && e.v.every(Number.isFinite) ? [...e.v] : null;
+}
+
 export function validEffectFields(value: any): value is EffectFieldData {
-  const index = (v: any) => Number.isInteger(v) && v >= 0 && v < 65536;
-  const field = (v: any) => v === null || index(v);
+  const field = (v: any) => v === null || bindingIndex(v);
   const pair = (v: any) => Array.isArray(v) && v.length === 2 && v.every(field);
   const c = value?.classes;
-  return !!c && ['range', 'rate', 'vector', 'colour'].every(k => index(c[k]))
-    && Array.isArray(value.bindings) && value.bindings.length <= 65536
-    && value.bindings.every((b: any) => b && index(b.instance) && field(b.angularSpeed) && field(b.rotation)
-      && [b.speed, b.acceleration, b.scale, b.color].every(pair))
-    && new Set(value.bindings.map((b: any) => b.instance)).size === value.bindings.length;
+  return !!c && ['range', 'rate', 'vector', 'colour'].every(k => bindingIndex(c[k]))
+    && validBindingList(value.bindings, b => field(b.angularSpeed) && field(b.rotation)
+      && [b.speed, b.acceleration, b.scale, b.color].every(pair));
 }
 
 export function createEffectFieldReader(data: EffectFieldData | undefined, objects: ConstructorRecord[]) {
   if (data !== undefined && !validEffectFields(data)) throw Error('invalid effect field bindings');
-  const byInstance = new Map((data?.bindings ?? []).map(b => [b.instance, b]));
+  const bindingOf = instanceLookup((data?.bindings ?? []).map(b => [b.instance, b] as const), objects);
   const classes = data?.classes;
   const read = (slot: number, ops: EffectExtra[]): EffectFieldValues | null => {
-    const b = byInstance.get(objects[slot]?.values[1]);
+    const b = bindingOf(slot);
     if (!b || !classes) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
-    const scalar = (e: EffectExtra | undefined): number | null => {
-      const n = e?.kind === 'float' ? e.value : e?.kind === 'fixed' && e.floats?.length === 1 ? e.floats[0] : null;
-      return n !== null && Number.isFinite(n) ? n : null;
-    };
-    const sample = (e: EffectExtra | undefined): EffectSample | null => {
-      const n = scalar(e);
-      if (n !== null) return n;
-      if (e?.kind !== 'typed' || e.class !== classes.range || e.fields.length !== 2) return null;
-      const lo = scalar(e.fields[0]), hi = scalar(e.fields[1]);
-      return lo !== null && hi !== null ? [lo, hi] : null;
-    };
+    const sample = (e: EffectExtra | undefined): EffectSample | null => effectScalar(e) ?? effectRange(e, classes.range);
     const marker = (op: number | null, name: string) => {
       const e = op === null ? undefined : fields.get(op);
       return e?.kind === 'symbol' && e.name === name;
@@ -82,7 +85,7 @@ export function createEffectFieldReader(data: EffectFieldData | undefined, objec
       return value !== null && duration.kind === 'duration' && duration.ticks > 0 ? {value, ticks: duration.ticks} : null;
     };
     const vector = (e: EffectExtra | undefined): [EffectSample, EffectSample, EffectSample] | null => {
-      if (e?.kind === 'vec3') return e.v.every(Number.isFinite) ? [...e.v] : null;
+      if (e?.kind === 'vec3') return effectVec3(e);
       if (e?.kind !== 'typed' || e.class !== classes.vector || e.fields.length !== 3) return null;
       const v = e.fields.map(sample);
       return v.every(x => x !== null) ? v as [EffectSample, EffectSample, EffectSample] : null;
@@ -110,7 +113,7 @@ export function createEffectFieldReader(data: EffectFieldData | undefined, objec
     };
   };
   // Whether the build's decode data knows this row as a particle emitter.
-  const bound = (slot: number): boolean => byInstance.has(objects[slot]?.values[1]);
+  const bound = (slot: number): boolean => bindingOf(slot) !== undefined;
   return Object.assign(read, {bound});
 }
 

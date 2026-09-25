@@ -10,10 +10,10 @@ import {
   type GameWaterShared, type GameWaterStyleUniforms,
 } from './game-water.js';
 import { buildMeshGeometry } from '../mesh-geometry.js';
-import { b64ToF32, idlePoseKey, skinVertices } from '../../extract/world/idle-poses.js';
+import { idlePoseKey, skinVertices } from '../../extract/world/idle-poses.js';
 import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
-import type { AppStore } from '../../store.js';
+import { b64f32, type AppStore } from '../../store.js';
 import type { GameRoomSource, GameBatchSource } from './game-frame.js';
 import { emissionKey } from './draw-order.js';
 
@@ -134,9 +134,9 @@ export type ColumnMap = Readonly<Record<string, number>>;
  *  flat shapes in one marker colour; authored-empty ground keeps a faint
  *  wireframe in its category colour. */
 export const GIZMO_SWATCH = '#e05ad0';
-export function gizmoMaterial(category: string, groundColour: number | undefined): THREE.Material {
+export function gizmoMaterial(category: string): THREE.Material {
   if (category === 'terrain') {
-    return new THREE.MeshBasicMaterial({ color: groundColour ?? 0xd87dc0, wireframe: true, transparent: true, opacity: 0.24, depthWrite: false });
+    return new THREE.MeshBasicMaterial({ color: CATEGORY_COLOURS.terrain, wireframe: true, transparent: true, opacity: 0.24, depthWrite: false });
   }
   return new THREE.MeshBasicMaterial({ color: GIZMO_SWATCH, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
 }
@@ -330,10 +330,20 @@ function cachedPromise<V>(
   return promise;
 }
 
+/** Upload an authored mip chain as-is (three.js default trilinear filtering). */
+function authoredMips<T extends THREE.Texture>(texture: T, mipmaps: any[], colorSpace: THREE.ColorSpace): T {
+  texture.mipmaps = mipmaps;
+  texture.generateMipmaps = false;
+  texture.flipY = false;
+  texture.colorSpace = colorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function disposeRoomGroup(group: THREE.Group): void {
   group.traverse((object: any) => {
     if (object.isInstancedMesh) object.dispose();
-    // water materials and the tile-colour grid are per room
+    // water materials are per room
     object.userData?.gameWater?.water?.dispose?.();
   });
   group.clear();
@@ -728,7 +738,7 @@ export class WorldScene {
       const pose = rig >= 0 ? doc?.poses?.[idlePoseKey(rig, clip)] : null;
       if (!pose?.m) return base;
       let palette: Float32Array;
-      try { palette = b64ToF32(pose.m); } catch { return base; }
+      try { palette = b64f32(pose.m); } catch { return base; }
       if (palette.length !== Number(pose.bones) * 12 || !palette.length) return base;
       const geo = base.clone();
       const positions = geo.getAttribute('position');
@@ -893,7 +903,7 @@ export class WorldScene {
     ]);
     return cachedPromise(this._materialPromises, key, async () => {
       if (this.disposed) throw new Error('WorldScene is disposed');
-      if (authoredEmpty) return gizmoMaterial(category, CATEGORY_COLOURS[category]);
+      if (authoredEmpty) return gizmoMaterial(category);
       if (renderTexture < 0) {
         // Native meshes author reverse faces where required. Rendering those
         // triangles again as DoubleSide flips their lighting normal and makes
@@ -951,15 +961,8 @@ export class WorldScene {
     return cachedPromise(this._waterTexturePromises, `ripples:${textureId}`, async () => {
       const images = (await this._waterSubImages(textureId, '_rg')).slice().sort((a, b) => b.width - a.width);
       const chain = images.filter((image, k) => k === 0 || image.width * 2 === images[k - 1].width);
-      const texture = new THREE.Texture(chain[0]);
-      texture.mipmaps = chain;
-      texture.generateMipmaps = false;
-      texture.flipY = false;
+      const texture = authoredMips(new THREE.Texture(chain[0]), chain, THREE.NoColorSpace);
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-      texture.minFilter = THREE.LinearMipmapLinearFilter;
-      texture.magFilter = THREE.LinearFilter;
-      texture.colorSpace = THREE.NoColorSpace;
-      texture.needsUpdate = true;
       return texture;
     });
   }
@@ -971,15 +974,7 @@ export class WorldScene {
       const sizes = [...new Set(images.map((image) => image.width))].sort((a, b) => b - a);
       const levels = sizes.map((size) => images.filter((image) => image.width === size));
       if (!levels.length || levels.some((faces) => faces.length !== 6)) throw new Error(`texture ${textureId} is not a cube`);
-      const texture = new THREE.CubeTexture(levels[0]);
-      texture.mipmaps = levels.slice(1).map((faces) => ({ image: faces })) as any;
-      texture.generateMipmaps = false;
-      texture.flipY = false;
-      texture.minFilter = THREE.LinearMipmapLinearFilter;
-      texture.magFilter = THREE.LinearFilter;
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.needsUpdate = true;
-      return texture;
+      return authoredMips(new THREE.CubeTexture(levels[0]), levels.slice(1).map((faces) => ({ image: faces })), THREE.SRGBColorSpace);
     });
   }
 
@@ -996,16 +991,7 @@ export class WorldScene {
         if (!next) break;
         chain.push(next);
       }
-      const texture = new THREE.Texture(chain[0]);
-      texture.mipmaps = chain;
-      texture.generateMipmaps = false;
-      texture.flipY = false;
-      texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
-      texture.minFilter = THREE.LinearMipmapLinearFilter;
-      texture.magFilter = THREE.LinearFilter;
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.needsUpdate = true;
-      return texture;
+      return authoredMips(new THREE.Texture(chain[0]), chain, THREE.SRGBColorSpace);
     });
   }
 
@@ -1285,19 +1271,9 @@ export class WorldScene {
     return target;
   }
 
-  /** The colour the game gives a placed part at its tile (full range), when
-   *  the shard carries it. */
-  _partColour(shard: any, row: any[]): number[] | null {
-    const entry = this._partColourEntry(shard, row);
-    return entry ? entry.slice(0, 4) : null;
-  }
-
-  /** The two recolour tints (half range) of a placed part, when known. */
-  _partTints(shard: any, row: any[]): number[][] | null {
-    const entry = this._partColourEntry(shard, row);
-    return entry && entry.length >= 12 ? [entry.slice(4, 8), entry.slice(8, 12)] : null;
-  }
-
+  /** A placed part's colour entry, when the shard carries it: the colour the
+   *  game gives it at its tile (full range), then optionally its two
+   *  recolour tints (half range). */
   _partColourEntry(shard: any, row: any[]): number[] | null {
     const column = this.placementColumns?.part_colour;
     if (column === undefined) return null;
@@ -1314,6 +1290,7 @@ export class WorldScene {
     const render = this.index?.render ?? null;
     const batches: GameBatchSource[] = [];
     const matrix = new THREE.Matrix4();
+    const payloads = new Map<number, any>();   // one decode per mesh per room
     room.group.updateMatrix();
     const oc = this.occurrenceColumns, pc = this.placementColumns;
     for (const batch of this._batchRows(room.shard)) {
@@ -1327,16 +1304,19 @@ export class WorldScene {
       // the game does not show.
       if (!waterInfo && batch.flags & this.flags.unrenderable) continue;
       if (!waterInfo && batch.flags & this.flags.authoredEmpty && batch.category !== 'terrain') continue;
-      const payload = await this.store.payload(`meshes/${pad5(batch.mesh)}.json`);
+      const mesh = Number(batch.mesh);
+      let payload = payloads.get(mesh);
+      if (!payload) payloads.set(mesh, payload = await this.store.payload(`meshes/${pad5(mesh)}.json`));
       const matrices = batch.entries.map((entry) => {
         this._placementMatrix(room.shard, entry.row, matrix, false);
         return room.group.matrix.clone().multiply(matrix);
       });
+      const colours = batch.entries.map((entry) => this._partColourEntry(room.shard, entry.row));
       batches.push({
         category: batch.category,
-        mesh: Number(batch.mesh), material: Number(batch.material), renderTexture: Number(batch.renderTexture),
-        payload, matrices, tints: batch.entries.map((entry) => this._partColour(room.shard, entry.row) ?? batch.recolors?.[0] ?? null),
-        recolours: batch.entries.map((entry) => this._partTints(room.shard, entry.row)),
+        mesh, material: Number(batch.material), renderTexture: Number(batch.renderTexture),
+        payload, matrices, tints: colours.map((c) => c?.slice(0, 4) ?? batch.recolors?.[0] ?? null),
+        recolours: colours.map((c) => (c && c.length >= 12 ? [c.slice(4, 8), c.slice(8, 12)] : null)),
         order: batch.entries.map((entry) => emissionKey(room.shard.occurrences[entry.row[pc.occurrence]], entry.row, oc, pc)),
         water: waterInfo ? { kind: waterInfo.kind, style: waterInfo.style, opacity: waterInfo.opacity, window: waterInfo.window } : null,
       });
@@ -1975,6 +1955,7 @@ export class WorldScene {
     if (!occurrence) return null;
     const individualIndex = oc.individual === undefined ? -1 : Number(occurrence[oc.individual]);
     const secondaryValue = oc.secondary === undefined ? -1 : Number(occurrence[oc.secondary]);
+    const packedColumn = oc.appearance_packed_flags ?? oc.packed_flags;
     const matrixIndexValue = Number(placement[pc.matrix]);
     const matrixIndex = Number.isInteger(matrixIndexValue) && matrixIndexValue >= 0
       ? matrixIndexValue
@@ -1998,14 +1979,11 @@ export class WorldScene {
       depthRank: this._coplanarRank(shard, occurrenceIndex),
       occurrence,
       record: oc.record === undefined ? null : occurrence[oc.record],
-      resource: oc.appearance_resource === undefined ? occurrence[oc.resource] : occurrence[oc.appearance_resource],
-      sourceResource: occurrence[oc.resource],
+      resource: occurrence[oc.appearance_resource ?? oc.resource],
       secondary: secondaryValue >= 0 ? secondaryValue : null,
       entrySlot: oc.entry_slot === undefined ? null : occurrence[oc.entry_slot],
       packed: oc.packed === undefined ? null : occurrence[oc.packed],
-      packedFlags: oc.appearance_packed_flags === undefined
-        ? (oc.packed_flags === undefined ? null : occurrence[oc.packed_flags])
-        : occurrence[oc.appearance_packed_flags],
+      packedFlags: packedColumn === undefined ? null : occurrence[packedColumn],
       individual: individualIndex >= 0
         ? shard.individuals?.[individualIndex] ?? null
         : null,
@@ -2052,6 +2030,7 @@ export class WorldScene {
         recolorIndex: Number(row[pc.recolor]),
       }));
     }
+    const idleClip = this._spawnIdleClip(spawn);
     return Object.freeze({
       room: owner.id,
       category: 'spawns',
@@ -2067,17 +2046,13 @@ export class WorldScene {
       label: spawn[sc.label] ?? null,
       authoredLabel: spawn[sc.authored_label] ?? spawn[sc.label] ?? null,
       centreOffset: optionalFinite(spawn[sc.centre_offset]) ?? 0.5,
-      defaultRoomRecord: spawn[sc.default_room_record] ?? null,
-      enemyDefinitions: owner.shard.actor_definitions?.[index] ?? [],
       directionResource: spawn[sc.direction_resource],
       position: Object.freeze([spawn[sc.x], spawn[sc.y], spawn[sc.z]]),
       surfaceZ: optionalFinite(spawn[sc.surface_z]),
-      heightSource: spawn[sc.height_source]??'surface_estimate',
-      heightRoom: optionalFinite(spawn[sc.height_room]),
-      authoredHeight: optionalFinite(spawn[sc.authored_height]),
+      heightSource: spawn[sc.height_source] ?? 'surface_estimate',
       rotationQuarters: spawn[sc.rotation_quarters],
       // the clip the actor rests in (-1 / absent column -> null)
-      defaultClip: this._spawnIdleClip(spawn) >= 0 ? this._spawnIdleClip(spawn) : null,
+      defaultClip: idleClip >= 0 ? idleClip : null,
       parts: Object.freeze(parts),
     });
   }

@@ -15,8 +15,8 @@ import { GameShaderLibrary, putFloats, type GameProgram, type GameRenderTables }
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
 import { bakeGameGeometry } from './game-geometry.js';
 import { drawGroups, type DrawGroup, type EmissionKey } from './draw-order.js';
+import { styleColourBytes } from './game-water.js';
 import { detectChains } from '../../texture-roles.js';
-import type { YConvention } from './dxbc-glsl.js';
 
 export interface GameRenderIndex extends GameRenderTables {
   waterPrograms: { surface: number[]; curtain: number[] };
@@ -302,16 +302,17 @@ export class GameFrame {
     } else programIndex = this.mainProgram(batch.material);
     if (programIndex === null) return null;
     const program = await this.shaders.program(programIndex, 'clip');
+    const depthIndex = batch.water ? null : this.depthProgram(batch.material);
+    const depthProgram = depthIndex === null ? null : await this.shaders.program(depthIndex, 'clip');
     const material = this.index.materials[String(batch.material)];
     const style = batch.water?.kind === 'surface' ? this.room!.water.styles[batch.water.style] : null;
-    const srgbToLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-    const byte = (v: number) => Math.min(255, Math.max(0, Math.floor(f32(f32(v) * 255))));
-    const geometry = bakeGameGeometry({
-      instances, elements: program.elements, attributes: program.translated.attributes,
+    // One bake serves the main and depth programs; each names the shared streams its own way.
+    const [geometry, depthGeometry] = bakeGameGeometry({
+      instances,
+      layouts: [program, depthProgram].flatMap((p) => (p ? [{ elements: p.elements, attributes: p.translated.attributes }] : [])),
       specular: material?.specular ?? [0, 0, 0],
       opacity: batch.water ? batch.water.opacity : (material?.opacity ?? 1),
-      grid: null, tileUnits: this.tileUnits,
-      style: style ? [byte(srgbToLinear(style.colour[0])), byte(srgbToLinear(style.colour[1])), byte(srgbToLinear(style.colour[2])), byte(style.colour[3])] : undefined,
+      style: style ? styleColourBytes(style.colour) : undefined,
       window: batch.water?.kind === 'curtain' ? [Math.round(batch.water.window[0] * 65535), Math.round(batch.water.window[1] * 65535)] : undefined,
     });
     const glProgram = this.gl.compile(program.translated);
@@ -319,20 +320,11 @@ export class GameFrame {
     const index = geometry.getIndex()!;
     const textures = await this.bindTexturesFor(program, batch);
     let depth: Draw['depth'] = null;
-    if (!batch.water) {
-      const depthIndex = this.depthProgram(batch.material);
-      if (depthIndex !== null) {
-        const depthProgram = await this.shaders.program(depthIndex, 'clip');
-        const depthGeometry = bakeGameGeometry({
-          instances, elements: depthProgram.elements, attributes: depthProgram.translated.attributes,
-          specular: material?.specular ?? [0, 0, 0], opacity: material?.opacity ?? 1,
-          grid: null, tileUnits: this.tileUnits,
-        });
-        const depthGl = this.gl.compile(depthProgram.translated);
-        // cutout depth programs discard by the parameter plane: bind it too
-        depth = { program: depthProgram, gl: depthGl, vao: this.vertexArray(depthGl, depthGeometry),
-          textures: await this.bindTexturesFor(depthProgram, batch) };
-      }
+    if (depthProgram) {
+      const depthGl = this.gl.compile(depthProgram.translated);
+      // cutout depth programs discard by the parameter plane: bind it too
+      depth = { program: depthProgram, gl: depthGl, vao: this.vertexArray(depthGl, depthGeometry),
+        textures: await this.bindTexturesFor(depthProgram, batch) };
     }
     return {
       program, gl: glProgram, vao, count: index.count,
@@ -420,16 +412,7 @@ export class GameFrame {
       }
       return levels;
     }
-    // Older metadata without formats: walk the neighbours of `top`.
-    const out = [top];
-    // the chain is stored either smallest or largest first around its top
-    for (const step of [-1, 1]) {
-      let k = top, w = subs[top]?.[0] ?? 0, h = subs[top]?.[1] ?? 0;
-      while (subs[k + step] && subs[k + step][0] * 2 === w && subs[k + step][1] * 2 === h) {
-        k += step; [w, h] = subs[k]; out.push(k);
-      }
-    }
-    return out;
+    return [top];
   }
 
   private async bindTexturesFor(program: GameProgram, batch: GameBatchSource): Promise<Record<number, GameTexture>> {
@@ -594,8 +577,8 @@ export class GameFrame {
     const vignetteColour = env?.vignette ?? [0, 0, 0, 1];
     const k = idx.vignette.radius / Math.max(hx, hy) + 1;
     // The main pass fades to the vignette colour away from the room and
-    // darkens low ground; depth passes and the water (drawn by the overlay
-    // renderer, which gets the neutral vignette in the player's own room) do not.
+    // darkens low ground; depth passes and the water (neutral vignette, as in
+    // the game) do not.
     const vsWords = (wvp: THREE.Matrix4, receiver: THREE.Matrix4 | null, offset: number, neutral = false) => {
       const words = new Uint32Array(72);
       putFloats(words, 0, rows(wvp));
@@ -611,20 +594,24 @@ export class GameFrame {
       }
       return words;
     };
+    // Depth-only draws of every caster (none for a card) into the bound target.
+    const drawDepths = (words: Uint32Array, targetHeight: number) => {
+      for (const d of card ? [] : this.draws) {
+        if (!d.depth) continue;
+        this.gl.applyState(this.state(d.depth.program, { colourWrite: false }));
+        this.gl.bindResources(d.depth.gl, { [d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs']: words },
+          this.bound(d.depth.program, d.depth.textures), 'ps', targetHeight);
+        gl.bindVertexArray(d.depth.vao);
+        gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
+      }
+    };
 
     // ---- shadow pass
     gl.bindFramebuffer(gl.FRAMEBUFFER, t.shadowFb);
     gl.viewport(0, 0, size, size);
     gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
     const casterWords = vsWords(casterClip, null, 0, true);
-    for (const d of card ? [] : this.draws) {
-      if (!d.depth) continue;
-      this.gl.applyState(this.state(d.depth.program, { colourWrite: false }));
-      this.gl.bindResources(d.depth.gl, { [d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs']: casterWords },
-        this.bound(d.depth.program, d.depth.textures), 'ps', size);
-      gl.bindVertexArray(d.depth.vao);
-      gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
-    }
+    drawDepths(casterWords, size);
 
     // ---- ambient occlusion
     const ssao = idx.ssao;
@@ -643,14 +630,7 @@ export class GameFrame {
     gl.viewport(0, 0, t.wa, t.ha);
     gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
     const prepassWords = vsWords(prepassClip, null, 0, true);
-    for (const d of card ? [] : this.draws) {
-      if (!d.depth) continue;
-      this.gl.applyState(this.state(d.depth.program, { colourWrite: false }));
-      this.gl.bindResources(d.depth.gl, { [d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs']: prepassWords },
-        this.bound(d.depth.program, d.depth.textures), 'ps', t.ha);
-      gl.bindVertexArray(d.depth.vao);
-      gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
-    }
+    drawDepths(prepassWords, t.ha);
     const n5 = f32(near / ssao.unit), f5 = f32(far / ssao.unit);
     const hp2 = (v: number) => { let b = 1; while (b * 2 <= v) b *= 2; return b; };
     const S = f32(2 * hp2(Math.trunc(0x7fffffff / Math.trunc(f5))));
@@ -658,16 +638,11 @@ export class GameFrame {
     const fullscreen = (programIndex: number, fb: WebGLFramebuffer, w: number, h: number,
       cbs: (p: GameProgram) => Record<string, Uint32Array>, textures: Record<number, GameTexture>) => {
       const program = this.passPrograms.get(programIndex)!;
-      const glProgram = this.compiled(program);
+      const glProgram = this.gl.compile(program.translated);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
       gl.viewport(0, 0, w, h);
       this.gl.applyState({ depthTest: false, depthFunc: gl.LESS, depthWrite: false, blend: null, cull: null, colourWrite: true });
-      const bound: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> = {};
-      for (const s of program.translated.samplers) {
-        if (!textures[s.texture]) continue;
-        bound[s.texture] = { texture: textures[s.texture], sampler: s.sampler === null ? null : this.gl.sampler(program.samplers[s.sampler] ?? null) };
-      }
-      this.gl.bindResources(glProgram, cbs(program), bound, 'ps', h);
+      this.gl.bindResources(glProgram, cbs(program), this.bound(program, textures), 'ps', h);
       if (!this.fullscreen) this.fullscreen = this.fullscreenVao(glProgram);
       gl.bindVertexArray(this.fullscreen);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -792,19 +767,10 @@ export class GameFrame {
   private present(t: any, width: number, height: number): void {
     const gl = this.context;
     if (!this.presentProgram) {
-      const shader = (type: number, source: string) => {
-        const s = gl.createShader(type)!;
-        gl.shaderSource(s, source);
-        gl.compileShader(s);
-        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`present shader: ${gl.getShaderInfoLog(s)}`);
-        return s;
-      };
-      const program = gl.createProgram()!;
-      gl.attachShader(program, shader(gl.VERTEX_SHADER, `#version 300 es
+      const program = this.gl.linkSources(`#version 300 es
 void main() {
   gl_Position = vec4(float((gl_VertexID & 1) * 4) - 1.0, float((gl_VertexID & 2) * 2) - 1.0, 0.0, 1.0);
-}`));
-      gl.attachShader(program, shader(gl.FRAGMENT_SHADER, `#version 300 es
+}`, `#version 300 es
 precision highp float;
 uniform highp sampler2D u_colour;
 uniform highp sampler2D u_depth;
@@ -815,9 +781,7 @@ void main() {
   p.y = u_height - 1 - p.y;
   o = texelFetch(u_colour, p, 0);
   gl_FragDepth = texelFetch(u_depth, p, 0).r;
-}`));
-      gl.linkProgram(program);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`present program: ${gl.getProgramInfoLog(program)}`);
+}`);
       gl.useProgram(program);
       gl.uniform1i(gl.getUniformLocation(program, 'u_colour'), 0);
       gl.uniform1i(gl.getUniformLocation(program, 'u_depth'), 1);
@@ -834,7 +798,7 @@ void main() {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  /** Start the occlusion history afresh, as on the client's first frame: empty
+  /** Start the occlusion history afresh, as on the game's first frame: empty
    *  history (validity 0) and frame index 0. */
   resetTemporal(): void {
     this.ssaoFrame = 0;
@@ -847,18 +811,26 @@ void main() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  /** Read back an intermediate target (rows as the source stores them). */
-  readTarget(name: 'ao' | 'aoRaw' | 'blur1' | 'shadow' | 'linear' | 'main'): { width: number; height: number; data: number[] } | null {
+  /** Read back the finished frame's bytes (rows as the source stores them). */
+  readMain(): { width: number; height: number; data: Uint8Array } | null {
     const t = this.targets;
     if (!t) return null;
     const gl = this.context;
-    if (name === 'shadow') return null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.mainFb);
+    const data = new Uint8Array(t.mainColour.width * t.mainColour.height * 4);
+    gl.readPixels(0, 0, t.mainColour.width, t.mainColour.height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { width: t.mainColour.width, height: t.mainColour.height, data };
+  }
+
+  /** Read back an intermediate target (rows as the source stores them). */
+  readTarget(name: 'ao' | 'aoRaw' | 'blur1' | 'linear' | 'main'): { width: number; height: number; data: number[] } | null {
+    const t = this.targets;
+    if (!t) return null;
+    const gl = this.context;
     if (name === 'main') {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, t.mainFb);
-      const data = new Uint8Array(t.mainColour.width * t.mainColour.height * 4);
-      gl.readPixels(0, 0, t.mainColour.width, t.mainColour.height, gl.RGBA, gl.UNSIGNED_BYTE, data);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      return { width: t.mainColour.width, height: t.mainColour.height, data: Array.from(data) };
+      const out = this.readMain()!;
+      return { width: out.width, height: out.height, data: Array.from(out.data) };
     }
     if (name === 'linear') {
       // All five levels, level after level.
@@ -880,18 +852,4 @@ void main() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     return { width: t.wa, height: t.ha, data: Array.from(data) };
   }
-
-  private compiledPrograms = new Map<GameProgram, GameGLProgram>();
-  private compiled(program: GameProgram): GameGLProgram {
-    let p = this.compiledPrograms.get(program);
-    if (!p) { p = this.gl.compile(program.translated); this.compiledPrograms.set(program, p); }
-    return p;
-  }
-
-  dispose(): void {
-    this.draws = [];
-    this.waterDraws = [];
-  }
 }
-
-export type { YConvention };

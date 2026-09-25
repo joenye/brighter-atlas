@@ -1,4 +1,6 @@
 import type { EffectTransformBinding } from '../../extract/world/effect-transforms.js';
+import type { EmitterSim } from './effects-sim.js';
+import type { EffectBoneAnimation } from './effects-animation.js';
 
 export interface EffectBirthFrames {
   position: readonly number[] | null;
@@ -16,45 +18,44 @@ function multiply(a: readonly number[], b: readonly number[]): number[] {
   return out;
 }
 
-// Posed bones and inverse binds are in the owner's local coordinate system.
-// Only the position selector can request inverse-bind cancellation. Direction
-// selectors always use the posed bone, even when position uses the skin frame.
-export function animatedEffectBirthFrames(
-  binding: EffectTransformBinding, posedBones: readonly (readonly number[])[],
-  inverseBinds: readonly (readonly number[])[], inverseOwner: readonly number[],
-): EffectBirthFrames | null {
-  if (!validMatrix(inverseOwner)) return null;
-  const resolve = (ref: number | 'root' | null, skin: boolean): readonly number[] | null | undefined => {
-    if (ref === 'root') return null;
-    if (ref === null) return inverseOwner;
-    if (!Number.isInteger(ref) || ref < 0 || !validMatrix(posedBones[ref])) return undefined;
-    if (!skin) return posedBones[ref];
-    if (!validMatrix(inverseBinds[ref])) return undefined;
-    return multiply(posedBones[ref], inverseBinds[ref]);
-  };
-  const position = resolve(binding.primary, binding.mode === 'skin');
-  const direction = resolve(binding.secondary, false);
-  return position === undefined || direction === undefined ? null : {position, direction};
-}
-
-// Express the two independent birth frames relative to the owner. The
-// rendering layer applies that common owner frame after simulation.
-// At rest, inverse-bind mode cancels the bone's stored world matrix.
-// A missing selector in a rigged system leaves world coordinates unchanged,
-// so its relative frame is the inverse owner (including translation only
-// for points). null matrices here mean identity, not a missing selector.
-export function restEffectBirthFrames(
+// Express the two independent birth frames relative to the owner; the
+// rendering layer applies that common owner frame after simulation. Only the
+// position selector can request inverse-bind (skin) cancellation; direction
+// always uses the bone. Without inverseBinds the bones are at rest, where that
+// cancellation is identity. A missing selector in a rigged system leaves world
+// coordinates unchanged, so its relative frame is the inverse owner (including
+// translation only for points). null matrices here mean identity, not a
+// missing selector.
+export function effectBirthFrames(
   binding: EffectTransformBinding, bones: readonly (readonly number[])[],
-  inverseOwner: readonly number[],
+  inverseOwner: readonly number[], inverseBinds?: readonly (readonly number[])[],
 ): EffectBirthFrames | null {
   if (!validMatrix(inverseOwner)) return null;
   const resolve = (ref: number | 'root' | null, skin: boolean): readonly number[] | null | undefined => {
     if (ref === 'root') return null;
     if (ref === null) return inverseOwner;
     if (!Number.isInteger(ref) || ref < 0 || !validMatrix(bones[ref])) return undefined;
-    return skin ? null : bones[ref];
+    if (!skin) return bones[ref];
+    if (!inverseBinds) return null;
+    return validMatrix(inverseBinds[ref]) ? multiply(bones[ref], inverseBinds[ref]) : undefined;
   };
   const position = resolve(binding.primary, binding.mode === 'skin');
   const direction = resolve(binding.secondary, false);
-  return position === undefined || direction === undefined ? null : { position, direction };
+  return position === undefined || direction === undefined ? null : {position, direction};
+}
+
+// Apply rest birth frames to a rigged emitter; the returned setter swaps to
+// the animated frames (rest frames when a sample does not resolve) or back.
+export function bindRigBirthFrames(
+  sim: EmitterSim, binding: EffectTransformBinding, bones: readonly (readonly number[])[],
+  inverseOwner: readonly number[],
+): ((animation: EffectBoneAnimation | null) => void) | null {
+  const frames = effectBirthFrames(binding, bones, inverseOwner);
+  if (!frames) return null;
+  sim.setBirthFrames(frames.position, frames.direction);
+  return animation => {
+    if (animation) sim.setBirthFrameSampler(tick =>
+      effectBirthFrames(binding, animation.sample(tick), inverseOwner, animation.inverseBinds) || frames);
+    else sim.setBirthFrames(frames.position, frames.direction);
+  };
 }

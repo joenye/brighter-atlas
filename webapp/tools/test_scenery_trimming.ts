@@ -18,7 +18,7 @@ try{
  const g=make(),source={record:50,resource:0,secondary:7,cell:[4,6,2],entrySlot:0,packed:123,packedFlags:4|8|32,rotationQuarters:1,individual:null,parentLink:null,childLinks:[]},saved=structuredClone(source);
  const draw=g.drawOccurrence(source);assert.equal(draw.resource,1);assert.equal(draw.secondary,null);assert.equal(draw.packedFlags,4|(511<<7));assert.equal(g.drawOccurrence(draw),draw);assert.deepEqual(source,saved);
  assert.deepEqual(g.occurrenceAnchor(source).slice(0,2),[5,7.5]);
- const ctx={graph:g};const[out]=occurrenceRows(ctx,[source]);const cols=Object.fromEntries(OCCURRENCE_COLUMNS.map((k:string,i:number)=>[k,i]));
+ const ctx={graph:g,dynamic:()=>false};const[out]=occurrenceRows(ctx,[source]);const cols=Object.fromEntries(OCCURRENCE_COLUMNS.map((k:string,i:number)=>[k,i]));
  assert.equal(out[0][cols.resource],0);assert.equal(out[0][cols.appearance_resource],1);assert.equal(out[0][cols.packed_flags],saved.packedFlags);assert.equal(out[0][cols.appearance_packed_flags],draw.packedFlags);
  assert.equal(out[0][cols.anchor_x],5);assert.equal(out[0][cols.anchor_y],7.5);
  const part={kind:'model_part',mesh:10,material_slot:20,texture:30,typed_schema:'mesh_material_colors3_matrix3x4'};

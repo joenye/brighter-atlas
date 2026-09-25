@@ -1,5 +1,5 @@
 // Colour operations use single precision throughout, including intermediate
-// HSL values. Rounding only at the final RGB555 conversion changes some tiles.
+// HSL values. Rounding only at the final RGB555 conversion would change some tiles.
 import {packMapColor} from './geometry.js';
 
 export type MapColorRule =

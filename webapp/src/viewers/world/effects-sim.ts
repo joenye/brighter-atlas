@@ -1,15 +1,11 @@
-import {EffectRandom} from './effects-random.js';
-import type {EffectScales} from '../../extract/world/effect-scales.js';
-import {effectHslToRgb, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
-import {waterHeight, type EffectWave} from '../../extract/world/effect-waves.js';
-import type {EffectWindow} from '../../extract/world/effect-windows.js';
 // Particle effect simulation core for the world viewer. Pure math over the
 // recovered world:effects doc (extract/world/effects.js): no DOM, no three.js.
 //
 // The design is closed-form: a particle's full state at display time T is a
 // pure function of its spawn index, so there is no integration, no free list
 // and no frame-rate dependence. Spawn times come from a deterministic
-// schedule (continuous rate or burst windows, looping by the system cycle),
+// schedule (continuous rate, burst windows looping by the system cycle,
+// emission windows repeating by their own period, or water-crest bursts),
 // and every random quantity of spawn n draws from a counter-based PRNG keyed
 // (emitterSeed, n), so any clock value reproduces the same particles
 // bit-for-bit. Because life is constant per emitter, retirement is strict
@@ -25,6 +21,11 @@ import type {EffectWindow} from '../../extract/world/effect-windows.js';
 import type {
   EffectConfig, EffectEmitter, EffectSystem,
 } from '../../extract/world/effects.js';
+import {EffectRandom} from './effects-random.js';
+import type {EffectScales} from '../../extract/world/effect-scales.js';
+import {effectHslToRgb, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
+import {waterHeight, type EffectWave} from '../../extract/world/effect-waves.js';
+import type {EffectWindow} from '../../extract/world/effect-windows.js';
 import type { EffectBirthFrames } from './effects-frames.js';
 
 export type EffectBirthFrameSampler = (tick: number) => EffectBirthFrames;
@@ -62,6 +63,8 @@ const finite = (value: any, fallback: number): number => (
   Number.isFinite(Number(value)) ? Number(value) : fallback);
 const clamp = (value: number, lo: number, hi: number): number => (
   value < lo ? lo : value > hi ? hi : value);
+// Colours are stored as normalized bytes.
+const byteChannel = (v: number): number => Math.trunc(Math.fround(Math.fround(clamp(v, 0, 1)) * 255)) / 255;
 // One envelope window's progress, saturated. A zero-length window is passed
 // instantly (nothing to ramp through), which is what makes a missing fade
 // mean "already opaque" rather than "never visible".
@@ -133,6 +136,10 @@ function normalize(v: Vec3, fallback: Vec3): Vec3 {
   const len = Math.hypot(v[0], v[1], v[2]);
   if (!(len > 1e-9)) return fallback;
   return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+function linear(m: readonly number[], v: Vec3): Vec3 {
+  return [m[0] * v[0] + m[4] * v[1] + m[8] * v[2], m[1] * v[0] + m[5] * v[1] + m[9] * v[2], m[2] * v[0] + m[6] * v[1] + m[10] * v[2]];
 }
 
 function axisFrame(axis: Vec3): { w: Vec3; u: Vec3; v: Vec3 } {
@@ -247,9 +254,8 @@ export class EmitterSim {
   private _scales: EffectScales | null = null;
   private _sizes0!: Float32Array;
   private _sizes1!: Float32Array;
-  // Bound spawn-time properties. Sampled values are drawn per particle, in
-  // the game's evaluation order, from the same per-particle stream as
-  // sizes; literal values are already folded into the constants above.
+  // Bound spawn-time properties, sampled in _spawn; literal values are
+  // already folded into the constants above.
   private _fields: EffectFieldValues | null = null;
   private _random = false;
   private _perParticle = false;
@@ -265,6 +271,7 @@ export class EmitterSim {
   private _colours!: Float32Array;
   private _eventWindow: EffectWindow | null = null;
   private _wave: EffectWave | null = null;
+  private _waveCrestRate = 0;
   private _wavePoint: [number, number] = [0, 0];
   private _waveArmed = false;
   private _waveNext = 0;
@@ -334,11 +341,9 @@ export class EmitterSim {
         colorOverride[3] * emitter.color_override_alpha!];
       this.color1 = [...this.color0];
     }
-    // Endpoint colours are stored as normalized bytes. Quantize once before
-    // the envelope, retaining floating-point precision during fades.
-    const channel = (v: number) => Math.trunc(Math.fround(Math.fround(clamp(v, 0, 1)) * 255)) / 255;
-    this.color0 = this.color0.map(channel) as [number, number, number, number];
-    this.color1 = this.color1.map(channel) as [number, number, number, number];
+    // Quantize the endpoints once before the envelope, keeping float precision during fades.
+    this.color0 = this.color0.map(byteChannel) as [number, number, number, number];
+    this.color1 = this.color1.map(byteChannel) as [number, number, number, number];
     this._scales = emitter.scales ?? null;
     this.scale0 = finite(emitter.scale0?.value, 1);
     this.scale1 = finite(emitter.scale1?.value, this.scale0);
@@ -377,7 +382,8 @@ export class EmitterSim {
     this._wave = burst?.kind === 'burst_wave' && burst.wave ? burst.wave : null;
     if (this._wave) this.setWaveFrame(null);
     // A wave burst's steady density: its count once per crest of the faster wave.
-    const waveRate = this._wave ? this._wave.count * Math.max(...this._wave.water.rate.map(Math.abs)) * tickRate / TWO_PI : 0;
+    this._waveCrestRate = this._wave ? Math.max(...this._wave.water.rate.map(Math.abs)) : 0;
+    const waveRate = this._wave ? this._wave.count * this._waveCrestRate * tickRate / TWO_PI : 0;
     const rate = this._wave ? waveRate : Math.max(0, finite(this._eventWindow?.rate ?? burst?.per_second, 0));
     this.rate = rate;
     this.step = rate > 0 ? tickRate / rate : Infinity;
@@ -452,7 +458,7 @@ export class EmitterSim {
     let capacity = Math.round(clamp(Math.ceil(expected * 1.25), 4, PER_EMITTER_CAP));
     // A crest releases a whole burst at once; hold every burst one life can span.
     if (this._wave) capacity = Math.round(clamp(Math.max(capacity, Math.ceil(this._wave.count / next)
-      * (Math.ceil(this.life * Math.max(...this._wave.water.rate.map(Math.abs)) / Math.PI) + 2)), 4, PER_EMITTER_CAP));
+      * (Math.ceil(this.life * this._waveCrestRate / Math.PI) + 2)), 4, PER_EMITTER_CAP));
     if (next === this.k && capacity === this.capacity && this.birth) return;
     this.k = next;
     this.capacity = capacity;
@@ -489,10 +495,8 @@ export class EmitterSim {
   setAccelerationBasis(m: readonly number[] | null): void {
     this._accelBasis = m ? Array.from(m) : null;
     if (m) {
-      const apply = (v: Vec3): Vec3 => [m[0] * v[0] + m[4] * v[1] + m[8] * v[2],
-        m[1] * v[0] + m[5] * v[1] + m[9] * v[2], m[2] * v[0] + m[6] * v[1] + m[10] * v[2]];
-      this.accel = apply(this.accel);
-      this.accelSlope = apply(this.accelSlope);
+      this.accel = linear(m, this.accel);
+      this.accelSlope = linear(m, this.accelSlope);
     }
     this._dirty = true;
   }
@@ -566,7 +570,8 @@ export class EmitterSim {
   // across shape kinds.
   private _spawn(j: number, counter = j * this.k, tick = this.spawnTick(j)): void {
     const slot = j % this.capacity;
-    const rng = mulberry32(hash32(this.seed, counter | 0));
+    const particleSeed = hash32(this.seed, counter | 0);
+    const rng = mulberry32(particleSeed);
     const r0 = rng();
     const r1 = rng();
     const r2 = rng();
@@ -574,7 +579,7 @@ export class EmitterSim {
     // values are drawn in the game's evaluation order (origin radius, speed,
     // acceleration, size, rotation, spin, sprite, colour); the session's
     // shared stream state is not implied by this per-particle preview seed.
-    const random = this._random ? new EffectRandom(BigInt(hash32(this.seed, counter | 0))) : null;
+    const random = this._random ? new EffectRandom(BigInt(particleSeed)) : null;
     const draw = (v: EffectSample) => typeof v === 'number' ? v : random!.range(v[0], v[1]);
     const radius = this.shape.radial ? draw(this.shape.radial.radius) : 0;
     let speed = this.speed; let speedSlope = this.speedSlope;
@@ -593,10 +598,7 @@ export class EmitterSim {
         a0 = [v0[0] / t2, v0[1] / t2, v0[2] / t2];
         a1 = [(v1[0] - v0[0]) / t2 / this.life, (v1[1] - v0[1]) / t2 / this.life, (v1[2] - v0[2]) / t2 / this.life];
         const m = this._accelBasis;
-        if (m) {
-          a0 = [m[0] * a0[0] + m[4] * a0[1] + m[8] * a0[2], m[1] * a0[0] + m[5] * a0[1] + m[9] * a0[2], m[2] * a0[0] + m[6] * a0[1] + m[10] * a0[2]];
-          a1 = [m[0] * a1[0] + m[4] * a1[1] + m[8] * a1[2], m[1] * a1[0] + m[5] * a1[1] + m[9] * a1[2], m[2] * a1[0] + m[6] * a1[1] + m[10] * a1[2]];
-        }
+        if (m) { a0 = linear(m, a0); a1 = linear(m, a1); }
       }
       this._ax[slot] = a0[0]; this._ay[slot] = a0[1]; this._az[slot] = a0[2];
       this._jx[slot] = a1[0]; this._jy[slot] = a1[1]; this._jz[slot] = a1[2];
@@ -613,11 +615,10 @@ export class EmitterSim {
     }
     if (this.spriteChoices > 1) this.choice[slot] = random!.integer(this.spriteChoices);
     if (this._sampledColour) {
-      const channel = (v: number) => Math.trunc(Math.fround(Math.fround(clamp(v, 0, 1)) * 255)) / 255;
       const rgba = (c: EffectColourSample): number[] => {
-        if ('rgba' in c) return c.rgba.map(channel);
+        if ('rgba' in c) return c.rgba.map(byteChannel);
         const [a, h, sat, l] = c.ahsl.map(draw);
-        return [...effectHslToRgb(h, sat, l), a].map(channel);
+        return [...effectHslToRgb(h, sat, l), a].map(byteChannel);
       };
       const colour = f!.color!;
       const c0 = rgba(colour.start);
@@ -647,13 +648,13 @@ export class EmitterSim {
         [dx, dy, dz] = sampleConeDirection(s.w, [s.cone.yaw[0] * DEG, s.cone.yaw[1] * DEG],
           [s.cone.pitch[0] * DEG, s.cone.pitch[1] * DEG], r1, r2);
       } else {
-      const yaw = r1 * s.yaw;
-      const pitch = r2 * s.pitch;
-      const cp = Math.cos(pitch); const sp = Math.sin(pitch);
-      const cy = Math.cos(yaw); const sy = Math.sin(yaw);
-      dx = cp * s.w[0] + sp * (cy * s.u[0] + sy * s.v[0]);
-      dy = cp * s.w[1] + sp * (cy * s.u[1] + sy * s.v[1]);
-      dz = cp * s.w[2] + sp * (cy * s.u[2] + sy * s.v[2]);
+        const yaw = r1 * s.yaw;
+        const pitch = r2 * s.pitch;
+        const cp = Math.cos(pitch); const sp = Math.sin(pitch);
+        const cy = Math.cos(yaw); const sy = Math.sin(yaw);
+        dx = cp * s.w[0] + sp * (cy * s.u[0] + sy * s.v[0]);
+        dy = cp * s.w[1] + sp * (cy * s.u[1] + sy * s.v[1]);
+        dz = cp * s.w[2] + sp * (cy * s.u[2] + sy * s.v[2]);
       }
     } else if (s.kind === 'ring') {
       const theta = r0 * s.sweep;
@@ -838,6 +839,8 @@ export class EmitterSim {
     // reaches its second colour before it starts fading rather than over the
     // whole span; the two fades each act on one end's own alpha.
     const hold = Math.max(0, life - this.fadeIn - this.fadeOut);
+    const facingMode = this._facingMode;
+    const velocityFacing = facingMode === 1 || facingMode === 4;
     for (let j = this.tail; j < this.head; j++) {
       const slot = j % cap;
       const age = T - this.birth[slot];
@@ -881,10 +884,10 @@ export class EmitterSim {
         // Facing velocity follows the sprite program's motion vector. Its
         // changing-acceleration coefficient differs from the derivative of
         // the position polynomial. Supply native units per second.
-        (this._facingMode === 1 || this._facingMode === 4) ? this.tickRate * (this.vx[slot] + age * (ax + this.sx[slot] + .5 * age * jx)) : this.nx[slot],
-        (this._facingMode === 1 || this._facingMode === 4) ? this.tickRate * (this.vy[slot] + age * (ay + this.sy[slot] + .5 * age * jy)) : this.ny[slot],
-        (this._facingMode === 1 || this._facingMode === 4) ? this.tickRate * (this.vz[slot] + age * (az + this.sz[slot] + .5 * age * jz)) : this.nz[slot],
-        this._facingMode);
+        velocityFacing ? this.tickRate * (this.vx[slot] + age * (ax + this.sx[slot] + .5 * age * jx)) : this.nx[slot],
+        velocityFacing ? this.tickRate * (this.vy[slot] + age * (ay + this.sy[slot] + .5 * age * jy)) : this.ny[slot],
+        velocityFacing ? this.tickRate * (this.vz[slot] + age * (az + this.sz[slot] + .5 * age * jz)) : this.nz[slot],
+        facingMode);
     }
   }
 }

@@ -57,8 +57,9 @@ export const BUNDLE_LABEL: Record<number, string> = {
 };
 
 // Bundles a category uses when they are supplied, and never requires: the
-// world view draws with the game's own shaders when both shader bundles are
-// present (Windows builds only; the viewer checks the format itself).
+// world view draws with the game's own shaders when both shader bundles (4, 7)
+// are present (Windows builds only; the viewer checks the format itself), and
+// poses actors in their resting clip from the animations (1).
 export const OPTIONAL_CAT_BUNDLES: Record<string, number[]> = {
   world: [4, 7, 1],
 };

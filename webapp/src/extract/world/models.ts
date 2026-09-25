@@ -2954,11 +2954,7 @@ export interface EnemyBaseName {
 // an absent authored plural remains null.
 // `targets` is every registry row the definition references (typed 0x26 +
 // pooled + direct + series, first-occurrence order) and `targetTargets[i]`
-// is the identical projection of `targets[i]`. extractEnemyBaseNames and
-// extractEnemyRosters previously EACH ran this exact full-registry scan
-// (same predicate, same reference projection, verbatim-identical code);
-// computing it once and handing it to both halves that pass without
-// reordering a single loop.
+// is the identical projection of `targets[i]`.
 export interface EnemyDefinition {
   slot: number;
   name: string;                  // singular
@@ -2998,6 +2994,7 @@ export function scanEnemyDefinitions(
   const names = new Map<number, {name: string; plural: string | null}>();
   const bindings = new Map<string, Map<string, {singular: number; plural: number; witnesses: number}>>();
   const readerKey = (row: RegistryRow) => `${row.selector}\u0000${row.runtime}`;
+  const usable = (text: string) => text.trim() && isLabelString(text) && !isSentenceLike(text) && !isTechnicalLabel(text);
   for (const row of rows) {
     // exactly one singular+plural label pair on the definition row
     const labels: string[] = [];
@@ -3008,9 +3005,7 @@ export function scanEnemyDefinitions(
         if (text !== null) labels.push(text);
       }
     }
-    const distinct = orderedUnique(labels).filter(
-      (text) => text.trim() && isLabelString(text) && !isSentenceLike(text) && !isTechnicalLabel(text),
-    );
+    const distinct = orderedUnique(labels).filter(usable);
     if (distinct.length !== 2) continue;
     let singular: string | null = null;
     let plural: string | null = null;
@@ -3018,7 +3013,7 @@ export function scanEnemyDefinitions(
       if (b === `${a}s` || b === `${a}es`) { singular = a; plural = b; break; }
     }
     if (singular === null) continue;
-    names.set(row.slot, {name: singular, plural: plural!});
+    names.set(row.slot, {name: singular, plural});
     // Agreeing records of the same decoded type establish the authored name
     // fields. Other members may have irregular plurals, identical singular and
     // plural forms, or proper names; English suffix rules cannot identify those.
@@ -3072,7 +3067,6 @@ export function scanEnemyDefinitions(
       if (!candidates && !singleFields) continue;
       const events = strings.directStrings(row);
       const at = (op: number) => orderedUnique(events.filter(e => e.field_op === op).map(e => e.text));
-      const usable = (text: string) => text.trim() && isLabelString(text) && !isSentenceLike(text) && !isTechnicalLabel(text);
       if (candidates) {
         if (candidates.size !== 1) continue;
         const binding = [...candidates.values()][0];
@@ -3081,9 +3075,8 @@ export function scanEnemyDefinitions(
         if (singular.length !== 1 || plural.length !== 1 || ![singular[0], plural[0]].every(usable)) continue;
         label = {name: singular[0], plural: plural[0]};
       } else {
-        const fields = singleFields;
-        if (!fields || fields.size !== 1) continue;
-        const [op, witnesses] = [...fields][0];
+        if (singleFields?.size !== 1) continue;
+        const [op, witnesses] = [...singleFields][0];
         if (witnesses.size < 2) continue;
         const singular = at(op), labels = orderedUnique(events.map(e => e.text).filter(usable));
         if (singular.length !== 1 || labels.length !== 1 || singular[0] !== labels[0]) continue;
@@ -3103,9 +3096,9 @@ export function scanEnemyDefinitions(
 
 // The roaming-enemy catalog: named definitions reference small per-tier rows,
 // each of which references the tier's visual/style owner. The tier rows carry
-// only the QUALIFIER label
-// ("Powerful"), which the mutual-reference naming tier would otherwise
-// transfer onto the card; the definition row carries the family BASE name.
+// only the QUALIFIER label ("Powerful"), which the mutual-reference naming
+// tier would otherwise transfer onto the card; the definition row carries the
+// family BASE name.
 // -> Map<visual owner slot, base name>, dropping any owner reached by two
 // different bases. Structural throughout: no selector or class ids.
 // `defs` optionally supplies the shared scanEnemyDefinitions result.
@@ -3189,68 +3182,6 @@ export function extractEnemyRosters(
     }
   }
   return rosters;
-}
-
-// One style/visual owner's appearance parts: the
-// unique (mesh series, later material series) pair with no asset field
-// between (pooled or bare humanoid slot arrays), plus the two-tint actor
-// recolors — the same rules the actor rows use.
-export function ownerAppearanceParts(
-  rows: RegistryRow[], pool: any[], ownerSlot: number,
-  meshSlots: Map<number, number>, materialTextures: Map<number, number[]>,
-): Record<string, any>[] {
-  if (!isInt(ownerSlot) || ownerSlot < 0 || ownerSlot >= rows.length) return [];
-  const resolver = new Resolver(pool, meshSlots);
-  const row = rows[ownerSlot];
-  const decoded = decodeOwnerFields(row, pool, resolver);
-  const meshFields: [number, DecodedField, number[]][] = [];
-  const materialFields: [number, DecodedField, number[]][] = [];
-  const assetOps: number[] = [];
-  for (const [op, field] of decoded) {
-    let meshes: number[] | null = field.elements.length ? [] : null;
-    let materials: number[] | null = field.elements.length ? [] : null;
-    let hasAssets = false;
-    for (const [elementMeshes, elementMaterials] of field.elements) {
-      if (elementMeshes.length || elementMaterials.length) hasAssets = true;
-      if (meshes !== null) {
-        const slot = oneUnique(elementMeshes);
-        meshes = slot !== null && !elementMaterials.length ? [...meshes, slot] : null;
-      }
-      if (materials !== null) {
-        const handle = oneUnique(elementMaterials);
-        materials = handle !== null && !elementMeshes.length
-          && (materialTextures.get(handle) || []).length === 1
-          ? [...materials, handle] : null;
-      }
-    }
-    if (hasAssets) assetOps.push(op);
-    if (meshes !== null && meshes.length) meshFields.push([op, field, meshes]);
-    if (materials !== null && materials.length) materialFields.push([op, field, materials]);
-  }
-  const candidates: [number, number, number[], number[]][] = [];
-  for (const [meshOp, , meshes] of meshFields) {
-    for (const [materialOp, , materials] of materialFields) {
-      if (!(meshOp < materialOp) || meshes.length !== materials.length) continue;
-      let blocked = false;
-      for (const op of assetOps) if (op > meshOp && op < materialOp) { blocked = true; break; }
-      if (!blocked) candidates.push([meshOp, materialOp, meshes, materials]);
-    }
-  }
-  if (candidates.length !== 1) return [];
-  const [meshOp, materialOp, meshes, materials] = candidates[0];
-  const recolors = parallelRecolors(decoded, resolver, materialOp, meshes.length, row);
-  return meshes.map((meshSlot, index) => ({
-    mesh_def_slot: meshSlot,
-    mesh: meshSlots.get(meshSlot)!,
-    material_slot: materials[index],
-    texture: (materialTextures.get(materials[index]) || [])[0],
-    part_index: index,
-    mesh_field_op: meshOp,
-    material_field_op: materialOp,
-    recolors: recolors === null ? null : recolors.values[index].map((color) => [...color]),
-    recolor_field_ops: recolors === null ? [-1, -1] : recolors.field_ops,
-    recolor_scope: recolors === null ? null : recolors.scope,
-  }));
 }
 
 // ------------------------------------------------------------ orchestrator

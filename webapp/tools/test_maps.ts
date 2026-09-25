@@ -29,15 +29,12 @@ try{
   await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
   await page.mouse.move(box.x+box.width/2+60,box.y+box.height/2+30);await page.mouse.up();
   await page.waitForFunction(v=>(document.querySelector('.map-view canvas') as any).dataset.center!==v,{},before);
-  const session=await page.createCDPSession();
-  await session.send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:path.join(root,'downloads')});
+  const downloads=path.join(root,'downloads'),session=await page.createCDPSession();
+  await session.send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloads});
+  const download=async(match:(n:string)=>boolean)=>{for(let i=0;i<30;i++){const f=(await readdir(downloads)).find(match);if(f)return readFile(path.join(downloads,f));await new Promise(r=>setTimeout(r,100));}return null;};
   await page.$eval('[aria-label="PNG long edge in pixels"]',e=>{(e as any).value='512';});
   await page.evaluate(()=>window.__bs.app.view.exportPng());
-  let png:Buffer|null=null;
-  for(let i=0;i<30&&!png;i++){
-    const files=(await readdir(path.join(root,'downloads'))).filter(n=>n.endsWith('.png'));
-    if(files.length)png=await readFile(path.join(root,'downloads',files[0]));else await new Promise(r=>setTimeout(r,100));
-  }
+  const png=await download(n=>n.endsWith('.png'));
   assert(png);assert.equal(Math.max(png.readUInt32BE(16),png.readUInt32BE(20)),512);
   await page.select('[aria-label="Map data mode"]','room');
   await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.matches==='7');
@@ -53,12 +50,7 @@ try{
   await page.evaluate(()=>window.__bs.app.view.exportPng());
   assert.equal(await page.$eval('.map-view',e=>(e as any).dataset.exportMarkers),'1');
   await page.evaluate(()=>[...document.querySelectorAll('.map-inspection button')].find(e=>e.textContent==='Download filtered records')!.click());
-  let records:any=null;
-  for(let i=0;i<30&&!records;i++) {
-    const files=await readdir(path.join(root,'downloads'));
-    if(files.includes('map-records.json'))records=JSON.parse(await readFile(path.join(root,'downloads/map-records.json'),'utf8'));
-    else await new Promise(r=>setTimeout(r,100));
-  }
+  const records=JSON.parse(String(await download(n=>n==='map-records.json')));
   assert(records);assert.equal(records.inventory.resources.length,1);assert.equal(records.inventory.rooms[0].occurrences.length,1);
   await page.evaluate(()=>[...document.querySelectorAll('.map-selection button')].find(e=>e.textContent==='Hide this node type')!.click());
   await page.waitForFunction(()=>(document.querySelector('.map-view') as any).dataset.matches==='0');

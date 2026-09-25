@@ -78,7 +78,7 @@ function estimateSystemRadius(system: EffectSystem, configs: Record<string, Effe
     // INSIDE the quad, which reads as a blank or washed-out preview.
     const draw = spriteDrawOf(emitter.sprite);
     const maxScale = Math.max(
-      ...[emitter.scales?.start, emitter.scales?.end].flatMap(v => typeof v === 'number' ? [Math.abs(v)] : Array.isArray(v) ? v.map(Math.abs) : []),
+      extent(emitter.scales?.start), emitter.scales?.end === 'start' ? 0 : extent(emitter.scales?.end),
       Math.abs(Number(emitter.scale0?.value) || 0),
       Math.abs(Number(emitter.scale1?.value) || 0),
     );

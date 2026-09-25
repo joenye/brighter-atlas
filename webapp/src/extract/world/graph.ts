@@ -84,12 +84,6 @@ export const FACE_NAMES = [
 // that keeps every supported build byte-identical.
 const BLOCK_FACE_DEFAULT_OFFSET = -13;
 
-export const IDENTITY_LOCAL_MATRIX_GAME = [
-  1, 0, 0, 0,
-  0, 1, 0, 0,
-  0, 0, 1, 0,
-];
-
 function rotateXY(x: number, y: number, quarterTurns: number): [number, number] {
   for (let k = quarterTurns & 3; k > 0; k--) { const t = x; x = -y; y = t; }
   return [x, y];
@@ -119,6 +113,8 @@ export function nativeAxisAlignment(
 
 const isInt = (v: any) => Number.isInteger(v);
 const isNode = (v: any) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isTypedPart = (part: PartRecord) => part.typed_schema === 'mesh_material_colors3_matrix3x4'
+  || part.typed_schema === 'mesh_material_colors3';
 
 function unique<T>(values: Iterable<T>): T[] {
   const seen = new Set<T>();
@@ -868,7 +864,7 @@ export class AssetGraph {
     ownerType: number | null): PartColourRule | null {
     const colour = (slot: number, op: number) => this.color4f(this.fields(slot).get(op));
     const neutral = tiles.neutral.slice();
-    if (part.typed_schema === 'mesh_material_colors3_matrix3x4' || part.typed_schema === 'mesh_material_colors3') {
+    if (isTypedPart(part)) {
       const [first, second, third] = part.recolors ?? [];
       if (![first, second, third].every((c) => Array.isArray(c) && c.length === 4)) return null;
       const full = [third[0] * 2, third[1] * 2, third[2] * 2, third[3]];
@@ -1315,8 +1311,7 @@ export class AssetGraph {
       return [part];
     }
     const typedGroups = this.staticParts(shapeSlot)
-      .filter(part => part.typed_schema === 'mesh_material_colors3_matrix3x4'
-        || part.typed_schema === 'mesh_material_colors3')
+      .filter(isTypedPart)
       .map(part => ({ ...part, kind: 'terrain_model_part', ground_resource: groundSlot }));
     const faceBase = this._faceBase(shapeSlot, groundSlot);
     return [...this.faceParts(shapeSlot, groundSlot, 'terrain_face', faceBase), ...typedGroups];
@@ -1747,34 +1742,7 @@ export class AssetGraph {
     return result;
   }
 
-  // A selected group that only repeats identity block faces is inherited.
-  private _isInheritedBlockFaceCopy(ownerSlot: number, staticParts: PartRecord[]): boolean {
-    const blockParts = this.blockParts(ownerSlot);
-    if (!blockParts.length || !staticParts.length) return false;
-    for (const staticPart of staticParts) {
-      const matrix = staticPart.local_matrix_game;
-      if (matrix !== undefined && matrix !== null) {
-        if (matrix.length !== 12
-          || matrix.some((v: number, k: number) => v !== IDENTITY_LOCAL_MATRIX_GAME[k])) {
-          return false;
-        }
-      }
-      let matched = false;
-      for (const face of blockParts) {
-        if (staticPart.mesh !== face.mesh) continue;
-        if (staticPart.material_slot === face.material_slot
-          || (face.fallback_material_slot !== undefined
-            && staticPart.material_slot === face.fallback_material_slot)) {
-          matched = true;
-          break;
-        }
-      }
-      if (!matched) return false;
-    }
-    return true;
-  }
-
-  // The qualified static group, excluding inherited face copies.
+  // The qualified static group.
   staticParts(ownerSlot: number): PartRecord[] {
     // A block's component array follows its eight face fields. Later groups
     // belong to other appearances and cannot replace an empty component list.
@@ -1783,8 +1751,7 @@ export class AssetGraph {
       return this.modelGroups(ownerSlot).find(group => group.mesh_op === layout[0] + 8
         && group.material_op === group.mesh_op)?.parts || [];
     }
-    const selected = this._selectedStaticParts(ownerSlot);
-    return this._isInheritedBlockFaceCopy(ownerSlot, selected) ? [] : selected;
+    return this._selectedStaticParts(ownerSlot);
   }
 
   // Resolve lossless room occurrences into exact mesh/material instances.
@@ -1826,9 +1793,7 @@ export class AssetGraph {
         if ((part.kind === 'terrain_face' || part.kind === 'block_face')
           && hit.packedFlags !== null
           && !((hit.packedFlags >>> 7) & (1 << part.face_index))) continue;
-        if ((part.typed_schema === 'mesh_material_colors3_matrix3x4'
-          || part.typed_schema === 'mesh_material_colors3')
-          && hit.packedFlags !== null && !(hit.packedFlags & 0x8000)) continue;
+        if (isTypedPart(part) && hit.packedFlags !== null && !(hit.packedFlags & 0x8000)) continue;
         result.push({ occurrence: source, drawOccurrence: hit, part });
       }
     }

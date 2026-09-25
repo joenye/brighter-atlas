@@ -70,12 +70,6 @@ export function spriteDrawOf(sprite: { draw?: SpriteDraw | null } | null | undef
   };
 }
 
-// View-space billboard: the quad is built after the model-view transform and
-// before projection, so it always faces the camera. uSpriteSize carries the
-// sprite's native dimensions and aPosSize.w the per-particle scale (already
-// converted to the surface's own units), and the corner is scaled by both
-// BEFORE the roll rotation so a non-square sprite rotates as the rectangle it
-// is.
 type EmitterSprite = { material: number; images: number[]; draw?: SpriteDraw | null };
 /** The sprite outcomes an emitter draws: its single sprite (choice -1), or
  *  each outcome of a uniform per-particle selection. A computed selection is
@@ -91,6 +85,12 @@ configs: Record<string, { origin?: 'bound' }>): { sprite: EmitterSprite; choice:
   return emitter.sprite?.images?.length ? [{ sprite: emitter.sprite, choice: -1 }] : [];
 }
 
+// The quad is built in view space, after the model-view transform and before
+// projection, except a fixed plane (aFacingMode 0 with an axis), which is
+// built in model space. uSpriteSize carries the sprite's native dimensions
+// and aPosSize.w the per-particle scale (already converted to the surface's
+// own units), and the corner is scaled by both BEFORE the roll rotation so a
+// non-square sprite rotates as the rectangle it is.
 export const BILLBOARD_VERTEX = `
 attribute vec4 aPosSize;
 attribute vec4 aColor;

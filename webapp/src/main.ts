@@ -989,13 +989,13 @@ class App {
     this.sortDirEl.title = `Sort direction: ${this.sortDir === 'desc' ? 'descending' : 'ascending'} (click to flip)`;
   }
 
-  // static per-category filters + dynamic facets (strings namespaces,
-  // compare-mode diff states)
+  // static per-category filters + dynamic facets (world/maps episodes,
+  // strings namespaces, compare-mode diff states)
   catFilters(cat: string | undefined): FilterDef[] {
     return [...(FILTERS[cat ?? ''] || []), ...(['world','maps'].includes(cat??'') ? episodeFilters(this.items) : []), ...(this._diffFacets || [])];
   }
 
-  // checkbox-dropdown filter for the current category (multiple check = AND)
+  // checkbox-dropdown filter for the current category (facets AND, episodes OR; see matchesFilters)
   buildFilterUI(cat: string | undefined): void {
     clear(this.chipsEl);
     const filters = this.catFilters(cat);

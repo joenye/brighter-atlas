@@ -47,11 +47,22 @@ export interface ActorIdleOptions {
   decode?: ((slot: number) => { op: number; kind: string; node?: any }[] | null) | null;
   /** registry rows reachable from one pool value (models.js makePoolRegistryRefs) */
   poolRegistryRefs?: ((index: number) => number[]) | null;
-  /** the longest reference list still read as one animation choice */
-  maxRefs?: number;
 }
 
 const isInt = (v: unknown): v is number => Number.isInteger(v);
+const MAX_REFS = 4; // the longest reference list still read as one animation choice
+
+/** slot -> AB1 clip for every row whose single asset edge is a clip */
+export function clipRecords(rows: FillRow[]): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const row of rows) {
+    if (!row) continue;
+    for (const [, , tag, value] of row.g) {
+      if (tag === 0x61 && isInt(value)) { out.set(row.slot, value); break; }
+    }
+  }
+  return out;
+}
 
 type Classified =
   | { kind: 'clips'; clips: number[]; controller: number | null }
@@ -62,7 +73,6 @@ export class ActorIdleResolver {
   private _roomRows: Set<number> | null = null;
   private _rigClips: Map<number, number[]> | null = null;
   private _classified = new Map<string, Classified | null>();
-  private readonly _maxRefs: number;
 
   constructor(
     private readonly rows: FillRow[],
@@ -70,23 +80,10 @@ export class ActorIdleResolver {
     private readonly assets: AssetGraph,
     private readonly animDir: { skel: number; dur?: number }[],
     private readonly options: ActorIdleOptions = {},
-  ) {
-    this._maxRefs = options.maxRefs ?? 4;
-  }
+  ) {}
 
   /** slot -> AB1 clip for every row whose single asset edge is a clip */
-  clipOfRecord(): Map<number, number> {
-    if (!this._clipOfRecord) {
-      this._clipOfRecord = new Map();
-      for (const row of this.rows) {
-        if (!row) continue;
-        for (const [, , tag, value] of row.g) {
-          if (tag === 0x61 && isInt(value)) { this._clipOfRecord.set(row.slot, value); break; }
-        }
-      }
-    }
-    return this._clipOfRecord;
-  }
+  clipOfRecord(): Map<number, number> { return this._clipOfRecord ??= clipRecords(this.rows); }
 
   private _isRoom(slot: number): boolean {
     if (!this._roomRows) {
@@ -208,7 +205,7 @@ export class ActorIdleResolver {
     for (const { op, node } of this._genericFields(slot)) {
       const refs = this._fieldRefs(node);
       if (refs) {
-        if (refs.length > this._maxRefs) continue;
+        if (refs.length > MAX_REFS) continue;
         for (const ref of refs) {
           const classified = this._classify(ref, rigs, 0);
           if (!classified) continue;

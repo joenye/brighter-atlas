@@ -1,7 +1,7 @@
 // Synthetic shader fixtures for test_dxbc.ts: HLSL written for the test,
 // compiled with the standard HLSL compiler (optimization level 3). The
 // mnemonic lists are the compiler's own disassembly of the same bytes.
-// Regenerated with the fixture tooling; no game data.
+// No game data.
 export const FIXTURES = {
   vertex: {
     hlsl: "// Synthetic vertex shader for the DXBC translator tests.\nstruct Consts {\n  float4x4 v_world_view_projection;\n  float4 v_misc;\n  float4 v_table[4];\n};\ncbuffer cb0 : register(b0) { Consts v_cbo; };\nBuffer<float4> palette : register(t0);\nstruct VIn {\n  float3 pos : FIELD_A;\n  float4 nrm : FIELD_B;\n  float2 uv : FIELD_C;\n  uint4 bones : FIELD_D;\n  float4 col : FIELD_E;\n  uint vid : SV_VertexID;\n};\nstruct VOut {\n  float3 n : VARYING_A;\n  float2 uv : VARYING_B;\n  nointerpolation uint2 ids : VARYING_C;\n  noperspective float2 screen : VARYING_D;\n  float4 col : VARYING_E;\n  float4 pos : SV_POSITION;\n};\nVOut main(VIn i) {\n  VOut o;\n  uint b = i.bones.x * 3 + (i.bones.y << 2) + (i.bones.z >> 1) + (i.vid & 7);\n  float4 row = palette.Load(b);\n  float3 p = i.pos + row.xyz * v_cbo.v_misc.x;\n  o.pos = mul(float4(p, 1), v_cbo.v_world_view_projection);\n  o.n = normalize(i.nrm.xyz * 2.001957 - 1);\n  o.uv = i.uv * v_cbo.v_table[i.bones.w & 3].xy;\n  o.ids = uint2(b / 5, b % 5);\n  o.screen = o.pos.xy / o.pos.w;\n  int k = (int)(i.col.w * 10) - 3;\n  o.col = float4(i.col.rgb, (float)k * 0.1 + (float)i.bones.y);\n  return o;\n}",

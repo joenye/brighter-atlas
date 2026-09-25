@@ -132,9 +132,8 @@ export function deriveMapRoomRecords(
     const annotationNodes = annotationTable
       ? (annotationTable.entries.get(room.owner)??[]).map(resolve) : providerNodes;
     const annotations = annotationNodes.flatMap((n, index): MapAnnotation[] => {
-      // Older schemas retain resource references for their label providers.
-      // Keep them in annotationEntries until their provider is resolved; do
-      // not manufacture text, palette or visibility from unrelated fields.
+      // Older schemas list provider references (tag 38) here; their annotations
+      // come from the annotation table, so without one they yield none.
       if (n?.tag === 38) return [];
       const v = n?.tag === 36 && n.fields?.length === 5 ? n.fields.map(resolve) : null;
       const text = v ? decodeGlyphText(v[0], charset) : null;
@@ -150,7 +149,7 @@ export function deriveMapRoomRecords(
     out.set(room.room, {...room,
       terrain: {lut: f[lutIndex].node!.value, positions: positions as Pair[], styles,
         groupCounts: counts as number[],
-        baseColors: Array.from({length: colorCount}, (_,k) => k).map(k => vector(f[colorIndex + k].node, 21, 4) as Color)},
+        baseColors: Array.from({length: colorCount}, (_, k) => vector(f[colorIndex + k].node, 21, 4) as Color)},
       labels: {title: room.displayName, glyphs: [...title.values!],
         offsets: [0,1].map(k => vector(f[labelIndex + k].node, 24, 2)) as [Pair, Pair],
         metrics: measurements,

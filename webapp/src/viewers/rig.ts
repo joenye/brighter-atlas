@@ -51,7 +51,9 @@ export class Rig {
   bones: THREE.Bone[];
   roots: THREE.Bone[];
   rest: RestPose[];
+  localBind: THREE.Matrix4[];
   boneInverses: THREE.Matrix4[];
+  worldBind: THREE.Matrix4[];
   skeleton: THREE.Skeleton;
 
   constructor(skelJson: any) {
@@ -68,6 +70,7 @@ export class Rig {
       quat: new THREE.Quaternion(d.quat[0], d.quat[1], d.quat[2], d.quat[3]),
       scale: new THREE.Vector3().fromArray(d.scale),
     }));
+    this.localBind = this.def.map((d) => mat4From3x4(d.bind));
     this.def.forEach((d, i) => {
       if (d.parent >= 0) this.bones[d.parent].add(this.bones[i]);
       else this.roots.push(this.bones[i]);
@@ -77,9 +80,10 @@ export class Rig {
     // world bind composed down the tree from the stored local bind matrices
     const worldBind: THREE.Matrix4[] = [];
     this.def.forEach((d, i) => {
-      const local = mat4From3x4(d.bind);
+      const local = this.localBind[i];
       worldBind[i] = d.parent >= 0 ? worldBind[d.parent].clone().multiply(local) : local;
     });
+    this.worldBind = worldBind;
     this.boneInverses = worldBind.map((m) => m.clone().invert());
     this.skeleton = new THREE.Skeleton(this.bones, this.boneInverses);
   }
@@ -94,25 +98,21 @@ export class Rig {
     b.quaternion.copy(this.rest[i].quat);
     b.scale.copy(this.rest[i].scale);
     b.matrixAutoUpdate = false;
-    b.matrix.copy(mat4From3x4(this.def[i].bind));
+    b.matrix.copy(this.localBind[i]);
     b.matrixWorldNeedsUpdate = true;
   }
 
   // rest-pose world positions (for framing / joint sizing)
   restWorldInfo(): { positions: THREE.Vector3[]; min: THREE.Vector3; max: THREE.Vector3 } {
-    const world: THREE.Vector3[] = [];
     const min = new THREE.Vector3(Infinity, Infinity, Infinity);
     const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-    const mats: THREE.Matrix4[] = [];
-    this.def.forEach((d, i) => {
-      const local = mat4From3x4(d.bind);
-      mats[i] = d.parent >= 0 ? mats[d.parent].clone().multiply(local) : local;
-      const p = new THREE.Vector3().setFromMatrixPosition(mats[i]);
-      world.push(p);
+    const positions = this.worldBind.map((m) => {
+      const p = new THREE.Vector3().setFromMatrixPosition(m);
       min.min(p); max.max(p);
+      return p;
     });
     if (!isFinite(min.x)) { min.set(0, 0, 0); max.set(1, 1, 1); }
-    return { positions: world, min, max };
+    return { positions, min, max };
   }
 }
 

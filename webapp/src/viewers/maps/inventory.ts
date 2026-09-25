@@ -18,7 +18,6 @@ const clean=(s:string)=>s.toLocaleLowerCase();
 export class MapInventory {
   readonly nodes:InventoryNode[]=[];
   readonly categories=new Map<string,number>();
-  readonly sources=new Map<string,number>();
   readonly types=new Map<string,{name:string;source:NodeSource;runtime:number|null;count:number}>();
   readonly coordinates:Float32Array;
   private sizes=new Map<number,number[]|null>();
@@ -27,7 +26,6 @@ export class MapInventory {
     const add=(room:MapRoomInventory,source:NodeSource,index:number,description:InventoryDescription)=>{
       const n={id:this.nodes.length,room,source,index,description};this.nodes.push(n);
       this.categories.set(description.category,(this.categories.get(description.category)??0)+1);
-      this.sources.set(source,(this.sources.get(source)??0)+1);
       const key=nodeType(n),type=this.types.get(key)??{name:description.name??`Runtime ${description.runtime}`,source,runtime:description.runtime,count:0};
       type.count++;this.types.set(key,type);
     };

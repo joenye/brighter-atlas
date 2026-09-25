@@ -10,8 +10,8 @@
 //       accumulated with int16 wraparound, /32767 -> unit quat (x,y,z,w)
 //     varint n_trans in {0,1,full}; n*3 BE f32 PLANAR tx[n],ty[n],tz[n]
 //   where full = ceil(duration/20)+1 (both endpoints included).
-// Scale count 0 = unit scale. A bone without a track keeps its rest matrix.
-// Channel count 1 = const, full = track.
+// Channel count 0 = the rest value (unit for scale), 1 = const, full = track.
+// A bone without a track keeps its rest matrix.
 
 import { readVarint } from './bundles.js';
 import { b64FromTyped } from './b64.js';
@@ -83,11 +83,12 @@ function rotChannel(u8: Uint8Array, off: number, n: number): [AnimChannel, numbe
   return [{ mode: 'track', data: b64FromTyped(out) }, off];
 }
 
-// decodeAnim(u8, {i, skel, dur, frameMs}) -> anims/NNNNN.json object.
+// decodeAnim(u8, {i, skel, dur, frameMs, flags}) -> anims/NNNNN.json object.
 //   skel    = ab6 skeleton index from ab0's anim_dir (passed through).
 //   dur     = ab0's duration; unused: the clip's own duration is parsed from
 //             the stream (and validated identical across bones).
 //   frameMs = sample interval (always 20; the per-bone header byte is 0x14).
+//   flags   = ab0's anim_dir flag word; its bits read as an f32 give scale_threshold.
 export function decodeAnim(
   u8: Uint8Array,
   { i, skel, dur = null, frameMs = SAMPLE_MS, flags }:

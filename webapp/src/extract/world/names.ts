@@ -1,6 +1,5 @@
-// Record names: the name the game shows for a registry row, with its examine
-// text, internal id and action words, recovered from the shape of the data
-// alone (no record, runtime or field numbers).
+// Record names: the name the game shows for a registry row, recovered from the
+// shape of the data alone (no record, runtime or field numbers).
 //
 // A row's text members take several value shapes: a plain string, a styled or
 // composed text (a typed value whose leaves are only strings, colours and
@@ -26,19 +25,17 @@
 // Then: a row named only by a family (an enemy template) takes the name of the
 // one type row of that family that references it; a row naming a stack plural
 // keeps the singular. Action words are the one text a runtime states on nearly
-// every row and several runtimes share ("Talk to", "Use item on"); examine
-// text is a sentence at a position holding sentences on most rows.
+// every row and several runtimes share ("Talk to", "Use item on").
 
 import type {FillRow} from './replay.js';
 import type {PoolNode} from './value-pool.js';
 import type {ReparsedOp} from './effects.js';
+import {isDescriptorShape} from './object-descriptors.js';
 
 export interface RecordName {
   name: string;
   /** The singular form, when the name is a stack plural. */
   singular?: string;
-  /** A descriptor's subtitle ("Dye Tub" / "Neutral"). */
-  sub?: string | null;
   /** The family's singular, for type and tier rows and rows that restate them. */
   base?: string;
   rule: string;
@@ -46,16 +43,12 @@ export interface RecordName {
 
 export interface RecordNames {
   nameOf(slot: number): RecordName | null;
-  examineOf(slot: number): string | null;
-  internalIdOf(slot: number): string | null;
-  actionsOf(slot: number): string[];
   /** internal id -> display name, for type rows ("glinteye_deathcrow"). */
   byInternal: Map<string, string>;
 }
 
 type TextValue =
-  | { kind: 'str' | 'composed'; text: string }
-  | { kind: 'descriptor'; text: string; sub: string | null }
+  | { kind: 'str' | 'composed' | 'descriptor'; text: string }
   | { kind: 'ref'; ref: number }
   | { kind: 'list'; items: TextValue[] };
 
@@ -63,7 +56,7 @@ const isInt = (v: unknown): v is number => Number.isInteger(v);
 const SNAKE = /^[a-z0-9]+(?:_[a-z0-9()%.×#+\u{F0000}-\u{FFFFF}]+)+$|^[a-z][a-z0-9]*$/u;
 const SENTENCE = /[.!?…]["')]?$/;
 /** Display text without the font's private-use symbol glyphs, spaces collapsed. */
-const clean = (t: string) => t.replace(/[\u{F0000}-\u{FFFFF}]/gu, ' ').replace(/ /g, ' ').replace(/\s+/g, ' ')
+const clean = (t: string) => t.replace(/[\u{F0000}-\u{FFFFF}]/gu, ' ').replace(/\s+/g, ' ')
   .replace(/ ([)\],.])/g, '$1').replace(/([([]) /g, '$1').trim();
 /** A text that can be a name: short, not a sentence, id or symbol, with letters,
  *  not lowercase-led (lowercase-led composed texts are verb phrases: "fight "). */
@@ -104,11 +97,7 @@ export function recordNames(src: {
     if (n.tag === 0x26 && isInt(n.value)) return { kind: 'ref', ref: n.value };
     if (n.tag === 0x24 && n.fields) {
       const f = n.fields.map(deref);
-      // descriptor: [name string, subtitle string|symbol, icon, category, flag]
-      if (f.length === 5 && f[0]?.tag === 0x0e && [0x0e, 0x0f].includes(f[1]?.tag) && [0x0f, 0x26, 0x73].includes(f[2]?.tag)
-        && [0x0f, 0x26].includes(f[3]?.tag) && [0x0c, 0x0d].includes(f[4]?.tag)) {
-        return { kind: 'descriptor', text: glyphs(f[0].values), sub: f[1].tag === 0x0e ? glyphs(f[1].values) : null };
-      }
+      if (isDescriptorShape(f)) return { kind: 'descriptor', text: glyphs(f[0].values) };
       const parts: string[] = [];
       let ok = true, any = false;
       const walk = (x: any, d: number) => {
@@ -144,7 +133,7 @@ export function recordNames(src: {
   const textOf = (v: TextValue) => 'text' in v ? clean(v.text) : '';
 
   // ---- member positions: per (runtime, op) statistics ------------------------
-  type Pos = { rows: number; texts: Map<string, number>; snake: number; sentence: number; title: number; ref: number; dup: number };
+  type Pos = { rows: number; texts: Map<string, number>; title: number; ref: number; dup: number };
   const pos = new Map<string, Pos>();
   const key = (rt: number, op: number) => `${rt}:${op}`;
   const valueKey = (v: TextValue) => v.kind === 'ref' ? `r${v.ref}` : v.kind === 'list' ? null : `t${textOf(v)}`;
@@ -152,7 +141,7 @@ export function recordNames(src: {
     const rt = rows[slot].runtime, keys = m.map((x) => valueKey(x.v));
     m.forEach(({ op, v }, i) => {
       let s = pos.get(key(rt, op));
-      if (!s) pos.set(key(rt, op), s = { rows: 0, texts: new Map(), snake: 0, sentence: 0, title: 0, ref: 0, dup: 0 });
+      if (!s) pos.set(key(rt, op), s = { rows: 0, texts: new Map(), title: 0, ref: 0, dup: 0 });
       s.rows++;
       if (keys[i] && keys.some((k, j) => j !== i && k === keys[i])) s.dup++;
       if (v.kind === 'ref') { s.ref++; return; }
@@ -160,7 +149,7 @@ export function recordNames(src: {
       const t = textOf(v);
       if (!t) return;
       s.texts.set(t, (s.texts.get(t) ?? 0) + 1);
-      if (SNAKE.test(v.text.trim())) s.snake++; else if (SENTENCE.test(t)) s.sentence++; else s.title++;
+      if (!SNAKE.test(v.text.trim()) && !SENTENCE.test(t)) s.title++;
     });
   }
   // action words: one text on >= 90% of a runtime's rows, never restated in the
@@ -196,6 +185,7 @@ export function recordNames(src: {
     if (pl) family.set(slot, { singular: sing, plural: pl });
   }
   const typeRow = new Map<number, { internal: string; qualifier: string | null; family: number }>();
+  const typedFamilies = new Set<number>();
   for (const row of rows) {
     const f = fields(row.slot);
     if (!f.length) continue;
@@ -216,10 +206,11 @@ export function recordNames(src: {
     if (!family.has(fam)) family.set(fam, { singular: leadName(fam)!, plural: null });
     const iw = words(internal), fw = words(family.get(fam)!.singular), qw = qualifier ? words(qualifier) : [];
     if (!iw.includes(fw[fw.length - 1]) || (qw.length && !qw.every((w) => iw.includes(w)))) {
-      if (family.get(fam)!.plural === null && ![...typeRow.values()].some((t) => t.family === fam)) family.delete(fam);
+      if (family.get(fam)!.plural === null && !typedFamilies.has(fam)) family.delete(fam);
       continue;
     }
     typeRow.set(row.slot, { internal, qualifier: qualifier ?? null, family: fam });
+    typedFamilies.add(fam);
   }
   const tierRow = new Map<number, { qualifier: string; family: number }>();
   {
@@ -313,15 +304,12 @@ export function recordNames(src: {
         if (n) return { ...n, rule: `stated twice (reference) -> ${n.rule}`, via: d.v.ref };
         continue;
       }
-      return { name: textOf(d.v), sub: d.v.kind === 'descriptor' ? d.v.sub : undefined, rule: 'stated twice' };
+      return { name: textOf(d.v), rule: 'stated twice' };
     }
     if (fam) return { name: fam.singular, rule: 'family singular' };
     const titles = m.filter(({ op, v }) => (v.kind === 'str' || v.kind === 'descriptor' || v.kind === 'composed') && nameLike(textOf(v)) && !atVerb(slot, op))
       .filter(({ op }) => { const s = pos.get(key(rt, op))!; return namePos.has(key(rt, op)) && (s.rows < 3 || s.texts.size >= 2 || s.ref > 0); });
-    if (titles.length === 1) {
-      const v = titles[0].v;
-      return { name: textOf(v), sub: v.kind === 'descriptor' ? v.sub : undefined, rule: 'single title' };
-    }
+    if (titles.length === 1) return { name: textOf(titles[0].v), rule: 'single title' };
     for (const { op, v } of m) {
       if (v.kind !== 'ref' || !namePos.has(key(rt, op)) || (!typeRow.has(v.ref) && !family.has(v.ref))) continue;
       const n = nameOf(v.ref, depth + 1);
@@ -339,7 +327,7 @@ export function recordNames(src: {
       if (Array.isArray(n.values) && n.tag !== 0x0e) for (const x of n.values) if (x && typeof x === 'object') walk(x, d + 1, active);
     };
     for (const f of fields(slot)) if (f.kind === 'G') walk(f.node, 0, new Set());
-    for (const [, t] of (rows[slot] as any).r ?? []) if (isInt(t) && t < rows.length) out.add(t);
+    for (const [, t] of rows[slot].r) if (isInt(t) && t < rows.length) out.add(t);
     out.delete(slot);
     return [...out];
   };
@@ -373,27 +361,12 @@ export function recordNames(src: {
     if (!n.singular && pluralFamilies.has(n.name)) n.singular = pluralFamilies.get(n.name);
   }
 
-  // ---- examine text, internal ids, action words -------------------------------
-  const examine = new Map<number, string>(), internalId = new Map<number, string>(), actions = new Map<number, string[]>();
-  for (const [slot, m] of members) {
-    const rt = rows[slot].runtime;
-    for (const { op, v } of m) {
-      if (v.kind === 'list' || v.kind === 'ref') continue;
-      const tx = textOf(v), s = pos.get(key(rt, op))!;
-      if (!examine.has(slot) && v.kind === 'str' && SENTENCE.test(tx) && s.sentence >= s.rows * 0.6 && tx.length <= 240) examine.set(slot, tx);
-      if (!internalId.has(slot) && v.kind === 'str' && SNAKE.test(v.text.trim()) && v.text.includes('_')) internalId.set(slot, v.text.trim());
-      if (atVerb(slot, op)) { const l = actions.get(slot) ?? []; if (!l.includes(tx)) l.push(tx); actions.set(slot, l); }
-    }
-  }
   const byInternal = new Map<string, string>();
   for (const [slot, t] of typeRow) if (!byInternal.has(t.internal)) byInternal.set(t.internal, nameOf(slot)!.name);
   cache.clear();
 
   return {
-    nameOf: (slot) => { const n = names.get(slot); return n ? { name: n.name, singular: n.singular, sub: n.sub, base: n.base, rule: n.rule } : null; },
-    examineOf: (slot) => examine.get(slot) ?? null,
-    internalIdOf: (slot) => internalId.get(slot) ?? null,
-    actionsOf: (slot) => actions.get(slot) ?? [],
+    nameOf: (slot) => { const n = names.get(slot); return n ? { name: n.name, singular: n.singular, base: n.base, rule: n.rule } : null; },
     byInternal,
   };
 }

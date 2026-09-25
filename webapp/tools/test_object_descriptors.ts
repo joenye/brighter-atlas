@@ -26,7 +26,7 @@ try {
   const glyph=charset.indexOf('🪵');
   const skill=add([text('Gatherer'),scalar(1),ref(115,glyph),ref(115,glyph)]);
   const object=add([nil,[12],int(2),int(1),int(0),scalar(1),nil,
-    descriptor('Élder Log'.replace('É','é'),'Rare',ref(38,skill)),nil,descriptor('Log',null,ref(115,glyph))]);
+    descriptor('élder Log','Rare',ref(38,skill)),nil,descriptor('Log',null,ref(115,glyph))]);
   const shifted=add([nil,nil,nil,int(1),int(3),int(2),scalar(1),nil,descriptor('Moss',null,ref(115,glyph))]);
   const conflicting=add([text('Ambiguous'),ref(115,glyph),ref(115,0)]);
   const unknown=add([descriptor('Unknown',null,ref(38,conflicting))]);

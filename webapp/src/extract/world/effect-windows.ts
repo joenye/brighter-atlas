@@ -3,6 +3,7 @@
 // memory. Bindings identify fields; timings remain in the user's bundle.
 import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
+import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
 export interface EffectWindowBinding {
   instance: number; rate: number; windows: number; period: number;
   rangeClass: number; noneSymbol: number;
@@ -13,17 +14,14 @@ export interface EffectWindow {
   period: number | null;
 }
 export function validEffectWindows(v: any): v is EffectWindowBinding[] {
-  const index=(n:any)=>Number.isInteger(n)&&n>=0&&n<65536;
-  return Array.isArray(v)&&v.length<=65536&&v.every(b=>b
-    &&[b.instance,b.rate,b.windows,b.period,b.rangeClass,b.noneSymbol].every(index)
-    &&new Set([b.rate,b.windows,b.period]).size===3)
-    &&new Set(v.map(b=>b.instance)).size===v.length;
+  return validBindingList(v,b=>[b.rate,b.windows,b.period,b.rangeClass,b.noneSymbol].every(bindingIndex)
+    &&new Set([b.rate,b.windows,b.period]).size===3);
 }
 export function createEffectWindowReader(bindings: EffectWindowBinding[] | undefined, objects: ConstructorRecord[]) {
   if(bindings!==undefined&&!validEffectWindows(bindings))throw Error('invalid effect window bindings');
-  const byInstance=new Map((bindings??[]).map(b=>[b.instance,b]));
+  const bindingOf=instanceLookup((bindings??[]).map(b=>[b.instance,b] as const),objects);
   return (slot:number,ops:EffectExtra[]):EffectWindow|null=>{
-    const b=byInstance.get(objects[slot]?.values[1]);if(!b)return null;
+    const b=bindingOf(slot);if(!b)return null;
     const rate=ops.find(e=>e.op===b.rate),period=ops.find(e=>e.op===b.period);
     if(rate?.kind!=='int'||!Number.isSafeInteger(rate.value)||rate.value<0)return null;
     let repeat:number|null;

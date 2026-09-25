@@ -7,7 +7,7 @@ import {build} from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-effect-birth-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({stdin: {contents: "export {restEffectBirthFrames} from './src/viewers/world/effects-frames.ts'; export {EmitterSim} from './src/viewers/world/effects-sim.ts'; export {WorldEffectsLayer} from './src/viewers/world/effects-layer.ts'; export * from './vendor/three.module.js';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
+  await build({stdin: {contents: "export {effectBirthFrames} from './src/viewers/world/effects-frames.ts'; export {EmitterSim} from './src/viewers/world/effects-sim.ts'; export {WorldEffectsLayer} from './src/viewers/world/effects-layer.ts'; export * from './vendor/three.module.js';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
   const T = await import(pathToFileURL(file).href);
   const owner = new T.Matrix4().set(0, -2, 0, 100, -1, 0, 0, 200, 0, 0, .5, 300, 0, 0, 0, 1);
   const bones = [new T.Matrix4().set(1, 0, 0, 10, 0, 0, -1, 20, 0, 1, 0, 30, 0, 0, 0, 1),
@@ -17,7 +17,7 @@ try {
   const linear = (v: any, m: any) => v.clone().applyMatrix3(new T.Matrix3().setFromMatrix4(m));
   let checks = 0;
   for (const primary of ['root', null, 0, 1]) for (const secondary of ['root', null, 0, 1]) for (const mode of ['bone', 'skin']) {
-    const frames = T.restEffectBirthFrames({primary, secondary, mode}, bones.map(b => b.elements), inverse);
+    const frames = T.effectBirthFrames({primary, secondary, mode}, bones.map(b => b.elements), inverse);
     assert(frames);
     const sim = new T.EmitterSim({slot: 1, loop: false}, 0, {life: {ticks: 100}, burst: 1}, {1: {kind: 'burst_windowed', per_second: 600, windows: [[0, 0]]}}, 600);
     sim.shape.center = position.toArray(); sim.shape.w = velocity.toArray(); sim.shape.yaw = 0; sim.shape.pitch = 0;
@@ -35,7 +35,7 @@ try {
       assert(actual && actual.distanceTo(expected) < 1e-4, JSON.stringify({primary, secondary, mode, age, actual, expected})); checks++;
     }
   }
-  assert.equal(T.restEffectBirthFrames({primary: 9, secondary: 'root', mode: 'bone'}, bones.map(b => b.elements), inverse), null);
+  assert.equal(T.effectBirthFrames({primary: 9, secondary: 'root', mode: 'bone'}, bones.map(b => b.elements), inverse), null);
   // Several live particles have different attachment poses. Moving the
   // displayed anchor would move all of them; each must retain its birth pose.
   const moving = new T.EmitterSim({slot: 2, loop: true, cycle_ticks: 40}, 0,

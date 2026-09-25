@@ -1,9 +1,9 @@
 // Real-bundle end-to-end (local-only, needs the game bundles): a fresh
 // browser profile uploads assetBundle0..8 through the onboarding wizard,
-// extracts EVERY category including World, then asserts the whole app is
-// alive (populated catalogs, a painted 3D mesh, decoded audio, a rendered
-// image, a painted world room, a non-empty Models list) with zero console
-// errors throughout.
+// extracts every available category including World, then asserts the
+// whole app is alive (populated catalogs, a painted 3D mesh, decoded audio,
+// a rendered image, a painted world room, a non-empty Models list) with zero
+// console errors throughout.
 //
 //   node e2e.ts [--bundles PATH] [--room N]
 //
@@ -319,7 +319,7 @@ const roomLabels = await page.evaluate(async () => {
 ok(roomLabels.layouts === roomLabels.rooms && roomLabels.annotations > 100,
   `room indexes retain searchable annotations and source label layouts (${JSON.stringify(roomLabels)})`);
 
-// ---- 4. mesh route: a painted 3D canvas --------------------------------------
+// ---- 3b. 2D map route: stored primitives render the world map ----------------
 if(catState['2D Maps']?.checked) {
   const maps=await page.evaluate(async()=>{
     const store=window.__bs.app.store,index=await store.index('maps'),doc=await store.json('maps/scene.json');
@@ -345,6 +345,7 @@ if(catState['2D Maps']?.checked) {
   await page.waitForFunction(()=>document.querySelector('.map-view').dataset.markers==='0');
 }
 
+// ---- 4. mesh route: a painted 3D canvas --------------------------------------
 // flagship mesh: the biggest exported one, via the UI's own triangles sort
 await page.goto(`${base}/index.html#/meshes`, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__bs?.app && document.querySelector('#list-host .vrow'), { timeout: 30000 });
@@ -817,6 +818,8 @@ const actorAudit = await page.evaluate(async () => {
 ok(actorAudit.actors > 1000 && actorAudit.defaults === actorAudit.actors && actorAudit.volumes > 0
   && actorAudit.largeActors > 0 && actorAudit.transforms > 0 && actorAudit.failures.length === 0,
   `every actor retains default-room provenance; large actor matrices use authored centres (${JSON.stringify(actorAudit)})`);
+// Opt-in (BS_EXPECT_AUTHORED_HEIGHTS=1) when the served build has placement
+// decode data; without it actors keep estimated surface heights.
 if(process.env.BS_EXPECT_AUTHORED_HEIGHTS==='1')ok(actorAudit.authoredHeights===actorAudit.actors
   &&actorAudit.heightTransforms>0&&actorAudit.failures.length===0,
   'all authored tile heights reach stored actors and rendered matrices, including zero and linked-room results');
@@ -1340,7 +1343,8 @@ if (!rat) {
   ok(live > 0, `Giant Rat aura renders live particles (live=${live})`);
   const ratShot = path.join(SHOTS, 'e2e_effects_rat.png');
   await page.screenshot({ path: ratShot });
-  console.log(`  screenshot: ${ratShot}`);  // The toolbar's Particles toggle hides the effects, remembers the choice
+  console.log(`  screenshot: ${ratShot}`);
+  // The toolbar's Particles toggle hides the effects, remembers the choice
   // across a reload, and shows them again.
   const particles = () => page.evaluate(() => {
     const btn: any = [...document.querySelectorAll('.viewer-toolbar button')].find((b: any) => b.textContent.includes('Particles'));

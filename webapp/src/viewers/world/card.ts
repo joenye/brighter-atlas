@@ -82,14 +82,14 @@ const TEXTURE_FLUSH = 40;
 const frames = new WeakMap<WebGL2RenderingContext, { frame: GameFrame; render: GameRenderIndex; count: number }>();
 const rad = (d: number) => d * Math.PI / 180;
 
-/** Row-major 3x4 skin matrices of a posed rig, and its bones' posed matrices. */
 /** A payload, retried once: a missing pose must fail the card, not quietly
  *  draw it unposed. */
 async function required(sources: CardSources, rel: string): Promise<any> {
   try { return await sources.payload(rel); } catch { return await sources.payload(rel); }
 }
 
-async function posedRig(sources: CardSources, rigId: number, clip: number | null, timeMs: number): Promise<{ palette: Float32Array; bones: THREE.Matrix4[] } | null> {
+/** Row-major 3x4 skin matrices of a posed rig, and its bones' posed matrices. */
+async function posedRig(sources: CardSources, rigId: number, clip: number | null, timeMs: number): Promise<{ palette: Float32Array; bones: THREE.Matrix4[] }> {
   const skeleton = await required(sources, `rigs/${pad5(rigId)}.json`);
   if (!skeleton?.bones?.length) throw new Error(`card: rig ${rigId} has no bones`);
   const rig = new Rig(skeleton);
@@ -163,9 +163,6 @@ export async function renderCard(sources: CardSources, subject: CardSubject, vie
     focus = [e[12], e[13], e[14]];
   } else if (subject.bounds) focus = [0, 0, 2 * (subject.bounds[5] - subject.bounds[2]) / 3];
 
-  // The focus is taken on the turned subject.
-  // The yaw turns the subject. An actor's focus is a bone of the turned
-  // subject; an object's base is its own fixed matrix and does not turn.
   const turn = new THREE.Matrix4().makeRotationZ(rad(view.yaw));
   focus = new THREE.Vector3(focus[0], focus[1], focus[2]).applyMatrix4(turn).toArray();
   const batches: GameBatchSource[] = [];
@@ -193,15 +190,13 @@ export async function renderCard(sources: CardSources, subject: CardSubject, vie
     grid: null, batches, water: null, textureMeta: sources.textureMeta,
   });
   // Without lights of its own a card keeps the frame's default daylight.
-  frame.environmentOverride = view.lights
-    ? { ...view.lights, vignette: [0, 0, 0, 1], height: 0, floor: 1 }
-    : ({ vignette: [0, 0, 0, 1], height: 0, floor: 1 } as any);
+  frame.environmentOverride = (view.lights ?? {}) as GameRenderIndex['environments'][string];
   const camera = cardCamera(view, focus, subject.distance, width, height, subject.base ?? null);
   frame.card = { direction: cardLightDirection(view.lightTurn), shift: camera.shift };
   frame.resetTemporal();
   frame.render({ eye: camera.eye, target: camera.target, up: camera.up, fov: view.icon ? view.icon.zoom : view.zoom, width, height }, 0, 0, true);
-  const out = frame.readTarget('main');
+  const out = frame.readMain();
   frame.releaseRoom();
   if (!out) throw new Error('card: no frame');
-  return { width: out.width, height: out.height, rgba: Uint8Array.from(out.data) };
+  return { width: out.width, height: out.height, rgba: out.data };
 }

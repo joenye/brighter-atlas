@@ -4,9 +4,10 @@ import {MapInventory,sourceNames,nodeTitle,nodeType,type InventoryNode,type Inve
 import type {MapDocument} from '../../extract/maps/index.js';
 import type {MapView} from './renderer.js';
 
+const DEFAULT_OPTIONS={roots:true,linked:true,additionalOnly:false,footprints:true,raw:true};
 export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:number)=>void) {
-  const saved=app.mapInspectionSettings??={mode:'map',query:'',typeQuery:'',roots:true,linked:true,additionalOnly:false,
-    footprints:true,raw:true,disabledSources:new Set<string>(),disabledCategories:new Set<string>(),disabledTypes:new Set<string>()};
+  const saved=app.mapInspectionSettings??={mode:'map',query:'',typeQuery:'',...DEFAULT_OPTIONS,
+    disabledSources:new Set<string>(),disabledCategories:new Set<string>(),disabledTypes:new Set<string>()};
   const toolbar=el('span',{class:'map-inspection-toolbar'});
   const mode=el('select',{'aria-label':'Map data mode'},el('option',{value:'map',text:'2D map only'}),el('option',{value:'room',text:'Additional room data'}));
   mode.value=saved.mode;
@@ -29,7 +30,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
   }
   const sources=el('div',{class:'map-options map-sources'});
   for(const [key,label] of Object.entries(sourceNames))sources.append(check(label,!saved.disabledSources.has(key),v=>{
-    v?saved.disabledSources.delete(key):saved.disabledSources.add(key);filter();},{'data-source':key}));
+    v?saved.disabledSources.delete(key):saved.disabledSources.add(key);filter();}));
   const options=el('div',{class:'map-options'});
   for(const [key,label] of [['roots','Root placements'],['linked','Linked components'],['additionalOnly','Additional inventory only'],
     ['footprints','Show footprints'],['raw','Show other placement dots']])
@@ -38,7 +39,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
     categories.replaceChildren();if(!inventory)return;
     for(const [category,n] of [...inventory.categories].sort((a,b)=>a[0].localeCompare(b[0]))) {
       if(!category.toLowerCase().includes(categorySearch.value.toLowerCase()))continue;
-      const row=check(category,!saved.disabledCategories.has(category),v=>{v?saved.disabledCategories.delete(category):saved.disabledCategories.add(category);filter();},{'data-category':category});
+      const row=check(category,!saved.disabledCategories.has(category),v=>{v?saved.disabledCategories.delete(category):saved.disabledCategories.add(category);filter();});
       row.append(el('small',{text:n.toLocaleString()}));categories.append(row);
     }
   }
@@ -46,7 +47,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
     types.replaceChildren();if(!inventory)return;
     for(const [key,t] of [...inventory.types].sort((a,b)=>a[1].name.localeCompare(b[1].name))) {
       if(!`${t.name} runtime:${t.runtime}`.toLowerCase().includes(typeSearch.value.toLowerCase()))continue;
-      const row=check(t.name,!saved.disabledTypes.has(key),v=>{v?saved.disabledTypes.delete(key):saved.disabledTypes.add(key);filter();},{'data-node-type':key});
+      const row=check(t.name,!saved.disabledTypes.has(key),v=>{v?saved.disabledTypes.delete(key):saved.disabledTypes.add(key);filter();});
       row.title=sourceNames[t.source];row.append(el('small',{text:t.count.toLocaleString()}));types.append(row);
     }
   }
@@ -61,7 +62,6 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
       categories:new Set([...(inventory?.categories.keys()??[])].filter(s=>!saved.disabledCategories.has(s))),disabledTypes:saved.disabledTypes,
       roots:saved.roots,linked:saved.linked,additionalOnly:saved.additionalOnly,query:saved.query,typeQuery:saved.typeQuery,rooms};
     matches=mode.value==='room'&&inventory?inventory.filter(f):[];
-    toolbar.dataset.matches=String(matches.length);toolbar.dataset.mode=mode.value;
     if(selected&&!matches.includes(selected)){selected=null;selection.replaceChildren();overlaps.replaceChildren();}
     count.textContent=mode.value==='room'?`${matches.length.toLocaleString()} matching records`:'2D terrain, room names and map annotations';
     controls.disabled=mode.value!=='room'||!inventory;
@@ -85,7 +85,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
         }));
         message.textContent='Inspection markers show stored room data. Actor shapes and volume colours are diagnostic. Alternate records may not be active together.';
         filter();
-      }catch(e){if(!dead){message.textContent=(e as Error).message;toolbar.dataset.error=message.textContent;}}
+      }catch(e){if(!dead)message.textContent=(e as Error).message;}
       finally{loading=null;}
     })();return loading;
   }
@@ -96,7 +96,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
   const unplaced=el('details',{},el('summary',{text:'Unplaced room associations'}));
   const reset=button('Reset filters',()=>{
     saved.disabledSources.clear();saved.disabledCategories.clear();saved.disabledTypes.clear();
-    search.value='';typeSearch.value='';categorySearch.value='';saved.roots=saved.linked=saved.footprints=saved.raw=true;saved.additionalOnly=false;
+    search.value='';typeSearch.value='';categorySearch.value='';Object.assign(saved,DEFAULT_OPTIONS);
     for(const input of sources.querySelectorAll('input'))input.checked=true;
     for(const input of options.querySelectorAll('input'))input.checked=saved[input.dataset.mapOption!];
     drawTypes();drawCategories();filter();
@@ -130,7 +130,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
       const hits=inventory.hits(matches,x,y,scale,saved.raw);overlaps.replaceChildren();
       if(hits.length){overlaps.append(el('h3',{text:`${hits.length} overlapping records`}));for(const n of hits.slice(0,200))overlaps.append(button(`${nodeTitle(n)} / ${sourceNames[n.source]}`,()=>select(n)));select(hits[0]);}
     },
-    get mode(){return mode.value;},get count(){return matches.length;},
+    get count(){return matches.length;},
     destroy(){dead=true;if(searchTimer)clearTimeout(searchTimer);}
   };
 }

@@ -8,7 +8,7 @@ const tmp=await mkdtemp(path.join(os.tmpdir(),'atlas-actor-height-'));
 try{
   const file=path.join(tmp,'placement.mjs');
   await build({entryPoints:['src/extract/world/placement.ts'],bundle:true,platform:'node',format:'esm',outfile:file});
-  const {packedRoomHeight,validatePlacementData,loadPlacementData,createActorHeightReader,decodeDefaultAppearances,createAppearanceCandidateReader}=await import(pathToFileURL(file).href);
+  const {packedRoomHeight,validatePlacementData,placementDataOf,createActorHeightReader,decodeDefaultAppearances,createAppearanceCandidateReader}=await import(pathToFileURL(file).href);
   for(const [word,layer,expected] of [[0xf5,0,5],[5,0,0],[0x120023,1,7],[0x20023,1,0],[0x120003,1,5],[0x120023,2,3]])
     assert.equal(packedRoomHeight(word,layer),expected);
   const hash='a'.repeat(64),data={kind:'brighter-atlas-placement-decode',format:1,bundle0_raw_sha256:hash,
@@ -16,8 +16,9 @@ try{
   assert.equal(validatePlacementData(data,hash),data);
   assert.throws(()=>validatePlacementData(data,'b'.repeat(64)));
   assert.throws(()=>validatePlacementData({...data,rooms:{...data.rooms,words:1}},hash));
-  assert.equal(await loadPlacementData(hash,async()=>{throw Error('not available');}),null);
-  await assert.rejects(()=>loadPlacementData(hash,async()=>({...data,format:2})));
+  assert.equal(placementDataOf({bundle0:{raw_sha256:hash}}),null);
+  assert.equal(placementDataOf({bundle0:{raw_sha256:hash},placement:data}),data);
+  assert.throws(()=>placementDataOf({bundle0:{raw_sha256:hash},placement:{...data,format:2}}));
   const lit=(tag:number,value:any)=>({kind:'lit',tag,value,elems:null});
   const grid=(origin:number[],words:number[])=>({table:[],top:[lit(10,99),lit(10,words.length),lit(10,1),lit(46,origin),
     {kind:'array',tag:32,elems:words.map(v=>lit(10,v))}]});

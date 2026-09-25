@@ -5,17 +5,9 @@
 // GPU skinning path applies to a bind-pose vertex; stored row-major 3x4 per
 // bone (the skeleton payload's own matrix convention), base64 float32.
 
-import { restWorldMatrices, multiplyMatrices, type SkeletonBone } from '../skeleton.js';
+import { restWorldMatrices, multiplyMatrices, bindLocal, type SkeletonBone } from '../skeleton.js';
 import type { AnimPayload } from '../anim.js';
-import { b64FromTyped } from '../b64.js';
-
-// Base64 float32 track decode (little-endian payloads, see anim.js).
-export function b64ToF32(s: string): Float32Array {
-  const binary = atob(s);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Float32Array(bytes.buffer, 0, bytes.byteLength >> 2);
-}
+import { b64f32, b64FromTyped } from '../b64.js';
 
 export const IDLE_POSES_FORMAT = 1;
 
@@ -39,10 +31,6 @@ const trs = (t: number[], q: number[], s: number[]): number[] => {
   ];
 };
 
-const bindLocal = (m: number[]): number[] => [
-  m[0], m[4], m[8], 0, m[1], m[5], m[9], 0, m[2], m[6], m[10], 0, m[3], m[7], m[11], 1,
-];
-
 // Inverse of a column-major affine 4x4 (general 3x3 block plus translation).
 function invertAffine(m: number[]): number[] | null {
   const a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
@@ -63,7 +51,8 @@ function invertAffine(m: number[]): number[] | null {
 const frame0 = (channel: any, width: number, fallback: number[]): number[] => {
   if (!channel || channel.mode === 'absent') return fallback;
   if (channel.mode === 'const') return channel.value;
-  return Array.from(b64ToF32(channel.data).subarray(0, width));
+  // Tracks are frame-major: frame 0 is the first 16 bytes at most (24 base64 chars decode 18).
+  return Array.from(b64f32(channel.data.slice(0, 24)).subarray(0, width));
 };
 
 /** Row-major 3x4 skin matrices (bones*12) for the clip's first frame. */

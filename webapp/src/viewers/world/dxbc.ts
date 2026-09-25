@@ -91,8 +91,6 @@ export interface SignatureElement {
   componentType: number;
   register: number;
   mask: number;
-  /** ISGN: components the shader reads; OSGN: components it never writes. */
-  rwMask: number;
 }
 
 export interface CBufferVariable {
@@ -111,8 +109,6 @@ export interface CBufferVariable {
 export interface CBufferReflection {
   name: string;
   size: number;
-  type: number;
-  flags: number;
   /** Members flattened out of struct variables, absolute byte offsets. */
   variables: CBufferVariable[];
 }
@@ -120,19 +116,13 @@ export interface CBufferReflection {
 export interface ResourceBinding {
   name: string;
   type: number;
-  returnType: number;
-  dimension: number;
-  samples: number;
   bindPoint: number;
   bindCount: number;
-  flags: number;
 }
 
 export interface Reflection {
   constantBuffers: CBufferReflection[];
   bindings: ResourceBinding[];
-  creator: string;
-  target: number;
 }
 
 export interface OperandIndex {
@@ -216,7 +206,6 @@ export interface Declarations {
   samplers: SamplerDecl[];
   constantBuffers: ConstantBufferDecl[];
   immediateConstantBuffer: Uint32Array | null;
-  globalFlags: number;
 }
 
 export interface DxbcShader {
@@ -292,7 +281,6 @@ function parseSignature(chunk: Uint8Array | undefined): SignatureElement[] {
       componentType: view.getUint32(at + 12, true),
       register: view.getUint32(at + 16, true),
       mask: chunk[at + 20],
-      rwMask: chunk[at + 21],
     });
   }
   return out;
@@ -304,7 +292,6 @@ function parseReflection(chunk: Uint8Array | undefined): Reflection | null {
   const u32 = (at: number) => view.getUint32(at, true);
   const u16 = (at: number) => view.getUint16(at, true);
   const cbCount = u32(0), cbAt = u32(4), bindCount = u32(8), bindAt = u32(12);
-  const target = u32(16), creatorAt = u32(24);
   // Shader model 5 reflection adds an 'RD11' header and longer variable
   // records; shader model 4 records are 24 bytes.
   const rd11 = chunk.length >= 32 && cstring(chunk.subarray(28, 32), 0) === 'RD11';
@@ -312,10 +299,7 @@ function parseReflection(chunk: Uint8Array | undefined): Reflection | null {
   const bindings: ResourceBinding[] = [];
   for (let k = 0; k < bindCount; k++) {
     const at = bindAt + 32 * k;
-    bindings.push({
-      name: cstring(chunk, u32(at)), type: u32(at + 4), returnType: u32(at + 8), dimension: u32(at + 12),
-      samples: u32(at + 16), bindPoint: u32(at + 20), bindCount: u32(at + 24), flags: u32(at + 28),
-    });
+    bindings.push({ name: cstring(chunk, u32(at)), type: u32(at + 4), bindPoint: u32(at + 20), bindCount: u32(at + 24) });
   }
   const constantBuffers: CBufferReflection[] = [];
   const flatten = (out: CBufferVariable[], name: string, parent: string | null, typeAt: number, offset: number, size: number) => {
@@ -352,9 +336,9 @@ function parseReflection(chunk: Uint8Array | undefined): Reflection | null {
         : 4 * Math.max(1, x.columns) * Math.max(1, x.rows);
       x.size = x.elements > 1 ? next - x.offset : Math.min(natural, next - x.offset);
     }
-    constantBuffers.push({ name: cstring(chunk, u32(at)), size, type: u32(at + 20), flags: u32(at + 16), variables });
+    constantBuffers.push({ name: cstring(chunk, u32(at)), size, variables });
   }
-  return { constantBuffers, bindings, creator: creatorAt ? cstring(chunk, creatorAt) : '', target };
+  return { constantBuffers, bindings };
 }
 
 class TokenReader {
@@ -445,7 +429,7 @@ export function parseDxbc(bytes: Uint8Array): DxbcShader {
   if (!stage) throw new Error(`unknown shader program type ${version >>> 16}`);
   const decls: Declarations = {
     temps: 0, indexableTemps: [], inputs: [], outputs: [], resources: [], samplers: [], constantBuffers: [],
-    immediateConstantBuffer: null, globalFlags: 0,
+    immediateConstantBuffer: null,
   };
   const all: Instruction[] = [];
   const instructions: Instruction[] = [];
@@ -488,8 +472,6 @@ export function parseDxbc(bytes: Uint8Array): DxbcShader {
       decls.temps = r.next();
     } else if (opcode === OP.DCL_INDEXABLE_TEMP) {
       decls.indexableTemps.push({ register: r.next(), size: r.next(), comps: r.next() });
-    } else if (opcode === OP.DCL_GLOBAL_FLAGS) {
-      decls.globalFlags = controls;
     } else if (opcode === OP.DCL_MAX_OUTPUT_VERTEX_COUNT || opcode === OP.DCL_GS_INPUT_PRIMITIVE
       || opcode === OP.DCL_GS_OUTPUT_TOPOLOGY) {
       while (r.pos < r.end) r.next();
@@ -564,10 +546,6 @@ export function parseDxbc(bytes: Uint8Array): DxbcShader {
 // ---- Disassembly (tests and debugging).
 
 const COMPONENTS = 'xyzw';
-
-function hexWord(v: number): string {
-  return '0x' + (v >>> 0).toString(16).padStart(8, '0');
-}
 
 /** Float formatting in the assembler's %f style. */
 function fixed(bits: number): string {
@@ -688,5 +666,3 @@ export function systemValueName(name: number): string {
   return ['undefined', 'position', 'clip_distance', 'cull_distance', 'rendertarget_array_index',
     'viewport_array_index', 'vertex_id', 'primitive_id', 'instance_id', 'is_front_face', 'sampleIndex'][name] ?? `sv${name}`;
 }
-
-export { hexWord };

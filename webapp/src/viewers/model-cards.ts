@@ -5,7 +5,7 @@
 // renders run one at a time, list thumbnails are drawn when their row comes
 // into view and kept per version.
 
-import { renderCard, CARD_WIDTH, CARD_HEIGHT, type CardSubject, type CardView } from './world/card.js';
+import { renderCard, type CardSubject, type CardView } from './world/card.js';
 import { derivedGet, derivedPut } from '../storage.js';
 
 /** The card's own backdrop: a vertical ramp from near black to dark grey. */
@@ -21,7 +21,6 @@ class ModelCards {
   private queue: Promise<unknown> = Promise.resolve();
   private thumbs = new Map<string, Promise<string | null>>();
   private observer: IntersectionObserver | null = null;
-  private pending = new WeakMap<Element, string>();
 
   constructor(private readonly store: any) {}
 
@@ -114,10 +113,9 @@ class ModelCards {
         for (const e of entries) {
           if (!e.isIntersecting) continue;
           const target = e.target as HTMLElement;
-          const id = this.pending.get(target);
+          const id = target.dataset.card;
           this.observer!.unobserve(target);
           if (!id) continue;
-          this.pending.delete(target);
           this.thumbnail(id).then((url) => {
             if (!url || target.dataset.card !== id) { if (!url) target.classList.add('r-card-none'); return; }
             const img = document.createElement('img');
@@ -128,7 +126,6 @@ class ModelCards {
       }, { rootMargin: '200px' });
     }
     host.dataset.card = modelId;
-    this.pending.set(host, modelId);
     this.observer.observe(host);
   }
 }
@@ -140,5 +137,3 @@ export function modelCards(store: any): ModelCards {
   if (!shared || shared.versionId !== store.versionId) shared = { versionId: store.versionId ?? null, cards: new ModelCards(store) };
   return shared.cards;
 }
-
-export { CARD_WIDTH, CARD_HEIGHT };

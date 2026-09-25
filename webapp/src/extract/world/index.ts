@@ -1,6 +1,3 @@
-import {createEffectScaleReader} from './effect-scales.js';
-import {createEffectWindowReader} from './effect-windows.js';
-import {createEffectSpriteReader} from './effect-sprites.js';
 // World extraction orchestrator: turns the user's bundles into the stored
 // world package: match the per-build decode data against ab0, replay the
 // registry + value pool, parse every ab2 room, stitch the door graph into
@@ -15,12 +12,15 @@ import {createEffectSpriteReader} from './effect-sprites.js';
 // This module itself is only ever dynamically imported (ingest.js), so nothing
 // here loads unless the user actually selected the World category.
 
+import {createEffectScaleReader} from './effect-scales.js';
+import {createEffectWindowReader} from './effect-windows.js';
+import {createEffectSpriteReader} from './effect-sprites.js';
 import {createEffectFacingReader} from './effect-facing.js';
 import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
 import {readWorldWater, type WorldWater} from './water-materials.js';
-import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, validRenderData, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
+import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, recordField, recordRef, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
 import {b64FromTyped} from '../b64.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
@@ -55,7 +55,7 @@ import {deriveCardData} from './card-data.js';
 import {annotateObjectCatalog,appendObjectMeshNames} from './object-names.js';
 import { inferMeshSlots, type RigSkeleton } from './mesh-slots.js';
 import * as effectsMod from './effects.js';
-import { decodeSkeleton, restWorldMatrices } from '../skeleton.js';
+import { decodeSkeleton, restWorldMatrices, type SkeletonBone } from '../skeleton.js';
 import { decodeAnim } from '../anim.js';
 import { idlePosePalette, encodeIdlePose, idlePoseKey, IDLE_POSES_FORMAT, type IdlePosesDoc } from './idle-poses.js';
 
@@ -170,14 +170,16 @@ export async function extractWorld({
   // ---- (c) interned value pool ---------------------------------------------
   step('pool', 0, 1);
   const pool = decodePool(ab0, profile);
+  // One registry row's full fields, re-decoded per call (nothing is kept
+  // between calls), shared by every reader below.
+  const rowDecoder = effectsMod.makeRegistryRowDecoder(rows, ab0, profile);
   // Water materials resolved from the user's bundle through the optional
   // per-build decode data; absent or unreadable data leaves water to the
   // viewer's plain surfaces.
   let worldWater: WorldWater | null = null;
   try {
-    worldWater = readWorldWater(placementData?.water, rows,
-      effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any, pool.values);
-  } catch { worldWater = null; }
+    worldWater = readWorldWater(placementData?.water, rows, rowDecoder, pool.values);
+  } catch { /* unreadable water data: plain surfaces */ }
   step('pool', 1, 1);
   bail();
 
@@ -362,7 +364,6 @@ export async function extractWorld({
   // name placed actors: the actor record's own name, else its authored label
   // mapped through the internal ids ("glinteye_deathcrow", or quest-prefixed
   // "q2_0_giant_two_headed_bear").
-  const rowDecoder = effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any;
   const recNames = recordNames({ rows, pool: pool.values, charset: dt.charset, symbols: dt.symbols, decode: rowDecoder });
   const enemyNames = enemyDisplayNames(rows, poolStrings, poolRegistryRefs);
   // enemy definitions keep their slots; the record names correct their text
@@ -395,9 +396,7 @@ export async function extractWorld({
     placement:placementData,
     objects,
     bytes: ab0,
-    assetMaps,             // shared pure derivations (computed once above)
-    materialAssets,
-    enemyDefs,
+    enemyDefs,             // shared pure derivation (computed once above)
     animDir: dt.animDir,
   });
   // Jigsaw connector meshes, resolved to this build's ab5 ordinals by content
@@ -460,7 +459,6 @@ export async function extractWorld({
       Object.assign(shard, {mapLabels: mapRecord.labels});
       Object.assign(entry, {mapAnnotations: mapRecord.labels.annotations.map(a => a.text)});
     }
-    // The room's tile colours tint all of its ground (and its water).
     const grid = colourGrids.get(roomId);
     if (grid) shard.colour_grid = encodeColourGrid(grid);
     putBatch.push([`world:room:${roomId}`, shard]);
@@ -536,6 +534,45 @@ export async function extractWorld({
     }
   }
   await sink.derivedPut(versionId, 'anim:idle', { format: 1, actors: idleActors });
+  // Rig rest-world bone translations, needed for particle-effect bone
+  // binding (effects.js): every distinct rig ANY mesh references, decoded
+  // once from ab6 and reduced via forward kinematics to rest-WORLD bone
+  // translations (extract/skeleton.js). 'world' always requires bundle 6
+  // (CAT_BUNDLES.world), so files[6]/frames[6] are expected present; the
+  // guard below is belt-and-braces, matching this module's own "never let a
+  // recovery-only stage fail the extraction" discipline. A rig that fails to
+  // decode (malformed skeleton) simply stays out of the map: effects.js
+  // degrades any reference to it to bone:null (root) placement.
+  // The bone PARENTS come along for the ride: the body-slot inference below
+  // walks them to give an unlabelled bone its nearest labelled ancestor's slot.
+  // The decoded bones themselves pose the idle clips below.
+  const rigBoneTranslations = new Map<number, number[][]>();
+  const rigWorldMatrices = new Map<number, number[][]>();
+  const rigSkeletons = new Map<number, RigSkeleton>();
+  const rigBones = new Map<number, SkeletonBone[]>();
+  if (files[6] && frames[6]) {
+    const rigIds = new Set<number>();
+    for (const entry of dt.meshDir) if (entry.sref >= 2) rigIds.add(entry.sref - 2);
+    if (rigIds.size) {
+      try {
+        const ab6 = new Uint8Array(await files[6].arrayBuffer());
+        for (const rigId of rigIds) {
+          const e = frames[6].entries[rigId];
+          if (!e) continue;
+          try {
+            const dec = decodeObject(6, ab6.subarray(e.offset, e.offset + e.length));
+            const { bones } = decodeSkeleton(dec, { i: rigId });
+            rigBones.set(rigId, bones);
+            const matrices = restWorldMatrices(bones);
+            const rest = matrices.map(m => [m[12], m[13], m[14]]);
+            rigWorldMatrices.set(rigId, matrices);
+            rigBoneTranslations.set(rigId, rest);
+            rigSkeletons.set(rigId, { parents: bones.map((b) => b.parent), rest });
+          } catch { /* malformed skeleton: this rig stays unresolved */ }
+        }
+      } catch { /* bundle 6 unreadable: every rig stays unresolved */ }
+    }
+  }
   // Frame-0 skin palettes need the clips themselves (assetBundle1), which the
   // World category only uses when it was supplied; without them the world
   // keeps drawing rigged actors in their bind pose.
@@ -543,17 +580,11 @@ export async function extractWorld({
   if (files[1] && frames[1] && idlePairs.size) {
     try {
       const ab1 = new Uint8Array(await files[1].arrayBuffer());
-      const skeletons = new Map<number, any>();
-      const ab6 = files[6] && frames[6] ? new Uint8Array(await files[6].arrayBuffer()) : null;
       const poses: IdlePosesDoc['poses'] = {};
       for (const [key, { rig, clip }] of idlePairs) {
         bail();
         try {
-          if (!skeletons.has(rig)) {
-            const e6 = frames[6]?.entries[rig];
-            skeletons.set(rig, ab6 && e6 ? decodeSkeleton(decodeObject(6, ab6.subarray(e6.offset, e6.offset + e6.length)), { i: rig }).bones : null);
-          }
-          const bones = skeletons.get(rig);
+          const bones = rigBones.get(rig);
           const e1 = frames[1].entries[clip];
           if (!bones || !e1) continue;
           const anim = decodeAnim(decodeObject(1, ab1.subarray(e1.offset, e1.offset + e1.length)), { i: clip, skel: rig, flags: dt.animDir[clip]?.flags });
@@ -580,42 +611,6 @@ export async function extractWorld({
   // only cancellation). Byte-identity of every existing output is untouched:
   // the stage only reads shared state and writes one new key.
   step('effects', 0, 1);
-  // Rig rest-world bone translations, needed for particle-effect bone
-  // binding (effects.js): every distinct rig ANY mesh references, decoded
-  // once from ab6 and reduced via forward kinematics to rest-WORLD bone
-  // translations (extract/skeleton.js). 'world' always requires bundle 6
-  // (CAT_BUNDLES.world), so files[6]/frames[6] are expected present; the
-  // guard below is belt-and-braces, matching this module's own "never let a
-  // recovery-only stage fail the extraction" discipline. A rig that fails to
-  // decode (malformed skeleton) simply stays out of the map: effects.js
-  // degrades any reference to it to bone:null (root) placement.
-  // The bone PARENTS come along for the ride: the body-slot inference below
-  // walks them to give an unlabelled bone its nearest labelled ancestor's slot.
-  const rigBoneTranslations = new Map<number, number[][]>();
-  const rigWorldMatrices = new Map<number, number[][]>();
-  const rigSkeletons = new Map<number, RigSkeleton>();
-  if (files[6] && frames[6]) {
-    const rigIds = new Set<number>();
-    for (const entry of dt.meshDir) if (entry.sref >= 2) rigIds.add(entry.sref - 2);
-    if (rigIds.size) {
-      try {
-        const ab6 = new Uint8Array(await files[6].arrayBuffer());
-        for (const rigId of rigIds) {
-          const e = frames[6].entries[rigId];
-          if (!e) continue;
-          try {
-            const dec = decodeObject(6, ab6.subarray(e.offset, e.offset + e.length));
-            const { bones } = decodeSkeleton(dec, { i: rigId });
-            const matrices = restWorldMatrices(bones);
-            const rest = matrices.map(m => [m[12], m[13], m[14]]);
-            rigWorldMatrices.set(rigId, matrices);
-            rigBoneTranslations.set(rigId, rest);
-            rigSkeletons.set(rigId, { parents: bones.map((b) => b.parent), rest });
-          } catch { /* malformed skeleton: this rig stays unresolved */ }
-        }
-      } catch { /* bundle 6 unreadable: every rig stays unresolved */ }
-    }
-  }
   const defaultAppearances=decodeDefaultAppearances(placementData,ab0,profile,pool.values,dt.symbols,rows.length);
   const appearanceCandidates=createAppearanceCandidateReader(placementData,rows,ab0,profile,pool.values,dt.symbols);
   const effectMotion=createEffectMotionReader(placementData,rows,ab0,profile,pool.values,dt.symbols);
@@ -638,7 +633,7 @@ export async function extractWorld({
       effectOrigin: createEffectOriginReader(placementData?.effectOrigins, objects),
       effectProperties: createEffectPropertyReader(placementData?.effectProperties,objects,ab0,profile,pool.values),
       effectFields: createEffectFieldReader(placementData?.effectFields, objects),
-      effectWave: createEffectWaveReader(placementData?.effectWaves, objects, effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any, pool.values),
+      effectWave: createEffectWaveReader(placementData?.effectWaves, objects, rowDecoder, pool.values),
       effectMotion: (controller,hit,roomId) => {
         const motion=effectMotion(controller);
         if(!motion||!placementData)return null;
@@ -726,15 +721,10 @@ export async function extractWorld({
   try {
     const render = placementData?.render;
     if (render) {
-      const decode = effectsMod.makeRegistryRowDecoder(rows, ab0, profile) as any;
       const environments: Record<string, RenderEnvironment> = {};
       const story: Record<string, StoryEnvironment> = {};
-      const field = (slot: number, op: number) => {
-        const f = slot >= 0 && rows[slot] ? decode(slot)?.find((x: any) => x.op === op) : null;
-        return f?.kind === 'G' ? resolveValue(pool.values, f.node) : null;
-      };
+      const field = (slot: number, op: number) => recordField(rows, rowDecoder, pool.values, slot, op);
       const text = (n: PoolNode | null) => (n?.tag === 0x0e && Array.isArray(n.values) ? String.fromCodePoint(...(n.values as number[])) : null);
-      const ref = (n: PoolNode | null) => (n && (n.tag === 0x26 || n.tag === 0x02) && Number.isInteger(n.value) ? n.value as number : -1);
       for (const roomId of new Set([...environmentSlots.keys(), ...environmentPresets.keys()])) {
         const slot = environmentSlots.get(roomId) ?? -1;
         const owner = roomMetadata.get(roomId)?.owner;
@@ -744,7 +734,7 @@ export async function extractWorld({
         let own: PoolNode | null = null;
         if (environmentPresets.has(roomId)) own = environmentPresets.get(roomId)!;
         else if (rows[slot]?.runtime === render.environment.family) own = field(slot, render.environment.field);
-        const read = (p: PoolNode | null) => readEnvironmentPreset(render, p, rows, decode, pool.values, dt.symbols);
+        const read = (p: PoolNode | null) => readEnvironmentPreset(render, p, rows, rowDecoder, pool.values, dt.symbols);
         const env = read(override ? archivedValue(ab0, profile, override.presetOffset) : own);
         if (env) environments[roomId] = env;
         // Rooms whose lighting follows a quest: every step, named by the quest
@@ -754,9 +744,9 @@ export async function extractWorld({
         if (s && entry) {
           const f = s.fields;
           const states = field(entry.variable, f.variableStates);
-          const quest = ref(field(entry.variable, f.variableQuest));
+          const quest = recordRef(field(entry.variable, f.variableQuest));
           const name = text(field(quest, f.questName));
-          const region = text(field(ref(field(quest, f.questRegion)), f.regionName));
+          const region = text(field(recordRef(field(quest, f.questRegion)), f.regionName));
           const steps = entry.steps.map(([from, offset]) => ({from, environment: read(offset < 0 ? own : archivedValue(ab0, profile, offset))}));
           const count = Array.isArray(states?.values) ? states!.values.length : entry.steps[entry.steps.length - 1][0] + 1;
           if (name && steps.every(st => st.environment)) {
@@ -767,7 +757,7 @@ export async function extractWorld({
       worldIndex.render = {
         programs: render.programs, vertexShaders: render.vertexShaders, pixelShaders: render.pixelShaders,
         samplers: render.samplers, blends: render.blends, waterPrograms: render.waterPrograms,
-        materials: readRenderMaterials(render, rows, decode, pool.values, dt.symbols),
+        materials: readRenderMaterials(render, rows, rowDecoder, pool.values, dt.symbols),
         environments,
         ...(Object.keys(story).length ? {story} : {}),
         lighting: {direction: archivedFloats(ab0, profile, render.lighting.directionOffset, 0x22, 3),
@@ -776,7 +766,7 @@ export async function extractWorld({
         ssao: render.ssao, camera: render.camera, vignette: render.vignette, clock: render.clock,
       };
     }
-  } catch { delete worldIndex.render; }
+  } catch { /* unreadable render data: no render bindings */ }
   bail();
 
   // ---- (g) portable system catalog through the existing validation seam -----
@@ -869,7 +859,7 @@ export async function extractWorld({
   // ---- card pictures (cards.ts): each model's card, drawn by the viewer ------
   // Card constants found in this bundle (card-data.ts); the lights need the
   // render data, else the viewer's default lights apply.
-  const renderData = placementData?.render && validRenderData(placementData.render) ? placementData.render : null;
+  const renderData = placementData?.render ?? null;
   const cardData = deriveCardData({ rows, pool: pool.values, charset: dt.charset, decode: rowDecoder });
   if (cardData) {
     const meshRig = (mesh: number) => { const sref = (dt.meshDir as any)?.[mesh]?.sref; return Number.isInteger(sref) && sref >= 2 ? sref - 2 : null; };
@@ -878,7 +868,7 @@ export async function extractWorld({
     const cards = readCards({
       rows, pool: pool.values, symbols: dt.symbols, charset: dt.charset, decode: rowDecoder,
       cards: cardData, render: renderData, meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
-      meshRig, clipRig, clipDuration, spawnGraph: ctx.spawnGraph as any, enemyNames,
+      meshRig, clipRig, clipDuration, spawnGraph: ctx.spawnGraph, enemyNames,
       nameOf: (slot: number) => { const n = recNames.nameOf(slot); return n ? n.singular ?? n.name : null; },
     });
     await sink.derivedPut(versionId, 'model:cards', { format: MODEL_CARDS_FORMAT, cards: assignModelCards(catalog.models as any[], cards) });

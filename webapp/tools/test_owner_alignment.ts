@@ -8,7 +8,7 @@ import {build} from 'esbuild';
 const tmp=await mkdtemp(path.join(os.tmpdir(),'atlas-owner-alignment-'));
 try {
  const file=path.join(tmp,'test.mjs');
- await build({stdin:{contents:"export * from './src/extract/world/graph.ts'; export {WorldScene,composePlacementMatrix} from './src/viewers/world/scene.ts'; export {MergedWorld} from './src/viewers/world/merged.ts'; export {Matrix4,BufferGeometry,Float32BufferAttribute} from './vendor/three.module.js';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
+ await build({stdin:{contents:"export * from './src/extract/world/graph.ts'; export {WorldScene} from './src/viewers/world/scene.ts'; export {MergedWorld} from './src/viewers/world/merged.ts'; export {Matrix4,BufferGeometry,Float32BufferAttribute} from './vendor/three.module.js';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
  const {AssetGraph,nativeAxisAlignment,WorldScene,MergedWorld,Matrix4,BufferGeometry,Float32BufferAttribute}=await import(pathToFileURL(file).href);
  const expected=[[0,-100,724,-924],[0,-100,724,-924],[0,-100,-200,-200],[0,0,512,-512],[0,0,0,-512],[0,0,512,0]];
  for(let mode=0;mode<6;mode++)for(let selector=0;selector<4;selector++)assert.equal(nativeAxisAlignment(mode,selector,2,-100,300,1024)||0,expected[mode][selector]);

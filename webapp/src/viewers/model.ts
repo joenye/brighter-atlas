@@ -318,23 +318,14 @@ async function renderVariantThumb(app: any, model: any, v: number): Promise<stri
   }
 }
 
-// ---- particle effects: join the displayed model to the world effects doc --
-// A system model's `sources[]` (extract/world/catalog.ts, the portable
-// catalog build) retain the registry slot(s) that produced it: the row that
-// owns the mesh/material directly (owner_slot), and, when the entity is
-// grouped under a shared descriptor, its family/base owner
-// (entity_owner_slot, entity_family_owner_slot). Any of those may be the
-// slot the effects doc's owner attachments reference, so the join checks
-// their union. User-authored models carry no `sources`, so this is empty
-// for them and the model page simply shows no effects.
 /** The card picture button: shown when the model has a card (World extraction). */
 function cardButton(app: any, model: ModelRecord): HTMLElement {
   const btn = el('button', { class: 'btn', text: '▤ Card', title: 'The picture the game shows on this model\u2019s information card: view it full size and download it' });
   btn.style.display = 'none';
-  modelCards(app.store).card((model as any).id).then((card) => { if (card) btn.style.display = ''; });
+  modelCards(app.store).card(model.id).then((card) => { if (card) btn.style.display = ''; });
   btn.addEventListener('click', async () => {
     const { openCardModal } = await import('./card-modal.js');
-    openCardModal(app, model as any);
+    openCardModal(app, model);
   });
   return btn;
 }
@@ -353,6 +344,15 @@ function worldButton(app: any, model: ModelRecord): HTMLElement {
   return btn;
 }
 
+// ---- particle effects: join the displayed model to the world effects doc --
+// A system model's `sources[]` (extract/world/catalog.ts, the portable
+// catalog build) retain the registry slot(s) that produced it: the row that
+// owns the mesh/material directly (owner_slot), and, when the entity is
+// grouped under a shared descriptor, its family/base owner
+// (entity_owner_slot, entity_family_owner_slot). Any of those may be the
+// slot the effects doc's owner attachments reference, so the join checks
+// their union. User-authored models carry no `sources`, so this is empty
+// for them and the model page simply shows no effects.
 function modelOwnerSlots(model: ModelRecord): Set<number> {
   const slots = new Set<number>();
   const sources = Array.isArray(model.sources) ? model.sources : [];
@@ -724,14 +724,13 @@ export function createModelView(app: any, model: ModelRecord) {
       tickModelEffects(dt, bar);
     });
     void attachModelEffects(effectsAnchor, bar, clips, rig, skelJson);
-    // Open resting the way the game rests this actor: the first of the
-    // model's source actors with a recovered resting clip on this rig.
+    // Open on the resting clip most of the model's source actors use on this
+    // rig (a merged model spans several placed actors, so a lone quest-state
+    // actor must not set the default); ties go to the lowest clip.
     void (async () => {
       let idle: any = null;
       try { idle = await app.store.animIdle?.(); } catch { idle = null; }
       if (destroyed || !idle?.actors) return;
-      // A merged model spans several placed actors; rest the way most of
-      // them do (a lone quest-state actor must not set the default).
       const votes = new Map<number, number>();
       for (const slot of modelOwnerSlots(model)) {
         const clip = Number(idle.actors[String(slot)]?.clip);
@@ -845,7 +844,7 @@ export function createModelView(app: any, model: ModelRecord) {
       (window as any).__bs.modelView = {
         model, skelEntry, rig, bar, active, scene, meshRows, get mode() { return getMode(); },
         effectsInfo: () => (effectsPlayer ? effectsPlayer.info() : { systems: [], live: 0 }),
-          effectsVisible: () => !!effectsAnchor?.visible,
+        effectsVisible: () => !!effectsAnchor?.visible,
       };
     }
   })();

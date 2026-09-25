@@ -1,8 +1,8 @@
-import {validEffectScales, type EffectScaleBinding} from './effect-scales.js';
-import {validEffectWindows, type EffectWindowBinding} from './effect-windows.js';
 // Optional per-build placement decode data is produced offline purely from
 // analysis of the game's own files, never by inspecting or modifying a running
 // game process or its memory. Missing data preserves legacy display grounding.
+import {validEffectScales, type EffectScaleBinding} from './effect-scales.js';
+import {validEffectWindows, type EffectWindowBinding} from './effect-windows.js';
 import {validEffectSprites, type EffectSpriteBinding} from './effect-sprites.js';
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
 import {validEffectOrigins, type EffectOriginBinding} from './effect-origins.js';
@@ -19,7 +19,7 @@ import type {RegistryRow} from './graph.js';
 import type {FillRow} from './replay.js';
 import type {WorldProfile} from './profile.js';
 import type {RoomRowRef, SpawnRecord} from './spawns.js';
-import {PoolDecoder} from './value-pool.js';
+import {PoolDecoder, profileArities} from './value-pool.js';
 import {readAppearanceControllers} from './default-appearance.js';
 import type {EffectMotion} from './effect-motion.js';
 
@@ -159,10 +159,9 @@ export function decodeDefaultAppearances(data:PlacementDecodeData|null,bytes:Uin
   const result=new Map<number,{controllers:number[]}>();
   if(!data)return result;
   validatePlacementData(data,profile.bundle0?.raw_sha256??'');
-  const arities=(values:Record<string,number>)=>new Map(Object.entries(values).map(([k,v])=>[+k,v]));
   for(const binding of data.defaultAppearances??[]){
     if(binding.end>bytes.length)throw Error('default appearance lies outside source data');
-    const decoder=new PoolDecoder(bytes.subarray(binding.start,binding.end),arities(profile.class_fields),arities(profile.tag6_fields));
+    const decoder=new PoolDecoder(bytes.subarray(binding.start,binding.end),...profileArities(profile));
     const node=decoder.value();
     const controllers=readAppearanceControllers(node,n=>resolveValue(pool,n),i=>symbols[i]);
     if(decoder.pos!==binding.end-binding.start||!controllers||controllers.some(id=>id>=rowCount))

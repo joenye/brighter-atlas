@@ -1,5 +1,4 @@
-/** Stateful random draws for authored particle ranges. The preview supplies
- * its own seed; cross-emitter stream ownership is handled separately. */
+/** Stateful random draws for authored particle ranges, seeded per particle by the caller. */
 export class EffectRandom {
   state: bigint;
   constructor(seed: bigint) { this.state = seed; }

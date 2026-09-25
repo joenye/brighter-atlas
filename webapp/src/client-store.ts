@@ -155,14 +155,7 @@ export class ClientStore extends EventTarget implements AppStore {
   // world extraction results: the rooms list + routing tables ('world:index',
   // cached like other indexes) and one columnar shard per room (NOT cached:
   // shards are big and a room load is deliberately one IDB get).
-  worldIndex(): Promise<any> {
-    if (!this._indexes.has('world:index')) {
-      this._indexes.set('world:index', derivedGet(this.versionId, 'world:index')
-        .then((idx) => idx || null)
-        .catch((e) => { this._indexes.delete('world:index'); throw e; }));
-    }
-    return this._indexes.get('world:index')!;
-  }
+  worldIndex(): Promise<any> { return this._doc('world:index'); }
 
   async worldRoom(id: number | string): Promise<any> {
     return (await derivedGet(this.versionId, `world:room:${id}`)) || null;
@@ -171,18 +164,11 @@ export class ClientStore extends EventTarget implements AppStore {
   // Recovered particle-effect systems ('world:effects', written by World
   // extraction), cached like world:index. Older extractions have no doc;
   // null, and every effects surface stays dormant.
-  worldEffects(): Promise<any> {
-    if (!this._indexes.has('world:effects')) {
-      this._indexes.set('world:effects', derivedGet(this.versionId, 'world:effects')
-        .then((doc) => doc || null)
-        .catch((e) => { this._indexes.delete('world:effects'); throw e; }));
-    }
-    return this._indexes.get('world:effects')!;
-  }
+  worldEffects(): Promise<any> { return this._doc('world:effects'); }
 
-  // Single-doc accessors for the resting-clip data World extraction writes
-  // ('anim:idle', 'world:idle-poses'), cached like world:effects; older
-  // extractions have neither doc and every consumer treats null as "none".
+  // Single-doc accessors for World extraction outputs, cached like
+  // world:effects; older extractions lack them and every consumer treats
+  // null as "none".
   animIdle(): Promise<any> { return this._doc('anim:idle'); }
   worldIdlePoses(): Promise<any> { return this._doc('world:idle-poses'); }
   modelCards(): Promise<any> { return this._doc('model:cards'); }

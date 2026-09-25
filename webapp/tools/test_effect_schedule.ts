@@ -15,12 +15,11 @@ try {
  const sparse=create(7);
  assert.deepEqual([0,1,2,3].map(i=>sparse.spawnTick(i)),[0,142,285,428]);
  const dense=create(2000);
+ // A timestamp of zero does not allow the second particle to appear at zero.
  dense.ensure(0);assert.equal(dense.head,1);
  dense.ensure(.5);assert.equal(dense.head,2);
  assert.deepEqual([...dense.birth.slice(0,2)],[0,0]);
  dense.ensure(1);assert.equal(dense.head,3);
- // A timestamp of zero does not allow the second particle to appear at zero.
- const reset=create(2000);reset.ensure(0);assert.equal(reset.head,1);
  const attached=create(7);attached.speed=0;
  attached.setBirthFrameSampler((tick:number)=>({
   position:[1,0,0,0,0,1,0,0,0,0,1,0,tick,0,0,1],

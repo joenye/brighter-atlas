@@ -3,6 +3,7 @@
 
 import type { VersionRecord } from './storage.js';
 import type { WorldEffectsDoc } from './extract/world/effects.js';
+import { b64Bytes } from './extract/b64.js';
 
 // One row of a category index. `i` is the bundle ordinal (the public asset
 // identity), `h` the stable 16-hex content hash when known. Category-specific
@@ -243,19 +244,7 @@ export class Store extends EventTarget implements AppStore {
 // Files are written little-endian; JS typed arrays are little-endian on every
 // platform this app targets (x86/ARM), so a plain view over the bytes is exact.
 
-export function b64Bytes(s: string): Uint8Array {
-  // Native decoder when available (V8 13+): same standard-alphabet padded
-  // input, same bytes out, minus the per-char loop (mesh/anim payload decode
-  // is a main-thread hot path).
-  if (typeof (Uint8Array as any).fromBase64 === 'function') {
-    return (Uint8Array as any).fromBase64(s) as Uint8Array;
-  }
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-export function b64f32(s: string): Float32Array { const b = b64Bytes(s); return new Float32Array(b.buffer, 0, b.byteLength >> 2); }
+export { b64Bytes, b64f32 } from './extract/b64.js';
 export function b64u16(s: string): Uint16Array { const b = b64Bytes(s); return new Uint16Array(b.buffer, 0, b.byteLength >> 1); }
 export function b64u32(s: string): Uint32Array { const b = b64Bytes(s); return new Uint32Array(b.buffer, 0, b.byteLength >> 2); }
 export function b64u8(s: string): Uint8Array { return b64Bytes(s); }

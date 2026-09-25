@@ -28,7 +28,7 @@ import {
   spriteDrawOf, spriteUniforms, spriteColorSpace, spriteMaterialState, configureSpriteSampling, emitterSpriteDraws, type SpriteDraw,
 } from './effects-sprite.js';
 import type { WorldEffectsDoc, EffectSystem } from '../../extract/world/effects.js';
-import {restEffectBirthFrames, animatedEffectBirthFrames} from './effects-frames.js';
+import {bindRigBirthFrames} from './effects-frames.js';
 import type {EffectBoneAnimation} from './effects-animation.js';
 
 // Per-view alive budget. A model page shows at most a handful of systems on
@@ -148,24 +148,14 @@ export class EffectsPlayer {
       slavedTick: 0,
       animation: null,
       configureAnimation: () => {},
-      // Resolved sprites, and computed selections whose shape is bound, enter
-      // these batches. Other missing records stay unresolved rather than
-      // borrowing a fallback appearance.
+      // Emitters with nothing drawable are skipped rather than given a fallback dot.
       emitters: system.emitters.flatMap((emitter, index) => {
         const draws = emitterSpriteDraws(emitter, this.doc.configs || {});
         if (!draws.length) return [];
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate);
         if (this._rig && system.rig_selection?.alternate === false && emitter.transform) {
-          const binding = emitter.transform;
-          const frames = restEffectBirthFrames(binding, this._rig.bones, IDENTITY);
-          if (frames) {
-            sim.setBirthFrames(frames.position, frames.direction);
-            animationSetters.push(animation => {
-              if (animation) sim.setBirthFrameSampler(tick =>
-                animatedEffectBirthFrames(binding, animation.sample(tick), animation.inverseBinds, IDENTITY) || frames);
-              else sim.setBirthFrames(frames.position, frames.direction);
-            });
-          }
+          const set = bindRigBirthFrames(sim, emitter.transform, this._rig.bones, IDENTITY);
+          if (set) animationSetters.push(set);
         }
         const blend = (emitter.blend || system.blend) === 'add' ? 'add' : 'mix';
         return draws.map(({ sprite, choice }) => {

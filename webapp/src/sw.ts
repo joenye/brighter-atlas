@@ -173,7 +173,8 @@ async function serveBlocks(c: VersionCtx, i: number, k: number): Promise<Respons
 
 // A shader object's first compiled blob (ab7 vertex, ab4 pixel).
 async function serveShader(c: VersionCtx, stage: string, i: number): Promise<Response> {
-  const blob = shaderBlobs(decodeObject(stage === 'vs' ? 7 : 4, await rawObject(c, stage === 'vs' ? 7 : 4, i)))[0];
+  const bundle = stage === 'vs' ? 7 : 4;
+  const blob = shaderBlobs(decodeObject(bundle, await rawObject(c, bundle, i)))[0];
   if (!blob) throw new Error(`no compiled shader in ${stage} ${i}`);
   return new Response(blob as unknown as BodyInit, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' } });
 }

@@ -111,7 +111,6 @@ const VECTOR: Record<Ty, string> = { f: 'vec', u: 'uvec', i: 'ivec' };
 const vtype = (ty: Ty, n: number) => (n === 1 ? SCALAR[ty] : `${VECTOR[ty]}${n}`);
 const letters = (comps: number[]) => comps.map((c) => LETTERS[c]).join('');
 const hex = (v: number) => `0x${(v >>> 0).toString(16)}u`;
-const bitsOf = (v: number): number => v >>> 0;
 
 function maskPositions(mask: number): number[] {
   const out: number[] = [];
@@ -223,7 +222,6 @@ class StageWriter {
   readonly samplers = new Map<string, SamplerBinding>();
   readonly helpers = new Set<string>();
   depth = 1;
-  usesPosition = false;
   constructor(
     readonly sh: DxbcShader,
     readonly stage: 'vs' | 'ps',
@@ -266,7 +264,7 @@ class StageWriter {
     const n = positions.length;
     let raw: string;
     if (o.type === OPERAND.IMMEDIATE32 && o.values) {
-      const vals = positions.map((p) => bitsOf(o.values!.length === 1 ? o.values![0] : o.values![p]));
+      const vals = positions.map((p) => o.values![o.values!.length === 1 ? 0 : p]);
       if (ty === 'u') raw = n === 1 ? hex(vals[0]) : `uvec${n}(${vals.map(hex).join(', ')})`;
       else if (ty === 'i') {
         const ints = vals.map((v) => (v === 0x80000000 ? 'int(0x80000000u)' : String(v | 0)));
@@ -714,6 +712,13 @@ class StageWriter {
 
   emit() {
     for (const ins of this.sh.instructions) this.instruction(ins);
+    if (this.usesRelativeRegister(OPERAND.INPUT) || this.usesRelativeRegister(OPERAND.OUTPUT)) throw new Error('indexed input or output registers are not supported');
+  }
+
+  /** main()'s zeroing of the temp registers ('' when there are none). */
+  tempsInit(): string {
+    const n = this.sh.decls.temps;
+    return n ? `  ${[...Array(n)].map((_, k) => `r${k} = uvec4(0u);`).join(' ')}\n` : '';
   }
 
   /** Uniform, constant and sampler declarations for this stage. */
@@ -738,11 +743,7 @@ class StageWriter {
 
   helperSource(): string {
     let s = HELPERS;
-    for (const h of ['nan', 'sat', 'min', 'max', 'log', 'sqrt', 'rsq']) if (this.helpers.has(h)) s += OPTIONAL_HELPERS[h];
-    if (this.helpers.has('ftoi')) s += OPTIONAL_HELPERS.ftoi;
-    if (this.helpers.has('ftou')) s += OPTIONAL_HELPERS.ftou;
-    if (this.helpers.has('udiv')) s += OPTIONAL_HELPERS.udiv;
-    if (this.helpers.has('mulhi')) s += OPTIONAL_HELPERS.mulhi;
+    for (const h of ['nan', 'sat', 'min', 'max', 'log', 'sqrt', 'rsq', 'ftoi', 'ftou', 'udiv', 'mulhi']) if (this.helpers.has(h)) s += OPTIONAL_HELPERS[h];
     return s;
   }
 
@@ -751,7 +752,7 @@ class StageWriter {
     return ['precision highp float;', 'precision highp int;', ...[...types].sort().map((t) => `precision highp ${t};`)].join('\n');
   }
 
-  usesRelativeRegister(type: number): boolean {
+  private usesRelativeRegister(type: number): boolean {
     const hit = (o: Operand): boolean => o.type === type && !!o.indices[0]?.rel
       || o.indices.some((i) => !!i.rel && hit(i.rel));
     return this.sh.instructions.some((ins) => ins.operands.some(hit));
@@ -863,7 +864,6 @@ export function translate(
     const w = new StageWriter(vs, 'vs', y, notes);
     vsWriter = w;
     w.emit();
-    if (w.usesRelativeRegister(OPERAND.INPUT) || w.usesRelativeRegister(OPERAND.OUTPUT)) throw new Error('indexed input or output registers are not supported');
     const inputs: string[] = [];
     const prologue: string[] = [];
     const inputRegs = new Set<number>();
@@ -895,7 +895,6 @@ export function translate(
       else if (q.noperspective) epilogue.push(`vr${l.register} = F(o${l.register}) * p.w;`);
       else epilogue.push(`vr${l.register} = F(o${l.register});`);
     }
-    const temps = vs.decls.temps ? `  ${[...Array(vs.decls.temps)].map((_, k) => `r${k} = uvec4(0u);`).join(' ')}\n` : '';
     vertex = [
       '#version 300 es',
       w.precision(),
@@ -911,7 +910,7 @@ export function translate(
       'void main() {',
       ...prologue.map((s) => '  ' + s),
       ...outGlobals.map((o) => `  ${o} = uvec4(0u);`),
-      temps + '  body();',
+      w.tempsInit() + '  body();',
       ...epilogue.map((s) => '  ' + s),
       '}',
       '',
@@ -933,7 +932,6 @@ export function translate(
     const w = new StageWriter(ps, 'ps', y, notes);
     psWriter = w;
     w.emit();
-    if (w.usesRelativeRegister(OPERAND.INPUT) || w.usesRelativeRegister(OPERAND.OUTPUT)) throw new Error('indexed input or output registers are not supported');
     const prologue: string[] = [];
     const inputRegs = new Set<number>();
     for (const l of link!.varyings) {
@@ -977,7 +975,6 @@ export function translate(
       epilogue.push(`frag${d.register} = ${ct === 'float' ? `F(o${d.register})` : ct === 'uint' ? `o${d.register}` : `ivec4(o${d.register})`};`);
     }
     if (depth) epilogue.push('gl_FragDepth = F(oDepth);');
-    const temps = ps.decls.temps ? `  ${[...Array(ps.decls.temps)].map((_, k) => `r${k} = uvec4(0u);`).join(' ')}\n` : '';
     const inputGlobals = [...inputRegs].sort((a, b) => a - b).map((r) => `v${r}`);
     const outGlobals = outRegs.sort((a, b) => a - b).map((r) => `o${r}`);
     fragment = [
@@ -998,7 +995,7 @@ export function translate(
       ...prologue.map((s) => '  ' + s),
       ...outGlobals.map((o) => `  ${o} = uvec4(0u);`),
       depth ? '  oDepth = 0u;' : '',
-      temps + '  body();',
+      w.tempsInit() + '  body();',
       ...epilogue.map((s) => '  ' + s),
       '}',
       '',

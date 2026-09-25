@@ -14,7 +14,7 @@ try {
  await build({stdin:{contents:"export * from './src/viewers/world/draw-order.ts';",
   resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
  const T=await import(pathToFileURL(file).href);
- let checks=0;const ok=(c:any,m:string)=>{assert(c,m);checks++;};
+ let checks=0;
  const oc={x:0,y:1,z:2,entry_slot:3,individual:4,dynamic:5},pc={occurrence:0,part_index:1};
  // Emission keys: layer = individual + 1 (none is 0); dynamic elements drop the layer.
  assert.deepEqual(T.emissionKey([3,4,1,2,-1,0],[0,5],oc,pc),[0,0,-1,4,3,2,5]);checks++;

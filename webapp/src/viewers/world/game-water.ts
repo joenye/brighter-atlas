@@ -14,7 +14,7 @@
 //
 // Heights and positions are native units (z up); wave rates are per tick.
 import * as THREE from '../../../vendor/three.module.js';
-import type { WorldWater, WorldWaterStyle, WorldWaterMaterial } from '../../extract/world/water-materials.js';
+import type { WorldWaterStyle, WorldWaterMaterial } from '../../extract/world/water-materials.js';
 
 const TWO_PI = Math.PI * 2;
 const f32 = Math.fround;
@@ -28,7 +28,7 @@ export interface GameWaterShared {
   uGround: { value: THREE.Color };
   uSun: { value: THREE.Color };
   uSunDirection: { value: THREE.Vector3 };   // native, the way the light travels
-  uLevel: { value: THREE.Vector2 };          // water level, style offset set per style
+  uLevel: { value: THREE.Vector2 };          // water level in x; the per-style offset is uStyleLevel
 }
 
 export function createGameWaterShared(): GameWaterShared {
@@ -55,19 +55,21 @@ export interface GameWaterStyleUniforms {
 }
 
 const srgbToLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
-// Packed colours truncate after scaling to 255.
-const unorm8 = (v: number) => Math.min(255, Math.max(0, Math.floor(f32(f32(v) * 255)))) / 255;
+/** A style colour as the game packs it: RGB converted to linear, alpha raw, each truncated to a byte after scaling. */
+export function styleColourBytes([r, g, b, a]: readonly number[]): [number, number, number, number] {
+  const byte = (v: number) => Math.min(255, Math.max(0, Math.floor(f32(f32(v) * 255))));
+  return [byte(srgbToLinear(r)), byte(srgbToLinear(g)), byte(srgbToLinear(b)), byte(a)];
+}
 const positiveMod = (v: number, m: number) => { const r = v % m; return r < 0 ? r + m : r; };
 
 export function createStyleUniforms(style: WorldWaterStyle): GameWaterStyleUniforms {
-  const [r, g, b, a] = style.colour;
+  const [r, g, b, a] = styleColourBytes(style.colour);
   return {
     uLayer0: { value: new THREE.Vector4(style.layers[0][0], style.layers[0][1], 0, 0) },
     uLayer1: { value: new THREE.Vector4(style.layers[1][0], style.layers[1][1], 0, 0) },
     uWaveX: { value: new THREE.Vector4(style.waves.amplitude[0], style.waves.frequency[0], 0, style.waves.tilt[0]) },
     uWaveY: { value: new THREE.Vector4(style.waves.amplitude[1], style.waves.frequency[1], 0, style.waves.tilt[1]) },
-    // The style colour is converted to linear before packing; alpha is not.
-    uStyleColour: { value: new THREE.Vector4(unorm8(srgbToLinear(r)), unorm8(srgbToLinear(g)), unorm8(srgbToLinear(b)), unorm8(a)) },
+    uStyleColour: { value: new THREE.Vector4(r / 255, g / 255, b / 255, a / 255) },
     uStyleLevel: { value: style.level },
   };
 }
@@ -282,7 +284,3 @@ export function updateGameWaterLights(
   shared.uSunDirection.value.copy(toSun).transformDirection(nativeFromWorld).negate();
   shared.uCamera.value.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(nativeFromWorld);
 }
-
-
-
-export type { WorldWater };

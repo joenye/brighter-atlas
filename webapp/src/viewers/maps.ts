@@ -26,7 +26,7 @@ export function createMapView(app:any,entry:IndexEntry|null) {
     const view={cx,cy,scale,width:host.clientWidth,height:host.clientHeight,dpr:devicePixelRatio,labels:labels.checked};
     renderer.draw({...view,markers:inspection.markers(view)});
     canvas.dataset.scale=String(scale);canvas.dataset.center=`${cx},${cy}`;
-    root.dataset.mode=inspection.mode;root.dataset.matches=String(inspection.count);root.dataset.markers=String(renderer.stats.markers);
+    root.dataset.matches=String(inspection.count);root.dataset.markers=String(renderer.stats.markers);
   };
   const requestDraw=()=>{if(!raf&&!dead)raf=requestAnimationFrame(draw);};
   const inspection=createMapInspection(app,requestDraw,(x,y)=>{if(!Number.isFinite(x)||!Number.isFinite(y))return;cx=x;cy=y;scale=Math.max(25,scale);requestDraw();});
@@ -132,7 +132,7 @@ export function createMapView(app:any,entry:IndexEntry|null) {
       for(const [id,name] of episodes)episode.append(el('option',{value:id,text:name||`Episode ${id}`}));
       for(const r of [...doc.scene.rooms].sort((a,b)=>a.name.localeCompare(b.name)))roomSelect.append(el('option',{value:r.room+1,text:r.name}));
       roomSelect.value=String(entry?.i??0);selectRooms();root.dataset.ready='true';
-    }catch(e){if(!dead){status.textContent=(e as Error).message;root.dataset.error=(e as Error).message;}}
+    }catch(e){if(!dead)status.textContent=(e as Error).message;}
   })();
   return {root,exportPng,destroy(){dead=true;resize.disconnect();inspection.destroy();if(raf)cancelAnimationFrame(raf);renderer?.destroy();document.body.classList.remove('map-active');}};
 }

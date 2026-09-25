@@ -4,6 +4,8 @@
 // water style they follow; every value is read from the user's bundle.
 import {resolveValue} from './room-metadata.js';
 import type {ConstructorRecord} from './replay.js';
+import type {ReparsedOp} from './effects.js';
+import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
 
 export interface EffectWaveBinding {
   instance: number;
@@ -31,24 +33,20 @@ export interface EffectWave {
 }
 
 export function validEffectWaves(value: any): value is EffectWaveData {
-  const index = (v: any) => Number.isInteger(v) && v >= 0 && v < 65536;
-  const pair = (v: any) => Array.isArray(v) && v.length === 2 && v.every(index);
+  const pair = (v: any) => Array.isArray(v) && v.length === 2 && v.every(bindingIndex);
   return !!value && Number.isInteger(value.step) && value.step > 0 && value.step < 65536
-    && Array.isArray(value.bindings) && value.bindings.length <= 65536
-    && value.bindings.every((b: any) => b && [b.instance, b.water, b.point, b.count, b.threshold, b.translation].every(index)
-      && b.waterFields && ['amplitude', 'frequency', 'rate'].every(k => pair(b.waterFields[k])))
-    && new Set(value.bindings.map((b: any) => b.instance)).size === value.bindings.length;
+    && validBindingList(value.bindings, b => [b.water, b.point, b.count, b.threshold, b.translation].every(bindingIndex)
+      && b.waterFields && ['amplitude', 'frequency', 'rate'].every(k => pair(b.waterFields[k])));
 }
 
-type RawField = {op: number; kind: string; node?: any; value?: any};
 export function createEffectWaveReader(data: EffectWaveData | undefined, objects: ConstructorRecord[],
-  decode: (slot: number) => RawField[] | null, pool: any[]) {
+  decode: (slot: number) => ReparsedOp[] | null, pool: any[]) {
   if (data !== undefined && !validEffectWaves(data)) throw Error('invalid effect wave bindings');
-  const byInstance = new Map((data?.bindings ?? []).map(b => [b.instance, b]));
+  const bindingOf = instanceLookup((data?.bindings ?? []).map(b => [b.instance, b] as const), objects);
   return (slot: number): EffectWave | null => {
-    const b = byInstance.get(objects[slot]?.values[1]);
+    const b = bindingOf(slot);
     if (!b || !data) return null;
-    const node = (fields: RawField[] | null, op: number) => {
+    const node = (fields: ReparsedOp[] | null, op: number) => {
       const f = fields?.find(e => e.op === op);
       return f?.kind === 'G' ? resolveValue(pool, f.node) : null;
     };

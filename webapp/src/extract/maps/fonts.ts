@@ -62,6 +62,8 @@ export async function extractMapFonts(
     if (items.length !== 1) throw Error(`ambiguous or missing ${what}`);
     return items[0];
   };
+  const faceList = (f: PoolNode[], what: string): number[] =>
+    one(f.flatMap(n => {const refs = list(n, 2); return refs?.length ? [refs.map(r => r.value as number)] : [];}), what);
   const glyphMetrics = new Map<number, {metrics: PoolNode; key: number[]}>();
   const glyphRecord = (slot: number) => {
     if (!glyphMetrics.has(slot)) {
@@ -78,7 +80,7 @@ export async function extractMapFonts(
     const f = fields(request.slot);
     const table = one(f.filter(n => n.tag === 0x7e), 'font glyph lookup');
     if (!table.lookup || !table.range) throw Error('missing font lookup payload');
-    const faces = one(f.flatMap(n => {const refs = list(n, 2); return refs?.length ? [refs.map(n => n.value)] : [];}), 'font faces');
+    const faces = faceList(f, 'font faces');
     const dimensions = f.slice(f.indexOf(table) + 1, f.indexOf(table) + 4);
     if (dimensions.length !== 3 || dimensions.some(n => n.tag !== 11 || !Number.isFinite(n.value?.[0]))) throw Error('invalid font dimensions');
     const glyphs = [...new Set(request.glyphs)].filter(g => g !== 10).map(glyph => {
@@ -100,7 +102,7 @@ export async function extractMapFonts(
   const wantedFaces = new Set(Object.values(fonts).flatMap(font => font.faces));
   const atlases = rows.filter(row => row.selector === atlasSchema.selector).flatMap(row => {
     const f = fields(row.slot);
-    const faces = one(f.flatMap(n => {const refs = list(n, 2); return refs?.length ? [refs.map(n => n.value)] : [];}), 'atlas faces');
+    const faces = faceList(f, 'atlas faces');
     if (!faces.some(face => wantedFaces.has(face))) return [];
     const images = one(f.flatMap(n => {const refs = list(n, 0x33); return refs ? [refs.map(n => n.value as [number, number])] : [];}), 'atlas glyph images');
     const packing = one(f.filter(n => n.tag === 36), 'font atlas layout');

@@ -18,10 +18,12 @@
 //   objects  items and scenery: after the card record a base matrix and a
 //            distance, the mesh definitions and the object's material table.
 import type {FillRow} from './replay.js';
-import {resolveValue} from './room-metadata.js';
+import {decodeGlyphText, resolveValue} from './room-metadata.js';
 import type {PoolNode} from './value-pool.js';
 import {readEnvironmentPreset, type RenderDecodeData} from './render-data.js';
-import type {CardConstants} from './card-data.js';
+import {cardDistance, carriesCard, type CardConstants} from './card-data.js';
+import {clipRecords} from './actor-idle.js';
+import type {SpawnGraph} from './spawns.js';
 
 export const MODEL_CARDS_FORMAT = 1;
 
@@ -66,11 +68,7 @@ export interface CardSources {
   clipRig: (clip: number) => number | null;
   /** The clip's length in milliseconds (0: unknown). */
   clipDuration: (clip: number) => number;
-  spawnGraph: {
-    spawn(slot: number): any;
-    unplacedAppearance(slot: number): { label: string | null; parts: any[] } | null;
-    idleResolver: { resolve(slot: number, rigs: Set<number>): any; props(controller: number | null, rigs: Set<number>, meshRig: (m: number) => number | null): any[] } | null;
-  };
+  spawnGraph: SpawnGraph;
   /** Display names of enemy definitions (display-names.ts). */
   enemyNames: Map<number, { name: string }>;
   /** The record's own name (names.ts). */
@@ -86,16 +84,16 @@ export function readCards(src: CardSources): CardSpec[] {
   const vec = (n: any): number[] | null => { n = node(n); return Array.isArray(n?.value) ? n.value.map(Number) : null; };
   const colour = (n: any): number[] | null => { n = node(n); return n?.tag === 0x15 && Array.isArray(n.value) ? n.value.map(Number) : null; };
   const texOf = (m: number) => src.texturesByMaterial.get(m)?.[0] ?? -1;
-  const fieldsOf = (slot: number) => { try { return decode(slot) ?? []; } catch { return []; } };
-  const text = (n: any): string | null => {
-    n = node(n);
-    if (n?.tag !== 0x0e || !Array.isArray(n.values)) return null;
-    let t = '';
-    for (const g of n.values as number[]) { const ch = src.charset[g]; if (ch === undefined) return null; t += ch; }
-    return t;
+  const partFrom = (mesh: number, material: number, a: number[] | null, b: number[] | null): CardSpec['parts'][number] =>
+    ({ mesh, material, renderTexture: texOf(material), recolours: a && b ? [a, b] : null, tint: null });
+  const fieldCache = new Map<number, NonNullable<ReturnType<Decode>>>();
+  const fieldsOf = (slot: number) => {
+    let f = fieldCache.get(slot);
+    if (!f) { try { f = decode(slot) ?? []; } catch { f = []; } fieldCache.set(slot, f); }
+    return f;
   };
-  const clipOfRecord = new Map<number, number>();
-  for (const row of rows) for (const e of row.g || []) if (e[2] === 0x61 && isInt(e[3])) { clipOfRecord.set(row.slot, e[3]); break; }
+  const text = (n: any): string | null => decodeGlyphText(node(n), src.charset);
+  const clipOfRecord = src.spawnGraph.idleResolver?.clipOfRecord() ?? clipRecords(rows);
   const lightsOf = (n: any) => {
     if (!render) return null;
     n = node(n);
@@ -103,7 +101,7 @@ export function readCards(src: CardSources): CardSpec[] {
       const f = fieldsOf(n.value).find((x) => x.op === render.environment.field);
       n = f?.kind === 'G' ? node(f.node) : null;
     }
-    const env = readEnvironmentPreset(render, n, rows, decode as any, pool, src.symbols);
+    const env = readEnvironmentPreset(render, n, rows, fieldsOf, pool, src.symbols);
     return env ? { sky: env.sky, ground: env.ground, sun: env.sun } : null;
   };
   const viewOf = (f: any[]): [CardSpec['view'], any] => {
@@ -133,10 +131,11 @@ export function readCards(src: CardSources): CardSpec[] {
       lights: lightsOf(f[10]), lightTurn: [num(f[11]) ?? 0, num(f[12]) ?? 0],
     }, anim];
   };
-  const cardField = (fs: any[]) => fs.find((x) => x.kind === 'G' && node(x.node)?.tag === 0x24 && node(x.node)?.class === k.recordClass);
+  const isCard = (x: any) => x.kind === 'G' && node(x.node)?.tag === 0x24 && node(x.node)?.class === k.recordClass;
+  const cardField = (fs: any[]) => fs.find(isCard);
   const runtime = (slot: number) => rows[slot]?.runtime;
   const rigKinds = new Set(k.rigRecords);
-  const rigRecords = { has: (slot: number) => rigKinds.has(runtime(slot)!) };
+  const isRigRecord = (slot: number) => rigKinds.has(runtime(slot)!);
   const readRig = (record: number) => {
     let rig: number | null = null, focusBone: number | null = null;
     for (const y of fieldsOf(record)) {
@@ -173,20 +172,20 @@ export function readCards(src: CardSources): CardSpec[] {
   const rigOf = (fs: any[]): { rig: number | null; focusBone: number | null } => {
     const gs = fs.filter((x) => x.kind === 'G');
     let record: number | null = null;
-    const direct = gs.flatMap((x) => refsIn(x.node)).find((r) => rigRecords.has(r));
+    const direct = gs.flatMap((x) => refsIn(x.node)).find(isRigRecord);
     if (direct !== undefined) record = direct;
     for (const x of gs) {
       if (record !== null) break;
       for (const r of refsIn(x.node)) {
         if (runtime(r) !== k.appearance.runtime) continue;
         const f = fieldsOf(r).find((y) => y.op === k.appearance.rigField);
-        const hit = f ? refsIn(f.node).find((z) => rigRecords.has(z)) : undefined;
+        const hit = f ? refsIn(f.node).find(isRigRecord) : undefined;
         if (hit !== undefined) { record = hit; break; }
       }
     }
     if (record === null) {
       for (const r of gs.flatMap((x) => refsIn(x.node))) {
-        const hit = fieldsOf(r).filter((y) => y.kind === 'G').flatMap((y) => refsIn(y.node)).find((z) => rigRecords.has(z));
+        const hit = fieldsOf(r).filter((y) => y.kind === 'G').flatMap((y) => refsIn(y.node)).find(isRigRecord);
         if (hit !== undefined) { record = hit; break; }
       }
     }
@@ -210,20 +209,17 @@ export function readCards(src: CardSources): CardSpec[] {
         const def = node(v.fields[0]), mat = node(v.fields[1]);
         const mesh = def?.tag === 0x26 ? src.meshBySlot.get(def.value) : undefined;
         if (!isInt(mesh) || mat?.tag !== 0x02) continue;
-        const a = colour(v.fields[2]), b = colour(v.fields[3]);
-        out.push({ mesh, material: mat.value, renderTexture: texOf(mat.value), recolours: a && b ? [a, b] : null, tint: null });
+        out.push(partFrom(mesh, mat.value, colour(v.fields[2]), colour(v.fields[3])));
       }
       return out;
     }
     return [];
   };
   const boundsOf = (fs: any[]) => { for (const x of fs) { const n = node(x.node); if (n?.tag === 0x25 && Array.isArray(n.value) && n.value.length === 6) return n.value.map(Number); } return null; };
-  const bigEndian = (raw: ArrayLike<number>) => { const dv = new DataView(new ArrayBuffer(4)); for (let i = 0; i < 4; i++) dv.setUint8(i, raw[i]); return dv.getFloat32(0, false); };
-  const distanceOf = (fs: any[]) => { const f4 = fs.filter((x) => x.kind === 'F' && x.raw?.length === 4); return f4.length === 1 ? bigEndian(f4[0].raw!) : null; };
   const partOf = (p: any) => ({ mesh: p.mesh, material: p.material_slot, renderTexture: p.texture,
     recolours: p.recolors ? p.recolors.slice(0, 2).map((r: any) => r.map(Number)) : null, tint: null as null });
-  const propsOf = (anim: any, rig: number | null) => (anim?.tag === 0x26 && src.spawnGraph.idleResolver && rig !== null)
-    ? src.spawnGraph.idleResolver.props(anim.value, new Set([rig]), src.meshRig).map(partOf) : [];
+  const propsOf = (anim: any, rigs: Set<number>) => (anim?.tag === 0x26 && src.spawnGraph.idleResolver && rigs.size > 0)
+    ? src.spawnGraph.idleResolver.props(anim.value, rigs, src.meshRig).map(partOf) : [];
   const meshDefs = new Set(k.meshDefs.runtimes), enemyDefs = new Set(k.enemyDefs);
   const isDef = (v: any) => v?.tag === 0x26 && meshDefs.has(runtime(v.value)!);
   const listOf = (n: any) => { n = node(n); return Array.isArray(n?.values) && n.tag !== 0x0e && n.tag !== 0x15 ? n.values.map(node) : n ? [n] : []; };
@@ -244,19 +240,20 @@ export function readCards(src: CardSources): CardSpec[] {
     const found = rigOf(fs);
     if (unplaced && found.rig === null) return;
     const { rig, focusBone } = checkRig(found, parts.map((p: any) => p.mesh), view.clip);
+    const rigs = new Set(rig !== null ? [rig] : []);
     let clip: any = view.clip, idleProps: any[] = [];
     if (clip === '$idle') {
       if (s) { clip = s.idle_clip ?? null; idleProps = s.idle_props ?? []; }
       else {
-        const r = src.spawnGraph.idleResolver?.resolve(slot, new Set(rig !== null ? [rig] : []));
+        const r = src.spawnGraph.idleResolver?.resolve(slot, rigs);
         clip = r?.clip ?? null;
-        idleProps = r ? src.spawnGraph.idleResolver!.props(r.controller, new Set(rig !== null ? [rig] : []), src.meshRig) : [];
+        idleProps = r ? src.spawnGraph.idleResolver!.props(r.controller, rigs, src.meshRig) : [];
       }
     } else if (typeof clip !== 'number') clip = null;
     view.clip = clip;
     cards.push({ record: slot, kind: 'actor', label: src.nameOf?.(slot) ?? label, view,
-      subject: { rig, focusBone, bounds: boundsOf(fs), distance: distanceOf(fs) ?? k.actorDistance, base: null },
-      parts: [...parts.map(partOf), ...idleProps.map(partOf), ...propsOf(anim, rig), ...heldOf(fs)], own: parts.length });
+      subject: { rig, focusBone, bounds: boundsOf(fs), distance: cardDistance(fs) ?? k.actorDistance, base: null },
+      parts: [...parts.map(partOf), ...idleProps.map(partOf), ...propsOf(anim, rigs), ...heldOf(fs)], own: parts.length });
   };
   // an enemy's template actor: a record the definition references holds a
   // typed value naming an actor with its own card and card distance
@@ -271,7 +268,7 @@ export function readCards(src: CardSources): CardSpec[] {
           const r = node(f);
           if (r?.tag !== 0x26 || !isInt(r.value)) continue;
           const rf = fieldsOf(r.value);
-          if (cardField(rf) && distanceOf(rf) !== null) return rf;
+          if (cardField(rf) && cardDistance(rf) !== null) return rf;
         }
       }
     }
@@ -288,8 +285,7 @@ export function readCards(src: CardSources): CardSpec[] {
       parts = list.map((v: any, i: number) => {
         const mesh = src.meshBySlot.get(v.value), mat = mats[i];
         if (!isInt(mesh) || mat?.tag !== 0x02) return null;
-        const a = t1[i]?.tag === 0x15 ? t1[i].value.map(Number) : null, b = t2[i]?.tag === 0x15 ? t2[i].value.map(Number) : null;
-        return { mesh, material: mat.value, renderTexture: texOf(mat.value), recolours: a && b ? [a, b] : null, tint: null };
+        return partFrom(mesh, mat.value, colour(t1[i]), colour(t2[i]));
       }).filter(Boolean) as CardSpec['parts'];
       break;
     }
@@ -297,12 +293,13 @@ export function readCards(src: CardSources): CardSpec[] {
     let found = rigOf(fs);
     if (found.rig === null && template) found = rigOf(template);
     const { rig, focusBone } = checkRig(found, parts.map((p) => p.mesh), view.clip);
-    if ((view.clip as any) === '$idle') view.clip = src.spawnGraph.idleResolver?.resolve(slot, new Set(rig !== null ? [rig] : []))?.clip ?? null;
+    const rigs = new Set(rig !== null ? [rig] : []);
+    if ((view.clip as any) === '$idle') view.clip = src.spawnGraph.idleResolver?.resolve(slot, rigs)?.clip ?? null;
     else if (typeof view.clip !== 'number') view.clip = null;
     cards.push({ record: slot, kind: 'enemy', label: src.nameOf?.(slot) ?? src.enemyNames.get(slot)?.name ?? null, view,
       subject: { rig, focusBone, bounds: boundsOf(fs) ?? (template ? boundsOf(template) : null),
-        distance: (template ? distanceOf(template) : null) ?? k.actorDistance, base: null },
-      parts: [...parts, ...propsOf(anim, rig), ...heldOf(fs)], own: parts.length });
+        distance: (template ? cardDistance(template) : null) ?? k.actorDistance, base: null },
+      parts: [...parts, ...propsOf(anim, rigs), ...heldOf(fs)], own: parts.length });
   };
   // an object's material table: N material slots from op7, then colour fields
   // ending in one (tint, tint, extra) triple per slot
@@ -323,7 +320,7 @@ export function readCards(src: CardSources): CardSpec[] {
   const slotCounts = new Map<number, number>();
   const pending: { part: CardSpec['parts'][number]; own: number; slotMaterial: number | null }[] = [];
   const object = (slot: number, fs: any[]) => {
-    const cardsHere = fs.filter((x) => x.kind === 'G' && node(x.node)?.tag === 0x24 && node(x.node)?.class === k.recordClass);
+    const cardsHere = fs.filter(isCard);
     const baseField = fs.find((x) => x.kind === 'G' && node(x.node)?.tag === 0x30 && x.op > cardsHere[0].op);
     if (!baseField) return;
     const card = [...cardsHere].reverse().find((x) => x.op < baseField.op)!;
@@ -375,22 +372,13 @@ export function readCards(src: CardSources): CardSpec[] {
     const names = fs.map((x) => text(x.node)).filter((t): t is string => !!t && t.length < 60 && !/[.!?]$/.test(t.trim()));
     const twice = names.find((t, j) => names.indexOf(t) !== j) ?? null;
     cards.push({ record: slot, kind: 'object', label: src.nameOf?.(slot) ?? twice, view,
-      subject: { rig: null, focusBone: null, bounds: boundsOf(fs), distance: bigEndian(dField.raw!), base: vec(baseField.node) },
+      subject: { rig: null, focusBone: null, bounds: boundsOf(fs), distance: cardDistance([dField])!, base: vec(baseField.node) },
       parts, own: parts.length });
   };
 
   for (const row of rows) {
     // cheap gate: records holding a value of the card class
-    let has = false;
-    for (const e of row.g || []) if (e[2] === 0x24 && e[3] === k.recordClass) { has = true; break; }
-    if (!has) {
-      for (const e of row.g || []) {
-        if (e[1] !== 0 || e[2] !== 0 || !isInt(e[3])) continue;
-        const n = node({ tag: 0, value: e[3] });
-        if (n?.tag === 0x24 && n.class === k.recordClass) { has = true; break; }
-      }
-    }
-    if (!has) continue;
+    if (!carriesCard(row, k.recordClass, node)) continue;
     const fs = fieldsOf(row.slot);
     const card = cardField(fs);
     if (!card) continue;

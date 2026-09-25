@@ -26,7 +26,7 @@ try {
  add([[0,0]],[[1,0,0,0]]); // direction
  add([[19,77],ref(3)],[[1,0,19,77],[2,0,38,3]]); // room A cross-references an actor in B
  add([[19,78]],[[1,0,19,78]]); // room B has no actor list
- add([[14,3,1,2,3],float(1.5),ref(2),...Array.from({length:1},()=>int(4)),location(6,2)],[[3,0,38,2]]);
+ add([[14,3,1,2,3],float(1.5),ref(2),int(4),location(6,2)],[[3,0,38,2]]);
  add([[13],[13],float(0.5),ref(1),location(1,2)],[[4,0,38,1]]); // shifted header
  add([[13],[13],float(0.5),ref(1),location(1,2)],[[4,0,38,1]]); // alternate remains distinct
  add([float(0.5),ref(1),[36,8,...[1,2,3,1,1,2].flatMap(float)]],[[2,0,38,1]]); // volume is not actor

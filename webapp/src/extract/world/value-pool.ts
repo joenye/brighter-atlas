@@ -340,6 +340,20 @@ export class PoolDecoder {
   }
 }
 
+// The build's class and tag-0x06 arities as lookup maps, built once per
+// profile object (the maps are only ever read).
+const ARITIES = new WeakMap<object, [Map<number, number>, Map<number, number>]>();
+export function profileArities(
+  profile: Pick<WorldProfile, 'class_fields' | 'tag6_fields'>,
+): [Map<number, number>, Map<number, number>] {
+  let a = ARITIES.get(profile);
+  if (!a) {
+    const map = (o: Record<string, number>) => new Map(Object.entries(o).map(([k, v]) => [+k, v]));
+    ARITIES.set(profile, a = [map(profile.class_fields), map(profile.tag6_fields)]);
+  }
+  return a;
+}
+
 // Frame the pool from the data itself, decode all values, record the end.
 // ab0 = decompressed bundle bytes; profile supplies the build's
 // class/tag-0x06 arities.

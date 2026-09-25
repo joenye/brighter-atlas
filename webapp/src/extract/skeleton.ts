@@ -60,6 +60,11 @@ export function decodeSkeleton(
   return { i, bones };
 }
 
+// A bone's stored row-major 3x4 bind matrix as a column-major 4x4.
+export const bindLocal = (m: number[]): number[] => [
+  m[0], m[4], m[8], 0, m[1], m[5], m[9], 0, m[2], m[6], m[10], 0, m[3], m[7], m[11], 1,
+];
+
 // Stored local matrices define the rest pose. Keep their full affine basis;
 // recomposing the separate animation defaults can lose matrix precision.
 // Parents precede children in the decoded depth-first order. Returned
@@ -68,9 +73,7 @@ export function restWorldMatrices(bones: SkeletonBone[]): number[][] {
   const world = new Array<number[]>(bones.length);
   for (let i = 0; i < bones.length; i++) {
     const b = bones[i];
-    const m = b.bind;
-    const local = [m[0], m[4], m[8], 0, m[1], m[5], m[9], 0,
-      m[2], m[6], m[10], 0, m[3], m[7], m[11], 1];
+    const local = bindLocal(b.bind);
     world[i] = b.parent >= 0 && b.parent < i ? multiplyMatrices(world[b.parent], local) : local;
   }
   return world;

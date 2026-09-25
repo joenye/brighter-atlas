@@ -50,23 +50,49 @@ function top<K>(m: Map<K, number>): K | null {
   return best;
 }
 
+/** Whether a record holds a card value, directly or through the pool. */
+export function carriesCard(row: FillRow, recordClass: number, deref: (n: any) => any): boolean {
+  for (const e of row.g ?? []) {
+    if (e[2] === 0x24 && e[3] === recordClass) return true;
+    if (e[1] === 0 && e[2] === 0 && isInt(e[3])) {
+      const n = deref({ tag: 0, value: e[3] });
+      if (n?.tag === 0x24 && n.class === recordClass) return true;
+    }
+  }
+  return false;
+}
+
+const scratch = new DataView(new ArrayBuffer(4));
+/** The card distance: the record's one 4-byte F field, a big-endian float (null: none or several). */
+export function cardDistance(ops: readonly { kind: string; raw?: ArrayLike<number> }[]): number | null {
+  const f4 = ops.filter((x) => x.kind === 'F' && x.raw?.length === 4);
+  if (f4.length !== 1) return null;
+  for (let i = 0; i < 4; i++) scratch.setUint8(i, f4[0].raw![i]);
+  return scratch.getFloat32(0, false);
+}
+
 export function deriveCardData(src: {
   rows: FillRow[]; pool: PoolNode[]; charset: ArrayLike<string>;
   decode: (slot: number) => ReparsedOp[] | null;
 }): CardConstants | null {
   const { rows, pool, charset } = src;
   const deref = (n: any): any => { let k = 0; while (n && n.tag === 0 && k++ < 64) n = pool[n.value]; return n; };
-  const cache = new Map<number, { op: number; n: any }[]>();
-  const fields = (slot: number) => {
+  // each row decoded once: its generic fields and its 4-byte fixed fields
+  const cache = new Map<number, { g: { op: number; n: any }[]; f4: ReparsedOp[] }>();
+  const decoded = (slot: number) => {
     let f = cache.get(slot);
     if (!f) {
       let ops: ReparsedOp[] = [];
       try { ops = src.decode(slot) ?? []; } catch { ops = []; }
-      f = ops.filter((x) => x.kind === 'G').map((x: any) => ({ op: x.op, n: deref(x.node) }));
+      f = {
+        g: ops.filter((x) => x.kind === 'G').map((x: any) => ({ op: x.op, n: deref(x.node) })),
+        f4: ops.filter((x: any) => x.kind === 'F' && x.raw?.length === 4),
+      };
       cache.set(slot, f);
     }
     return f;
   };
+  const fields = (slot: number) => decoded(slot).g;
   const listOf = (n: any): any[] => Array.isArray(n?.values) && n.tag !== 0x0e ? n.values.map(deref) : n ? [n] : [];
   const refsIn = (n: any): number[] => listOf(n).filter((v) => v?.tag === 0x26 && isInt(v.value)).map((v) => v.value);
 
@@ -121,17 +147,7 @@ export function deriveCardData(src: {
   const focusRole = top(roleCount);
   if (focusRole === null) return null;
 
-  // records carrying a card value, directly or through the pool
-  const cardRows: number[] = [];
-  for (const row of rows) {
-    for (const e of row.g ?? []) {
-      if (e[2] === 0x24 && e[3] === recordClass) { cardRows.push(row.slot); break; }
-      if (e[1] === 0 && e[2] === 0 && isInt(e[3])) {
-        const n = deref({ tag: 0, value: e[3] });
-        if (n?.tag === 0x24 && n.class === recordClass) { cardRows.push(row.slot); break; }
-      }
-    }
-  }
+  const cardRows = rows.filter((row) => carriesCard(row, recordClass, deref)).map((row) => row.slot);
   const isRig = (slot: number) => rigKinds.has(rows[slot]?.runtime as number);
   const via = new Map<string, Set<number>>();
   for (const slot of cardRows) {
@@ -172,14 +188,9 @@ export function deriveCardData(src: {
   }
 
   const distances = new Map<number, number>();
-  const view = new DataView(new ArrayBuffer(4));
   for (const slot of cardRows) {
-    let ops: ReparsedOp[] = [];
-    try { ops = src.decode(slot) ?? []; } catch { continue; }
-    const f4 = ops.filter((x: any) => x.kind === 'F' && x.raw?.length === 4) as any[];
-    if (f4.length !== 1) continue;
-    for (let i = 0; i < 4; i++) view.setUint8(i, f4[0].raw[i]);
-    tally(distances, view.getFloat32(0, false));
+    const d = cardDistance(decoded(slot).f4);
+    if (d !== null) tally(distances, d);
   }
   const actorDistance = top(distances);
   if (actorDistance === null) return null;

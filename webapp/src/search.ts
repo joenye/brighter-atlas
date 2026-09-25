@@ -16,6 +16,8 @@ interface SearchItem {
   action?: () => void;
 }
 
+const roomTags = (r: IndexEntry): string[] => [r.episode?.name, ...(r.mapAnnotations || [])].filter(Boolean);
+
 // per-category result formatting: [index key, group title, route, meta fn]
 const CAT_DEFS: [string, string, string, (e: any) => string][] = [
   ['meshes', 'Meshes', 'mesh', (m) => `${m.v} verts · ${m.t} tris${m.sk ? ' · skinned' : ''}`],
@@ -23,8 +25,8 @@ const CAT_DEFS: [string, string, string, (e: any) => string][] = [
   ['images', 'Images', 'image', (im) => `${im.cat} ×${im.n}`],
   ['anims', 'Animations', 'anim', (a) => `Rig #${a.skel} · ${a.frames} frames`],
   ['rigs', 'Rigs', 'rig', (s) => `${s.bones} bones`],
-  ['world', 'Rooms', 'world', (r) => [r.episode?.name, ...(r.mapAnnotations || [])].filter(Boolean).join(' · ')],
-  ['maps', '2D Maps', 'map', (r) => [r.episode?.name, ...(r.mapAnnotations || [])].filter(Boolean).join(' · ')],
+  ['world', 'Rooms', 'world', (r) => roomTags(r).join(' · ')],
+  ['maps', '2D Maps', 'map', (r) => roomTags(r).join(' · ')],
 ];
 
 export class GlobalSearch {
@@ -105,17 +107,18 @@ export class GlobalSearch {
 
     // every category: by index number, content-hash prefix, or friendly name
     for (const [key, title, route, metaFn] of CAT_DEFS) {
+      const nameOf = (e: IndexEntry) => key === 'world' ? e.name : effectiveName(e, key);
       const matches = (src[key] || []).filter((e) => {
         if (num && String(e.i).startsWith(qq)) return true;
         if (hex && e.h && e.h.startsWith(q)) return true;
-        const name = key === 'world' ? e.name : effectiveName(e, key);
-        if (key === 'world' && [e.episode?.name, ...(e.mapAnnotations || [])].filter(Boolean).join(' ').toLowerCase().includes(q)) return true;
+        const name = nameOf(e);
+        if (key === 'world' && roomTags(e).join(' ').toLowerCase().includes(q)) return true;
         if (name && name.toLowerCase().includes(q)) return true;
         if (key === 'images' && e.cat && e.cat.toLowerCase().includes(q)) return true;
         return false;
       });
       push(title, matches.map((e) => ({
-        label: (key === 'world' ? e.name : effectiveName(e, key)) || `${route} ${idLabel(e)}`,
+        label: nameOf(e) || `${route} ${idLabel(e)}`,
         meta: `#${e.i} · ${metaFn(e)}`,
         hash: `#/${route}/${e.i}`,
       })));

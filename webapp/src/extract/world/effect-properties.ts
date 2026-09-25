@@ -7,9 +7,10 @@ import {resolveValue} from './room-metadata.js';
 import type {WorldProfile} from './profile.js';
 import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
+import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
 
-const propertyRoles = ['color', 'scale', 'speed', 'acceleration'] as const;
-type PropertyRole = typeof propertyRoles[number];
+const propertyRoles = ['scale', 'speed', 'acceleration'] as const;
+export type PropertyRole = typeof propertyRoles[number];
 export type EffectPropertyPairs = Partial<Record<PropertyRole, [number, number]>>;
 
 /** A repeated-value marker identifies both fields even when the first value
@@ -51,19 +52,17 @@ export interface EffectPropertyBinding {
   angularSpeedField: number;
 }
 export function validEffectProperties(values:any):values is EffectPropertyBinding[] {
-  const integer=(v:any)=>Number.isInteger(v)&&v>=0&&v<65536;
-  return Array.isArray(values)&&values.length<=65536&&values.every(v=>v&&integer(v.instance)
-    &&integer(v.speedField)&&integer(v.angularSpeedField)&&v.color&&integer(v.color.systemField)
+  return validBindingList(values,v=>bindingIndex(v.speedField)&&bindingIndex(v.angularSpeedField)
+    &&v.color&&bindingIndex(v.color.systemField)
     &&Number.isSafeInteger(v.color.start)&&v.color.start>=0&&Number.isSafeInteger(v.color.end)
     &&v.color.end>v.color.start&&v.color.end-v.color.start<=65536
-    &&Number.isFinite(v.color.alphaScale)&&v.color.alphaScale>=0&&v.color.alphaScale<=1)
-    &&new Set(values.map(v=>v.instance)).size===values.length;
+    &&Number.isFinite(v.color.alphaScale)&&v.color.alphaScale>=0&&v.color.alphaScale<=1);
 }
 
 export function createEffectPropertyReader(bindings:EffectPropertyBinding[]|undefined,
   objects:ConstructorRecord[],bytes:Uint8Array,profile:WorldProfile,pool:any[]) {
   if(bindings!==undefined&&!validEffectProperties(bindings))throw Error('invalid effect property bindings');
-  const byInstance=new Map((bindings??[]).map(v=>[v.instance,v]));
+  const bindingOf=instanceLookup((bindings??[]).map(v=>[v.instance,v] as const),objects);
   const colors=new Map<number,[number,number,number,number]>();
   const arities=(v:Record<string,number>)=>new Map(Object.entries(v).map(([k,n])=>[+k,n]));
   for(const b of bindings??[]){
@@ -75,7 +74,7 @@ export function createEffectPropertyReader(bindings:EffectPropertyBinding[]|unde
     colors.set(b.instance,[...n.value] as [number,number,number,number]);
   }
   return (slot:number,system:EffectExtra[]):EffectPropertyBinding & {rgba:[number,number,number,number]} | null=>{
-    const b=byInstance.get(objects[slot]?.values[1]);
+    const b=bindingOf(slot);
     if(!b)return null;
     const field=system.find(e=>e.op===b.color.systemField);
     // An optional authored colour overrides the default. Unknown expressions

@@ -35,7 +35,7 @@ import { Scene3D, getRenderer, mountImmersiveControls } from './three-common.js'
 import * as THREE from '../../vendor/three.module.js';
 import { OrbitControls } from '../../vendor/OrbitControls.js';
 import WorldScene, {
-  WORLD_CATEGORIES, CATEGORY_COLOURS, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection, GIZMO_SWATCH, gizmoMaterial,
+  WORLD_CATEGORIES, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection, GIZMO_SWATCH, gizmoMaterial,
 } from './world/scene.js';
 import { FlyControls } from './world/fly-controls.js';
 import {
@@ -364,7 +364,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // While the loading overlay hides the canvas the cap is far stricter still
   // (see STREAM_PRESENT_MS below).
   let fly: any = null;     // first-person fly camera (all-rooms only; created below)
-  {
+  if (allMode) {
     const RENDER_BUDGET_MS = 40;
     // While the loading overlay hides the canvas and the merged bake hasn't
     // started, presented frames exist ONLY to pace the reveal queue's GPU
@@ -905,19 +905,23 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // the same camera and depth range.
   let gameFrame: GameFrame | null = null;
   let gameCamera: { eye: THREE.Vector3; target: THREE.Vector3 } | null = null;
-  const gameActive = () => !!gameFrame && !!state.game && !allMode;
-  const savedCamera = { fov: scene3d.camera.fov, near: scene3d.camera.near, far: scene3d.camera.far };
+  const gameActive = () => !!gameFrame && !!state.game;
+  // The view's own framing, taken when the game camera replaces it.
+  let savedCamera: { fov: number; near: number; far: number } | null = null;
   function applyGameShading(): void {
     const on = gameActive();
     world.setGameShading(on);
     const cam = scene3d.camera;
-    const units = world.tileUnits || 1024;
     const render = world.index?.render;
     if (on && render) {
+      savedCamera ??= { fov: cam.fov, near: cam.near, far: cam.far };
       cam.fov = render.camera.fov;
-      cam.near = render.camera.near / units;
-      cam.far = render.camera.far / units;
-    } else Object.assign(cam, savedCamera);
+      cam.near = render.camera.near / world.tileUnits;
+      cam.far = render.camera.far / world.tileUnits;
+    } else if (savedCamera) {
+      Object.assign(cam, savedCamera);
+      savedCamera = null;
+    }
     cam.updateProjectionMatrix();
   }
   // While a game frame is being built, its GL work (programs, buffers,
@@ -2184,6 +2188,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const roomCell = `${identifier(info.room)}${world.roomMeta(info.room)?.name ? ` · ${world.roomMeta(info.room).name}` : ''}`;
     const tileCell = `${info.position.join(', ')} · ${Number(info.rotationQuarters || 0) * 90}°`;
     const rows: [string, any][] = [['Room', roomCell]];
+    const spawnHeightRows: [string, string][] = isSpawn ? [
+      ['Centre offset', compact(info.centreOffset)],
+      ['Height source', info.heightSource === 'room_tiles' ? 'Authored room tiles' : 'Estimated terrain surface'],
+    ] : [];
 
     // A pinned model (spawn entity or multi-part occurrence group) reads at the
     // MODEL level: the per-mesh mesh/material/texture/recolor fields belong to
@@ -2212,8 +2220,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (isSpawn) rows.push(['Spawn', `${identifier(info.record)} · row ${identifier(info.spawnIndex)}`]);
       if (isSpawn && SPAWN_ORIGIN_NOTES[info.origin]) rows.push(['Position', SPAWN_ORIGIN_NOTES[info.origin]]);
       if (isSpawn && info.authoredLabel && info.authoredLabel !== info.label) rows.push(['Source label', info.authoredLabel]);
-      if (isSpawn) rows.push(['Centre offset', compact(info.centreOffset)]);
-      if (isSpawn) rows.push(['Height source', info.heightSource==='room_tiles'?'Authored room tiles':'Estimated terrain surface']);
+      rows.push(...spawnHeightRows);
       rows.push(['Tile', tileCell]);
     } else {
       const texture = identifier(info.texture);
@@ -2243,8 +2250,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         rows.push(
           ['Label', info.label || 'unlabelled'],
           ['Spawn', `${identifier(info.record)} · row ${identifier(info.spawnIndex)}`],
-          ['Centre offset', compact(info.centreOffset)],
-          ['Height source', info.heightSource==='room_tiles'?'Authored room tiles':'Estimated terrain surface'],
+          ...spawnHeightRows,
           ...(info.authoredLabel && info.authoredLabel !== info.label ? [['Source label', info.authoredLabel] as [string, string]] : []),
           ...(SPAWN_ORIGIN_NOTES[info.origin] ? [['Position', SPAWN_ORIGIN_NOTES[info.origin]] as [string, string]] : []),
         );
@@ -2493,13 +2499,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return [0, 0];
   }
 
-  // The spawn's native world matrix, honouring any session edit, so the
-  // composite tracks exactly where the static spawn would sit (including nudges).
-  function computeSpawnBaseMatrix(info: any, shard: any): THREE.Matrix4 | null {
-    const partRow = info.parts?.[0]?.row;
-    if (!partRow) return null;
-    const matrix = new THREE.Matrix4();
-    try { world._spawnMatrix(shard, partRow, matrix); } catch { return null; }
+  // Apply any session edit, then the room's display offset.
+  function placeEdited(info: any, matrix: THREE.Matrix4): THREE.Matrix4 {
     const edit = edits.get(info);
     if (edit && !edit.deleted && !edits.isNoop(edit)) {
       const pivot = pivotFor(info);
@@ -2512,23 +2513,23 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return matrix;
   }
 
+  // The spawn's native world matrix, honouring any session edit, so the
+  // composite tracks exactly where the static spawn would sit (including nudges).
+  function computeSpawnBaseMatrix(info: any, shard: any): THREE.Matrix4 | null {
+    const partRow = info.parts?.[0]?.row;
+    if (!partRow) return null;
+    const matrix = new THREE.Matrix4();
+    try { world._spawnMatrix(shard, partRow, matrix); } catch { return null; }
+    return placeEdited(info, matrix);
+  }
+
   function replacementBaseMatrix(member: any, shard: any): THREE.Matrix4 | null {
     const info = member.info;
     if (info.sourceKind === 'spawn') return computeSpawnBaseMatrix(info, shard);
     const row = shard.placements?.[info.category]?.[info.placementIndex]?.slice();
     if (!row) return null;
     row[world.placementColumns.matrix] = -1;
-    const matrix = world._placementMatrix(shard, row, new THREE.Matrix4());
-    const edit = edits.get(info);
-    if (edit && !edit.deleted && !edits.isNoop(edit)) {
-      const pivot = pivotFor(info);
-      editedMatrix(edit, matrix.clone(), pivot[0], pivot[1],
-        world.tileUnits, world.layerUnits, matrix);
-    }
-    const offset = spawnRoomOffset(info.room);
-    matrix.elements[12] += offset[0];
-    matrix.elements[13] += offset[1];
-    return matrix;
+    return placeEdited(info, world._placementMatrix(shard, row, new THREE.Matrix4()));
   }
 
   function updateSpawnCompositeMatrix(): void {
@@ -2811,7 +2812,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const idleRooms = new Map<number, { token: number }>();
   let idleToken = 0;
   async function idleRoomLoaded(room: any): Promise<void> {
-    if (!state.idle || destroyed || allMode) return;
+    if (!state.idle || destroyed) return;
     const roomId = Number(room.id);
     if (idleRooms.has(roomId)) return;
     const owner = { token: ++idleToken };
@@ -2829,13 +2830,18 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       try { await startIdleAnim(roomId, shard, info, key, clip, owner); } catch { /* one actor at a time */ }
     }
   }
-  function idleRoomUnloaded(roomId: number): void {
-    idleRooms.delete(roomId);
+  // Drop parked resting animations: one room's, or all of them.
+  function disposeIdleAnims(roomId?: number): void {
+    const prefix = roomId === undefined ? '' : `${roomId}|spawn|`;
     for (const [key, parked] of [...persistentAnims]) {
-      if (!parked.idle || !key.startsWith(`${roomId}|spawn|`)) continue;
+      if (!parked.idle || !key.startsWith(prefix)) continue;
       persistentAnims.delete(key);
       disposeSpawnAnim(parked);
     }
+  }
+  function idleRoomUnloaded(roomId: number): void {
+    idleRooms.delete(roomId);
+    disposeIdleAnims(roomId);
   }
   async function startIdleAnim(roomId: number, shard: any, info: any, key: string, clip: number, owner: { token: number }): Promise<void> {
     const live = () => !destroyed && idleRooms.get(roomId) === owner && state.idle;
@@ -2888,11 +2894,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       return;
     }
     idleRooms.clear();
-    for (const [key, parked] of [...persistentAnims]) {
-      if (!parked.idle) continue;
-      persistentAnims.delete(key);
-      disposeSpawnAnim(parked);
-    }
+    disposeIdleAnims();
   }
 
   // A playing/posed animation persists for the whole session, decoupled from
@@ -4615,7 +4617,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           geometry = (await world._meshGeometry(batch.mesh, batch.reflect)).clone();
         } catch { continue; }
         if (destroyed) { geometry.dispose(); return null; }
-        const material = gizmoMaterial(batch.category, CATEGORY_COLOURS[batch.category]);
+        const material = gizmoMaterial(batch.category);
         geometries.push(geometry);
         materials.push(material);
         const instanced = new THREE.InstancedMesh(geometry, material, batch.matrices.length);
@@ -5111,11 +5113,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       ready: () => gameActive(),
       setCamera(eye: number[] | null, target?: number[]) {
         gameCamera = eye && target ? { eye: new THREE.Vector3(eye[0], eye[1], eye[2]), target: new THREE.Vector3(target[0], target[1], target[2]) } : null;
-      },
-      target(name: 'ao' | 'aoRaw' | 'blur1' | 'linear') {
-        const out = gameFrame?.readTarget(name) ?? null;
-        renderer.resetState();
-        return out;
       },
       /** Draw `frames` game frames (no overlays) and read the last back: RGBA rows top first,
        *  with the occlusion targets of the same frame. `fresh` starts the occlusion history anew. */

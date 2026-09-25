@@ -9,7 +9,7 @@
 // it must stay byte-exact — bookmarks depend on it.
 
 import { Sha256 } from '../hash.js';
-import { isTechnicalLabel, pyTitle } from './models.js';
+import { isTechnicalLabel, pyTitle, type EnemyBaseName } from './models.js';
 import { usesUniformLuminanceTint, type TextureMeta } from './shards.js';
 
 export const COMPLETE_MODEL_RULES = new Set([
@@ -903,7 +903,7 @@ function mergeSameNameModels(systemModels: any[]): {
 
 function applyEnemyBaseNames(
   systemModels: any[],
-  enemyBases: Map<number, { name: string; plural: string | null; def_slot: number; tier_slot: number }>,
+  enemyBases: Map<number, EnemyBaseName>,
 ): number {
   let named = 0;
   for (const model of systemModels) {
@@ -971,7 +971,7 @@ export function buildSystemCatalog(
   assetModels: any, meshesIndex: any[], imagesIndex: any[], skeletonsIndex: any[],
   spawnActors: SpawnActorRef[] | null = null,
   texMeta: ((id: number) => TextureMeta | undefined) | null = null,
-  enemyBases: Map<number, { name: string; plural: string | null; def_slot: number; tier_slot: number }> | null = null,
+  enemyBases: Map<number, EnemyBaseName> | null = null,
 ): SystemCatalog {
   // Uniform-luminance verdict for one recolor + its primary texture.
   const uniformTintFor = (

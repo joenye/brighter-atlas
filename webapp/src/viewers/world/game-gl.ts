@@ -4,7 +4,7 @@
 // count, integer and depth targets render per mip level, and every draw sets
 // its full pipeline state. It shares the page's WebGL2 context with three.js;
 // callers reset three's cached state afterwards (renderer.resetState()).
-import type { TranslatedProgram } from './dxbc-glsl.js';
+import type { TranslatedProgram, AttributeBinding } from './dxbc-glsl.js';
 
 export interface GameGLProgram {
   program: WebGLProgram;
@@ -20,9 +20,6 @@ export interface GameTexture {
   target: number;            // TEXTURE_2D or TEXTURE_CUBE_MAP
   width: number;
   height: number;
-  levels: number;
-  integer: boolean;
-  depth: boolean;
 }
 
 export interface DrawState {
@@ -75,7 +72,8 @@ export class GameGL {
     return p;
   }
 
-  private link(translated: TranslatedProgram): GameGLProgram {
+  /** Compile and link a program, binding attributes to their registers before the link. */
+  linkSources(vertex: string, fragment: string, attributes: readonly AttributeBinding[] = []): WebGLProgram {
     const gl = this.gl;
     const shader = (type: number, source: string) => {
       const s = gl.createShader(type)!;
@@ -85,13 +83,19 @@ export class GameGL {
       return s;
     };
     const program = gl.createProgram()!;
-    gl.attachShader(program, shader(gl.VERTEX_SHADER, translated.vertex));
-    gl.attachShader(program, shader(gl.FRAGMENT_SHADER, translated.fragment));
+    gl.attachShader(program, shader(gl.VERTEX_SHADER, vertex));
+    gl.attachShader(program, shader(gl.FRAGMENT_SHADER, fragment));
     // Attributes sit at their source register, so every convention of a
     // program shares one vertex array.
-    for (const a of translated.attributes) gl.bindAttribLocation(program, a.register, a.name);
+    for (const a of attributes) gl.bindAttribLocation(program, a.register, a.name);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`program link: ${gl.getProgramInfoLog(program)}`);
+    return program;
+  }
+
+  private link(translated: TranslatedProgram): GameGLProgram {
+    const gl = this.gl;
+    const program = this.linkSources(translated.vertex, translated.fragment, translated.attributes);
     const attributes = new Map<string, number>();
     for (const a of translated.attributes) attributes.set(a.name, gl.getAttribLocation(program, a.name));
     const uniforms = new Map<string, WebGLUniformLocation>();
@@ -155,7 +159,7 @@ export class GameGL {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, levels > 1 ? gl.NEAREST_MIPMAP_NEAREST : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     }
-    return { texture, target: gl.TEXTURE_2D, width, height, levels, integer, depth };
+    return { texture, target: gl.TEXTURE_2D, width, height };
   }
 
   /** Upload block-compressed or RGBA8 levels (largest first). */
@@ -178,7 +182,7 @@ export class GameGL {
     }));
     gl.texParameteri(glTarget, gl.TEXTURE_BASE_LEVEL, 0);
     gl.texParameteri(glTarget, gl.TEXTURE_MAX_LEVEL, levels.length - 1);
-    return { texture, target: glTarget, width: first.width, height: first.height, levels: levels.length, integer: false, depth: false };
+    return { texture, target: glTarget, width: first.width, height: first.height };
   }
 
   /** Whether the GPU path accepts an image format (else the caller decodes). */

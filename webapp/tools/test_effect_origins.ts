@@ -93,12 +93,8 @@ try {
     const sim = new T.EmitterSim({slot: 4, loop: true}, 0, {life: {ticks: 600}, burst: 1, shape: 2, speed: {value: 600}},
       {1: {kind: 'burst_continuous', per_second: 600}, 2: {kind: 'shape', shape_kind: 'segment', segment: {from: segment.from, to: segment.to},
         center: [0, -512, 0], axis: segment.axis, cone: {yaw: segment.yaw, pitch: segment.pitch}, origin: 'bound'}}, 600);
-    sim.ensure(300); let n = 0;
-    sim.evaluate(300, (x: number, y: number, z: number) => {
-      const age = 300 - Math.trunc(n * 600 / 600) + 0; n++;
-      assert(Math.abs(x) <= 512 + 1e-3, 'on the segment');
-      void age;
-    });
+    sim.ensure(300);
+    sim.evaluate(300, (x: number) => assert(Math.abs(x) <= 512 + 1e-3, 'on the segment'));
     for (let j = sim.tail; j < sim.head; j++) {
       const slot = j % sim.capacity;
       const d = [sim.vx[slot], sim.vy[slot], sim.vz[slot]];

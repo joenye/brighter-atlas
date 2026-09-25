@@ -33,7 +33,7 @@ export function readEffectAccelerationFrame(
   const byOp = new Map(ops.map(e => [e.op, e]));
   if (familyOp != null) {
     const flag = byOp.get(familyOp);
-    return boolean(flag) ? {world: flag?.kind === 'other' && flag.tag === 12, op: familyOp} : null;
+    return boolean(flag) ? {world: isTrue(flag), op: familyOp} : null;
   }
   let flags: EffectExtra[] = [];
   if (layout.skinOp !== null) {
@@ -43,10 +43,12 @@ export function readEffectAccelerationFrame(
       flags = [byOp.get(start + 5)!];
     }
   } else {
-    flags = ops.filter(e => boolean(e) && byOp.get(e.op - 1)?.kind === 'symbol'
-      && (byOp.get(e.op - 1) as Extract<EffectExtra, {kind: 'symbol'}>).name === '$acceleration0');
+    flags = ops.filter(e => {
+      const prev = byOp.get(e.op - 1);
+      return boolean(e) && prev?.kind === 'symbol' && prev.name === '$acceleration0';
+    });
   }
-  return flags.length === 1 ? { world: flags[0].kind === 'other' && flags[0].tag === 12, op: flags[0].op } : null;
+  return flags.length === 1 ? { world: isTrue(flags[0]), op: flags[0].op } : null;
 }
 
 export function inferEffectAccelerationFrameOp(
@@ -68,7 +70,7 @@ export function readEffectRigSelection(ops: EffectExtra[]): EffectRigSelection |
     const [a, b, c, d] = ops.slice(i, i + 4);
     if (a.kind === 'symbol' && boolean(b) && boolean(c) && boolean(d)
       && b.op === a.op + 1 && c.op === b.op + 1 && d.op === c.op + 1) {
-      candidates.push({ alternate: d.kind === 'other' && d.tag === 12, op: d.op });
+      candidates.push({ alternate: isTrue(d), op: d.op });
     }
   }
   return candidates.length === 1 ? candidates[0] : null;
@@ -80,6 +82,7 @@ const reference = (e: EffectExtra | undefined): boolean =>
   e?.kind === 'symbol' || (e?.kind === 'int' && Number.isInteger(e.value) && e.value >= 0);
 const boolean = (e: EffectExtra | undefined): boolean =>
   e?.kind === 'other' && (e.tag === 0x0c || e.tag === 0x0d);
+const isTrue = (e: EffectExtra | null | undefined): boolean => e?.kind === 'other' && e.tag === 0x0c;
 
 // Infer one layout from the family's complete field patterns. A number next
 // to a marker is insufficient: configuration flags can occupy that position.
@@ -114,5 +117,5 @@ export function readEffectTransformBinding(
   const value = (e: EffectExtra | undefined): number | 'root' | null =>
     e?.kind === 'int' ? e.value : layout.skinOp === null || marker(e) ? 'root' : null;
   return { primary: value(a), secondary: value(b),
-    mode: flag?.kind === 'other' && flag.tag === 0x0c ? 'skin' : 'bone', source: layout };
+    mode: isTrue(flag) ? 'skin' : 'bone', source: layout };
 }

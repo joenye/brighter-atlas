@@ -150,7 +150,7 @@ export class SpawnGraph {
         // A location value marks an actor row cheaply and without recursion
         // (spawn() itself is what calls the resolver).
         isActor: (slot) => this._location(slot) !== null,
-        decode: this._decode ? (slot) => this._decode!(slot) as any : null,
+        decode: this._decode,
         poolRegistryRefs: makePoolRegistryRefs(pool),
       });
     }
@@ -455,9 +455,10 @@ export class SpawnGraph {
     return null;
   }
 
-  private _label(ownerSlot: number, beforeOp: number): [string | null, number] {
-    if (this._decode) {
-      const fields = (this._decode(ownerSlot) ?? []).filter(f => f.kind === 'G' && f.op < beforeOp);
+  private _label(ownerSlot: number, beforeOp: number,
+    decoded = this._decode ? this._decode(ownerSlot) ?? [] : null): [string | null, number] {
+    if (decoded) {
+      const fields = decoded.filter(f => f.op < beforeOp);
       for (const field of fields.reverse()) {
         if (field.kind !== 'G') continue;
         const node = this.assets.deref(field.node);
@@ -475,7 +476,6 @@ export class SpawnGraph {
     return [null, -1];
   }
 
-  // One exact actor record, or null for a non-actor row.
   /** The resting-clip resolver (null without animation data). */
   get idleResolver(): ActorIdleResolver | null { return this._idle; }
 
@@ -488,6 +488,7 @@ export class SpawnGraph {
     return { label, parts: appearance.parts };
   }
 
+  // One exact actor record, or null for a non-actor row.
   spawn(ownerSlot: number): SpawnRecord | null {
     if (this._spawnCache.has(ownerSlot)) return this._spawnCache.get(ownerSlot)!;
     const location = this._location(ownerSlot);
@@ -502,13 +503,14 @@ export class SpawnGraph {
     }
     const appearance = this._appearance(ownerSlot, location.field_op);
     const nameBefore = appearance !== null ? appearance.mesh_field_op : location.field_op;
-    const [label, labelOp] = this._label(ownerSlot, nameBefore);
+    const decoded = this._decode ? this._decode(ownerSlot) ?? [] : null;
+    const [label, labelOp] = this._label(ownerSlot, nameBefore, decoded);
     // The default-placement group ends with a typed XYZ/direction value,
     // preceded by its room reference and scalar centre offset. Discover it
     // relative to the validated location rather than a build-specific index.
     const scalar = (op: number): any => {
-      if (this._decode) {
-        const field = (this._decode(ownerSlot) ?? []).find(f => f.op === op && f.kind === 'G');
+      if (decoded) {
+        const field = decoded.find(f => f.op === op && f.kind === 'G');
         return field?.kind === 'G' ? this.assets.deref(field.node) : null;
       }
       const field = this.assets.fields(ownerSlot).get(op);
@@ -549,17 +551,14 @@ export class SpawnGraph {
     };
     // The resting clip must belong to the rig of the actor's own meshes.
     if (this._idle && appearance !== null) {
+      const meshRig = (mesh: number) => { const sref = this._meshDir?.[mesh]?.sref; return typeof sref === 'number' && sref >= 2 ? sref - 2 : null; };
       const rigs = new Set<number>();
-      for (const part of appearance.parts) {
-        const sref = this._meshDir?.[part.mesh]?.sref;
-        if (typeof sref === 'number' && sref >= 2) rigs.add(sref - 2);
-      }
+      for (const part of appearance.parts) { const rig = meshRig(part.mesh); if (rig !== null) rigs.add(rig); }
       const idle = this._idle.resolve(ownerSlot, rigs);
       if (idle) {
         result.idle_clip = idle.clip;
         result.idle_source = idle.source;
         result.idle_field_op = idle.field_op;
-        const meshRig = (mesh: number) => { const sref = this._meshDir?.[mesh]?.sref; return typeof sref === 'number' && sref >= 2 ? sref - 2 : null; };
         result.idle_props = this._idle.props(idle.controller, rigs, meshRig).map((prop, index) => ({
           mesh_def_slot: prop.mesh_def_slot,
           mesh: prop.mesh,

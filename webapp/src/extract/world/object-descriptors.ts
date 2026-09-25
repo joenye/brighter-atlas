@@ -16,6 +16,11 @@ export interface ObjectDescription {
   iconResource:number|null; dimensions:number[]|null; descriptors:ObjectDescriptor[];
 }
 
+// [name string, subtitle string|symbol, icon, category, flag]
+export const isDescriptorShape=(v:(PoolNode|null|undefined)[])=>v.length===5&&v[0]?.tag===0x0e
+  &&[0x0e,0x0f].includes(v[1]?.tag??-1)&&[0x0f,0x26,0x73].includes(v[2]?.tag??-1)
+  &&[0x0f,0x26].includes(v[3]?.tag??-1)&&[0x0c,0x0d].includes(v[4]?.tag??-1);
+
 export function objectDescriptionReader(rows:FillRow[],pool:PoolNode[],bytes:Uint8Array,
   profile:WorldProfile,charset:ArrayLike<string>) {
   const decode=makeRegistryRowDecoder(rows,bytes,profile),cache=new Map<number,ObjectDescription>();
@@ -40,8 +45,7 @@ export function objectDescriptionReader(rows:FillRow[],pool:PoolNode[],bytes:Uin
     for(const {field,node} of values) {
       if(node?.tag!==0x24||node.fields?.length!==5)continue;
       const v=node.fields.map(n=>resolveValue(pool,n));
-      if(v[0]?.tag!==14||![14,15].includes(v[1]?.tag??-1)||![15,38,115].includes(v[2]?.tag??-1)
-        ||![15,38].includes(v[3]?.tag??-1)||![12,13].includes(v[4]?.tag??-1))continue;
+      if(!isDescriptorShape(v))continue;
       const name=decodeGlyphText(v[0],charset);if(name===null)continue;
       descriptors.push({field,name,qualifier:decodeGlyphText(v[1],charset),...icon(v[2])});
     }

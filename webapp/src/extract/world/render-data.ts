@@ -7,7 +7,7 @@
 // user's bundle at the offsets given here.
 import {resolveValue} from './room-metadata.js';
 import type {FillRow} from './replay.js';
-import {PoolDecoder, type PoolNode} from './value-pool.js';
+import {PoolDecoder, profileArities, type PoolNode} from './value-pool.js';
 import type {WorldProfile} from './profile.js';
 
 
@@ -102,6 +102,15 @@ export function validRenderData(d: any): d is RenderDecodeData {
 type RawField = {op: number; kind: string; node?: any; value?: any};
 type Decode = (slot: number) => RawField[] | null;
 
+/** A record reference's slot (-1: not a reference). */
+export const recordRef = (n: PoolNode | null): number => (n && (n.tag === 0x26 || n.tag === 0x02) && Number.isInteger(n.value) ? n.value as number : -1);
+
+/** A record's generic field, resolved through the pool. */
+export function recordField(rows: FillRow[], decode: Decode, pool: PoolNode[], slot: number, op: number): PoolNode | null {
+  const e = slot >= 0 && rows[slot] ? decode(slot)?.find(x => x.op === op) : null;
+  return e?.kind === 'G' ? resolveValue(pool, e.node) : null;
+}
+
 /** A material's programs: main-pass keys [skinned, 32-bit, shadows, ssao, vignette, program],
  *  depth-pass keys [skinned, 32-bit, program], its specular bytes and opacity. */
 export interface RenderMaterial {
@@ -111,7 +120,6 @@ export interface RenderMaterial {
   opacity: number;
 }
 
-/** Light values of one scene environment (colours authored, before the 2.2 power). */
 /** A room whose lighting follows a quest: the quest's name, its number of
  *  states, and the environment shown from each state on. */
 export interface StoryEnvironment {
@@ -120,6 +128,7 @@ export interface StoryEnvironment {
   steps: {from: number; environment: RenderEnvironment}[];
 }
 
+/** Light values of one scene environment (colours authored, before the 2.2 power). */
 export interface RenderEnvironment {
   sky: number[]; ground: number[]; sun: number[];   // [r, g, b, intensity]
   vignette: number[];                                // [r, g, b, a]
@@ -132,10 +141,7 @@ export function readRenderMaterials(data: RenderDecodeData, rows: FillRow[], dec
   pool: PoolNode[], symbols: string[]): Record<string, RenderMaterial> {
   const families = new Set(data.materials.families);
   const f = data.materials.fields, keys = data.materials.keys;
-  const field = (slot: number, op: number): PoolNode | null => {
-    const e = decode(slot)?.find(x => x.op === op);
-    return e?.kind === 'G' ? resolveValue(pool, e.node) : null;
-  };
+  const field = (slot: number, op: number) => recordField(rows, decode, pool, slot, op);
   const flag = (n: PoolNode | null) => (n?.tag === 0x0c ? 1 : n?.tag === 0x0d ? 0 : -1);
   const symbol = (n: PoolNode | null) => (n?.tag === 0x0f && Number.isInteger(n.value) ? symbols[n.value] : null);
   const pick = (n: PoolNode | null, pair: [string, string]) => {
@@ -186,11 +192,9 @@ export function readRenderMaterials(data: RenderDecodeData, rows: FillRow[], dec
   return out;
 }
 
-const arities = (values: Record<string, number>) => new Map(Object.entries(values).map(([k, v]) => [+k, v]));
-
 /** Decode one archived value at an AB0 byte offset. */
 export function archivedValue(ab0: Uint8Array, profile: WorldProfile, offset: number): PoolNode {
-  const decoder = new PoolDecoder(ab0.subarray(offset), arities(profile.class_fields as any), arities(profile.tag6_fields as any));
+  const decoder = new PoolDecoder(ab0.subarray(offset), ...profileArities(profile));
   return decoder.value();
 }
 
@@ -209,15 +213,10 @@ export function readEnvironmentPreset(data: RenderDecodeData, preset: PoolNode |
   const env = data.environment;
   if (preset?.tag !== 0x24 || preset.class !== env.presetClass || !Array.isArray(preset.fields)) return null;
   const slot = (i: number) => resolveValue(pool, preset.fields![i]);
-  const recordField = (n: PoolNode | null): PoolNode | null => {
-    const s = n && (n.tag === 0x26 || n.tag === 0x02) && Number.isInteger(n.value) ? n.value : -1;
-    if (s < 0 || !rows[s]) return null;
-    const e = decode(s)?.find(x => x.op === env.light.field);
-    return e?.kind === 'G' ? resolveValue(pool, e.node) : null;
-  };
+  const linked = (n: PoolNode | null) => recordField(rows, decode, pool, recordRef(n), env.light.field);
   // A light is a {colour, intensity} value held inline or in a record.
   const light = (n: PoolNode | null): number[] | null => {
-    const value = n?.tag === 0x24 ? n : recordField(n);
+    const value = n?.tag === 0x24 ? n : linked(n);
     if (value?.tag !== 0x24 || !Array.isArray(value.fields)) return null;
     const colour = resolveValue(pool, value.fields[env.light.colour]);
     const intensity = resolveValue(pool, value.fields[env.light.intensity]);
@@ -227,7 +226,7 @@ export function readEnvironmentPreset(data: RenderDecodeData, preset: PoolNode |
   // A height or floor is a number held inline or in a record, or the
   // avatar-height symbol.
   const scalar = (n: PoolNode | null): number | 'avatar' | null => {
-    const value = n?.tag === 0x0b || n?.tag === 0x0a || n?.tag === 0x0f ? n : recordField(n);
+    const value = n?.tag === 0x0b || n?.tag === 0x0a || n?.tag === 0x0f ? n : linked(n);
     if (value?.tag === 0x0b && Array.isArray(value.value)) return Number(value.value[0]);
     if (value?.tag === 0x0a && Number.isInteger(value.value)) return value.value;
     if (value?.tag === 0x0f && symbols[value.value] === env.avatarZ) return 'avatar';
@@ -235,7 +234,7 @@ export function readEnvironmentPreset(data: RenderDecodeData, preset: PoolNode |
   };
   const sky = light(slot(env.slots.sky)), ground = light(slot(env.slots.ground)), sun = light(slot(env.slots.sun));
   const vignetteSlot = slot(env.slots.vignette);
-  const vignetteNode = vignetteSlot?.tag === 0x15 ? vignetteSlot : recordField(vignetteSlot);
+  const vignetteNode = vignetteSlot?.tag === 0x15 ? vignetteSlot : linked(vignetteSlot);
   const vignette = vignetteNode?.tag === 0x15 && Array.isArray(vignetteNode.value) ? vignetteNode.value.map(Number) : null;
   const height = scalar(slot(env.slots.height)), floor = scalar(slot(env.slots.floor));
   if (!sky || !ground || !sun || !vignette || height === null || floor === null) return null;

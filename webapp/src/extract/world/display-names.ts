@@ -58,7 +58,7 @@ function stringsUnder(strings: PoolStrings, index: number): string[] {
 }
 
 /** The display name (and base name) of an enemy type record, or null. */
-function enemyTypeName(row: Row, strings: PoolStrings): { name: string; base: string } | null {
+function enemyTypeName(row: Row, strings: PoolStrings): { name: string; base: string; internal: string } | null {
   const direct = strings.directStrings(row).map((e) => e.text);
   const internal = direct.find((t) => SNAKE.test(t));
   if (!internal) return null;
@@ -91,24 +91,24 @@ function enemyTypeName(row: Row, strings: PoolStrings): { name: string; base: st
     }
   }
   if (!base) return null;
-  return { name: qualifier ? `${qualifier} ${title(base)}` : title(base), base: title(base) };
+  return { name: qualifier ? `${qualifier} ${title(base)}` : title(base), base: title(base), internal };
 }
 
-/** Display names of enemy definition records (by registry slot), with the
- *  base name (the singular without its qualifier) for shared model names. */
 /** Enemy display names by the type record's internal name ("grumpy_pirate"),
  *  filled by enemyDisplayNames. */
 export const byInternal = new Map<string, { name: string; base: string }>();
 
+/** Display names of enemy definition records (by registry slot), with the
+ *  base name (the singular without its qualifier) for shared model names. */
 export function enemyDisplayNames(rows: Row[], strings: PoolStrings, poolRefs: (index: number) => number[]): Map<number, { name: string; base: string }> {
   byInternal.clear();
   const typeName = new Map<number, { name: string; base: string }>();
   for (const row of rows) {
     const named = enemyTypeName(row, strings);
     if (named) {
-      typeName.set(row.slot, named);
-      const internal = strings.directStrings(row).map((e) => e.text).find((t) => SNAKE.test(t));
-      if (internal && !byInternal.has(internal)) byInternal.set(internal, named);
+      const { internal, ...entry } = named;
+      typeName.set(row.slot, entry);
+      if (!byInternal.has(internal)) byInternal.set(internal, entry);
     }
   }
   // A type record names the records it references when it is their only
@@ -143,9 +143,8 @@ export const isWeakName = (name: unknown): boolean => typeof name !== 'string' |
 // or an action phrase ("pump the bellows", "Investigate at").
 const ACTION = /^[a-z]|_|\s(?:at|on|to|in|with|from|into)$/;
 const isNameLike = (name: unknown): name is string => typeof name === 'string' && !isWeakName(name) && !ACTION.test(name);
+const allSources = (model: any): any[] => [...(model.sources ?? []), ...(model.variants ?? []).flatMap((v: any) => v.sources ?? [])];
 
-/** Name models and variants owned by enemy definitions, and give models still
- *  carrying a placeholder or a technical token their object label. */
 /** Records referencing each record (direct and through pool values). */
 export function referrerIndex(rows: Row[], poolRefs: (index: number) => number[]): Map<number, number[]> {
   const out = new Map<number, number[]>();
@@ -160,10 +159,11 @@ export function referrerIndex(rows: Row[], poolRefs: (index: number) => number[]
   return out;
 }
 
+/** Name models and variants owned by enemy definitions, and give models still
+ *  carrying a placeholder or a technical token their object label. */
 export function annotateDisplayNames(catalog: SystemCatalog, enemies: Map<number, { name: string; base: string }>,
   items: Map<number, string> = new Map(),
   referred: { referrers: Map<number, number[]>; labelOf: (slot: number) => string | null } | null = null) {
-  let modelsNamed = 0, variantsNamed = 0;
   const alias = (target: any, names: string[]) => {
     const all = [...new Set([...(target.aliases ?? []), ...names])].filter((s) => s && s !== target.name).sort((a, b) => a.localeCompare(b));
     if (all.length) target.aliases = all;
@@ -176,14 +176,14 @@ export function annotateDisplayNames(catalog: SystemCatalog, enemies: Map<number
     if (internal) model.name = internal.name;
     for (const variant of model.variants ?? []) {
       const vi = typeof variant.name === 'string' ? byInternal.get(variant.name) : undefined;
-      if (vi) { alias(variant, [variant.name]); variant.name = vi.name; variantsNamed++; }
+      if (vi) { alias(variant, [variant.name]); variant.name = vi.name; }
     }
     const names = namesOf(model.sources ?? []);
     for (const variant of model.variants ?? []) {
       const vn = namesOf(variant.sources ?? []);
       if (vn.length === 1 && isWeakName(variant.name)) {
         if (variant.name && variant.name !== 'Variant') alias(variant, [variant.name]);
-        variant.name = vn[0]; variantsNamed++;
+        variant.name = vn[0];
       }
       names.push(...vn);
     }
@@ -193,8 +193,7 @@ export function annotateDisplayNames(catalog: SystemCatalog, enemies: Map<number
         if (distinct.length === 1) model.name = distinct[0];
         else {
           // variants of one enemy family share its base name
-          const bases = [...new Set([...(model.sources ?? []), ...(model.variants ?? []).flatMap((v: any) => v.sources ?? [])]
-            .map((s: any) => enemies.get(s.owner_slot)?.base).filter(Boolean))];
+          const bases = [...new Set(allSources(model).map((s: any) => enemies.get(s.owner_slot)?.base).filter(Boolean))];
           if (bases.length === 1) model.name = bases[0];
         }
       }
@@ -202,8 +201,7 @@ export function annotateDisplayNames(catalog: SystemCatalog, enemies: Map<number
     }
     if (isWeakName(model.name)) {
       // an item record's own display name
-      const own = [...new Set([...(model.sources ?? []), ...(model.variants ?? []).flatMap((v: any) => v.sources ?? [])]
-        .map((s: any) => items.get(s.owner_slot)).filter(isNameLike))];
+      const own = [...new Set(allSources(model).map((s: any) => items.get(s.owner_slot)).filter(isNameLike))];
       if (own.length === 1) model.name = own[0];
       else if (own.length > 1) alias(model, own);
     }
@@ -213,7 +211,7 @@ export function annotateDisplayNames(catalog: SystemCatalog, enemies: Map<number
     }
     if (isWeakName(model.name) && referred) {
       // an appearance record: the name every named record using it agrees on
-      const owners = new Set([...(model.sources ?? []), ...(model.variants ?? []).flatMap((v: any) => v.sources ?? [])].map((s: any) => s.owner_slot));
+      const owners = new Set(allSources(model).map((s: any) => s.owner_slot));
       const names = new Set<string>();
       for (const o of owners) for (const r of referred.referrers.get(o) ?? []) {
         const n = enemies.get(r)?.name ?? items.get(r) ?? referred.labelOf(r);
@@ -225,19 +223,14 @@ export function annotateDisplayNames(catalog: SystemCatalog, enemies: Map<number
       if (names.size === 1) model.name = prop ? `${[...names][0]} prop` : [...names][0];
       else if (names.size > 1 && names.size <= 6) alias(model, [...names]);
     }
-    if (model.name !== previous) {
-      modelsNamed++;
-      if (previous && !/^Recovered model /.test(previous)) alias(model, [previous]);
-    }
+    if (model.name !== previous && previous && !/^Recovered model /.test(previous)) alias(model, [previous]);
   }
-  return { modelsNamed, variantsNamed };
 }
 
 /** A display string without the font's inline symbol glyphs (charges,
  *  profession marks), whitespace collapsed. */
 export function cleanName(text: string): string {
-  return text.replace(/[^\u0020-\u007E\u00A0-\u024F\u2018-\u201F]/gu, ' ').replace(/\s+/g, ' ').trim()
-    .replace(/\(\s*\)/g, '').replace(/\s+/g, ' ').trim();
+  return text.replace(/[^\u0020-\u007E\u00A0-\u024F\u2018-\u201F]/gu, ' ').replace(/\(\s*\)/g, '').replace(/\s+/g, ' ').trim();
 }
 
 const LEADING_GLYPH = /^[^\u0020-\u007E\u00A0-\u024F]/u;
@@ -247,7 +240,7 @@ const ICON_MIN = 128, ICON_MAX = 300, SHARED_MATERIAL = 64, COMMON_STRING = 40;
 
 /** Names for stored icon pictures: {format, images: {ordinal: {names}}}. */
 export function iconImageNames(rows: Row[], strings: PoolStrings, texturesByMaterial: Map<number, number[]>,
-  images: any[], materialsOf: ((slot: number) => number[]) | null = null): { format: number; images: Record<string, { names: string[] }>; rowNames: Map<number, string> } {
+  images: any[], materialsOf: (slot: number) => number[]): { format: number; images: Record<string, { names: string[] }>; rowNames: Map<number, string> } {
   const iconSized = new Set<number>();
   for (const e of images) {
     if (!e || !String(e.cat ?? '').startsWith('sprite')) continue;
@@ -260,23 +253,6 @@ export function iconImageNames(rows: Row[], strings: PoolStrings, texturesByMate
   const found: [Row, number, number][] = [];
   const stringRows = new Map<string, number>();
   const labels = new Map<number, string[]>();
-  // Row events leave scalar payloads out: with the row decoder, the materials
-  // of every record that carries a label come from its decoded fields.
-  const eventMaterials = (row: Row): number[] => {
-    const out: number[] = [];
-    for (const event of row.g || []) {
-      if (!Array.isArray(event) || event.length !== 4 || event[1] > 2 || !isInt(event[3])) continue;
-      // a material held directly or through the pool
-      let material: number | null = event[2] === 0x02 ? event[3] : null;
-      if (event[2] === 0) {
-        let node = strings.pool[event[3]], hops = 0;
-        while (node && node.tag === 0 && isInt(node.value) && hops++ < 8) node = strings.pool[node.value];
-        if (node?.tag === 0x02 && isInt(node.value)) material = node.value;
-      }
-      if (material !== null) out.push(material);
-    }
-    return out;
-  };
   for (const row of rows) {
     // (a line led by one of the font's symbol glyphs is an annotation, such as
     // an effect, not a name)
@@ -310,7 +286,7 @@ export function iconImageNames(rows: Row[], strings: PoolStrings, texturesByMate
     const named = [...new Set([...composedNames, ...twice])];
     if (named.length) { texts.splice(0, texts.length, ...named); statedNames.add(row.slot); }
     const seen = new Set<number>();
-    for (const material of materialsOf ? materialsOf(row.slot) : eventMaterials(row)) {
+    for (const material of materialsOf(row.slot)) {
       if (seen.has(material)) continue;
       seen.add(material);
       const icon = iconOf(material);
@@ -355,7 +331,6 @@ export function iconImageNames(rows: Row[], strings: PoolStrings, texturesByMate
  *  own names (names.ts): the one name they state, else the family they share,
  *  else a two-thirds majority. Variants likewise. */
 export function nameFromRecords(catalog: SystemCatalog, nameOf: (slot: number) => { name: string; base?: string } | null) {
-  let named = 0;
   const pick = (sources: any[]): string | null => {
     const found = sources.map((s: any) => nameOf(s.owner_slot)).filter((n): n is { name: string; base?: string } => !!n && isNameLike(n.name));
     if (!found.length) return null;
@@ -372,11 +347,10 @@ export function nameFromRecords(catalog: SystemCatalog, nameOf: (slot: number) =
     for (const variant of model.variants ?? []) {
       if (!isWeakName(variant.name)) continue;
       const n = pick(variant.sources ?? []);
-      if (n) { variant.name = n; named++; }
+      if (n) variant.name = n;
     }
     if (!isWeakName(model.name)) continue;
-    const n = pick([...(model.sources ?? []), ...(model.variants ?? []).flatMap((v: any) => v.sources ?? [])]);
-    if (n) { model.name = n; named++; }
+    const n = pick(allSources(model));
+    if (n) model.name = n;
   }
-  return named;
 }

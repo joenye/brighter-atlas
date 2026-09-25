@@ -590,12 +590,8 @@ export interface ShardContextOptions {
   // dt.charset: decodes actor labels and enemy-definition associations.
   charset?: ArrayLike<string> | null;
   symbols?: string[];
-  // Precomputed shared derivations from the orchestrator, each a pure
-  // never-mutated function of the same rows/pool passed here: the
-  // traceAssetMaps / materialMap results and the enemy-definition scan.
-  // Absent, they are derived locally exactly as before.
-  assetMaps?: { meshSlots: Map<number, number>; textureSlots: Map<number, number[]> } | null;
-  materialAssets?: { handles: Set<number>; materialTextures: Map<number, number[]> } | null;
+  // The orchestrator's enemy-definition scan (pure in rows/pool), shared so
+  // it is not repeated here.
   enemyDefs?: EnemyDefinition[] | null;
   // Constructor values per registry slot (replay.js replayConstructors).
   objects?: { values: number[] }[] | null;

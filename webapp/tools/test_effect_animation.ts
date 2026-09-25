@@ -7,7 +7,7 @@ import {build} from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-effect-animation-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({stdin: {contents: "export {EffectBoneAnimation} from './src/viewers/world/effects-animation.ts'; export {animatedEffectBirthFrames} from './src/viewers/world/effects-frames.ts'; export {WorldEffectsLayer} from './src/viewers/world/effects-layer.ts'; export {PlaybackBar} from './src/viewers/rig.ts'; export * from './vendor/three.module.js';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
+  await build({stdin: {contents: "export {EffectBoneAnimation} from './src/viewers/world/effects-animation.ts'; export {effectBirthFrames} from './src/viewers/world/effects-frames.ts'; export {WorldEffectsLayer} from './src/viewers/world/effects-layer.ts'; export {PlaybackBar} from './src/viewers/rig.ts'; export * from './vendor/three.module.js';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
   const T = await import(pathToFileURL(file).href);
   const skel = {i: 7, bones: [{parent: -1, scale: [1,1,1], quat: [0,0,0,1], trans: [5,0,0], bind: [1,0,0,5,0,1,0,0,0,0,1,0]}]};
   const clip = {i: 9, skel: 7, duration_ms: 40, frame_ms: 40, frames: 2, bones: [{present: true,
@@ -63,9 +63,9 @@ try {
     wrongRig.dispose(); animation.dispose(); layer.dispose();
   }
   const identity = new T.Matrix4().elements;
-  assert.equal(T.animatedEffectBirthFrames({primary: 1,secondary:'root',mode:'bone'},[identity],[identity],identity),null);
-  assert.equal(T.animatedEffectBirthFrames({primary: 0,secondary:'root',mode:'skin'},[identity],[],identity),null);
-  assert.equal(T.animatedEffectBirthFrames({primary: 0,secondary:'root',mode:'bone'},[[NaN,...identity.slice(1)]],[identity],identity),null);
+  assert.equal(T.effectBirthFrames({primary: 1,secondary:'root',mode:'bone'},[identity],identity,[identity]),null);
+  assert.equal(T.effectBirthFrames({primary: 0,secondary:'root',mode:'skin'},[identity],identity,[]),null);
+  assert.equal(T.effectBirthFrames({primary: 0,secondary:'root',mode:'bone'},[[NaN,...identity.slice(1)]],identity,[identity]),null);
   const bar=Object.create(T.PlaybackBar.prototype);
   bar.t=0; bar.loop=true; bar.speed=1; bar.playing=true; bar.sampler={duration:40};
   bar.applyPose=()=>{}; bar.playBtn={textContent:''};

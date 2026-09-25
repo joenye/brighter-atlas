@@ -385,23 +385,22 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
     ].join(', ');
     const goBtn = el('button', { class: 'btn primary', text: 'Open the viewer →' });
     goBtn.addEventListener('click', () => onDone?.(result));
-    // A failed world stage is a whole-category failure, not a skipped item:
-    // surface its actual error message instead of hiding it in the count.
-    const worldErr = cats.includes('world')
-      ? result.errors.find((e: any) => typeof e === 'string' && e.startsWith('world: ')) : null;
-    const mapsErr=cats.includes('maps')?result.errors.find((e:any)=>typeof e==='string'&&e.startsWith('maps: ')):null;
-    const otherErrors = result.errors.length - (worldErr ? 1 : 0) - (mapsErr ? 1 : 0);
+    // A failed world or maps stage is a whole-category failure, not a skipped
+    // item: surface its actual error message instead of hiding it in the count.
+    const stageErrs = ['world', 'maps'].filter((c) => cats.includes(c)).flatMap((c) => {
+      const err = result.errors.find((e: any) => typeof e === 'string' && e.startsWith(`${c}: `));
+      return err ? [el('p', { class: 'small err', text: `${CAT_INFO[c].label} couldn't be extracted: ${err.slice(c.length + 2)}` })] : [];
+    });
+    const otherErrors = result.errors.length - stageErrs.length;
     root.append(
       el('h2', { text: 'Done: everything stays on this machine' }),
       el('div', { class: 'ob-done card' },
         el('p', {}, el('b', { text: `Extracted in ${result.seconds.toFixed(1)}s: ` }), catLine),
         el('p', { class: 'dim small', text: `Game build ${result.versionId.slice(0, 8)} · using ${fmtBytes(est.usage || 0)} of local browser storage.` }),
-        ...(worldErr ? [el('p', { class: 'small err',
-          text: `World couldn't be extracted: ${worldErr.slice('world: '.length)}` })] : []),
-        ...(mapsErr?[el('p',{class:'small err',text:`2D Maps couldn't be extracted: ${mapsErr.slice('maps: '.length)}`} )]:[]),
+        ...stageErrs,
         otherErrors
           ? el('p', { class: 'small err', text: `${otherErrors} item(s) couldn't be read and were skipped.` })
-          : worldErr || mapsErr ? null : el('p', { class: 'dim small', text: 'Everything decoded cleanly. Next time, it loads instantly from your device.' })),
+          : stageErrs.length ? null : el('p', { class: 'dim small', text: 'Everything decoded cleanly. Next time, it loads instantly from your device.' })),
       el('div', { class: 'ob-actions' }, el('span', { class: 'spacer' }), goBtn));
     if (result.errors.length) console.warn('ingest errors:', result.errors);
     setTimeout(() => onDone?.(result), 2500);   // auto-continue; the button is for the impatient

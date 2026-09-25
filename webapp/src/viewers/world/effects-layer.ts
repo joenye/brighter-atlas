@@ -42,7 +42,7 @@
 // the EffectInstanceEdit doc comment below for the per-field rationale.
 
 import * as THREE from '../../../vendor/three.module.js';
-import { restEffectBirthFrames, animatedEffectBirthFrames } from './effects-frames.js';
+import { bindRigBirthFrames } from './effects-frames.js';
 import type { EffectBoneAnimation } from './effects-animation.js';
 import { proceduralEffectFrame } from './effects-motion.js';
 import {
@@ -400,9 +400,7 @@ export class WorldEffectsLayer {
       // child rigs and older documents still need their own resolved frames.
       const animationSetters: ((animation: EffectBoneAnimation | null) => void)[] = [];
       system.emitters.forEach((emitter, index) => {
-        // Missing sprite records may represent computed selections. Those
-        // draw only once their shape is bound; substituting a fallback dot
-        // would invent their appearance.
+        // Nothing drawable: skip rather than invent a fallback dot.
         const draws = emitterSpriteDraws(emitter, this.doc.configs || {});
         if (!draws.length) return;
         const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate, att.color_override);
@@ -413,17 +411,9 @@ export class WorldEffectsLayer {
         // Store it relative to the common owner so final drawing does not
         // rotate it again. Rigged systems use their rig root independently.
         if (att.rig === null && emitter.acceleration_frame?.world) sim.setAccelerationBasis(inverseOwner);
-        if (rigWorld && inverseOwner && system.rig_selection?.alternate === false && emitter.transform) {
-          const frames = restEffectBirthFrames(emitter.transform, rigWorld, inverseOwner);
-          if (frames) {
-            const binding = emitter.transform;
-            animationSetters.push(animation => {
-              if (animation) sim.setBirthFrameSampler(tick =>
-                animatedEffectBirthFrames(binding, animation.sample(tick), animation.inverseBinds, inverseOwner) || frames);
-              else sim.setBirthFrames(frames.position, frames.direction);
-            });
-            sim.setBirthFrames(frames.position, frames.direction);
-          }
+        if (rigWorld && system.rig_selection?.alternate === false && emitter.transform) {
+          const set = bindRigBirthFrames(sim, emitter.transform, rigWorld, inverseOwner);
+          if (set) animationSetters.push(set);
         }
         if (att.rig === 'transform' && att.motion && system.rig_selection?.alternate === false
           && emitter.transform?.primary === 'root' && emitter.transform.secondary === 'root') {
@@ -442,6 +432,16 @@ export class WorldEffectsLayer {
           rec.emitters.push({ sim, batchKey: `${texId}|${blend}`, choice });
         }
       });
+      rec.configureAnimation = animation => {
+        const accepted = animation?.rig === att.rig && animationSetters.length ? animation : null;
+        if (rec.animation === accepted) return;
+        rec.animation = accepted;
+        for (const set of animationSetters) set(accepted);
+        rec.movingCenter = !!accepted;
+        rec.localCenter = meanSpawnCenter(rec, this._instanceTime(rec));
+        if (rec.proxy) positionProxy(rec.proxy, rec);
+      };
+      rec.configureAnimation(this._animations.get(`${id}|${rec.occurrence}`) || null);
       // The pick target has to sit ON the particles, so it is built after the
       // emitters exist and placed at their mean spawn centre rather than at
       // the instance's anchor origin. Those are the same point only for an
@@ -449,16 +449,6 @@ export class WorldEffectsLayer {
       // or on a rooftop left the marker at ground level, usually buried
       // inside the owner's own geometry, so the effect could be seen but not
       // clicked.
-      rec.configureAnimation = animation => {
-        const accepted = animation?.rig === att.rig && animationSetters.length ? animation : null;
-        if (rec.animation === accepted) return;
-        rec.animation = accepted;
-        for (const set of animationSetters) set(accepted);
-        rec.movingCenter = !!accepted || att.rig === 'transform';
-        rec.localCenter = meanSpawnCenter(rec, this._instanceTime(rec));
-        if (rec.proxy) positionProxy(rec.proxy, rec);
-      };
-      rec.configureAnimation(this._animations.get(`${id}|${rec.occurrence}`) || null);
       rec.localCenter = meanSpawnCenter(rec, this._instanceTime(rec));
       rec.proxy = this._createProxy(rec);
       this.root.add(rec.proxy);
@@ -1069,14 +1059,11 @@ export class WorldEffectsLayer {
         sim.ensure(Tm);
         sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode) => {
           if (idx >= cap) return;
-          // Owner frame applied after the independent birth transforms, rather than
-          // a helper returning a tuple: no per-particle allocation, since
-          // this loop runs thousands of times a frame across a merged room
-          // set.
-          const lx = x; const ly = y; const lz = z;
-          const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
-          const wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
-          const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+          // Owner frame applied after the sim's birth transforms, inlined (no
+          // per-particle tuple): this loop runs thousands of times a frame.
+          const wx = m[0] * x + m[4] * y + m[8] * z + m[12];
+          const wy = m[1] * x + m[5] * y + m[9] * z + m[13];
+          const wz = m[2] * x + m[6] * y + m[10] * z + m[14];
           const at4 = idx * 4;
           posSize[at4] = wx;
           posSize[at4 + 1] = wy;
@@ -1088,9 +1075,9 @@ export class WorldEffectsLayer {
           color[at4 + 3] = a;
           rot[idx] = roll;
           facingMode[idx] = mode;
-          facing[idx * 3] = (m[0] * nx + m[4] * ny + m[8] * nz);
-          facing[idx * 3 + 1] = (m[1] * nx + m[5] * ny + m[9] * nz);
-          facing[idx * 3 + 2] = (m[2] * nx + m[6] * ny + m[10] * nz);
+          facing[idx * 3] = m[0] * nx + m[4] * ny + m[8] * nz;
+          facing[idx * 3 + 1] = m[1] * nx + m[5] * ny + m[9] * nz;
+          facing[idx * 3 + 2] = m[2] * nx + m[6] * ny + m[10] * nz;
           if (sortable) {
             this._scratch.set(wx, wy, wz).applyMatrix4(rootMatrix!);
             batch.depth[idx] = this._scratch.sub(this._camPos).dot(this._camFwd);
