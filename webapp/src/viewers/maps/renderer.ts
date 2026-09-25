@@ -150,13 +150,18 @@ function makeLabels(scene:any,images:Record<string,MapBitmap>){
  }
  return passes.map((rows,i)=>({texture:textures[i],rows:new Float32Array(rows)}));
 }
+// One instance per terrain tile, written in place (a few hundred thousand
+// tiles for the whole world: no per-tile arrays).
 function makeTerrain(scene:any){
- const count=scene.shingles.reduce((n:number,s:any)=>n+s.tiles.filter(Boolean).length,0),data=new Float32Array(count*STRIDE);let cursor=0;
+ let count=0;for(const s of scene.shingles)for(let t=0;t<16;t++)if(s.tiles[t])count++;
+ const data=new Float32Array(count*STRIDE),aw=scene.atlas.width,ah=scene.atlas.height;let o=0;
  for(const s of scene.shingles){const base=unpack555(s.base555),corners=s.corners555.map(unpack555);
-  for(let t=0;t<16;t++){const id=s.tiles[t];if(!id)continue;const x=t&3,y=t>>>2;
-   data.set([(s.position[0]*2+x)*32,(s.position[1]*2+y)*32,32,0,0,32,
-    ((id%12)*40+4)/scene.atlas.width,(Math.floor(id/12)*40+4)/scene.atlas.height,32/scene.atlas.width,32/scene.atlas.height,
-    ...base,1,...corners[(y>>>1)*2+(x>>>1)],id<=12?.4:.3,0,0],cursor);cursor+=STRIDE;
+  for(let t=0;t<16;t++){const id=s.tiles[t];if(!id)continue;const x=t&3,y=t>>>2,c=corners[(y>>>1)*2+(x>>>1)];
+   data[o]=(s.position[0]*2+x)*32;data[o+1]=(s.position[1]*2+y)*32;data[o+2]=32;data[o+5]=32;
+   data[o+6]=((id%12)*40+4)/aw;data[o+7]=(Math.floor(id/12)*40+4)/ah;data[o+8]=32/aw;data[o+9]=32/ah;
+   data[o+10]=base[0];data[o+11]=base[1];data[o+12]=base[2];data[o+13]=1;
+   data[o+14]=c[0];data[o+15]=c[1];data[o+16]=c[2];data[o+17]=id<=12?.4:.3;
+   o+=STRIDE;
   }
  }
  return data;

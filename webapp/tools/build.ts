@@ -18,7 +18,7 @@ const common: BuildOptions = {
   bundle: true,
   format: 'esm',
   target: 'es2022',
-  minify: !watch,                       // whitespace + identifiers + syntax
+  minify: !watch && !process.env.BS_NO_MINIFY,                       // whitespace + identifiers + syntax
   sourcemap: watch ? 'inline' : false,
   metafile: !watch,
   logLevel: 'info',
