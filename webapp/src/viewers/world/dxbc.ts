@@ -250,7 +250,7 @@ export function shaderBlobs(object: Uint8Array): Uint8Array[] {
   return out;
 }
 
-function chunks(bytes: Uint8Array): Map<string, Uint8Array> {
+export function chunks(bytes: Uint8Array): Map<string, Uint8Array> {
   if (bytes.length < 32 || cstring(bytes.subarray(0, 4), 0) !== 'DXBC') throw new Error('not a DXBC container');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const total = view.getUint32(24, true);
@@ -267,7 +267,7 @@ function chunks(bytes: Uint8Array): Map<string, Uint8Array> {
   return out;
 }
 
-function parseSignature(chunk: Uint8Array | undefined): SignatureElement[] {
+export function parseSignature(chunk: Uint8Array | undefined): SignatureElement[] {
   if (!chunk) return [];
   const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   const count = view.getUint32(0, true);
@@ -286,7 +286,7 @@ function parseSignature(chunk: Uint8Array | undefined): SignatureElement[] {
   return out;
 }
 
-function parseReflection(chunk: Uint8Array | undefined): Reflection | null {
+export function parseReflection(chunk: Uint8Array | undefined): Reflection | null {
   if (!chunk) return null;
   const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   const u32 = (at: number) => view.getUint32(at, true);

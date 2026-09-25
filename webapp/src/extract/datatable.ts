@@ -21,6 +21,7 @@
 // All varints are LSB-first 7-bit (0x80 continuation); fixed ints are big-endian.
 // Worker-safe: no DOM, no Node APIs (TextDecoder is available in workers).
 
+import { parseGraphicsHeader, type GraphicsHeader } from './graphics.js';
 import { readVarint } from './bundles.js';
 
 export interface CharsetEntry { ch: string; upper: number; lower: number; flags: number; extras: string[] }
@@ -38,6 +39,8 @@ export interface Datatable {
   textureDir: TextureDirEntry[];
   audioDir: { samples: number }[];
   objStart: number;
+  /** How the game draws (graphics.ts); null when it does not parse exactly. */
+  graphics: GraphicsHeader | null;
 }
 
 const UTF8 = new TextDecoder('utf-8', { fatal: true }); // strict UTF-8
@@ -394,23 +397,24 @@ export function parseDatatable(u8: Uint8Array): Datatable {
   // regions 6+8+9: scan past the undecoded grid, chain-validated
   let tex: { dir: TextureDirEntry[]; end: number } | null = null;
   let mesh: { dir: MeshDirEntry[]; end: number; anim: { dir: AnimDirEntry[]; end: number } } | null = null;
+  let meshStart = -1;
   for (let p = e4, hi = e4 + SCAN_WINDOW; p < hi && !tex; p++) {
     const t = tryPairTable(u8, p);
     if (!t) continue;
     for (let q = t.end, qhi = t.end + SCAN_WINDOW; q < qhi; q++) {
       const m = tryMeshTable(u8, q);
-      if (m) { tex = t; mesh = m; break; }
+      if (m) { tex = t; mesh = m; meshStart = q; break; }
     }
   }
   if (!tex || !mesh) throw new Error('ab0: texture_dir/mesh_dir not found');
 
   // region 10 + object table start: scan past the undecoded anim trailer + 'mini'
-  let objStart = null;
+  let objStart = null, classStart = -1;
   for (let p = mesh.anim.end, hi = mesh.anim.end + SCAN_WINDOW; p < hi; p++) {
     const c = tryClassTable(u8, p);
     if (!c) continue;
     objStart = findObjectTableStart(u8, c.end, c.end + 8192);
-    if (objStart !== null) break;
+    if (objStart !== null) { classStart = p; break; }
   }
   if (objStart === null) throw new Error('ab0: object table not found');
 
@@ -424,5 +428,6 @@ export function parseDatatable(u8: Uint8Array): Datatable {
     textureDir: tex.dir,
     audioDir: audio.values.map((v) => ({ samples: v })),
     objStart, // extra: where the registry/heap begins (the string-sweep range start)
+    graphics: parseGraphicsHeader(u8, tex.end, meshStart, mesh.anim.end, classStart),
   };
 }

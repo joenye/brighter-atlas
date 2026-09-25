@@ -20,7 +20,8 @@ import {createEffectOriginReader} from './effect-origins.js';
 import {createEffectFieldReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
 import {readWorldWater, type WorldWater} from './water-materials.js';
-import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, recordField, recordRef, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
+import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, recordField, recordRef, validRenderData, type RenderDecodeData, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
+import {deriveRenderData, shaderFacts, type ShaderFacts} from './render-shape.js';
 import {b64FromTyped} from '../b64.js';
 import { loadWorldProfile, type FetchJson } from './profile.js';
 import { fillRoomNames } from './room-graph.js';
@@ -28,13 +29,13 @@ import { deriveRoomAmbience } from './room-ambience.js';
 import { deriveMapRoomRecords } from '../maps/records.js';
 import { decodeMapAnnotationTable } from '../maps/bindings.js';
 import { validateMapDecodeData } from '../maps/decode-data.js';
-import { deriveRoomMetadata, resolveValue } from './room-metadata.js';
+import { decodeGlyphText, deriveRoomMetadata, resolveValue } from './room-metadata.js';
 import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader} from './placement.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
 import { SpawnGraph } from './spawns.js';
-import { decodeObject, makeSlabReader } from '../bundles.js';
+import { decodeObject, makeSlabReader, readRaw } from '../bundles.js';
 import { hashObject } from '../hash.js';
 
 const UTF8_ENCODER = new TextEncoder();
@@ -184,6 +185,23 @@ export async function extractWorld({
   try {
     worldWater = readWorldWater(placementData?.water, rows, rowDecoder, pool.values);
   } catch { /* unreadable water data: plain surfaces */ }
+  // How the game draws this build (render-shape.ts): from the bundles, with
+  // the per-build decode data's quest-lit rooms. Needs both shader bundles.
+  let renderData: RenderDecodeData | null = null;
+  try {
+    const facts = async (n: number) => {
+      if (!files[n] || !frames[n]) return null;
+      const out: (ShaderFacts | null)[] = [];
+      for (const e of frames[n].entries) out.push(shaderFacts(decodeObject(n as 4, await readRaw(files[n], e))));
+      return out as ShaderFacts[];
+    };
+    const [vertex, pixel] = [await facts(7), await facts(4)];
+    renderData = deriveRenderData({
+      graphics: dt.graphics, vertex, pixel, ab0,
+      reg: { rows, pool: pool.values, decode: rowDecoder, symbols: dt.symbols },
+      text: (n) => decodeGlyphText(n, dt.charset),
+    }, placementData?.render ?? null);
+  } catch { renderData = null; }
   step('pool', 1, 1);
   bail();
 
@@ -209,6 +227,7 @@ export async function extractWorld({
   const contentHashes = new Map<number, string>(); // ab2 idx -> sha256/16 of decoded bytes
   const environmentSlots = new Map<number, number>(); // ab2 idx -> environment record slot
   const environmentPresets = new Map<number, PoolNode>(); // ab2 idx -> inline environment preset
+  const environmentCandidates = new Map<number, { rooms: number; slots: Map<number, number>; presets: Map<number, PoolNode> }>();
   // An inline preset in pool form. The room drops the preset's boolean (a bare
   // marker), so its values fill the slots the environment reads, in order.
   const inlinePreset = (group: any, table: any[], slots: number[]): PoolNode | null => {
@@ -246,16 +265,27 @@ export async function extractWorld({
         colourGrids.set(i, {x0: ox0, y0: oy0, width: ox1 - ox0, height: oy1 - oy0, colours: colours as number[][]});
       }
       // The room's scene environment (lights, vignette colour, height fade):
-      // a record, or a preset held inline in the room.
-      const envValue = placementData?.render?.environment.assetValue;
-      if (envValue !== undefined) {
-        const ref = roomMod.deref(parsed!.top.slice(parsed!.table.length)[envValue], parsed!.table);
-        if (ref?.kind === 'lit' && ref.tag === 0x26 && Number.isInteger(ref.value)) environmentSlots.set(i, ref.value);
-        else if (ref?.kind === 'group' && ref.cls === placementData!.render!.environment.presetClass) {
-          const slots = [...new Set(Object.values(placementData!.render!.environment.slots))].sort((a, b) => a - b);
-          const preset = inlinePreset(ref, parsed!.table, slots);
-          if (preset) environmentPresets.set(i, preset);
-        }
+      // a record, or a preset held inline in the room, at the room value most
+      // rooms use for one (chosen after the loop).
+      if (renderData) {
+        const env = renderData.environment;
+        const values = parsed!.top.slice(parsed!.table.length);
+        values.forEach((value: any, v: number) => {
+          const ref = roomMod.deref(value, parsed!.table);
+          let c = environmentCandidates.get(v);
+          if (ref?.kind === 'lit' && ref.tag === 0x26 && Number.isInteger(ref.value)) {
+            if (!c) environmentCandidates.set(v, c = { rooms: 0, slots: new Map(), presets: new Map() });
+            c.slots.set(i, ref.value);
+            if (rows[ref.value]?.runtime === env.family) c.rooms++;
+          } else if (ref?.kind === 'group' && ref.cls === env.presetClass) {
+            const slots = [...new Set(Object.values(env.slots))].sort((a, b) => a - b);
+            const preset = inlinePreset(ref, parsed!.table, slots);
+            if (!preset) return;
+            if (!c) environmentCandidates.set(v, c = { rooms: 0, slots: new Map(), presets: new Map() });
+            c.presets.set(i, preset);
+            c.rooms++;
+          }
+        });
       }
       rooms.push({
         idx: i,
@@ -270,6 +300,17 @@ export async function extractWorld({
     if (i % 10 === 0 || i === entries2.length - 1) step('rooms', i + 1, entries2.length);
   }
   if (!layersById.size) throw new Error('no rooms found in assetBundle2. Mixed game versions?');
+  if (renderData) {
+    let best = -1;
+    for (const [v, c] of environmentCandidates) if (best < 0 || c.rooms > environmentCandidates.get(best)!.rooms) best = v;
+    if (best < 0) renderData = null;
+    else {
+      renderData.environment.assetValue = best;
+      for (const [room, slot] of environmentCandidates.get(best)!.slots) environmentSlots.set(room, slot);
+      for (const [room, preset] of environmentCandidates.get(best)!.presets) environmentPresets.set(room, preset);
+    }
+  }
+  environmentCandidates.clear();
 
   const roomMetadata = deriveRoomMetadata(rows, pool.values, ab0, profile, dt.charset, rooms.map(r => r.idx));
   let annotationTable;
@@ -400,7 +441,6 @@ export async function extractWorld({
   // ---- card pictures (cards.ts): each model's card, drawn by the viewer ------
   // Card constants found in this bundle (card-data.ts); the lights need the
   // render data, else the viewer's default lights apply.
-  const renderData = placementData?.render ?? null;
   let cards: ReturnType<typeof readCards> | null = null;
   const cardData = deriveCardData({ rows, pool: pool.values, charset: dt.charset, decode: rowDecoder });
   if (cardData) {
@@ -791,8 +831,8 @@ export async function extractWorld({
   // How the game draws the world: program tables, materials and each room's
   // scene environment, from the optional per-build render bindings.
   try {
-    const render = placementData?.render;
-    if (render) {
+    const render = renderData;
+    if (render && validRenderData(render)) {
       const environments: Record<string, RenderEnvironment> = {};
       const story: Record<string, StoryEnvironment> = {};
       const field = (slot: number, op: number) => recordField(rows, rowDecoder, pool.values, slot, op);

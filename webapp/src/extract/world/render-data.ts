@@ -1,10 +1,12 @@
-// Optional per-build decode data is produced offline purely from analysis of
-// the game's own files, never by inspecting or modifying a running game
-// process or its memory. It describes how the game draws its world: the
-// shader pair and state of every program, vertex formats, samplers, the
-// material fields that choose programs, and frame constants. Values the game
-// stores (lights, the sun direction, the shadow view) are read from the
-// user's bundle at the offsets given here.
+// How the game draws a build: the shader pair and state of every program,
+// vertex formats, samplers, the material fields that choose programs, room
+// environments and frame constants. render-shape.ts reads all of it from the
+// user's bundles; the optional per-build decode data adds only the rooms whose
+// lighting follows a quest and the dynamic-list field (RenderBuildData). That
+// data is produced offline purely from analysis of the game's own files, never
+// by inspecting or modifying a running game process or its memory. Values the
+// game stores (lights, the sun direction, the shadow view) are read from the
+// user's bundle at the offsets found there.
 import {resolveValue} from './room-metadata.js';
 import type {FillRow} from './replay.js';
 import {PoolDecoder, profileArities, type PoolNode} from './value-pool.js';
@@ -97,6 +99,22 @@ export function validRenderData(d: any): d is RenderDecodeData {
     && !!v && [v.radius, v.overlayRadius, v.avatarOffset].every(finite) && Array.isArray(v.avatarFloor)
     && v.avatarFloor.length === 4 && v.avatarFloor.every(finite)
     && finite(d.clock?.ticksPerSecond) && d.clock.ticksPerSecond > 0;
+}
+
+/** What only the per-build decode data can tell about how a build draws
+ *  (render-shape.ts reads the rest from the user's bundles): the rooms whose
+ *  lighting follows a quest, and the element field of the dynamic list. */
+export interface RenderBuildData {
+  story?: {rooms: {roomRuntime: number; variable: number; steps: [number, number][]}[]};
+  scene?: {dynamicField: number};
+}
+
+export function validRenderBuildData(d: any): d is RenderBuildData {
+  if (!d || typeof d !== 'object') return false;
+  if (d.story !== undefined && !(Array.isArray(d.story?.rooms) && d.story.rooms.every((r: any) => index(r?.roomRuntime)
+    && index(r?.variable) && Array.isArray(r.steps) && r.steps.length > 0 && r.steps.every((st: any) => Array.isArray(st)
+      && st.length === 2 && index(st[0]) && (st[1] === -1 || index(st[1])))))) return false;
+  return d.scene === undefined || index(d.scene?.dynamicField);
 }
 
 type RawField = {op: number; kind: string; node?: any; value?: any};

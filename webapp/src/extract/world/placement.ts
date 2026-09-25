@@ -10,7 +10,7 @@ import {validEffectProperties, type EffectPropertyBinding} from './effect-proper
 import {validEffectFields, type EffectFieldData} from './effect-fields.js';
 import {validEffectWaves, type EffectWaveData} from './effect-waves.js';
 import {validWaterData, type WaterDecodeData} from './water-materials.js';
-import {validRenderData, type RenderDecodeData} from './render-data.js';
+import {validRenderBuildData, type RenderBuildData} from './render-data.js';
 import {validTileData, type TileDecodeData} from './tile-colour.js';
 import {deref, type RoomNode} from './room.js';
 import {makeRegistryRowDecoder} from './effects.js';
@@ -40,7 +40,7 @@ export interface PlacementDecodeData {
   effectFields?: EffectFieldData;
   effectWaves?: EffectWaveData;
   water?: WaterDecodeData;
-  render?: RenderDecodeData;
+  render?: RenderBuildData;
   tiles?: TileDecodeData;
   effectMotion?: {
     controllers: {runtime:number; field:number}[];
@@ -91,7 +91,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectFields!==undefined&&!validEffectFields(data.effectFields))throw Error('invalid effect field bindings');
   if(data.effectWaves!==undefined&&!validEffectWaves(data.effectWaves))throw Error('invalid effect wave bindings');
   if(data.water!==undefined&&!validWaterData(data.water))throw Error('invalid water bindings');
-  if(data.render!==undefined&&!validRenderData(data.render))throw Error('invalid render bindings');
+  if(data.render!==undefined&&!validRenderBuildData(data.render))throw Error('invalid render bindings');
   if(data.tiles!==undefined&&!validTileData(data.tiles))throw Error('invalid tile colour bindings');
   return data;
 }
