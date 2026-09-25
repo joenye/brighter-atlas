@@ -91,7 +91,7 @@ export class Scene3D {
     this.controls.dampingFactor = 0.12;
 
     // lights (Z-up: hemisphere "sky" direction along +Z); intensities come
-    // from the persisted viewer-lighting prefs (adjustable via the 💡 panel)
+    // from the persisted viewer-lighting prefs (adjustable via the Lighting panel)
     const lights = savedLights();
     this.hemi = new THREE.HemisphereLight(0xcdd9ee, 0x33291f, lights.ambient);
     this.hemi.position.set(0, 0, 1);
@@ -256,7 +256,7 @@ function applyLightsTo(scene: Scene3D, v: ViewerLights): void {
   scene.fill.intensity = v.fill;
 }
 
-// Toolbar 💡 button + a floating "Lighting" overlay (the world panel's
+// Toolbar Lighting button + a floating "Lighting" overlay (the world panel's
 // Lighting & effects controls, ported to the generic viewers). The panel
 // mounts inside the scene host; values write through to prefs live.
 export function makeLightToggle(scene: Scene3D): HTMLButtonElement {
@@ -296,7 +296,7 @@ export function makeLightToggle(scene: Scene3D): HTMLButtonElement {
     }
   });
   scene.host.appendChild(panel);
-  const btn = el('button', { class: 'btn', text: '💡', title: 'Adjust the viewer lighting (persists across assets)' });
+  const btn = el('button', { class: 'btn', text: 'Lighting', title: 'Adjust the viewer lighting (persists across assets)' });
   btn.addEventListener('click', () => {
     panel.hidden = !panel.hidden;
     btn.classList.toggle('active', !panel.hidden);

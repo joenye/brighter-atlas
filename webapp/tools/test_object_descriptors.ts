@@ -13,7 +13,7 @@ try {
   const int=(v:number)=>{const b=new Uint8Array(4);new DataView(b.buffer).setInt32(0,v);return [10,...b];};
   const scalar=(v:number)=>{const b=new Uint8Array(4);new DataView(b.buffer).setFloat32(0,v);return [11,...b];};
   const ref=(tag:number,v:number)=>[tag,...uint(v)],nil=ref(15,9);
-  const charset=Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz é🪵');
+  const charset=Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz é\u{F0068}');
   const text=(value:string)=>[14,...uint(Array.from(value).length),...Array.from(value,ch=>charset.indexOf(ch))];
   const typed=(nodes:number[][])=>[36,...uint(91),...nodes.flat()];
   const descriptor=(name:string,qualifier:string|null,glyph:number[])=>typed([text(name),qualifier===null?nil:text(qualifier),glyph,ref(38,0),[13]]);
@@ -23,7 +23,7 @@ try {
     data.push(...uint(slot),...values.flat());selectors[selector]={runtime:selector,ctor_varints:0,fill:['U',...values.map(()=> 'G')]};
     rows.push({slot,selector,runtime:selector,start,end:data.length,g:[],r:[],s:[],m:[],v:[]});return slot;
   };
-  const glyph=charset.indexOf('🪵');
+  const glyph=charset.indexOf('\u{F0068}');
   const skill=add([text('Gatherer'),scalar(1),ref(115,glyph),ref(115,glyph)]);
   const object=add([nil,[12],int(2),int(1),int(0),scalar(1),nil,
     descriptor('élder Log','Rare',ref(38,skill)),nil,descriptor('Log',null,ref(115,glyph))]);
