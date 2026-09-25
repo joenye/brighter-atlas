@@ -23,6 +23,7 @@ function validRule(v: unknown): v is MapColorRule {
   if (!object(v)) return false;
   if (v.kind === 'default') return true;
   if (v.kind === 'constant') return integer(v.value, 0x7fff);
+  if (v.kind === 'room') return integer(v.owner);
   return (v.kind === 'rgb' || v.kind === 'hsl') && integer(v.color, 3)
     && Array.isArray(v.multiply) && v.multiply.length === 3 && v.multiply.every(Number.isFinite);
 }

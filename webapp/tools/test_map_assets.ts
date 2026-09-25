@@ -30,6 +30,12 @@ try {
   assert.equal(resolveMapPalette(103,[1],[],new Map([[1,10]]),rules).get(1),10);
   assert.equal(resolveMapPalette(102,[1],[],new Map([[1,10]]),null).get(1),10);
   assert.throws(()=>resolveMapPalette(101,[2],[[1,0,0],[0,1,0]],new Map([[0,9]]),rules),/unresolved/);
+  // A room using another room's colours: that room's rule and base colours,
+  // or the shared rule when that room is not known.
+  const linked = {...rules,104:{0:{kind:'room',owner:7},1:{kind:'room',owner:7}}};
+  const roomOf = (owner:number) => owner===7 ? {runtime:102,colors:[[0,1,0]]} : undefined;
+  assert.deepEqual([...resolveMapPalette(104,[0,1],[[1,0,0]],new Map([[0,9],[1,10]]),linked,roomOf)],[[0,992],[1,7]]);
+  assert.deepEqual([...resolveMapPalette(104,[0,1],[[1,0,0]],new Map([[0,9],[1,10]]),linked)],[[0,31744],[1,10]]);
   assert.throws(()=>evaluateMapColor({kind:'default'},[],32768),/invalid/);
   assert.throws(()=>evaluateMapColor({kind:'rgb',color:1,multiply:[1,1,1]},[[1,1,1]],0),/invalid/);
 
@@ -136,6 +142,8 @@ try {
   assert.deepEqual(readMapDecodeData(undefined),{bindings:{},rooms:null});
   assert.deepEqual(readMapDecodeData({...mapData,kind:'other'}),{bindings:{},rooms:null});
   assert.equal(readMapDecodeData({...mapData,palette:{rooms:{101:{0:{kind:'constant',value:1e6}}}}}).rooms,null);
+  assert.deepEqual(readMapDecodeData({...mapData,palette:{rooms:{104:{0:{kind:'room',owner:7}}}}}).rooms,{104:{0:{kind:'room',owner:7}}});
+  assert.equal(readMapDecodeData({...mapData,palette:{rooms:{104:{0:{kind:'room',owner:-1}}}}}).rooms,null);
   // The fleck atlas: the referenced texture twelve 40-pixel cells wide whose
   // smaller levels halve.
   const level=(w:number,h:number)=>[0x16,w>>8,w&255,h>>8,h&255,0,0,0,0,0,0,0,0];

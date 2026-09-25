@@ -5,7 +5,10 @@ import {packMapColor} from './geometry.js';
 export type MapColorRule =
   | {kind: 'default'}
   | {kind: 'constant'; value: number}
-  | {kind: 'rgb' | 'hsl'; color: number; multiply: [number, number, number]};
+  | {kind: 'rgb' | 'hsl'; color: number; multiply: [number, number, number]}
+  // The colour another room gives this style: that room's own rule, with its
+  // own base colours.
+  | {kind: 'room'; owner: number};
 
 /** Each room type's own colour rules, by style key. */
 export type MapRoomRules = Record<string, Record<string, MapColorRule>>;
@@ -72,18 +75,31 @@ export function evaluateMapColor(
   return packMapColor(rule.kind === 'hsl' ? hslToRgb(scaled) : scaled);
 }
 
+/** A room's type and base colours, by its record. */
+export type MapRoomLookup = (owner: number) => {runtime: number; colors: readonly (readonly number[])[]} | undefined;
+
 // A room type without rules of its own (or a build without them) uses the
-// shared rules alone.
+// shared rules alone. A rule naming another room takes that room's rule and
+// base colours; when that room is unknown, the shared rule applies.
 export function resolveMapPalette(
   runtime: number, keys: Iterable<number>, colors: readonly (readonly number[])[],
-  defaults: ReadonlyMap<number, number>, rooms: MapRoomRules | null,
+  defaults: ReadonlyMap<number, number>, rooms: MapRoomRules | null, room?: MapRoomLookup,
 ): Map<number, number> {
-  const overrides = (rooms && Object.hasOwn(rooms, runtime) ? rooms[runtime] : null) ?? {};
+  const ruleOf = (type: number, key: number): MapColorRule | undefined =>
+    (rooms && Object.hasOwn(rooms, type) ? rooms[type] : null)?.[key];
+  const shared = (key: number): MapColorRule => MAP_BASE_RULES[key] ?? DEFAULT_RULE;
   const palette = new Map<number, number>();
   for (const key of keys) {
-    const rule = overrides[key] ?? MAP_BASE_RULES[key] ?? DEFAULT_RULE, fallback = defaults.get(key);
+    const fallback = defaults.get(key);
     if (fallback === undefined) throw Error(`unresolved map style ${key}`);
-    palette.set(key, evaluateMapColor(rule, colors, fallback));
+    let rule = ruleOf(runtime, key) ?? shared(key), source = colors;
+    for (let hops = 0; rule.kind === 'room'; hops++) {
+      const other = hops < 8 ? room?.(rule.owner) : undefined;
+      if (!other) { rule = shared(key); source = colors; break; }
+      rule = ruleOf(other.runtime, key) ?? shared(key);
+      source = other.colors;
+    }
+    palette.set(key, evaluateMapColor(rule, source, fallback));
   }
   return palette;
 }

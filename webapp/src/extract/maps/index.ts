@@ -50,7 +50,8 @@ export async function extractMaps({ab0,dt,files,frames,fetchJson,onProgress=()=>
     lookup,owner=>{
       const r=byOwner.get(owner)!;
       const keys=new Set(r.terrain.styles.flatMap(w=>[0,8,16,24].map(s=>w>>>s&255)));
-      return resolveMapPalette(rows[owner].runtime,keys,r.terrain.baseColors,styles.defaults,data.rooms);
+      return resolveMapPalette(rows[owner].runtime,keys,r.terrain.baseColors,styles.defaults,data.rooms,
+        other=>{const o=byOwner.get(other);return o&&{runtime:rows[other].runtime,colors:o.terrain.baseColors};});
     });
   const badge=mapBadgeFormatter(ab0,pool,profile,data,dt.charset,fixed);
   const rooms=[...records.values()].map(r=>{
