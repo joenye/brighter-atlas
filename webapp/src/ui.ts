@@ -44,6 +44,11 @@ export function badge(text: string, kind = '', title = ''): HTMLSpanElement {
   return el('span', { class: `badge ${kind}`, title: title || null, text });
 }
 
+// Map labels begin with the game's own icon, a private-use character that no
+// system font draws (it shows as an empty box): drop those for plain text.
+export function plainLabel(s: string): string {
+  return s.replace(/[\uE000-\uF8FF\u{F0000}-\u{10FFFF}]/gu, '').replace(/\s+/g, ' ').trim();
+}
 export function fmtInt(n: number | null | undefined): string { return n == null ? '-' : n.toLocaleString('en-US'); }
 
 export function fmtBytes(n: number | null | undefined): string {

@@ -2,7 +2,7 @@
 // friendly names and image categories. Indexes are pulled lazily the first
 // time the search box is used.
 
-import { el, clear, debounce, idLabel } from './ui.js';
+import { el, clear, debounce, idLabel, plainLabel } from './ui.js';
 import { effectiveName } from './names.js';
 import type { IndexEntry } from './store.js';
 
@@ -16,7 +16,7 @@ interface SearchItem {
   action?: () => void;
 }
 
-const roomTags = (r: IndexEntry): string[] => [r.episode?.name, ...(r.mapAnnotations || [])].filter(Boolean);
+const roomTags = (r: IndexEntry): string[] => [r.episode?.name, ...(r.mapAnnotations || []).map(plainLabel)].filter(Boolean);
 
 // per-category result formatting: [index key, group title, route, meta fn]
 const CAT_DEFS: [string, string, string, (e: any) => string][] = [

@@ -13,7 +13,7 @@ import { derivedGet, getVersion } from './storage.js';
 import { diffIndexes } from './diff.js';
 import { VList } from './virtual-list.js';
 import { GlobalSearch } from './search.js';
-import { el, clear, append, badge, kvTable, rawJson, fmtInt, fmtDur, fmtBytes, fmtNum, debounce, placeholderCard, idLabel, makeResizable, versionLabel, platformIcon } from './ui.js';
+import { el, clear, append, badge, kvTable, rawJson, fmtInt, fmtDur, fmtBytes, fmtNum, debounce, placeholderCard, idLabel, makeResizable, versionLabel, platformIcon, plainLabel } from './ui.js';
 import { initPanels, expandPanelForContent } from './panels.js';
 import { effectiveName, setLocalName, buildNamesFile, replaceNames, hydrateNames } from './names.js';
 import { bodySlot, bodySlotLabel, bodySlotTitle } from './mesh-slot.js';
@@ -1495,7 +1495,7 @@ class App {
     } else if (cat === 'rigs') {
       pairs = [['index', `#${e.i}`], ['bones', e.bones], ['file', e.f || 'not included']];
     } else if (cat === 'maps') {
-      pairs=[['room',e.room??'Full world'],['episode',e.episode?.name],['room labels',(e.mapAnnotations||[]).join(', ')||null]];
+      pairs=[['room',e.room??'Full world'],['episode',e.episode?.name],['room labels',(e.mapAnnotations||[]).map(plainLabel).join(', ')||null]];
     } else if (cat === 'strings') {
       pairs = [
         ['index', `#${e.i}`],
@@ -1523,7 +1523,7 @@ class App {
       ['name', r.name || null],
       ['episode', r.episode?.name ?? null],
       ['map position', r.mapPosition?.join(', ') ?? null],
-      ['map annotations', r.mapAnnotations?.length ? r.mapAnnotations.join(' · ') : null],
+      ['map annotations', r.mapAnnotations?.length ? r.mapAnnotations.map(plainLabel).join(' · ') : null],
       ['size', r.w && r.h ? `${r.w} × ${r.h} tiles` : null],
       ['plane', r.world?.plane ?? null],
       ['world position', r.world && Number.isFinite(r.world.x) ? `${r.world.x}, ${r.world.y}` : null],
