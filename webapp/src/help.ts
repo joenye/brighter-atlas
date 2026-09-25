@@ -41,10 +41,10 @@ export function buildHelpContent(): HTMLElement {
 
     ...section('Getting started',
       qa('What do I need?',
-        p('A desktop browser and your own Brighter Shores install. Mobile isn’t supported: it lacks the memory and storage this needs.')),
+        p('A desktop browser and your own Brighter Shores install. Mobile isn’t supported: it lacks the memory and storage this needs. (The world map on the home page needs neither, and works on phones.)')),
       qa('Where do the assets come from? (bring your own)',
         p('You supply your own ', code('assetBundle0'), ' … ', code('assetBundle8'),
-          ' files from your own Brighter Shores install. The app ships no game data: nothing is hosted, served or uploaded. ',
+          ' files from your own Brighter Shores install. Nothing you pick is uploaded, and the viewer serves no game data (the world map on the home page is the one part of the site that does). ',
           code('assetBundle0'), ' (the game’s master index) is always required; the others are only needed for the categories you choose to extract.')),
       qa('How do I use it?',
         p('Point it at your bundle files, pick what to extract, and it decodes everything in your browser. Return visits load instantly from storage.'))),
@@ -57,11 +57,15 @@ export function buildHelpContent(): HTMLElement {
         p(b('Images'), ': textures, sprites, icons and fonts. ',
           b('Audio'), ': music and sound effects, with a waveform player. ',
           b('Text'), ': all of the game’s text.'),
-        p(b('World'), ': the game world in 3D, every room with its placed meshes and spawns, ',
+        p(b('Models'), ': the game’s own multi-part models, named the way the game names them, plus your own saved combinations. ',
+          'Each has its in-game information card picture (download it as a picture), and Show in world opens the rooms it appears in.'),
+        p(b('2D Maps'), ': the game’s own 2D map of the whole world and of every room, labels included, filtered by episode, ',
+          'with each room’s contents to search and inspect, and a picture download at the size you choose.'),
+        p(b('World'), ': the game world in 3D, every room with its placed meshes and spawns, drawn with the game’s own lighting, materials and water, ',
           'one room at a time or merged into the whole map. Extracting it also recovers room names and the ',
           b('System'), ' texture and model catalog: the game’s own mesh-to-texture pairings and models, ',
           'which the rest of the app uses for texturing. ',
-          'World is available for supported game builds; if yours is not supported yet, everything else still works. ',
+          'World and 2D Maps are available for supported game builds; if yours is not supported yet, everything else still works. ',
           'Build support is plain decode data, derived purely from analysis of the game’s own files: nothing ever inspects or modifies a running game.')),
       qa('What are “bundles”?',
         p('The ', code('assetBundle0'), ' to ', code('assetBundle8'), ' files are the game’s on-disk asset cache. Roughly: ',
@@ -73,7 +77,7 @@ export function buildHelpContent(): HTMLElement {
     el('p', { class: 'help-legal small dim' },
       'A fan-made project, not affiliated with or endorsed by Fen Research. ',
       'Brighter Shores, its assets and trademarks belong to Fen Research. ',
-      'Bring your own game files; no game data is hosted, served or uploaded.'));
+      'Bring your own game files: nothing you pick is uploaded, and the only game data the site serves is the world map on its home page.'));
 
   // build version (Git tag + commit), baked in at deploy time; "dev build" locally
   const verEl = el('b', { text: buildLabel() });

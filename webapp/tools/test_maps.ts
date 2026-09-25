@@ -11,7 +11,7 @@ const {root,cleanup}=await shimWebroot('atlas-maps-'),fixture=mapFixture();
 for(const dir of ['data/maps','data/index','downloads'])await mkdir(path.join(root,dir),{recursive:true});
 for(const [name,data] of [['manifest.json',fixture.manifest],['index/maps.json',fixture.index],['maps/scene.json',fixture.doc],['maps/room-data.json',fixture.roomData]] as const)
   await writeFile(path.join(root,'data',name),JSON.stringify(data));
-const {server,port}=await serve(root),base=`http://127.0.0.1:${port}/?data=data`;
+const {server,port}=await serve(root),base=`http://127.0.0.1:${port}/viewer.html?data=data`;
 const browser=await puppeteer.launch({executablePath:CHROME!,headless:true,args:['--no-sandbox',...GL_ARGS]});
 try{
   const page=await browser.newPage(),errors:string[]=[];

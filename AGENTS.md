@@ -20,12 +20,14 @@ its memory.
 
 ## The world map page (the one exception to "bring your own files")
 
-`webapp/world.html` (the site serves it at `/world`) draws the game's 2D map
+`webapp/index.html` (the site's home page) draws the game's 2D map
 for every game update from data the site itself serves under `world-data/`
 (see `webapp/src/world-atlas/data.ts` for the layout). That is the only game
 content the site distributes, and it is limited to the 2D map: terrain, room
 labels and their artwork. Nothing else from
-the game is ever served; a new feature that wants hosted game content is a
+the game is ever served. Areas the game has not shown (sealed episodes) are
+never served at all: the data carries only their silhouette, which the page
+draws dark under fog with the episode's logo. A new feature that wants hosted game content is a
 decision for the maintainer, never a default. The page stays small and
 simple: the labels switch, the update list and the date slider.
 

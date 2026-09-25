@@ -92,7 +92,7 @@ page.on('console', (m) => {
 
 // ---- 1. onboarding: upload the real bundles, select everything --------------
 let t0 = Date.now();
-await page.goto(`${base}/index.html`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.ob-drop', { timeout: 15000 });
 ok(true, 'fresh visit boots into the onboarding wizard');
 
@@ -262,7 +262,7 @@ ok(rigSlots.otherRigsInferred === 0,
 
 // ...and the rig view's slot facet is built from all of them, which is the
 // point: filtering "head" shows the whole head wardrobe, not the named few.
-await page.goto(`${base}/index.html#/rig/${rigSlots.rig}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/rig/${rigSlots.rig}`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.sm-slot option', { timeout: 30000 });
 const facet = await page.$eval('.sm-slot', (s) => [...s.options].slice(1).map((o) => o.text));
 const facetTotal = facet.reduce((sum, text) => sum + (Number(text.match(/\((\d+)\)$/)?.[1]) || 0), 0);
@@ -337,7 +337,7 @@ if(catState['2D Maps']?.checked) {
   ok(maps.rooms===rooms.length && maps.entries===rooms.length+1 && maps.patches>1000 && maps.glyphs>20 && maps.rgba,
     `2D map index, primitives and typed glyph pixels stored (${JSON.stringify(maps)})`);
   ok(maps.irregularEnemies>0,'map inventory retains enemy names whose singular and plural forms match');
-  await page.goto(`${base}/index.html#/map/0`,{waitUntil:'networkidle0'});
+  await page.goto(`${base}/viewer.html#/map/0`,{waitUntil:'networkidle0'});
   await page.waitForSelector('.map-view[data-ready="true"]',{timeout:120000});
   ok(await page.$eval('.map-view',e=>Number(e.dataset.rooms)>100 && Number(e.dataset.tiles)>1000),'full world map renders from stored primitives');
   ok(await page.$('[aria-label="PNG long edge in pixels"]')!==null,'map exposes resolution-selectable PNG export');
@@ -351,13 +351,13 @@ if(catState['2D Maps']?.checked) {
 
 // ---- 4. mesh route: a painted 3D canvas --------------------------------------
 // flagship mesh: the biggest exported one, via the UI's own triangles sort
-await page.goto(`${base}/index.html#/meshes`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/meshes`, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__bs?.app && document.querySelector('#list-host .vrow'), { timeout: 30000 });
 await page.select('#list-sort', 'triangles');
 await sleep(400);
 const meshI = await page.evaluate(() => window.__bs.app.filteredItems().find((m) => m.f)?.i ?? null);
 ok(meshI != null, `picked the largest exported mesh (#${meshI})`);
-await page.goto(`${base}/index.html#/mesh/${meshI}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/mesh/${meshI}`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
 await sleep(2000);
 const covMesh = await paintCoverage(page);
@@ -369,7 +369,7 @@ const skinnedI = await page.evaluate(async () => {
   return idx.find((m) => m.sk && m.skel >= 0 && m.f)?.i ?? null;
 });
 ok(skinnedI != null, `picked a skinned mesh with a rig (#${skinnedI})`);
-await page.goto(`${base}/index.html#/mesh/${skinnedI}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/mesh/${skinnedI}`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.anim-bar select', { timeout: 30000 });
 await sleep(800);
 const clipVal = await page.$eval('.anim-bar select',
@@ -452,7 +452,7 @@ let dyeDelta = 0;
 let dyeState: any = null;
 let withControl = 0;
 for (const i of dyeCandidates) {
-  await page.goto(`${base}/index.html#/mesh/${i}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/mesh/${i}`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
   await sleep(700);
   if (!(await page.$('.tex-dyes:not([hidden]) input.dye-swatch'))) continue;
@@ -589,7 +589,7 @@ const audioEntry = await page.evaluate(async () => {
 });
 ok(audioEntry != null && audioEntry.dur > 0,
   `picked an audio entry with a duration (#${audioEntry?.i} ${audioEntry?.codec} ${audioEntry?.dur}s)`);
-await page.goto(`${base}/index.html#/audio/${audioEntry.i}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/audio/${audioEntry.i}`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.audio-wave-wrap canvas', { timeout: 30000 });
 await page.waitForFunction(() => {
   const b = [...document.querySelectorAll('.viewer-toolbar .btn')].find((x) => x.textContent === '▶');
@@ -627,7 +627,7 @@ const imageI = await page.evaluate(async () => {
   return (idx.find((e) => e.cat === 'material' && e.f?.length) || idx.find((e) => e.f?.length))?.i ?? null;
 });
 ok(imageI != null, `picked an exported image (#${imageI})`);
-await page.goto(`${base}/index.html#/image/${imageI}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/image/${imageI}`, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => {
   const i = document.querySelector('.img-stage img');
   return i && i.naturalWidth > 0 && i.style.visibility !== 'hidden';
@@ -676,7 +676,7 @@ const ROOM = Number(roomArg)
   || rooms.find((r) => r.name === DEFAULT_ROOM_NAME)?.id
   || rooms.reduce((a, b) => (b.meshes > a.meshes ? b : a)).id;   // densest room fallback
 t0 = Date.now();
-await page.goto(`${base}/index.html#/world/${ROOM}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/world/${ROOM}`, { waitUntil: 'networkidle0' });
 await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 300000 });
 await sleep(2500);
 console.log(`  room ${ROOM} loaded in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
@@ -694,7 +694,7 @@ console.log(`  screenshot: ${shot}`);
 // Heavy (~all 451 rooms streamed + merged bake, SwiftShader here): perf
 // measurement only, never asserted, kept out of the default gate's runtime.
 if (process.env.BS_E2E_ALL_ROOMS === '1') {
-  await page.goto(`${base}/index.html#/world/all`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/world/all`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.world-loading .world-load-confirm', { timeout: 30000 });
   t0 = Date.now();
   await page.click('.world-loading .world-load-confirm');
@@ -1007,7 +1007,7 @@ for (const probe of [
     ok(true, `${probe.room} effects render skipped (room name absent)`);
     continue;
   }
-  await page.goto(`${base}/index.html#/world/${fxRoomId}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/world/${fxRoomId}`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 300000 });
   await page.waitForFunction(() => (window.__bs.worldView.effectsApi?.info().systems || 0) > 0,
     { timeout: 60000 });
@@ -1117,7 +1117,7 @@ ok(!!drawData && drawData.poses > 100, `actors rest in their own animation (${dr
 const beachId = rooms.find((r) => r.name === 'East Beach')?.id ?? null;
 if (beachId == null) ok(true, 'East Beach shading check skipped (room name absent)');
 else {
-  await page.goto(`${base}/index.html#/world/${beachId}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/world/${beachId}`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 180000 });
   const gameReady = await page.waitForFunction(() => window.__bs.worldView?.gameApi?.ready?.() === true, { timeout: 60000 })
     .then(() => true).catch(() => false);
@@ -1131,7 +1131,7 @@ else {
 }
 
 // ---- 8. Models list: the system catalog arrived with the World extraction -----
-await page.goto(`${base}/index.html#/models`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/models`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('#list-host .vrow', { timeout: 30000 });
 const modelRows = await page.$$eval('#list-host .vrow', (r) => r.length);
 ok(modelRows > 0, `Models list is non-empty (${modelRows} visible rows)`);
@@ -1143,7 +1143,7 @@ const vm = await page.evaluate(() => {
 });
 ok(vm != null, `found a multi-variant system model (${vm?.variants ?? 0} variants)`);
 if (vm) {
-  await page.goto(`${base}/index.html#/model/${vm.id}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/model/${vm.id}`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.variant-strip', { timeout: 20000 });
   const cells = await page.$$eval('.variant-strip .subthumb', (c) => c.length);
   ok(cells === vm.variants, `variant strip shows one cell per variant (${cells}/${vm.variants})`);
@@ -1181,7 +1181,7 @@ const hagCardId = await page.evaluate(async () => {
 });
 ok(typeof hagCardId === 'string' && hagCardId.startsWith('sys-'),
   `Street Hag resolves to exactly one merged card (${hagCardId})`);
-await page.goto(`${base}/index.html#/model/${hagCardId}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/model/${hagCardId}`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
 await sleep(2500);
 const hagState = await page.evaluate(() => {
@@ -1231,7 +1231,7 @@ const coloredCardId = await page.evaluate(async () => {
 });
 ok(typeof coloredCardId === 'string' && coloredCardId.startsWith('sys-'),
   `found a system card with authored (non-neutral) recolours (${coloredCardId})`);
-await page.goto(`${base}/index.html#/model/${coloredCardId}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/model/${coloredCardId}`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
 await sleep(2500);
 const coloredState = await page.evaluate(() => {
@@ -1261,7 +1261,7 @@ const trollId = await page.evaluate(async () => {
   const models = await window.__bs.app.store.json(rel);
   return models.find((m) => m.name === 'Troll Mystic')?.id || null;
 });
-await page.goto(`${base}/index.html#/model/${trollId}`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/model/${trollId}`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
 await sleep(2500);
 const trollState = await page.evaluate(() => {
@@ -1323,7 +1323,7 @@ if (!snail) {
   console.log('  WARN: no Electric Snail model/effect system found in this build, skipping model-page effects check');
   ok(true, 'model-page effects skipped (Electric Snail absent)');
 } else {
-  await page.goto(`${base}/index.html#/model/${snail.id}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/model/${snail.id}`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
   await page.waitForFunction(() => typeof (window as any).__bs.modelView?.effectsInfo === 'function', { timeout: 20000 });
   await page.waitForFunction(() => ((window as any).__bs.modelView.effectsInfo().systems || []).length > 0, { timeout: 20000 })
@@ -1375,7 +1375,7 @@ if (!rat) {
   console.log('  WARN: no Giant Rat model found in this build, skipping rat aura screenshot');
   ok(true, 'model-page rat aura skipped (Giant Rat absent)');
 } else {
-  await page.goto(`${base}/index.html#/model/${rat.id}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/model/${rat.id}`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.canvas-host canvas', { timeout: 30000 });
   await page.waitForFunction(() => typeof (window as any).__bs.modelView?.effectsInfo === 'function', { timeout: 20000 });
   await page.waitForFunction(() => ((window as any).__bs.modelView.effectsInfo().systems || []).length > 0, { timeout: 20000 })
@@ -1441,7 +1441,7 @@ const boundEffect = await page.evaluate(async () => {
   return null;
 });
 if (boundEffect) {
-  await page.goto(`${base}/index.html#/model/${boundEffect.id}`, {waitUntil: 'networkidle0'});
+  await page.goto(`${base}/viewer.html#/model/${boundEffect.id}`, {waitUntil: 'networkidle0'});
   await page.waitForFunction(slot => (window as any).__bs.modelView?.effectsInfo?.().systems.some((s: any) => s.slot === slot),
     {timeout: 30000}, boundEffect.slot);
   ok(await page.evaluate(slot => {
@@ -1504,7 +1504,7 @@ const cardCount = await page.evaluate(async () => {
 ok(cardCount > 300, `card pictures stored for the models (${cardCount})`);
 if (!bearId) ok(true, 'card and Show in world checks skipped (Bear absent)');
 else {
-  await page.goto(`${base}/index.html#/models/${encodeURIComponent(bearId)}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html#/models/${encodeURIComponent(bearId)}`, { waitUntil: 'networkidle0' });
   const cardBtn = await page.waitForFunction(() => [...document.querySelectorAll('button')]
     .some((b) => /Card$/.test(b.textContent.trim()) && b.style.display !== 'none'), { timeout: 30000 }).then(() => true).catch(() => false);
   ok(cardBtn, 'the Bear model offers its card picture');
@@ -1551,7 +1551,7 @@ const namedModels = await page.evaluate(async () => {
 ok(namedModels.length === 4, `well-known models carry the game's names (${namedModels.join(', ')})`);
 
 // ---- 8b. strings viewer + global search ----------------------------------------
-await page.goto(`${base}/index.html#/strings`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html#/strings`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.vrow', { timeout: 15000 });
 const stringRows = await page.$$eval('.vrow', (r) => r.length);
 ok(stringRows > 5, `strings list renders (${stringRows} visible rows)`);
@@ -1583,7 +1583,7 @@ await sleep(200);
 
 // ---- 9. return visit: instant boot from storage, no re-extract ----------------
 t0 = Date.now();
-await page.goto(`${base}/index.html`, { waitUntil: 'networkidle0' });
+await page.goto(`${base}/viewer.html`, { waitUntil: 'networkidle0' });
 await page.waitForSelector('.vrow', { timeout: 20000 });
 ok((Date.now() - t0) < 15000, `return visit boots from storage in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 ok(await page.$('.ob-drop') === null, 'no onboarding on return visit');

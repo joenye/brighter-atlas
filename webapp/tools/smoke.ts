@@ -74,7 +74,7 @@ async function newPage(browser: any, allow: string[] = []) {
 async function fixtureSuite(browser: any, base: string) {
   console.log('\n== fixtures suite ==');
   const { page, errors } = await newPage(browser);
-  const u = (hash) => `${base}/index.html?data=data-fixtures${hash}`;
+  const u = (hash) => `${base}/viewer.html?data=data-fixtures${hash}`;
 
   // ---- mesh 0: static cube paints ----------------------------------------
   await page.goto(u('#/mesh/0'), { waitUntil: 'networkidle0' });
@@ -596,7 +596,7 @@ async function fixtureSuite(browser: any, base: string) {
 async function worldSuite(browser: any, base: string) {
   console.log('\n== world suite (fixtures) ==');
   const { page, errors } = await newPage(browser);
-  const u = (hash) => `${base}/index.html?data=data-fixtures${hash}`;
+  const u = (hash) => `${base}/viewer.html?data=data-fixtures${hash}`;
 
   // ---- landing: world present -> stats + list hint --------------------------
   await page.goto(u('#/world'), { waitUntil: 'networkidle0' });
@@ -1867,7 +1867,7 @@ async function onboardingSuite(browser: any) {
 
   // the fresh visit legitimately 404s the default HTTP data tree once
   const { page, errors } = await newPage(browser, ['data/manifest.json', 'data-nonexistent/manifest.json', 'builds/']);
-  await page.goto(`${base}/index.html`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.ob-drop', { timeout: 15000 });
   ok(true, 'fresh visit (no stored data) boots into the onboarding wizard');
   ok(await page.$eval('.onboard', (n) => /not affiliated/i.test(n.textContent) && /fan-made/i.test(n.textContent)),
@@ -1918,7 +1918,7 @@ async function onboardingSuite(browser: any) {
   ok(await page.$$eval('.ob-bundle.ok', (els) => els.length) === 9, 'Back returns to the pick step with the files kept');
 
   // ---- classic ?data= landing: explicit HTTP tree missing -> guidance card ----
-  await page.goto(`${base}/index.html?data=data-nonexistent`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html?data=data-nonexistent`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.card');
   ok(await page.$eval('.card', (n) => !!n.querySelector('a[href*="data-fixtures"]')),
     'classic ?data= landing links to the built-in fixtures dataset');
@@ -1944,7 +1944,7 @@ async function mobileGateSuite(browser: any) {
     viewport: { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true },
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
   });
-  await page.goto(`${base}/index.html`, { waitUntil: 'networkidle0' });
+  await page.goto(`${base}/viewer.html`, { waitUntil: 'networkidle0' });
   await page.waitForSelector('.mgate', { timeout: 15000 });
   ok(await page.$('.ob-drop') === null, 'phone boot mounts the gate, not the onboarding wizard');
   ok(await page.$eval('#app', (n) => getComputedStyle(n).display === 'none'), 'app chrome stays hidden behind the gate');
@@ -1957,8 +1957,8 @@ async function mobileGateSuite(browser: any) {
     href: n.getAttribute('href'), target: n.getAttribute('target'), rel: n.getAttribute('rel'),
     svg: !!n.querySelector('svg'),
   })));
-  ok(acts.length === 3 && acts.every((a) => a.h >= 44),
-    `gate offers 3 tappable actions ≥44px (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
+  ok(acts.length === 4 && acts.every((a) => a.h >= 44) && /World map/.test(acts[0].label) && acts[0].href === './',
+    `gate offers 4 tappable actions ≥44px, the world map (home page) first (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
   // the single source of truth for each URL/icon is the (hidden) topbar markup
   const srcLinks = await page.evaluate(() => Object.fromEntries(['discord', 'github'].map((k) =>
     [k, document.querySelector(`#topbar .top-social.${k}`)?.getAttribute('href')])));
@@ -2013,7 +2013,7 @@ async function mobileGateSuite(browser: any) {
   // a NARROW DESKTOP window (mouse, no touch) must never gate
   const desk = await newPage(browser, ['data/manifest.json', 'builds/']);
   await desk.page.setViewport({ width: 640, height: 720 });
-  await desk.page.goto(`${base}/index.html`, { waitUntil: 'networkidle0' });
+  await desk.page.goto(`${base}/viewer.html`, { waitUntil: 'networkidle0' });
   await desk.page.waitForSelector('.ob-drop', { timeout: 15000 });
   ok(await desk.page.$('.mgate') === null, 'narrow desktop window (fine pointer) never gates');
   ok(desk.errors.length === 0, `zero console errors in narrow-desktop check${desk.errors.length ? `:\n    ${desk.errors.join('\n    ')}` : ''}`);
@@ -2026,7 +2026,7 @@ async function mobileGateSuite(browser: any) {
 async function realSuite(browser: any, base: string, dataDir: string) {
   console.log(`\n== real data suite (${dataDir}) ==`);
   const { page, errors } = await newPage(browser);
-  const u = (hash) => `${base}/index.html?data=${dataDir}${hash}`;
+  const u = (hash) => `${base}/viewer.html?data=${dataDir}${hash}`;
 
   // mesh 3855: largest mesh, skinned, flagship animation test
   await page.goto(u('#/mesh/3855'), { waitUntil: 'networkidle0' });

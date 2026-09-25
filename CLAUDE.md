@@ -4,7 +4,7 @@ A fully client-side viewer for the **Brighter Shores** asset bundles
 (engine "mahogany", Fen Research). Users provide their own `assetBundle0` to
 `assetBundle8` cache files; everything decodes in-browser. **No game data is
 committed, ever, and none is distributed, with one exception:** the world map
-page (`world.html`, served at `/world`) draws every game update's 2D map
+page (`index.html`, the site's home page) draws every game update's 2D map
 (terrain, room labels and their artwork)
 from data the site serves under `world-data/`. Nothing else from the game is
 served; widening that is the maintainer's decision (AGENTS.md).
@@ -16,8 +16,13 @@ served; widening that is the maintainer's decision (AGENTS.md).
   libraries (npm devDeps exist only for their types). `defaults/` ships the
   shared room-name override table (no user annotations). `data-fixtures/` is
   the committed synthetic dataset the smoke test runs against.
-- `world.html` + `src/world-atlas/` + `css/world.css`: the world map page,
-  a separate entry (`js/world.js`) that needs no game files. It reuses the
+- Two pages. `index.html` (the home page, `/`) is the world map:
+  `src/world-atlas/` + `css/world.css`, entry `js/world.js`, no game files
+  needed. `viewer.html` (`/viewer`) is the viewer for the user's own files,
+  entry `js/main.js`. The world map forwards old viewer links (`/#/...`,
+  `/?data=...`) to `/viewer` unchanged. Sealed areas (episodes the game has
+  not shown) arrive as silhouettes only and are drawn dark under fog by
+  `src/world-atlas/sealed.ts`. The world map reuses the
   Maps renderer and camera (`viewers/maps/renderer.ts`, `pan-zoom.ts`);
   `tools/test_world.ts` (run by smoke) covers it on synthetic data.
 - Hosting, deployment and release tooling are **not part of this repo**: it
@@ -46,15 +51,23 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   looking at a mesh rather than what it IS. They persist the same way
   (IndexedDB `userdata`, keyed by mesh content hash) but are not part of the
   portable file, and they add no save/load UI of their own.
-- **The runtime layout is a contract.** `index.html` loads `js/main.js`;
+- **The runtime layout is a contract.** `viewer.html` loads `js/main.js`,
+  `index.html` loads `js/world.js`;
   workers are spawned by path (`js/extract/worker.js`, …); the service worker
   must stay at the webapp root (`sw.js`) so its scope covers the page, and it
   serves decoded payloads at `cs/<versionId>/…`. The esbuild config
   (`tools/build.ts`) maps entry points to exactly these paths. Keep it
   that way.
-- **World support is per game build**: the app looks up per-build data on
-  the site origin at extraction time; an unsupported build simply lacks the
-  World category and everything else keeps working.
+- **World and 2D Maps support is per game build**: the app looks up per-build
+  data on the site origin at extraction time; an unsupported build simply
+  lacks those categories and everything else keeps working.
+- **Categories.** Meshes, Images, Audio, Animations, Rigs, Text, World, 2D
+  Maps and Models. 2D Maps (`extract/maps/`, `viewers/maps.ts` +
+  `viewers/maps/`) reads the game's own map records and draws them with its
+  terrain and label artwork; the world map page reuses its renderer. Card
+  pictures (`extract/world/card-data.ts`, `viewers/world/card.ts`,
+  `viewers/card-modal.ts`) render a model's in-game Info card with the
+  game's own camera, pose and lights.
 - **World decode is build-agnostic** (older builds shift their structural
   layout). Never hardcode an absolute generic-field op position or a
   fixed-offset field base in `extract/world/*`: older builds pack these

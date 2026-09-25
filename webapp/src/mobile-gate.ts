@@ -2,7 +2,7 @@
 // full-viewport greeting instead of an app they can't run. main.ts skips the
 // whole app boot when this mounts, so the gate is all the device pays for.
 // DRY by construction: the brand lockup and the Discord/GitHub links are
-// CLONED from the (hidden) topbar markup in index.html (their URLs and SVG
+// CLONED from the (hidden) topbar markup in viewer.html (their URLs and SVG
 // icons exist only there), and the inline help view renders help.ts's shared
 // content builder. Styling lives in the .mgate-* block of css/app.css, which
 // also holds the anti-flash rule keyed off the .mgate-on/.mgate-off classes
@@ -44,7 +44,10 @@ function renderHome(root: HTMLElement): HTMLElement {
     'Help/FAQs');
   helpBtn.addEventListener('click', () => renderHelp(root));
 
-  const actions = el('div', { class: 'mgate-actions' }, helpBtn);
+  // the part of the site that works on a phone: the world map (home page)
+  const worldLink = el('a', { class: 'mgate-action', href: './' },
+    el('span', { class: 'mgate-action-ico', 'aria-hidden': 'true', text: '◮' }), 'World map');
+  const actions = el('div', { class: 'mgate-actions' }, worldLink, helpBtn);
   for (const key of ['discord', 'github']) {
     const a = cloneTopbar(`#topbar .top-social.${key}`);
     if (!a) continue;   // topbar markup moved: degrade to Help only
@@ -59,9 +62,9 @@ function renderHome(root: HTMLElement): HTMLElement {
   const previews = el('div', { class: 'mgate-previews' },
     el('h2', { class: 'mgate-previews-label', text: 'Screenshots' }),
     ...([
-      ['assets/preview-world.jpg', 'The whole game world, explorable in 3D'],
-      ['assets/preview-model.jpg', 'Models with their variants, textures, and animations'],
-      ['assets/preview-audio.jpg', 'Play music and sound effects'],
+      ['assets/preview-world.jpg', 'Every room in 3D, lit and shaded the way the game draws it'],
+      ['assets/preview-model.jpg', 'Models with their in-game card pictures, variants and animations'],
+      ['assets/preview-maps.jpg', 'The game’s own 2D maps, for every room'],
     ] as const).map(([src, caption]) => el('figure', { class: 'mgate-preview' },
       el('img', { src, alt: caption, loading: 'lazy', decoding: 'async' }),
       el('figcaption', { text: caption }))));

@@ -1,5 +1,5 @@
 // Build: bundle each runtime entry point with esbuild to the exact paths the
-// app expects at runtime (index.html loads js/main.js; the service worker
+// app expects at runtime (viewer.html loads js/main.js, index.html js/world.js; the service worker
 // must sit at the app root so its scope covers the page; workers are spawned
 // by path string).
 //

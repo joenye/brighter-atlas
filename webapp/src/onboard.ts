@@ -129,6 +129,8 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
         : el('p', { class: 'dim' },
           'This app decodes the Brighter Shores asset bundles entirely in your browser. ',
           'Pick the files once: they are stored locally so next time it loads instantly.'),
+      ...(existing ? [] : [el('p', { class: 'ob-world-link' },
+        'No game files? ', el('a', { href: './', text: 'Browse the world map for every game update' }), '.')]),
       wherePaths,
       drop, grid,
       el('div', { class: 'ob-actions' },
@@ -137,7 +139,7 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
         el('span', { class: 'spacer' }), next),
       el('p', { class: 'dim small ob-legal' },
         'A fan-made project, not affiliated with or endorsed by Fen Research. ',
-        'Bring your own game files; no game data is hosted, served or uploaded. ',
+        'Bring your own game files: nothing you pick is uploaded, and the only game data the site serves is the world map on its home page. ',
         DESKTOP_ONLY_LINE));
   }
 
