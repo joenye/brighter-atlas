@@ -1,4 +1,4 @@
-// The hosted world map (world.html, served at /world): the 2D map of every
+// The world map (index.html: the site's home page): the 2D map of every
 // game release, no game files needed. Pick a release from the list or slide
 // through the dates; the camera stays put so the world can be watched
 // changing. The state lives in the URL hash (#r=<release id or YYYY-MM-DD>
@@ -7,6 +7,14 @@
 import { MapRenderer } from '../viewers/maps/renderer.js';
 import { attachPanZoom, fitCamera, type MapCamera } from '../viewers/maps/pan-zoom.js';
 import { createWorldData, type WorldMap, type WorldRelease } from './data.js';
+import { SealedLayer } from './sealed.js';
+import { openWhatsNew, maybeAutoShowWhatsNew } from '../changelog.js';
+import { buildVersionLabel, buildInfoReady } from '../build-info.js';
+
+// Links from before the site opened on the world map (#/mesh/3, ?data=...)
+// belong to the viewer (viewer.html, at /viewer): send them on whole.
+const viewerLink = location.hash.startsWith('#/') || new URLSearchParams(location.search).has('data');
+if (viewerLink) location.replace(`viewer${location.search}${location.hash}`);
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('world-canvas'), host = canvas.parentElement!;
@@ -16,28 +24,33 @@ const prev = $<HTMLButtonElement>('world-prev'), next = $<HTMLButtonElement>('wo
 const labels = $<HTMLInputElement>('world-labels');
 const picker = $('world-picker'), search = $<HTMLInputElement>('world-search'), list = $('world-list');
 
+// Safari's own pinch zoom (its gesture events) would zoom the whole page:
+// the map does its own pinch, so the page never zooms
+for (const type of ['gesturestart', 'gesturechange']) document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+
 const data = createWorldData();
 const camera: MapCamera = { cx: 0, cy: 0, scale: 1 };
 let releases: WorldRelease[] = [];
 let current: WorldMap | null = null, renderer: MapRenderer | null = null;
-let wanted: WorldRelease | null = null, raf = 0, prefetching = false, cameraFromUrl = false;
+let wanted: WorldRelease | null = null, raf = 0, prefetching = false, cameraFromUrl = false, refit = false;
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const dateOf = (r: WorldRelease) => new Date(r.date);
-const dayText = (d: Date) => `${String(d.getUTCDate()).padStart(2, '0')} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-const timeText = (d: Date) => `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`;
 const minutes = (r: WorldRelease) => Math.round(dateOf(r).getTime() / 60000);
-// same-day updates keep the time so each is told apart
+// every update as the viewer writes dates (21-Sep-2026), with its UTC time
 const releaseText = (r: WorldRelease) => {
-  const d = dateOf(r), day = dayText(d);
-  const sameDay = releases.filter((o) => dayText(dateOf(o)) === day).length > 1;
-  return sameDay ? `${day}, ${timeText(d)}` : day;
+  const d = dateOf(r), p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getUTCDate())}-${MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
 };
 
 // ---------------------------------------------------------------- drawing
+// sealed areas: silhouettes under drifting fog, drawn above the map
+const sealed = new SealedLayer($<HTMLCanvasElement>('world-fog'), $('world-sealed'),
+  () => ({ camera, width: host.clientWidth, height: host.clientHeight, dpr: devicePixelRatio }));
 function draw() {
   raf = 0;
   if (!renderer) return;
+  sealed.draw();
   renderer.draw({ ...camera, width: host.clientWidth, height: host.clientHeight, dpr: devicePixelRatio, labels: labels.checked });
   const root = document.documentElement.dataset;   // for tests and scripts
   root.tiles = String(renderer.stats.terrainTiles);
@@ -45,7 +58,10 @@ function draw() {
 const requestDraw = () => { if (!raf) raf = requestAnimationFrame(draw); };
 function fit() {
   if (!renderer) return;
-  fitCamera(camera, renderer.bounds(labels.checked), host.clientWidth, host.clientHeight, .95);
+  const b = renderer.bounds(labels.checked), s = sealed.bounds();
+  const x0 = Math.min(b.x, s?.x ?? Infinity), y0 = Math.min(b.y, s?.y ?? Infinity);
+  const x1 = Math.max(b.x + b.width, s ? s.x + s.width : -Infinity), y1 = Math.max(b.y + b.height, s ? s.y + s.height : -Infinity);
+  fitCamera(camera, { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, host.clientWidth, host.clientHeight, .95);
   requestDraw(); saveState();
 }
 attachPanZoom(canvas, host, camera, { changed: () => { requestDraw(); saveState(); }, fit });
@@ -54,30 +70,46 @@ labels.addEventListener('change', () => { requestDraw(); saveState(); });
 
 // ---------------------------------------------------------------- releases
 function setStatus(text: string, error = false) { status.textContent = text; status.classList.toggle('error', error); }
+// A release still downloading: the map shown now stays, blurred, under a
+// clear notice (the first map has nothing under it yet).
+const loadingBox = $('world-loading'), loadingText = $('world-loading-text');
+function showLoading(text: string | null) {
+  loadingBox.hidden = !text; host.classList.toggle('loading', !!text && !!renderer);
+  if (text) loadingText.textContent = text;
+}
+// nothing to say when all is well (the map explains itself); tests and
+// scripts read the counts from the page's data attributes
 function describe(map: WorldMap) {
-  setStatus(`${map.doc.scene.rooms.length} rooms. Drag to pan, pinch or scroll to zoom.`);
+  setStatus('');
+  const root = document.documentElement.dataset;
+  root.rooms = String(map.doc.scene.rooms.length);
+  root.wip = map.sealed.map((a) => a.name).join(', ');
 }
 /** Show a release: at once when its data is here, else once it arrives (a
  *  newer request made meanwhile wins). */
 async function show(release: WorldRelease): Promise<void> {
   wanted = release;
   releaseButton.textContent = releaseText(release);
+  sliderLook();
   const i = releases.indexOf(release);
   prev.disabled = i <= 0; next.disabled = i >= releases.length - 1;
-  if (!data.ready(release)) setStatus('Loading this update...');
+  const loading = !data.ready(release);
+  if (loading) showLoading(`Loading ${releaseText(release)}...`);
   try {
     const map = await data.map(release);
     if (wanted !== release) return;
     current = map;
+    sealed.setAreas(map.sealed);
     if (!renderer) {
       renderer = new MapRenderer(canvas, map.doc);
       renderer.setRooms(null);
       if (!cameraFromUrl) fit();
     } else renderer.setDoc(map.doc);
-    describe(map); requestDraw(); saveState();
+    if (refit) { refit = false; fit(); }
+    showLoading(null); describe(map); requestDraw(); saveState();
     document.documentElement.dataset.release = release.id;
   } catch (e) {
-    if (wanted === release) setStatus(`This update could not be loaded: ${(e as Error).message}`, true);
+    if (wanted === release) { showLoading(null); setStatus(`This update could not be loaded: ${(e as Error).message}`, true); }
   }
 }
 const nearest = (value: number) => {   // the release in force at a date: the last one on or before it
@@ -85,12 +117,23 @@ const nearest = (value: number) => {   // the release in force at a date: the la
   for (const r of releases) if (minutes(r) <= value) pick = r;
   return pick;
 };
+// the slider's look: filled to the handle, and the date in a bubble over it
+const sliderBox = slider.parentElement!, bubble = $('world-bubble');
+function sliderLook() {
+  const lo = Number(slider.min), hi = Number(slider.max), frac = hi > lo ? (Number(slider.value) - lo) / (hi - lo) : 1;
+  sliderBox.style.setProperty('--pos', `calc(9px + (100% - 18px) * ${frac})`);
+  sliderBox.style.setProperty('--frac', String(frac));
+  if (releases.length) bubble.textContent = releaseText(nearest(Number(slider.value)));
+}
+for (const e of ['pointerdown', 'touchstart']) slider.addEventListener(e, () => sliderBox.classList.add('dragging'), { passive: true });
+for (const e of ['pointerup', 'pointercancel', 'touchend', 'blur']) slider.addEventListener(e, () => sliderBox.classList.remove('dragging'));
+slider.addEventListener('input', sliderLook);
 slider.addEventListener('input', () => {
   const r = nearest(Number(slider.value));
   if (r !== wanted) void show(r);
   if (!prefetching) { prefetching = true; void data.prefetch(); }   // scrubbing: fetch the rest of history once
 });
-slider.addEventListener('change', () => { if (wanted) slider.value = String(minutes(wanted)); });
+slider.addEventListener('change', () => { if (wanted) slider.value = String(minutes(wanted)); sliderLook(); });
 const step = (by: number) => {
   const i = Math.max(0, Math.min(releases.length - 1, releases.indexOf(wanted!) + by));
   slider.value = String(minutes(releases[i])); void show(releases[i]);
@@ -108,7 +151,7 @@ function buildTicks() {
     frag.append(t);
   }
   for (let y = dateOf(releases[0]).getUTCFullYear() + 1; y <= dateOf(releases.at(-1)!).getUTCFullYear(); y++) {
-    const t = document.createElement('span'); t.className = 'year'; t.title = String(y);
+    const t = document.createElement('span'); t.className = 'year'; t.dataset.year = String(y);
     t.style.left = `${((Date.UTC(y, 0, 1) / 60000 - lo) / span) * 100}%`;
     frag.append(t);
   }
@@ -172,8 +215,30 @@ function readState(): WorldRelease {
   return releases.at(-1)!;
 }
 
+// ---------------------------------------------------------------- top bar
+// The version and "What's new", as in the viewer (one record of what was seen
+// serves both pages)
+const badge = document.getElementById('build-badge');
+if (badge && !viewerLink) {
+  const setBadge = () => { badge.textContent = buildVersionLabel(); };
+  setBadge(); void buildInfoReady.then(setBadge);
+  badge.title = "What's new: this release's changes";
+  badge.addEventListener('click', () => { void openWhatsNew(); });
+  void maybeAutoShowWhatsNew();
+}
+// The brand: back to the latest update and the whole world, without a reload
+$('world-home').addEventListener('click', (e) => {
+  if (!releases.length) return;   // not started: let the link reload the page
+  e.preventDefault();
+  const latest = releases.at(-1)!;
+  slider.value = String(minutes(latest));
+  if (!labels.checked) labels.checked = true;
+  if (latest === wanted) fit(); else { cameraFromUrl = false; refit = true; void show(latest); }
+});
+
 // ---------------------------------------------------------------- start
 (async () => {
+  if (viewerLink) return;
   try {
     const manifest = await data.manifest();
     releases = [...manifest.releases].sort((a, b) => a.date.localeCompare(b.date));
@@ -190,6 +255,7 @@ function readState(): WorldRelease {
 // A new hash (typed, or set by a script) applies at once; the page's own
 // updates use replaceState, which fires no hashchange.
 addEventListener('hashchange', () => {
+  if (location.hash.startsWith('#/')) { location.replace(`viewer${location.search}${location.hash}`); return; }   // a viewer route
   if (!releases.length) return;
   const r = readState();
   slider.value = String(minutes(r));

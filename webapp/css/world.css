@@ -1,19 +1,56 @@
 /* The world map page (world.html): layout only. Colours, the top bar,
    buttons and the map's canvas come from css/app.css, as in the app. */
+/* the page itself never zooms or scrolls on a phone: only the map pans and
+   zooms (a stray pinch or double tap used to leave the page zoomed in) */
+html, body { touch-action: manipulation; overscroll-behavior: none; }
 .world { display: flex; flex-direction: column; height: 100%; padding-bottom: env(safe-area-inset-bottom, 0px); }
 .world-title { color: var(--fg1); font-weight: 600; }
 .world-toolbar { gap: 8px 14px; }
 .world-pick { display: flex; align-items: center; gap: 6px; }
 .world-release { min-width: 128px; font-variant-numeric: tabular-nums; }
-.world-labels { margin-left: 6px; }
-.world-slider { position: relative; flex: 1; min-width: 200px; height: 32px; display: flex; align-items: center; }
-.world-slider input[type=range] { width: 100%; margin: 0; cursor: pointer; }
-.world-ticks { position: absolute; left: 8px; right: 8px; top: 2px; height: 6px; pointer-events: none; }
-.world-ticks span { position: absolute; top: 0; width: 1px; height: 6px; background: var(--fg2); opacity: .6; }
-.world-ticks span.year { height: 10px; top: -2px; background: var(--fg1); opacity: .9; }
-.world-map { flex: 1; }
-.world-map canvas { outline: none; }
-.map-status.error { color: var(--bad); }
+/* the date slider: a filled track to the handle, a tick per update, year
+   marks with their year, and a date bubble over the handle while it moves */
+.world-slider { --pos: 100%; position: relative; flex: 1; min-width: 200px; height: 40px; display: flex; align-items: center; padding-bottom: 10px; }
+.world-slider input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; margin: 0; background: transparent; cursor: pointer; position: relative; z-index: 1; }
+.world-slider input[type=range]:focus-visible { outline: none; }
+.world-slider input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent) var(--pos), var(--bg3) var(--pos)); }
+.world-slider input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--bg3); }
+.world-slider input[type=range]::-moz-range-progress { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); }
+.world-slider input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--accent); box-shadow: 0 0 0 4px rgba(120, 183, 255, .18), 0 2px 6px rgba(0, 0, 0, .6); transition: box-shadow .15s; }
+.world-slider input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 3px solid var(--accent);
+  box-shadow: 0 0 0 4px rgba(120, 183, 255, .18), 0 2px 6px rgba(0, 0, 0, .6); }
+.world-slider input[type=range]:hover::-webkit-slider-thumb, .world-slider input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(120, 183, 255, .28), 0 2px 6px rgba(0, 0, 0, .6); }
+.world-ticks { position: absolute; left: 9px; right: 9px; top: 26px; height: 14px; pointer-events: none; }
+.world-ticks span { position: absolute; top: 0; width: 1px; height: 4px; background: var(--fg2); opacity: .55; }
+.world-ticks span.year { height: 7px; background: var(--fg1); opacity: .9; }
+.world-ticks span.year::after { content: attr(data-year); position: absolute; top: 6px; left: 3px; font-size: 10px; color: var(--fg2); letter-spacing: .04em; }
+.world-bubble { position: absolute; bottom: 34px; left: calc(9px + (100% - 18px) * var(--frac, 1)); transform: translateX(-50%); padding: 3px 8px;
+  border-radius: 6px; background: var(--accent); color: #0d0f13; font-size: 12px; font-weight: 650; white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity .15s; z-index: 2; }
+.world-bubble::after { content: ""; position: absolute; left: 50%; bottom: -4px; width: 8px; height: 8px; background: var(--accent); transform: translateX(-50%) rotate(45deg); }
+.world-slider.dragging .world-bubble { opacity: 1; }
+.world-map { flex: 1; background: #0e1014; }
+.world-map canvas { outline: none; transition: filter .25s ease; }
+/* while another update loads: the current map stays, blurred and dimmed, under a clear notice */
+.world-map.loading canvas, .world-map.loading .world-sealed { filter: blur(5px) brightness(.75); }
+.wmap-loading { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.wmap-loading[hidden] { display: none; }
+.wmap-loading span { font-size: clamp(18px, 3.2vw, 30px); font-weight: 650; letter-spacing: .02em; color: var(--fg0);
+  padding: 12px 22px; border-radius: var(--radius); background: rgba(13, 15, 19, .55); text-shadow: 0 1px 3px #000; }
+/* only a failure has anything to say: on the map, bottom right */
+.world-status { position: absolute; right: 10px; bottom: 10px; max-width: calc(100% - 20px); margin: 0; padding: 4px 9px;
+  border-radius: 6px; background: rgba(13, 15, 19, .8); color: var(--bad); font-size: 12px; pointer-events: none; }
+.world-status:empty { display: none; }
+/* the labels switch, on the map (bottom left) */
+.wmap-labels { position: absolute; left: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
+  border-radius: 999px; background: rgba(13, 15, 19, .72); border: 1px solid var(--line); color: var(--fg1); font-size: 12px; cursor: pointer; user-select: none; z-index: 3; }
+.wmap-labels:hover { color: var(--fg0); border-color: var(--accent-dim); }
+.wmap-labels input { margin: 0; accent-color: var(--accent); }
+/* the way into the viewer: the page's main action */
+.world-cta { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; text-decoration: none; white-space: nowrap; }
+.world-cta:hover { text-decoration: none; }
 
 .world-picker[hidden] { display: none; }
 .world-picker { position: fixed; inset: 0; z-index: 50; background: rgba(5, 7, 10, .6); display: flex; align-items: center; justify-content: center; }
@@ -31,14 +68,33 @@
 /* phones: the toolbar stacks (update controls, then the slider), bigger targets */
 @media (max-width: 640px) {
   #topbar .world-title { display: none; }
+  .world-cta { padding: 5px 10px; font-size: 12px; }
   .world-toolbar { padding: 8px 10px; }
   .world-toolbar .btn { min-height: 36px; }
   .world-pick { width: 100%; }
   .world-release { flex: 1; }
   .world-slider { min-width: 0; width: 100%; flex: none; }
+  .wmap-labels { left: 8px; bottom: 8px; }
   .world-picker { align-items: flex-end; }
   .world-picker-card { width: 100%; border-radius: var(--radius) var(--radius) 0 0; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); }
+  /* 16px or more: Safari zooms the page into any smaller text field it focuses */
+  .world-picker-head input { font-size: 16px; }
 }
 
+/* sealed areas (src/world-atlas/sealed.ts): the fog canvas and the badges over it */
+.world-map canvas.world-fog { pointer-events: none; }
+.world-sealed { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.sealed-badge { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  --glow: rgba(150, 190, 255, .55); animation: sealed-breathe 7s ease-in-out infinite; }
+.sealed-stonemaw { --glow: rgba(245, 158, 72, .6); }
+.sealed-bleakholm { --glow: rgba(92, 184, 250, .6); }
+.sealed-badge img { width: var(--logo, 64px); height: var(--logo, 64px); object-fit: contain; opacity: .9;
+  filter: grayscale(.35) brightness(.85) drop-shadow(0 0 10px var(--glow)) drop-shadow(0 0 2px rgba(0, 0, 0, .9)); }
+.sealed-name { font-weight: 650; letter-spacing: .14em; text-transform: uppercase; font-size: 11px; color: #d9dde6;
+  text-shadow: 0 0 8px var(--glow), 0 1px 2px #000; white-space: nowrap; }
+.sealed-note { font-size: 10px; letter-spacing: .3em; text-transform: uppercase; color: rgba(200, 206, 220, .55); text-shadow: 0 1px 2px #000; }
+@keyframes sealed-breathe { 0%, 100% { opacity: .82; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .sealed-badge { animation: none; } }
+
 /* a capture view (#ui=0): the map alone, for scripted time-lapses */
-.world.bare #topbar, .world.bare .world-toolbar, .world.bare .map-status { display: none; }
+.world.bare #topbar, .world.bare .world-toolbar, .world.bare .world-status, .world.bare .wmap-labels { display: none; }

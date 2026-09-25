@@ -22,9 +22,15 @@ export interface WorldRelease {
   art: { terrain: string[]; images: Record<string, string> };
   rooms: number[];
 }
-export interface WorldManifest { format: 1; releases: WorldRelease[]; packs: { file: string; count: number }[]; pieces: number[] }
-interface Piece { room: any; shingles: number[] }
-export interface WorldMap { release: WorldRelease; doc: MapDocument }
+export interface WorldManifest {
+  format: 1; releases: WorldRelease[]; packs: { file: string; count: number }[]; pieces: number[];
+  /** Sealed episodes: areas shown only as silhouettes, with their logo. */
+  sealed?: Record<string, { name: string; logo: string }>;
+}
+/** A sealed area: the whole map tiles its rooms cover (x, y pairs). */
+export interface SealedArea { key: string; name: string; logo: string; cells: number[] }
+interface Piece { room?: any; shingles?: number[]; sealed?: string; cells?: number[] }
+export interface WorldMap { release: WorldRelease; doc: MapDocument; sealed: SealedArea[] }
 
 const SHINGLE = 23;   // x, y, base colour, four corner colours, sixteen tiles
 
@@ -100,20 +106,27 @@ export function createWorldData(base = 'world-data/') {
       const art = artSets.get(artKey) ?? { terrainMips: await Promise.all(release.art.terrain.map(loadImage)),
         images: Object.fromEntries(await Promise.all(Object.entries(release.art.images).map(async ([k, h]) => [k, await loadImage(h)] as const))) };
       artSets.set(artKey, art);
-      const rooms: any[] = [], shingles: any[] = [];
-      release.rooms.forEach((id, i) => {
+      const rooms: any[] = [], shingles: any[] = [], sealed = new Map<string, number[]>();
+      for (const id of release.rooms) {
         const piece = pieces.get(id);
         if (!piece) throw Error(`piece ${id} is missing from its pack`);
+        if (piece.sealed) {   // a sealed room: its silhouette only
+          const cells = sealed.get(piece.sealed) ?? sealed.set(piece.sealed, []).get(piece.sealed)!;
+          for (const c of piece.cells ?? []) cells.push(c);
+          continue;
+        }
+        const i = rooms.length;
         rooms.push({ ...piece.room, room: i, owner: i });
-        const s = piece.shingles;
+        const s = piece.shingles!;
         for (let k = 0; k + SHINGLE <= s.length; k += SHINGLE) {
           shingles.push({ index: shingles.length, room: i, position: [s[k], s[k + 1]], group: 0, base555: s[k + 2],
             corners555: s.slice(k + 3, k + 7), tiles: s.slice(k + 7, k + SHINGLE) });
         }
-      });
+      }
       const { format: _format, ...sceneStyle } = style;
       const doc = { format: 1, scene: { ...sceneStyle, rooms, shingles }, terrainMips: art.terrainMips, images: art.images, roomData: null } as unknown as MapDocument;
-      const map = { release, doc };
+      const map = { release, doc, sealed: [...sealed].map(([key, cells]) => ({ key, cells,
+        name: manifest!.sealed?.[key]?.name ?? 'Sealed', logo: base + (manifest!.sealed?.[key]?.logo ?? '') })) };
       // assembled maps are large next to their pieces: keep the last few
       docs.set(release.id, map);
       while (docs.size > 8) docs.delete(docs.keys().next().value!);
