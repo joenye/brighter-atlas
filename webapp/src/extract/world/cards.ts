@@ -298,7 +298,8 @@ export function readCards(src: CardSources): CardSpec[] {
     else if (typeof view.clip !== 'number') view.clip = null;
     cards.push({ record: slot, kind: 'enemy', label: src.nameOf?.(slot) ?? src.enemyNames.get(slot)?.name ?? null, view,
       subject: { rig, focusBone, bounds: boundsOf(fs) ?? (template ? boundsOf(template) : null),
-        distance: (template ? cardDistance(template) : null) ?? k.actorDistance, base: null },
+        // 0: the build names no distance for this enemy (the viewer takes one by size)
+        distance: template ? cardDistance(template) ?? k.actorDistance : 0, base: null },
       parts: [...parts, ...propsOf(anim, rigs), ...heldOf(fs)], own: parts.length });
   };
   // an object's material table: N material slots from op7, then colour fields

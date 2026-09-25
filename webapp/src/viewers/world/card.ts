@@ -124,6 +124,24 @@ function posedPayload(payload: any, palette: Float32Array | null, rig: number | 
   return { ...payload, positions, normals, tangents };
 }
 
+/** A card distance for a subject whose build names none (older builds' enemy
+ *  cards): authored distances step with the subject's size, 2048 up to about
+ *  1500 units across, then 4096, at most 6144. */
+function distanceBySize(batches: GameBatchSource[]): number {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const b of batches) {
+    const p = b.payload?.positions;
+    const v: Float32Array | null = typeof p === 'string' ? b64f32(p) : p ?? null;
+    if (!v) continue;
+    for (let i = 0; i + 2 < v.length; i += 3) for (let k = 0; k < 3; k++) {
+      if (v[i + k] < lo[k]) lo[k] = v[i + k];
+      if (v[i + k] > hi[k]) hi[k] = v[i + k];
+    }
+  }
+  const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+  return Number.isFinite(size) ? Math.min(6144, 2048 * Math.max(1, Math.ceil(size / 1500))) : 2048;
+}
+
 /** The eye, target and pixel shift of a card's camera. */
 export function cardCamera(view: CardView, focus: number[], distance: number, width: number, height: number, base: number[] | null = null) {
   // camera to scene: offset, then pitch, then roll, then the base (a focus
@@ -191,7 +209,7 @@ export async function renderCard(sources: CardSources, subject: CardSubject, vie
   });
   // Without lights of its own a card keeps the frame's default daylight.
   frame.environmentOverride = (view.lights ?? {}) as GameRenderIndex['environments'][string];
-  const camera = cardCamera(view, focus, subject.distance, width, height, subject.base ?? null);
+  const camera = cardCamera(view, focus, subject.distance || distanceBySize(batches), width, height, subject.base ?? null);
   frame.card = { direction: cardLightDirection(view.lightTurn), shift: camera.shift };
   frame.resetTemporal();
   frame.render({ eye: camera.eye, target: camera.target, up: camera.up, fov: view.icon ? view.icon.zoom : view.zoom, width, height }, 0, 0, true);
