@@ -3,6 +3,7 @@ import type {ObjectDescription} from '../../extract/world/object-descriptors.js'
 import type {MapMarker,MapView} from './renderer.js';
 
 export const sourceNames={object:'Described objects',other:'Other placements',actor:'Actor starts',enemy:'Enemy starts',region:'Room volumes'};
+const kindNames:Record<NodeSource,string>={object:'Object',other:'Other placement',actor:'Actor start',enemy:'Enemy start',region:'Room volume'};
 export type NodeSource=keyof typeof sourceNames;
 type InventoryDescription=Omit<ObjectDescription,'runtime'|'selector'>&{runtime:number|null;selector:number|null};
 export interface InventoryNode {id:number;room:MapRoomInventory;source:NodeSource;index:number;description:InventoryDescription}
@@ -92,28 +93,41 @@ export class MapInventory {
     return nodes.filter(n=>(raw||n.source!=='other')&&distance(n)<radius)
       .sort((a,b)=>Number(a.source==='other')-Number(b.source==='other')||distance(a)-distance(b));
   }
-  detail(n:InventoryNode) {
+  /** One record as the inspector shows and exports it: plain facts, no internal
+   *  identifiers. `tile` and `layer` are in the room (tiles from its top-left
+   *  corner, height layers); `mapPosition` is on the world map (the room's map
+   *  position plus the tile, centred as the marker is drawn). */
+  record(n:InventoryNode) {
+    const actor=n.source==='actor'||n.source==='enemy'?n.room.actors[n.index]:null;
     const occurrence=n.source==='object'||n.source==='other'?n.room.occurrences[n.index]:null;
-    return {name:nodeTitle(n),source:sourceNames[n.source],room:n.room.name,roomId:n.room.room,
-      resource:n.description.id,category:n.description.category,position:this.rawPosition(n),
-      mapPosition:Array.from(this.coordinates.subarray(n.id*2,n.id*2+2)),footprint:this.footprint(n),
-      ...(occurrence?{occurrence:Object.fromEntries(['resource','x','y','layer','rotation','record','entrySlot','parentLink','childLinks','individual','packed']
-        .map((key,i)=>[key,occurrence[i as keyof MapOccurrence]])),descriptors:n.description.descriptors}
-        :n.source==='region'?{volume:n.room.volumes[n.index]}:{actor:n.room.actors[n.index]}),
-      note:n.source==='region'?'Room geometry volume; its gameplay purpose is unresolved.'
-        :n.source==='actor'||n.source==='enemy'?'Authored default starting position. Alternate actor records are retained separately.'
-        :'Stored occupancy origin, centred using its footprint. Linked components and alternate records are retained; visibility during play is unresolved.'};
+    const volume=n.source==='region'?n.room.volumes[n.index]:null;
+    const tile=this.rawPosition(n).slice(0,2);
+    const layer=actor?actor.position[2]:occurrence?occurrence[3]:volume?(volume.origin[2]??null):null;
+    const facing=actor?actor.angle_degrees:occurrence&&occurrence[4]!==null?occurrence[4]*90:null;
+    const map=Array.from(this.coordinates.subarray(n.id*2,n.id*2+2),v=>Number.isFinite(v)?Math.round(v*1000)/1000:null);
+    const kind=kindNames[n.source];
+    return {...(n.description.name?{name:nodeTitle(n)}:{}),kind,...(n.description.category!==kind?{category:n.description.category}:{}),room:n.room.name,
+      tile,...(layer!==null?{layer}:{}),mapPosition:map,
+      ...(facing!==null?{facing}:{}),...(this.footprint(n)?{footprint:this.footprint(n)}:{}),
+      ...(isLinked(n)?{linked:true}:{}),
+      ...(actor&&actor.enemy_definitions.length?{enemies:actor.enemy_definitions.map(e=>e.name)}:{})};
   }
-  filteredData(nodes:InventoryNode[]):MapRoomData {
-    const rooms=new Map<number,MapRoomInventory>(),resources=new Set<number>();
-    for(const n of nodes) {
-      let room=rooms.get(n.room.room);
-      if(!room){room={...n.room,occurrences:[],actors:[],volumes:[]};rooms.set(room.room,room);}
-      if(n.source==='object'||n.source==='other'){room.occurrences.push(n.room.occurrences[n.index]);resources.add(n.description.id);}
-      else if(n.source==='region')room.volumes.push(n.room.volumes[n.index]);
-      else room.actors.push(n.room.actors[n.index]);
-    }
-    return {format:1,rooms:[...rooms.values()],resources:this.data.resources.filter(r=>resources.has(r.id)),
-      unplaced:this.data.unplaced.filter(r=>rooms.has(r.room))};
+  /** The download: each room with its map position and size, then the chosen
+   *  records inside it. `episodes`: room id to episode name. */
+  exportData(nodes:InventoryNode[],episodes:Map<number,string|null>=new Map()) {
+    const rooms=new Map<MapRoomInventory,ReturnType<MapInventory['record']>[]>();
+    for(const n of nodes){let list=rooms.get(n.room);if(!list)rooms.set(n.room,list=[]);list.push(this.record(n));}
+    return {format:2,rooms:[...rooms].map(([r,records])=>({name:r.name,...(episodes.get(r.room)?{episode:episodes.get(r.room)}:{}),
+      mapPosition:r.position,size:r.size,records})),
+      unplaced:this.data.unplaced.filter(u=>[...rooms.keys()].some(r=>r.room===u.room))
+        .map(u=>({name:u.name,room:[...rooms.keys()].find(r=>r.room===u.room)!.name}))};
   }
+  /** Why a record sits where it does (shown under it in the inspector). */
+  note(n:InventoryNode):string {
+    return n.source==='region'?'Room geometry volume; its gameplay purpose is unresolved.'
+      :n.source==='actor'||n.source==='enemy'?'Authored default starting position. Alternate actor records are retained separately.'
+      :'Stored occupancy origin, centred using its footprint. Linked components and alternate records are retained; visibility during play is unresolved.';
+  }
+
+
 }

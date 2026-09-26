@@ -54,7 +54,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
   function select(n:InventoryNode) {
     if(!inventory)return;selected=n;panel.hidden=false;toggle.setAttribute('aria-expanded','true');
     selection.replaceChildren(el('h3',{text:nodeTitle(n)}),button('Hide this node type',()=>{saved.disabledTypes.add(nodeType(n));drawTypes();filter();}),
-      el('pre',{text:JSON.stringify(inventory.detail(n),null,2)}));panel.scrollTop=0;onChange();
+      el('p',{class:'dim small',text:inventory.note(n)}),el('pre',{text:JSON.stringify(inventory.record(n),null,2)}));panel.scrollTop=0;onChange();
   }
   function filter() {
     saved.query=search.value;saved.typeQuery=typeSearch.value;
@@ -81,7 +81,7 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
         inventory=new MapInventory(data);drawCategories();drawTypes();
         const names=new Map(data.rooms.map((r:any)=>[r.room,r.name]));
         for(const r of data.unplaced)unplaced.append(button(`${r.name} / ${names.get(r.room)??r.room}`,()=>{
-          selected=null;selection.replaceChildren(el('h3',{text:r.name}),el('p',{text:'This definition references the room but supplies no starting position.'}),el('pre',{text:JSON.stringify(r,null,2)}));onChange();
+          selected=null;selection.replaceChildren(el('h3',{text:r.name}),el('p',{text:'This definition references the room but supplies no starting position.'}),el('pre',{text:JSON.stringify({name:r.name,room:names.get(r.room)??null},null,2)}));onChange();
         }));
         message.textContent='Inspection markers show stored room data. Actor shapes and volume colours are diagnostic. Alternate records may not be active together.';
         filter();
@@ -103,8 +103,8 @@ export function createMapInspection(app:any,onChange:()=>void,focus:(x:number,y:
   });
   const exportData=button('Download filtered records',()=>{
     if(!inventory)return;
-    download(new Blob([JSON.stringify({mode:mode.value,filters:{...saved,disabledSources:[...saved.disabledSources],disabledCategories:[...saved.disabledCategories],disabledTypes:[...saved.disabledTypes]},
-      inventory:inventory.filteredData(matches)})],{type:'application/json'}),'map-records.json');
+    const episodes=new Map<number,string|null>((doc?.scene?.rooms??[]).map((r:any)=>[r.room,r.episode?.displayName??r.episode?.name??null]));
+    download(new Blob([JSON.stringify(inventory.exportData(matches,episodes))],{type:'application/json'}),'map-records.json');
   });
   controls.append(search,sources,options,el('details',{open:true},el('summary',{text:'Categories'}),categorySearch,
     button('All categories',()=>{saved.disabledCategories.clear();drawCategories();filter();}),

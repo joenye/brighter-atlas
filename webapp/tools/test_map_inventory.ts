@@ -14,12 +14,13 @@ try {
   const all={sources:new Set(['object','other','actor','enemy','region']),categories:new Set(inventory.categories.keys()),
     disabledTypes:new Set(),roots:true,linked:true,additionalOnly:false,query:'',typeQuery:'',rooms:null};
   const nodes=inventory.filter(all);assert.equal(nodes.length,7);
-  assert.deepEqual(inventory.detail(nodes[0]).mapPosition,[1,.5]);
-  assert.deepEqual(inventory.detail(nodes[1]).mapPosition,[1.5,1]);assert.deepEqual(inventory.footprint(nodes[1]),[1,2]);
-  assert.deepEqual(inventory.detail(nodes[1]).occurrence.parentLink,[0,0,0]);
-  assert.deepEqual(inventory.detail(nodes[0]).position,[0,0]);
+  assert.deepEqual(inventory.record(nodes[0]).mapPosition,[1,.5]);
+  assert.deepEqual(inventory.record(nodes[1]).mapPosition,[1.5,1]);assert.deepEqual(inventory.footprint(nodes[1]),[1,2]);
+  assert.equal(inventory.record(nodes[1]).linked,true);
+  assert.deepEqual(inventory.record(nodes[0]).tile,[0,0]);
   const enemies=inventory.filter({...all,sources:new Set(['enemy'])});assert.equal(enemies.length,1);
-  assert.deepEqual(inventory.detail(enemies[0]).mapPosition,[4.5,2.5]);
+  assert.deepEqual(inventory.record(enemies[0]).mapPosition,[4.5,2.5]);
+  assert.deepEqual(inventory.record(enemies[0]).enemies,['Fiend']);
   assert.equal(inventory.hits(nodes,4.5,2.5,25,true).length,2);
   assert.equal(inventory.filter({...all,roots:false}).length,4);
   assert.equal(inventory.filter({...all,linked:false}).length,6);
@@ -28,10 +29,16 @@ try {
   assert.equal(inventory.filter({...all,disabledTypes:new Set([nodeType(nodes[0])])}).length,5);
   assert.equal(inventory.filter({...all,query:'Fiend'}).length,1);
   assert.equal(inventory.filter({...all,typeQuery:'runtime:1001'}).length,1);
-  const exported=inventory.filteredData(inventory.filter({...all,query:'Gathering node'}));
-  assert.equal(exported.rooms.length,1);assert.equal(exported.rooms[0].occurrences.length,2);
-  assert.equal(exported.resources.length,1);assert.equal(exported.rooms[0].actors.length,0);
-  assert.deepEqual(exported.rooms[0].occurrences[1],roomData.rooms[0].occurrences[1]);
+  const exported=inventory.exportData(inventory.filter({...all,query:'Gathering node'}),new Map([[roomData.rooms[0].room,'Test Episode']]));
+  assert.equal(exported.rooms.length,1);assert.equal(exported.rooms[0].records.length,2);
+  assert.deepEqual(exported.rooms[0].mapPosition,roomData.rooms[0].position);assert.equal(exported.rooms[0].episode,'Test Episode');
+  assert.ok(exported.rooms[0].records.every((r:any)=>r.mapPosition.length===2&&r.tile.length===2));
+  // The public export states plain facts only: no internal identifiers.
+  const keys=new Set<string>();
+  const walk=(v:any)=>{if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object')for(const [k,x] of Object.entries(v)){keys.add(k);walk(x);}};
+  walk(inventory.exportData(nodes));walk(nodes.map(n=>inventory.record(n)));
+  const allowed=['format','rooms','name','episode','mapPosition','size','records','kind','category','room','tile','layer','facing','footprint','linked','enemies','unplaced'];
+  assert.deepEqual([...keys].filter(k=>!allowed.includes(k)),[],'export keys are the public ones only');
   const view={cx:3,cy:1,scale:25,width:400,height:300};
   assert.equal(inventory.markers(nodes,view,true,true).length,7);
   assert.equal(inventory.markers(nodes,view,false,false).length,6);
