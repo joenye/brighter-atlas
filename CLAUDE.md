@@ -109,8 +109,8 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   distance is a draw count (all rooms lays its floor in ten-tile steps,
   rebuilding only to grow); the game frame's endless far pieces stay within
   one texture repeat (its coordinates are 16-bit).
-- **Neighbouring rooms.** A room can show the rooms through its doors (the
-  world index's door links, 1 to 5 rooms away, its own plane only) at their
+- **Neighbouring rooms.** A room can show the rooms directly through its
+  doors (the world index's door links), as the game loads them, at their
   stitched places (`world.ts` `wantedNeighbours`, `WorldScene.setNeighbours`,
   `unloadRoom`). The game frame draws them after the room, each in its own
   draw order, under the room's bounds and vignette; the floor stays the

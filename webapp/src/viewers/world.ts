@@ -112,8 +112,6 @@ const MERGED_ACTIVATION_INTERVAL_MS = 500;  // re-rank cadence
 // Bumping this discards previously saved prefs ONCE so everyone lands on the
 // current defaults (v2: water 50%, ambient 1.85, sun 2.80, no aniso control).
 const STATE_VERSION = 2;
-/** The furthest neighbouring rooms a room shows (rooms away, through doors). */
-const MAX_NEIGHBOUR_DISTANCE = 5;
 
 const DEFAULT_STATE = Object.freeze({
   terrain: true,
@@ -127,7 +125,6 @@ const DEFAULT_STATE = Object.freeze({
   groundd: PLANE_ENDLESS,           // a room's ground plane distance: endless
   groundw: PLANE_GAME_DISTANCE,     // all rooms: the game's ten tiles
   neighbours: false,                // a room: also its neighbours
-  neighbourd: 1,                    // ... this many rooms away
   neighbourfade: true,              // ... shaded as the game shades them
   names: true,
   spawnnames: false,
@@ -158,7 +155,7 @@ const PERSISTED = Object.keys(DEFAULT_STATE).filter((k) => k !== 'inspect');
 interface WorldState {
   terrain: boolean; models: boolean; spawns: boolean; components: boolean;
   untextured: boolean; collision: boolean; empty: boolean; names: boolean; ground: boolean;
-  groundd: number; groundw: number; neighbours: boolean; neighbourd: number; neighbourfade: boolean;
+  groundd: number; groundw: number; neighbours: boolean; neighbourfade: boolean;
   spawnnames: boolean;
   inspect: boolean; water: boolean; game: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
@@ -830,12 +827,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   groundRange.title = `How far the floor reaches past each room. The game's is ${PLANE_GAME_DISTANCE} tiles; `
     + `past ${PLANE_DISTANCE_MAX} (the far end) it never ends.`;
   groundRange.hidden = !state.ground;
-  // a room's neighbours: the rooms through its doors, up to so many rooms away
-  const neighbourRange = range('neighbourd', 'Rooms away', 1, MAX_NEIGHBOUR_DISTANCE, 1,
-    (v) => (Number(v) === 1 ? '1 room' : `${v} rooms`), () => applyNeighbours());
-  neighbourRange.title = 'How many rooms away from this one, counted through doors';
-  neighbourRange.classList.add('wp-sub');
-  neighbourRange.hidden = !state.neighbours;
+  // a room's neighbours: the rooms directly through its doors
   const applyNeighbourFade = () => {
     world.setNeighbourShade(!!state.neighbourfade);
     if (gameFrame) gameFrame.neighbourFade = !!state.neighbourfade;
@@ -864,7 +856,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     allMode ? null : check('neighbours', 'Neighbouring rooms', () => applyNeighbours(),
       { swatch: '#9aa7b8', title: 'Also show the rooms through its doors, in place around it' }),
     allMode ? null : neighbourFadeCheck,
-    allMode ? null : neighbourRange,
     check('ground', 'Ground plane', applyGround,
       { swatch: '#8c7b5e', title: 'The textured floor the game lays under and around each room. Each episode has its own; sea and river beds show through the water.' }),
     groundRange,
@@ -4407,9 +4398,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   // --- a room's neighbouring rooms ---------------------------------------------
-  // The rooms through the room's doors (the world index's door links), up to
-  // the set number of rooms away on the room's own plane, loaded at their
-  // stitched places around it. They draw like the room (in the game's frame
+  // The rooms directly through the room's doors (the world index's door
+  // links), as the game loads them, at their stitched places around it. They draw like the room (in the game's frame
   // too, after it, under its vignette), and the room's floor is laid as the
   // game lays it with neighbours: theirs removes it under their ground and
   // shows their darker sea beds.
@@ -4426,26 +4416,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const doors = new Map<number, Set<number>>();
     const join = (a: number, b: number) => { if (!doors.has(a)) doors.set(a, new Set()); doors.get(a)!.add(b); };
     for (const link of world.index?.links ?? []) { join(Number(link.a), Number(link.b)); join(Number(link.b), Number(link.a)); }
+    // every room through a door, whatever height its doors sit at: rooms
+    // outside the connected layout have no stitched place and stay out
     const placed = (id: number) => {
       const at = rooms.get(id)?.world;
-      return !!at && Number.isFinite(at.x) && Number.isFinite(at.y) && (at.plane ?? 0) === (home.plane ?? 0);
+      return !!at && Number.isFinite(at.x) && Number.isFinite(at.y);
     };
-    const seen = new Set([homeId]);
-    let ring = [homeId];
-    const out: number[] = [];
-    const steps = Math.min(MAX_NEIGHBOUR_DISTANCE, Math.max(1, Number(state.neighbourd) || 1));
-    for (let step = 0; step < steps; step++) {
-      const next: number[] = [];
-      for (const id of ring) {
-        for (const n of doors.get(id) ?? []) {
-          if (seen.has(n) || !placed(n)) continue;
-          seen.add(n);
-          next.push(n);
-        }
-      }
-      out.push(...next);
-      ring = next;
-    }
+    const out = [...doors.get(homeId) ?? []].filter((n) => n !== homeId && placed(n));
     for (const id of out) {
       const at = rooms.get(id).world;
       neighbourOffsets.set(id, { x: at.x - home.x, y: at.y - home.y });
@@ -4453,7 +4430,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return out;
   }
   function applyNeighbours(): void {
-    neighbourRange.hidden = !state.neighbours;
     neighbourFadeCheck.hidden = !state.neighbours;
     neighbourSync = neighbourSync.then(syncNeighbours).catch((error) => console.warn('neighbouring rooms unavailable', error));
   }
