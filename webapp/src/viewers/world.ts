@@ -36,6 +36,7 @@ import * as THREE from '../../vendor/three.module.js';
 import { OrbitControls } from '../../vendor/OrbitControls.js';
 import WorldScene, {
   WORLD_CATEGORIES, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection, GIZMO_SWATCH, gizmoMaterial,
+  GAME_DRAWN_LAYER, placeSkin,
 } from './world/scene.js';
 import { FlyControls } from './world/fly-controls.js';
 import {
@@ -948,6 +949,51 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       gameBuilds--;
     }
   }
+  // Actors in the game's frame: a spawn playing a clip (its resting clip, or
+  // one picked in the inspector) is drawn in its live pose. Its skinned
+  // meshes' skin matrices, taken to the native frame, are the palette the
+  // game's skinned programs read; three's own copies leave the camera.
+  const nativeFromDisplay = new THREE.Matrix4(), skin = new THREE.Matrix4(), editMatrix = new THREE.Matrix4();
+  world.actorPalette = (roomId: number, spawnIndex: number, partIndex: number, mesh: number, rest: Float32Array) => {
+    if (!state.spawns) return null;
+    const edit = edits.get({ room: roomId, sourceKind: 'spawn', category: 'spawns', placementIndex: partIndex });
+    if (edit?.deleted) return null;
+    const key = `${roomId}|spawn|${spawnIndex}`;
+    const sa = spawnAnim?.key === key ? spawnAnim : persistentAnims.get(key);
+    const part = sa?.active ? sa.composite?._meshes.find((m: any) => m.isSkinnedMesh && m.userData.mesh === mesh) : null;
+    if (!part) {
+      // resting: a nudge or turn moves the resting pose about the spawn's anchor
+      if (!edit || edits.isNoop(edit)) return undefined;
+      const room = world.rooms.get(roomId);
+      let info;
+      try { info = room && world._describeSpawn({ id: roomId, shard: room.shard }, spawnIndex); } catch { info = null; }
+      if (!info) return undefined;
+      const pivot = pivotFor(info);
+      editedMatrix(edit, new THREE.Matrix4(), pivot[0], pivot[1], world.tileUnits, world.layerUnits, editMatrix);
+      return placeSkin(editMatrix, rest);
+    }
+    const skeleton = part.skeleton;
+    const out = new Float32Array(skeleton.bones.length * 12);
+    nativeFromDisplay.copy(world.root.matrixWorld).invert().multiply(part.matrixWorld).multiply(part.bindMatrixInverse);
+    for (let b = 0; b < skeleton.bones.length; b++) {
+      skin.multiplyMatrices(skeleton.bones[b].matrixWorld, skeleton.boneInverses[b]).multiply(part.bindMatrix).premultiply(nativeFromDisplay);
+      const e = skin.elements, o = b * 12;
+      out[o] = e[0]; out[o + 1] = e[4]; out[o + 2] = e[8]; out[o + 3] = e[12];
+      out[o + 4] = e[1]; out[o + 5] = e[5]; out[o + 6] = e[9]; out[o + 7] = e[13];
+      out[o + 8] = e[2]; out[o + 9] = e[6]; out[o + 10] = e[10]; out[o + 11] = e[14];
+    }
+    return out;
+  };
+  /** Composite meshes the game's frame draws leave three's camera while it does. */
+  function syncActorLayers(on: boolean): void {
+    const materials = world.index?.render?.materials;
+    spawnAnimRoot.traverse((o: any) => {
+      if (!o.isMesh) return;
+      const drawn = on && o.userData.gameMaterial !== undefined && !!materials?.[String(o.userData.gameMaterial)];
+      o.layers.set(drawn ? GAME_DRAWN_LAYER : 0);
+    });
+  }
+
   /** Native-frame camera of the current view (or the harness override). */
   function currentGameCamera() {
     const nativeFromWorld = world.root.matrixWorld.clone().invert();
@@ -973,6 +1019,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           this.camera.lookAt(camera.target.clone().applyMatrix4(worldFromNative));
           this.camera.updateMatrixWorld();
         }
+        // the bones' posed matrices, current for this frame's palettes
+        spawnAnimRoot.updateMatrixWorld(true);
+        syncActorLayers(true);
         gameFrame!.render(camera, waterTicks, camera.target.z);
         this.renderer.resetState();
         // A colour background makes three clear the frame: overlays only.
@@ -986,6 +1035,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         this.scene.fog = fog;
       } else {
         if (gameBuilds) this.renderer.resetState();
+        syncActorLayers(false);
         this.renderer.render(this.scene, this.camera);
       }
       requestAnimationFrame(this._loop);
@@ -1553,6 +1603,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   // --- inspector -----------------------------------------------------------------
   const raycaster = new THREE.Raycaster();
+  raycaster.layers.enableAll();   // spawns the game's frame draws sit on their own layer
   const confirmRaycaster = new THREE.Raycaster();   // stable across async picks
   const pointerNdc = new THREE.Vector2();
   const highlightMaterial = new THREE.MeshBasicMaterial({
@@ -5113,6 +5164,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     // fixed native-frame camera (eye and target in native units) for captures.
     gameApi: {
       ready: () => gameActive(),
+      actors: () => gameFrame?.actorInfo() ?? null,
       setCamera(eye: number[] | null, target?: number[]) {
         gameCamera = eye && target ? { eye: new THREE.Vector3(eye[0], eye[1], eye[2]), target: new THREE.Vector3(target[0], target[1], target[2]) } : null;
       },
@@ -5125,6 +5177,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         const camera = currentGameCamera();
         if (fresh) gameFrame!.resetTemporal();
         // The last frame is also presented, as the view shows it.
+          spawnAnimRoot.updateMatrixWorld(true);
         for (let k = 0; k < frames; k++) gameFrame!.render(camera, waterTicks, camera.target.z, k < frames - 1);
         const out = gameFrame!.readTarget('main');
         const gl = renderer.getContext() as WebGL2RenderingContext;

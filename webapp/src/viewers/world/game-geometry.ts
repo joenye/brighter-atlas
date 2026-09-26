@@ -5,9 +5,12 @@
 // k/1023 values the hardware would produce), uv (16-bit unorm), specular
 // bytes (uint) and vertex colour (8-bit unorm). The vertex colour is the
 // room bake's: half the part colour (the placement tint), alpha the material
-// opacity, truncated to bytes.
+// opacity, truncated to bytes. A skinned program's layout (an actor) adds
+// four bone indices (8-bit uint) and weights (8-bit unorm) straight after the
+// uv and tangent, and keeps the mesh in its own space: its bone matrices
+// carry the placement.
 import { THREE } from '../three-common.js';
-import { b64f32, b64u16, b64u32 } from '../../store.js';
+import { b64f32, b64u16, b64u32, b64u8 } from '../../store.js';
 import type { AttributeBinding } from './dxbc-glsl.js';
 import { packColour } from '../../extract/world/tile-colour.js';
 
@@ -37,6 +40,8 @@ export interface BakeInputs {
   style?: [number, number, number, number];
   /** Water sides: the texture window (v range) as 16-bit unorm. */
   window?: [number, number];
+  /** Skinned programs: bake the bone indices and weights (instances in mesh space). */
+  skinned?: boolean;
 }
 
 const quantise10 = (v: number) => Math.min(1023, Math.max(0, Math.round((v + 1) * 511)));
@@ -44,6 +49,7 @@ const quantise10 = (v: number) => Math.min(1023, Math.max(0, Math.round((v + 1) 
 interface DecodedMesh {
   positions: Float32Array; normals: Float32Array; uvs: Float32Array; tangents: Float32Array | null;
   source: Uint16Array | Uint32Array; count: number;
+  boneIndices: Uint8Array | null; boneWeights: Uint8Array | null;
 }
 
 // A stream is base64 in a stored payload, or already decoded (a posed copy).
@@ -56,6 +62,8 @@ function decodeMesh(payload: any): DecodedMesh {
     tangents: payload.tangents ? floats(payload.tangents) : null,
     source: payload.idx_dtype === 'u32' ? b64u32(payload.indices) : b64u16(payload.indices),
     count: positions.length / 3,
+    boneIndices: payload.bone_indices ? b64u8(payload.bone_indices) : null,
+    boneWeights: payload.bone_weights ? b64u8(payload.bone_weights) : null,
   };
 }
 
@@ -81,6 +89,8 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
   const sty = new Uint8Array(total * 4);
   const tints = [new Uint8Array(total * 4), new Uint8Array(total * 4)];
   const win = new Uint16Array(total * 2);
+  const bones = input.skinned ? new Uint8Array(total * 4) : null;
+  const weights = input.skinned ? new Uint8Array(total * 4) : null;
   const neutral = packColour([127 / 255, 127 / 255, 127 / 255, 1]);   // neutral recolour tint (half range)
   const p = new THREE.Vector3(), n = new THREE.Vector3(), t = new THREE.Vector3();
   const rotation = new THREE.Matrix3();
@@ -88,7 +98,8 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
   let first = 0, at = 0;
   for (let i = 0; i < instances.length; i++) {
     const { matrix, tint, recolours } = instances[i];
-    const { positions, normals, uvs, tangents, source, count: nv } = meshes[i];
+    const { positions, normals, uvs, tangents, source, count: nv, boneIndices, boneWeights } = meshes[i];
+    if (bones && boneIndices && boneWeights) { bones.set(boneIndices.subarray(0, nv * 4), first * 4); weights!.set(boneWeights.subarray(0, nv * 4), first * 4); }
     const tintBytes = [0, 1].map((k) => (recolours?.[k] ? packColour(recolours[k]) : neutral));
     rotation.setFromMatrix4(matrix);
     const mirrored = matrix.determinant() < 0;
@@ -131,9 +142,14 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
     }));
     // Colour elements: a water surface's style colour then its colour; for
     // recoloured textures one or two tints precede the colour, which is last.
+    // Skinned layouts: the first uint element is the bone indices, the unorm
+    // element after it their weights; the rest follow the static layout.
     let normalSeen = 0, uvSeen = 0, colourSeen = 0;
-    const colourCount = elements.filter((f) => f === VERTEX_FORMAT.UNORM8X4).length;
-    const roles = byElement.map(({ format }) => {
+    const boneAt = input.skinned ? elements.indexOf(VERTEX_FORMAT.UINT8X4) : -1;
+    const colourCount = elements.filter((f, k) => f === VERTEX_FORMAT.UNORM8X4 && k !== boneAt + 1).length;
+    const roles = byElement.map(({ format }, k) => {
+      if (boneAt >= 0 && k === boneAt) return 'boneIndex';
+      if (boneAt >= 0 && k === boneAt + 1) return 'boneWeight';
       if (format === VERTEX_FORMAT.FLOAT3) return 'position';
       if (format === VERTEX_FORMAT.UNORM10X3_2) return normalSeen++ === 0 ? 'normal' : 'tangent';
       if (format === VERTEX_FORMAT.UNORM16X2) return uvSeen++ === 0 ? 'uv' : 'uv2';
@@ -160,6 +176,8 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
       else if (role === 'colour') attribute = new THREE.BufferAttribute(col, 4, true);
       else if (role === 'style') attribute = new THREE.BufferAttribute(sty, 4, true);
       else if (role === 'tint0' || role === 'tint1') attribute = new THREE.BufferAttribute(tints[role === 'tint0' ? 0 : 1], 4, true);
+      else if (role === 'boneIndex' && bones) { attribute = new THREE.BufferAttribute(bones, 4); attribute.gpuType = THREE.IntType; }
+      else if (role === 'boneWeight' && weights) attribute = new THREE.BufferAttribute(weights, 4, true);
       else return;
       geometry.setAttribute(name, attribute);
     });

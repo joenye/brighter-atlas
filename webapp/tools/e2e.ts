@@ -1125,6 +1125,20 @@ else {
   await sleep(2500);
   const beachCov = await paintCoverage(page);
   ok(beachCov > 0.05, `East Beach paints with game shading (coverage ${(beachCov * 100).toFixed(1)}% > 5%)`);
+  // Its crabs and the fish under the water are actors: posed in the game's
+  // frame by its skinned programs (drawn before the water, casting shadows),
+  // while three's own spawn meshes leave the camera but stay pickable.
+  const actors = await page.evaluate(() => window.__bs.worldView.gameApi.actors?.() ?? null);
+  ok(!!actors && actors.built >= 4 && actors.live === actors.built,
+    `East Beach actors draw in the game's frame (${actors?.live}/${actors?.built} posed)`);
+  const doubled = await page.evaluate(() => {
+    let n = 0;
+    for (const room of window.__bs.worldView.world.rooms.values()) {
+      for (const mesh of room.meshes) if (mesh.userData.exact?.category === 'spawns' && mesh.visible && (mesh.layers.mask & 1)) n++;
+    }
+    return n;
+  });
+  ok(doubled === 0, `no spawn is drawn twice over the game's frame (${doubled} three.js spawn batches on the camera layer)`);
   const beachShot = path.join(SHOTS, 'e2e_world_east_beach.png');
   await page.screenshot({ path: beachShot });
   console.log(`  screenshot: ${beachShot}`);

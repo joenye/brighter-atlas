@@ -169,6 +169,9 @@ export class SpawnAnimComposite {
       const skinned = !!skinnedSet?.has(Number(part.mesh)) && !!geometry.attributes.skinIndex;
       const mesh = skinned ? new PartSkinnedMesh(geometry, material, this.group) : new THREE.Mesh(geometry, material);
       mesh.userData.partIndex = partIndex;
+      // the part's mesh and material, for the game's frame (world.ts actorPalette)
+      mesh.userData.mesh = Number(part.mesh);
+      mesh.userData.gameMaterial = Number(part.material);
       if (skinned) {
         // Explicit identity bind matrix: the bones live under this group; a
         // parameterless bind() would recompute boneInverses from the current

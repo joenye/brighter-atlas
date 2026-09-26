@@ -13,8 +13,8 @@ import { buildMeshGeometry } from '../mesh-geometry.js';
 import { idlePoseKey, skinVertices } from '../../extract/world/idle-poses.js';
 import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
-import { b64f32, type AppStore } from '../../store.js';
-import type { GameRoomSource, GameBatchSource } from './game-frame.js';
+import { b64f32, b64u8, type AppStore } from '../../store.js';
+import type { GameRoomSource, GameBatchSource, GameActorSource } from './game-frame.js';
 import { emissionKey } from './draw-order.js';
 
 export const WORLD_CATEGORIES: readonly string[] = Object.freeze([
@@ -420,6 +420,25 @@ export async function loadRoomsWithRetry(world: WorldScene, roomIds: Iterable<nu
  * placement ({x, y} in tiles); omitted → rooms render at the origin. `origin`
  * is a global {x, y} tile offset (or a callback).
  */
+/** The three.js layer of spawn meshes the game's frame draws: the camera
+ *  skips it, picking does not. */
+export const GAME_DRAWN_LAYER = 1;
+
+/** Skin matrices (row-major 3x4 per bone) moved by a placement: P x S. */
+export function placeSkin(placement: THREE.Matrix4, palette: Float32Array, out = new Float32Array(palette.length)): Float32Array {
+  const p = placement.elements;   // column-major
+  for (let o = 0; o < palette.length; o += 12) {
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 4; c++) {
+        let v = p[r] * palette[o + c] + p[4 + r] * palette[o + 4 + c] + p[8 + r] * palette[o + 8 + c];
+        if (c === 3) v += p[12 + r];
+        out[o + r * 4 + c] = v;
+      }
+    }
+  }
+  return out;
+}
+
 export class WorldScene {
   store: AppStore;
   scene: THREE.Scene;
@@ -465,6 +484,11 @@ export class WorldScene {
   /** Water drawn with the game's surface and curtain materials (else plain). */
   gameWaterEnabled: boolean;
   gameShading = false;
+  /** The view's say over an actor part's skin matrices (native frame, row-major
+   *  3x4 per bone) each frame: its live pose while a clip plays, its resting
+   *  pose (`rest`) moved by a session edit, or null (hidden, deleted); undefined
+   *  keeps `rest`. `partIndex` is the spawn part row. */
+  actorPalette: ((roomId: number, spawnIndex: number, partIndex: number, mesh: number, rest: Float32Array) => Float32Array | null | undefined) | null = null;
   _waterStyles: Map<number, GameWaterStyleUniforms>;
   _waterTexturePromises: Map<string, Promise<any>>;
   _collisionGeometry: THREE.BoxGeometry;
@@ -1285,17 +1309,22 @@ export class WorldScene {
 
   /** One loaded room's placed batches for the game's own programs: raw mesh
    *  payloads with native-frame placements, the placement tints, and the
-   *  water material each water face draws with. */
+   *  water material each water face draws with; and its actors, the rigged
+   *  spawn parts the skinned programs pose from a bone palette each frame. */
   async gameRoomSource(room: WorldSceneRoom): Promise<GameRoomSource> {
     const water = this.index?.water ?? null;
     const render = this.index?.render ?? null;
     const batches: GameBatchSource[] = [];
+    const actors: GameActorSource[] = [];
     const matrix = new THREE.Matrix4();
     const payloads = new Map<number, any>();   // one decode per mesh per room
     room.group.updateMatrix();
     const oc = this.occurrenceColumns, pc = this.placementColumns;
     for (const batch of this._batchRows(room.shard)) {
-      if (batch.category === 'spawns') continue;
+      if (batch.category === 'spawns') {
+        await this._gameSpawnBatch(room, batch, payloads, batches, actors);
+        continue;
+      }
       const waterInfo = water?.materials?.[String(batch.material)] ?? null;
       const hasProgram = !!render?.materials?.[String(batch.material)];
       if (!waterInfo && !hasProgram) continue;
@@ -1331,8 +1360,69 @@ export class WorldScene {
         outer: grid ? [grid.x0, grid.y0, grid.x0 + grid.width, grid.y0 + grid.height] : [0, 0, w, h],
         layers: Number(room.shard.layers) || 1,
       },
-      grid, batches, water, textureMeta: (id: number) => this.textureMeta(id),
+      grid, batches, actors, water, textureMeta: (id: number) => this.textureMeta(id),
     };
+  }
+
+  /** A spawn batch for the game's frame. Rigged parts become actors: the mesh
+   *  in its own space with a palette of the resting clip's first frame placed
+   *  at the spawn (the view swaps in the live pose while a clip plays). The
+   *  rest are placed like any other part. Spawn parts take no tile colour;
+   *  their recolour tints come from the spawn's recolour entry. */
+  async _gameSpawnBatch(room: WorldSceneRoom, batch: WorldBatch, payloads: Map<number, any>,
+    batches: GameBatchSource[], actors: GameActorSource[]): Promise<void> {
+    const render = this.index?.render ?? null;
+    if (!render?.materials?.[String(batch.material)]) return;
+    if (batch.flags & this.flags.unrenderable) return;
+    if (batch.flags & this.flags.authoredEmpty) return;
+    const spc = this.spawnPartColumns!;
+    const mesh = Number(batch.mesh);
+    let payload = payloads.get(mesh);
+    if (!payload) payloads.set(mesh, payload = await this.store.payload(`meshes/${pad5(mesh)}.json`));
+    const recolours = batch.recolors?.length ? batch.recolors.slice(0, 2).map((c: number[]) => c.map(Number)) : null;
+    const place = (row: any[]) => room.group.matrix.clone().multiply(this._spawnMatrix(room.shard, row, new THREE.Matrix4()));
+    const rigged = !!(payload?.skinned && payload.bone_indices && payload.bone_weights && Number(payload.skel) >= 0);
+    if (!rigged) {
+      batches.push({
+        category: 'spawns', mesh, material: Number(batch.material), renderTexture: Number(batch.renderTexture),
+        payload, matrices: batch.entries.map((entry) => place(entry.row)),
+        tints: batch.entries.map(() => null), recolours: batch.entries.map(() => recolours), water: null,
+      });
+      return;
+    }
+    const rest = await this._restPalette(payload, Number(payload.skel), batch.idleClip ?? -1);
+    for (const entry of batch.entries) {
+      const placement = place(entry.row);
+      const palette = placeSkin(placement, rest);
+      const spawnIndex = Number(entry.row[spc.spawn]);
+      actors.push({
+        mesh, material: Number(batch.material), renderTexture: Number(batch.renderTexture), payload,
+        bones: rest.length / 12, tint: null, recolours,
+        palette: () => {
+          const live = this.actorPalette?.(room.id, spawnIndex, entry.placementIndex, mesh, palette);
+          return live === undefined ? palette : live;
+        },
+      });
+    }
+  }
+
+  /** A rig's skin matrices at the first frame of `clip` (mesh space, row-major
+   *  3x4 per bone), or its bind pose (identities) without one. */
+  async _restPalette(payload: any, rig: number, clip: number): Promise<Float32Array> {
+    const doc = clip >= 0 ? await this._idlePoses() : null;
+    const pose = doc?.poses?.[idlePoseKey(rig, clip)];
+    if (pose?.m) {
+      try {
+        const palette = b64f32(pose.m);
+        if (palette.length === Number(pose.bones) * 12 && palette.length) return palette;
+      } catch { /* fall back to the bind pose */ }
+    }
+    let bones = 1;
+    const indices = b64u8(payload.bone_indices);
+    for (let k = 0; k < indices.length; k++) bones = Math.max(bones, indices[k] + 1);
+    const identity = new Float32Array(bones * 12);
+    for (let b = 0; b < bones; b++) { identity[b * 12] = 1; identity[b * 12 + 5] = 1; identity[b * 12 + 10] = 1; }
+    return identity;
   }
 
   _batchRows(shard: any): WorldBatch[] {
@@ -1426,15 +1516,20 @@ export class WorldScene {
   }
 
   _gameDraws(exact: any): boolean {
-    if (!exact || exact.category === 'spawns') return false;
+    if (!exact) return false;
     const material = String(exact.material);
+    if (exact.category === 'spawns') return !!this.index?.render?.materials?.[material] && !exact.authoredEmpty;
     return !!this.index?.water?.materials?.[material]
       || (!!this.index?.render?.materials?.[material] && (!exact.authoredEmpty || exact.category === 'terrain'));
   }
 
   _applyMeshVisibility(mesh: THREE.InstancedMesh): void {
     const exact = mesh.userData.exact;
-    if (this.gameShading && this._gameDraws(exact)) { mesh.visible = false; return; }
+    // Spawns the game's frame draws leave three's camera but stay pickable
+    // (the pick ray tests every layer).
+    const actor = exact?.category === 'spawns';
+    mesh.layers.set(actor && this.gameShading && this._gameDraws(exact) ? GAME_DRAWN_LAYER : 0);
+    if (!actor && this.gameShading && this._gameDraws(exact)) { mesh.visible = false; return; }
     // A water surface has no plain texture of its own (its material is
     // authored empty): while the game's water draws it, it is always shown.
     const water = !!mesh.userData.gameWater && this.gameWaterEnabled;

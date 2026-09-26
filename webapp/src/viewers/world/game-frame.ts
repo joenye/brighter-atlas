@@ -3,7 +3,8 @@
 // map from the fixed sun view fitted to the visible part of the scene, the
 // half-resolution ambient occlusion chain (depth prepass, linear depth mips,
 // spiral estimator with temporal accumulation, two bilateral blurs), then the
-// main pass (ground and objects) and the water. Everything is computed in
+// main pass (ground, objects, then the actors: rigged spawns drawn with the
+// skinned programs from a per-frame bone palette) and the water. Everything is computed in
 // the native frame (x east, y south, z up: left handed, native units) with
 // the game's camera conventions: view space x right, z up, looking along -y;
 // clip depth 0..1 (EXT_clip_control where available, else the translator's
@@ -50,11 +51,28 @@ export interface GameBatchSource {
   water: null | { kind: 'surface' | 'curtain'; style: number; opacity: number; window: [number, number] };
 }
 
+/** One skinned part of an actor: its mesh in its own space, posed each frame
+ *  by the bone palette the game's skinned programs read. */
+export interface GameActorSource {
+  mesh: number;
+  material: number;
+  renderTexture: number;
+  payload: any;
+  /** Bones in the rig (the palette's length is 12 floats each). */
+  bones: number;
+  tint: number[] | null;
+  recolours: number[][] | null;
+  /** This frame's skin matrices in the native frame (placement included),
+   *  row-major 3x4 per bone; null leaves the part out of the frame. */
+  palette: () => Float32Array | null;
+}
+
 export interface GameRoomSource {
   roomId: number;
   bounds: { inner: [number, number, number, number]; outer: [number, number, number, number]; layers: number };
   grid: any;                      // shard colour_grid
   batches: GameBatchSource[];
+  actors?: GameActorSource[];
   water: any | null;              // world index water (styles)
   textureMeta: (id: number) => any;
 }
@@ -79,6 +97,16 @@ interface Draw {
   textures: Record<number, GameTexture>;
   depth: null | { program: GameProgram; gl: GameGLProgram; vao: WebGLVertexArrayObject; textures: Record<number, GameTexture> };
   water: GameBatchSource['water'];
+  /** Actors: the bone palette texture (3 texels per bone) and its source. */
+  bones?: { texture: GameTexture; actor: GameActorSource; data: Float32Array; live: boolean };
+}
+
+/** The vertex stage's buffer resources (a skinned program's bone palette) bound to `bones`. */
+function boneBindings(program: GameProgram, bones: GameTexture | undefined): Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> | null {
+  if (!bones) return null;
+  const out: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> = {};
+  for (const s of program.translated.samplers) if (s.stage === 'vs' && s.dim === 'buffer') out[s.texture] = { texture: bones, sampler: null };
+  return out;
 }
 
 const f32 = Math.fround;
@@ -194,6 +222,7 @@ export class GameFrame {
   readonly gl: GameGL;
   readonly shaders: GameShaderLibrary;
   private draws: Draw[] = [];
+  private actorDraws: Draw[] = [];
   private waterDraws: Draw[] = [];
   private textures = new Map<string, Promise<GameTexture | null>>();
   private room: GameRoomSource | null = null;
@@ -214,16 +243,19 @@ export class GameFrame {
     this.shaders = new GameShaderLibrary(url, index, !!this.clipControl);
   }
 
-  /** The main-pass program of a material for the default settings. */
-  mainProgram(material: number): number | null {
+  /** The main-pass program of a material for the default settings (shadows,
+   *  occlusion and vignette on); `skinned` and `wide` (32-bit indices) pick the
+   *  actor and large-mesh variants. */
+  mainProgram(material: number, skinned = false, wide = false): number | null {
     const m = this.index.materials[String(material)];
-    const row = m?.main.find((k) => k[0] === 0 && k[1] === 0 && k[2] === 1 && k[3] === 1 && k[4] === 1);
+    const row = m?.main.find((k) => k[0] === +skinned && k[1] === +wide && k[2] === 1 && k[3] === 1 && k[4] === 1)
+      ?? m?.main.find((k) => k[0] === +skinned && k[1] === 0 && k[2] === 1 && k[3] === 1 && k[4] === 1);
     return row ? row[5] : null;
   }
 
-  depthProgram(material: number): number | null {
+  depthProgram(material: number, skinned = false, wide = false): number | null {
     const m = this.index.materials[String(material)];
-    const row = m?.depth.find((k) => k[0] === 0 && k[1] === 0);
+    const row = m?.depth.find((k) => k[0] === +skinned && k[1] === +wide) ?? m?.depth.find((k) => k[0] === +skinned && k[1] === 0);
     return row ? row[2] : null;
   }
 
@@ -262,13 +294,15 @@ export class GameFrame {
    *  textures stay cached for the next scene). */
   releaseRoom(): void {
     const gl = this.context;
-    for (const d of [...this.draws, ...this.waterDraws]) {
+    for (const d of [...this.draws, ...this.actorDraws, ...this.waterDraws]) {
       gl.deleteVertexArray(d.vao);
       if (d.depth) gl.deleteVertexArray(d.depth.vao);
+      if (d.bones) gl.deleteTexture(d.bones.texture.texture);
     }
     for (const b of this.roomBuffers) gl.deleteBuffer(b);
     this.roomBuffers = [];
     this.draws = [];
+    this.actorDraws = [];
     this.waterDraws = [];
   }
 
@@ -288,6 +322,82 @@ export class GameFrame {
       if (!draw) continue;
       (group.batch.water ? this.waterDraws : this.draws).push(draw);
     }
+    for (const actor of room.actors ?? []) {
+      const draw = await this.buildActorDraw(actor).catch((error) => {
+        console.warn('game shading: actor part skipped', actor.mesh, actor.material, error);
+        return null;
+      });
+      if (draw) this.actorDraws.push(draw);
+    }
+  }
+
+  /** One actor part: the skinned programs of its material, its mesh baked in
+   *  its own space with the bone indices and weights, and a bone palette
+   *  texture the frame refills before drawing. */
+  private async buildActorDraw(actor: GameActorSource): Promise<Draw | null> {
+    const wide = actor.payload?.idx_dtype === 'u32';
+    const programIndex = this.mainProgram(actor.material, true, wide);
+    if (programIndex === null || !(actor.bones > 0)) return null;
+    const program = await this.shaders.program(programIndex, 'clip');
+    const depthIndex = this.depthProgram(actor.material, true, wide);
+    const depthProgram = depthIndex === null ? null : await this.shaders.program(depthIndex, 'clip');
+    const material = this.index.materials[String(actor.material)];
+    const [geometry, depthGeometry] = bakeGameGeometry({
+      instances: [{ payload: actor.payload, matrix: new THREE.Matrix4(), tint: actor.tint, recolours: actor.recolours }],
+      layouts: [program, depthProgram].flatMap((p) => (p ? [{ elements: p.elements, attributes: p.translated.attributes }] : [])),
+      specular: material?.specular ?? [0, 0, 0],
+      opacity: material?.opacity ?? 1,
+      skinned: true,
+    });
+    const batch: GameBatchSource = {
+      category: 'spawns', mesh: actor.mesh, material: actor.material, renderTexture: actor.renderTexture,
+      payload: actor.payload, matrices: [], tints: [], water: null,
+    };
+    const glProgram = this.gl.compile(program.translated);
+    const vao = this.vertexArray(glProgram, geometry);
+    const index = geometry.getIndex()!;
+    let depth: Draw['depth'] = null;
+    if (depthProgram) {
+      const depthGl = this.gl.compile(depthProgram.translated);
+      depth = { program: depthProgram, gl: depthGl, vao: this.vertexArray(depthGl, depthGeometry),
+        textures: await this.bindTexturesFor(depthProgram, batch) };
+    }
+    // Three float4 rows per bone, element i at (i mod width, i div width).
+    const texels = actor.bones * 3, width = Math.min(texels, 4096), height = Math.ceil(texels / width);
+    const texture = this.gl.texture2D(width, height, this.context.RGBA32F);
+    return {
+      program, gl: glProgram, vao, count: index.count,
+      indexType: index.array instanceof Uint32Array ? this.context.UNSIGNED_INT : this.context.UNSIGNED_SHORT,
+      textures: await this.bindTexturesFor(program, batch), depth, water: null,
+      bones: { texture, actor, data: new Float32Array(width * height * 4), live: false },
+    };
+  }
+
+  /** Refill every actor's bone palette for this frame; parts without one sit it out. */
+  private updateActors(): void {
+    const gl = this.context;
+    for (const d of this.actorDraws) {
+      const bones = d.bones!;
+      const palette = bones.actor.palette();
+      bones.live = !!palette && palette.length >= bones.actor.bones * 12;
+      if (!bones.live) continue;
+      bones.data.set(palette!.subarray(0, bones.actor.bones * 12));
+      const t = bones.texture;
+      gl.bindTexture(gl.TEXTURE_2D, t.texture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, t.width, t.height, gl.RGBA, gl.FLOAT, bones.data);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  /** Test readback: the actor parts built for the room, and those posed last frame. */
+  actorInfo(): { built: number; live: number; meshes: number[] } {
+    return { built: this.actorDraws.length, live: this.actorDraws.filter((d) => d.bones!.live).length,
+      meshes: this.actorDraws.map((d) => d.bones!.actor.mesh) };
+  }
+
+  /** The static draws, then the actors posed this frame. */
+  private solidDraws(): Draw[] {
+    return [...this.draws, ...this.actorDraws.filter((d) => d.bones!.live)];
   }
 
   private async buildDraw(group: DrawGroup<GameBatchSource>): Promise<Draw | null> {
@@ -550,6 +660,8 @@ export class GameFrame {
     }
     const viewProjection = projection.clone().multiply(view);
     const t = this.ensureTargets(camera.width, camera.height);
+    this.updateActors();
+    const solid = this.solidDraws();
     const env = this.environmentOverride ?? idx.environments[String(this.room.roomId)] ?? null;
 
     // Shadow receiver fit over the scene box.
@@ -596,11 +708,11 @@ export class GameFrame {
     };
     // Depth-only draws of every caster (none for a card) into the bound target.
     const drawDepths = (words: Uint32Array, targetHeight: number) => {
-      for (const d of card ? [] : this.draws) {
+      for (const d of card ? [] : solid) {
         if (!d.depth) continue;
         this.gl.applyState(this.state(d.depth.program, { colourWrite: false }));
         this.gl.bindResources(d.depth.gl, { [d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs']: words },
-          this.bound(d.depth.program, d.depth.textures), 'ps', targetHeight);
+          this.bound(d.depth.program, d.depth.textures), 'ps', targetHeight, boneBindings(d.depth.program, d.bones?.texture));
         gl.bindVertexArray(d.depth.vao);
         gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
       }
@@ -735,11 +847,11 @@ export class GameFrame {
         else if (s.textureName === 'v_texture_ssao') textures[s.texture] = { texture: t.blur3, sampler: this.gl.sampler(desc) };
         else if (d.textures[s.texture]) textures[s.texture] = { texture: d.textures[s.texture], sampler: this.gl.sampler(desc) };
       });
-      this.gl.bindResources(d.gl, cbs, textures, 'ps', camera.height);
+      this.gl.bindResources(d.gl, cbs, textures, 'ps', camera.height, boneBindings(d.program, d.bones?.texture));
       gl.bindVertexArray(d.vao);
       gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
     };
-    for (const d of this.draws) drawMain(d, null);
+    for (const d of solid) drawMain(d, null);
     const water = this.room.water;
     for (const d of this.skipWater ? [] : this.waterDraws) {
       const style = water.styles[d.water!.style];

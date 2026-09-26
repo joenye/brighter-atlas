@@ -152,10 +152,12 @@ export class GameGL {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, 0);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, levels - 1);
     const integer = internalFormat === gl.R32UI || internalFormat === gl.RGBA8UI;
+    const float = internalFormat === gl.RGBA32F;
     const depth = internalFormat === gl.DEPTH_COMPONENT32F || internalFormat === gl.DEPTH_COMPONENT24;
-    // Integer and float depth formats are not filterable: with the default
-    // filters the texture would be incomplete and every fetch would read 0.
-    if (integer || depth) {
+    // Integer, 32-bit float (data) and float depth formats are not filterable:
+    // with the default filters the texture would be incomplete and every
+    // fetch would read 0.
+    if (integer || float || depth) {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, levels > 1 ? gl.NEAREST_MIPMAP_NEAREST : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     }
@@ -252,9 +254,12 @@ export class GameGL {
     this.samplerUnits.clear();
   }
 
-  /** Bind constant buffers (raw words), textures with their sampler objects, and the target height. */
+  /** Bind constant buffers (raw words), textures with their sampler objects, and the target height.
+   *  `vsTextures`: the vertex stage's own resources (a skinned program's bone buffer), bound
+   *  alongside `stage`'s; a buffer resource also gets its data texture's width. */
   bindResources(p: GameGLProgram, cbs: Record<string, Uint32Array>, textures: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }>,
-    stage: 'vs' | 'ps' | 'both', targetHeight: number): void {
+    stage: 'vs' | 'ps' | 'both', targetHeight: number,
+    vsTextures: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> | null = null): void {
     const gl = this.gl;
     gl.useProgram(p.program);
     for (const [name, words] of Object.entries(cbs)) {
@@ -262,9 +267,14 @@ export class GameGL {
       if (location) gl.uniform4uiv(location, words);
     }
     for (const s of p.translated.samplers) {
-      if (stage !== 'both' && s.stage !== stage) continue;
+      const own = vsTextures && s.stage === 'vs';
+      if (!own && stage !== 'both' && s.stage !== stage) continue;
       const unit = p.units.get(s.uniform)!;
-      const bound = textures[s.texture];
+      const bound = own ? vsTextures[s.texture] : textures[s.texture];
+      if (s.widthUniform) {
+        const location = p.uniforms.get(s.widthUniform);
+        if (location) gl.uniform1i(location, bound?.texture.width ?? 1);
+      }
       gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(bound ? bound.texture.target : (s.dim === 'cube' ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D), bound ? bound.texture.texture : null);
       gl.bindSampler(unit, bound?.sampler ?? null);
