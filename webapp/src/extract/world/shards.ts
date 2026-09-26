@@ -148,6 +148,8 @@ export const COORDINATE_SYSTEM = {
   draw_order_revision: 1,
   // 1: spawns carry their resting clip (idle_clip / idle_source)
   spawn_idle_revision: 1,
+  // 1: shards carry the room's ground plane (ground_plane)
+  ground_plane_revision: 1,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,
   layer_units: LAYER_UNITS,

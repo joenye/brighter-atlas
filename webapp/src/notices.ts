@@ -68,9 +68,21 @@ const WORLD_070: Record<string, number> = {
   effect_anchor_revision: 8, effect_property_revision: 5, water_revision: 1, scenery_trim_revision: 1,
   draw_order_revision: 1, spawn_idle_revision: 1,
 };
+const world070Stale = worldStale((s) => Object.entries(WORLD_070).some(([key, revision]) => (s[key] ?? 0) < revision));
 const WORLD_UPDATE = 'To update saved World data, open the version menu, choose "Add version (new game build)", and select World after choosing your current game files.';
 
 const NOTICES: Notice[] = [
+  {
+    id: 'world-0.7.2',
+    title: 'Brighter Atlas 0.7.2: the ground under every room',
+    paras: [
+      'Rooms now sit on the ground the game lays under and around them, with its sea and river beds showing through the water.',
+      'The ground is worked out when your game files are read, so your saved World data does not have it yet. ' + WORLD_UPDATE,
+      'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
+    ],
+    // only for data the 0.7.0 notice does not already send to re-extract
+    when: async (app: any) => (await worldStale((s) => (s.ground_plane_revision ?? 0) < 1)(app)) && !(await world070Stale(app)),
+  },
   {
     id: 'world-0.7.0',
     title: 'Brighter Atlas 0.7.0: the world as the game draws it',
@@ -79,7 +91,7 @@ const NOTICES: Notice[] = [
       'All of this is worked out when your game files are read, so your saved World data still has the old version. ' + WORLD_UPDATE,
       'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
     ],
-    when: worldStale((s) => Object.entries(WORLD_070).some(([key, revision]) => (s[key] ?? 0) < revision)),
+    when: world070Stale,
   },
   {
     id: 'extraction-engine-3-equipment',
