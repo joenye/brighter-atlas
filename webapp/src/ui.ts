@@ -1,6 +1,7 @@
 // Small DOM + formatting helpers shared by all views.
 
 import { getVersionName } from './prefs.js';
+import { gameVersion } from './game-build.js';
 import type { VersionRecord } from './storage.js';
 import type { IndexEntry } from './store.js';
 
@@ -115,8 +116,9 @@ export function versionDateLabel(v: VersionRecord | null | undefined): string | 
 }
 
 // A version's display name. Priority: the user's friendly name (a local pref) >
-// a legacy custom label > the build label from the per-build decode data >
-// an auto label. The auto label only embeds the date when it's a trustworthy
+// a legacy custom label > the build date with the game's own version
+// ("build 21-Sep-2026 (v0.99.3)") > the build label from the per-build decode
+// data > an auto label. The auto label only embeds the date when it's a trustworthy
 // build date; otherwise it falls back to the stable content id, since the file
 // date isn't the build date. `profileLabel` sits above both auto forms: it is
 // matched by content hash, so it names the build exactly ("build 23-Apr-2025")
@@ -126,6 +128,8 @@ export function versionLabel(v: VersionRecord | null | undefined): string {
   const friendly = getVersionName(v.versionId);
   if (friendly) return friendly;
   if (v.label && !/^build /i.test(v.label)) return v.label;
+  const version = gameVersion(v.buildString);
+  if (version) return v.profileLabel ? `build ${profileLabelDate(v.profileLabel)} (v${version})` : `build v${version}`;
   if (v.profileLabel) return `build ${profileLabelDate(v.profileLabel)}`;
   if (v.builtAt && versionDateReliable(v)) return `build ${fmtDate(v.builtAt)}`;
   return `build ${(v.versionId || '').slice(0, 8)}`;

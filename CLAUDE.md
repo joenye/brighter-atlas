@@ -86,6 +86,12 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   `builds/<hash16>.json`; new build-specific data extends it rather than adding
   a file, and anything computable from the user's bundles is computed at
   extraction instead of shipped.
+- **Builds are named by the game's own build string.** The per-build data's
+  `build.string` ("0.99.3-278abe752c42bda0", what the game's console prints
+  for `build_string`) names versions after their date, "build 21-Sep-2026
+  (v0.99.3)"
+  (`src/game-build.ts`, `ui.versionLabel`) and the world map's updates;
+  data without one keeps the date label. Stored versions pick it up at boot.
 - **Derive by shape.** Build-specific values the user's bundles can tell are
   found by data shape at extraction, the same rule on every build:
   `extract/world/render-shape.ts` (draw tables, materials, environments),

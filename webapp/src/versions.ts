@@ -104,8 +104,12 @@ export async function openStoragePanel(app: any): Promise<void> {
               ? "When this game build was published (worked out from the update's file dates)."
               : "When you added these files. The game doesn't record its real build date, so this is just your download date. Rename the version to label it.",
           }) : null,
+          v.buildString ? el('span', {
+            class: 'mono dim small', text: v.buildString,
+            title: 'The game\'s own build string for this build (what its console prints for build_string).',
+          }) : null,
           decodeId ? el('span', {
-            class: 'mono dim small', text: `build ${decodeId}`,
+            class: 'mono dim small', text: `id ${decodeId}`,
             title: 'The build\'s id in its per-build data (first 8 hex of the decompressed game-index hash).',
           }) : null,
           el('span', {
@@ -143,7 +147,7 @@ export async function openStoragePanel(app: any): Promise<void> {
                 return;
               }
               const freed = await deleteVersion(v.versionId);
-              app.banner(`deleted version ${v.label || v.versionId.slice(0, 8)} (freed ${fmtBytes(freed)})`, 'b-info');
+              app.banner(`deleted version ${versionLabel(v) || v.versionId.slice(0, 8)} (freed ${fmtBytes(freed)})`, 'b-info');
               if (v.versionId === activeId) { location.reload(); return; }
               render();
             });
@@ -189,26 +193,26 @@ export async function openStoragePanel(app: any): Promise<void> {
 // Per-build decode data can ship AFTER a build was extracted (a fresh game
 // update usually reaches users before its data is published), leaving the
 // version stuck with a fallback name like "build 6cba3cbd". Called once at
-// boot: any stored version with no profileLabel yet is re-matched against the
-// shipped data and stamped, so builds name themselves ("build 23-Apr-2025
-// (35f5efbc)") without a re-extract. Versions stored before ab0RawSha256
+// boot: any stored version with no profileLabel or game build string yet is
+// re-matched against the shipped data and stamped, so builds name themselves
+// ("build 21-Sep-2026 (v0.99.3)") without a re-extract. Versions stored before ab0RawSha256
 // existed derive it once from their stored ab0 (decompress + hash, a few MB,
 // only for still-unlabeled versions), and the key is persisted so later loads
 // are a single cheap fetch. Returns versionId -> new label so callers can
 // refresh live UI. Failures (offline, no data yet) are silent and simply
 // retried on a future load.
-export async function backfillProfileLabels(): Promise<Map<string, string>> {
-  const updated = new Map<string, string>();
+export async function backfillProfileLabels(): Promise<Map<string, { label?: string; build?: string }>> {
+  const updated = new Map<string, { label?: string; build?: string }>();
   let versions: VersionRecord[] = [];
   try { versions = await listVersions(); } catch { return updated; }
   for (const v of versions) {
-    if (v.profileLabel) continue;
+    if (v.profileLabel && v.buildString) continue;
     try {
       const profile = await import('./extract/world/profile.js');
       let entry = null;
       if (v.ab0RawSha256) {
         ({ entry } = await profile.matchWorldProfileEntryByHash(v.ab0RawSha256));
-        if (!entry?.label) continue;   // no data yet: nothing to persist
+        if (!entry?.label && !entry?.build) continue;   // no data yet: nothing to persist
       } else {
         const ab0Sha = v.bundles?.[0]?.sha256;
         if (!ab0Sha) continue;
@@ -223,10 +227,10 @@ export async function backfillProfileLabels(): Promise<Map<string, string>> {
         v.ab0RawSha256 = m.rawSha256;   // persist the key even when unmatched
         entry = m.entry;
       }
-      if (entry?.label) {
-        v.profileLabel = entry.label;
-        updated.set(v.versionId, entry.label);
-      }
+      const fresh: { label?: string; build?: string } = {};
+      if (entry?.label && entry.label !== v.profileLabel) fresh.label = v.profileLabel = entry.label;
+      if (entry?.build && entry.build !== v.buildString) fresh.build = v.buildString = entry.build;
+      if (fresh.label || fresh.build) updated.set(v.versionId, fresh);
       await putVersion(v);
     } catch { /* best-effort: offline or an unreadable stored bundle */ }
   }

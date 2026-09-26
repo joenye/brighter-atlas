@@ -222,17 +222,19 @@ async function ingest({
   onProgress({ stage: 'datatable', done: 1, total: 1 });
 
   // Build label from the per-build decode data (display only;
-  // versionId stays the id): the bundles carry no build string, but a known
-  // build's profile entry does. Best-effort: any failure (offline, node
+  // versionId stays the id): the bundles carry no build name, but a known
+  // build's per-build data does: its label and the game's build string. Best-effort: any failure (offline, node
   // without the defaults, unknown build) just leaves the mtime-derived
   // fallback label in place. Never fails the ingest.
   let profileBuildLabel = null;
+  let gameBuildString = null;
   let ab0RawSha256 = null;
   try {
     const { matchWorldProfileEntry } = await import('./world/profile.js');
     const matched = await matchWorldProfileEntry(ab0, { fetchJson: fetchJson as any });
     ab0RawSha256 = matched.rawSha256 || null;
     profileBuildLabel = matched.entry?.label || null;
+    gameBuildString = matched.entry?.build || null;
   } catch { /* label lookup is optional */ }
 
   // cross-checks: a bundle from a different game build than ab0 is a hard
@@ -581,6 +583,7 @@ async function ingest({
   // stored hash lets the app match a label later without re-reading bundles.
   if (ab0RawSha256) rec.ab0RawSha256 = ab0RawSha256;
   if (profileBuildLabel) rec.profileLabel = profileBuildLabel;
+  if (gameBuildString) rec.buildString = gameBuildString;
   if (builtAt && (!rec.builtAt || builtAt > rec.builtAt)) rec.builtAt = builtAt;
   // platform (macOS / Windows): exact from the shader bundle when present, else a
   // browser guess. Only fill if unknown, so a re-ingest / user choice isn't lost.

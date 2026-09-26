@@ -2119,6 +2119,9 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       console.log('\n== world map (tools/test_world.ts)');
       const world = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_world.ts')], { encoding: 'utf8' });
       ok(world.status === 0, `world map page${world.status === 0 ? '' : `:\n    ${(world.stderr || world.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
+      // build names: the game's build string names versions and releases
+      const names = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_build_names.ts')], { encoding: 'utf8', cwd: WEBAPP });
+      ok(names.status === 0, `build names${names.status === 0 ? '' : `:\n    ${(names.stderr || names.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
     }
     if (realData && existsSync(path.join(WEBAPP, realData, 'manifest.json'))) {
       await realSuite(browser, base, realData);

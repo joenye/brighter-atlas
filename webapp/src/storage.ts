@@ -36,6 +36,8 @@ export interface VersionRecord {
   label?: string;
   /** build label from the per-build decode data (e.g. "23-Apr-2025 (35f5efbc)"). Display precedence in ui.versionLabel */
   profileLabel?: string;
+  /** the game's build string from the per-build decode data (e.g. "0.99.3-278abe752c42bda0"); names the version as "build 21-Sep-2026 (v0.99.3)" */
+  buildString?: string;
   /** sha256 of the decompressed ab0, the decode-data lookup key, kept so a label can be matched later without re-reading bundles */
   ab0RawSha256?: string;
   builtAt?: number | string;

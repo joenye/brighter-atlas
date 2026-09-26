@@ -10,6 +10,7 @@
 // only the missing ones are offered, and the ingest merges into the record.
 
 import { el, clear, fmtBytes, fmtInt, versionLabel, profileLabelDate, DESKTOP_ONLY_LINE } from './ui.js';
+import { gameVersion } from './game-build.js';
 import { CAT_BUNDLES, ALL_CATS, BUNDLE_LABEL, requiredBundles } from './extract/ingest.js';
 import { requestPersist, storageEstimate } from './storage.js';
 
@@ -55,6 +56,7 @@ export interface OnboardingOpts {
 //                     ("extract more"): done categories lock, ingest merges.
 //   opts.onDone:      called after a successful extraction.
 export function mountOnboarding(host: HTMLElement, { requireCats = [], existing = null, onDone }: OnboardingOpts = {}): void {
+  let buildName: string | null = null;   // the recognised build ("21-Sep-2026 (v0.99.3)"), for the done screen
   clear(host);
   const root = el('div', { class: 'onboard' });
   host.appendChild(root);
@@ -224,7 +226,7 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
       // Build fingerprint: decompress + hash ab0 (7 MB, fast) and match it
       // against the shipped per-build decode data, BEFORE anything runs. A
       // recognized build shows its human label on the validate line ("· build
-      // 23-Apr-2025"); an unrecognized one locks the World row
+      // 21-Sep-2026 (v0.99.3)"); an unrecognized one locks the World row
       // with an honest explanation (everything else still extracts). Purely
       // best-effort: any failure here leaves the panel as it was (extraction
       // re-checks anyway).
@@ -237,8 +239,11 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
         ]);
         const ab0 = zstdDecompress(new Uint8Array(await readRaw(picked[0], header.entries[0])));
         const { entry, rawSha256 } = await matchWorldProfileEntry(ab0);
-        if (entry?.label) {
-          validate.appendChild(el('span', { text: ` · build ${profileLabelDate(entry.label)}` }));
+        const version = gameVersion(entry?.build);
+        if (version || entry?.label) {
+          const name = version && entry?.label ? `${profileLabelDate(entry.label)} (v${version})` : version ? `v${version}` : profileLabelDate(entry!.label!);
+          buildName = name;
+          validate.appendChild(el('span', { text: ` · build ${name}`, title: entry?.build ? `The game's build string: ${entry.build}` : '' }));
         }
         const world = rowParts.world;
         if (!entry && world && !doneCats.has('world')) {
@@ -399,7 +404,7 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
       el('h2', { text: 'Done: everything stays on this machine' }),
       el('div', { class: 'ob-done card' },
         el('p', {}, el('b', { text: `Extracted in ${result.seconds.toFixed(1)}s: ` }), catLine),
-        el('p', { class: 'dim small', text: `Game build ${result.versionId.slice(0, 8)} · using ${fmtBytes(est.usage || 0)} of local browser storage.` }),
+        el('p', { class: 'dim small', text: `Game build ${buildName ?? result.versionId.slice(0, 8)} · using ${fmtBytes(est.usage || 0)} of local browser storage.` }),
         ...stageErrs,
         otherErrors
           ? el('p', { class: 'small err', text: `${otherErrors} item(s) couldn't be read and were skipped.` })

@@ -3,6 +3,7 @@
 // origin, where hash16 is the first 16 hex chars of that hash. No data for
 // the hash -> the World category is unavailable for that build (everything
 // else still extracts).
+import { parseBuildString } from '../../game-build.js';
 
 export const WORLD_PROFILE_KIND = 'brighter-atlas-world-profile';
 export const WORLD_PROFILE_FORMAT = 1;
@@ -26,6 +27,8 @@ export interface WorldProfile {
   kind: string;
   format: number;
   label?: string;
+  /** The game's build string for this build ({string: "0.99.3-278abe752c42bda0"}). */
+  build?: { string?: string };
   bundle0?: { raw_sha256?: string };
   stream: WorldProfileStream;
   class_fields: Record<string, number>;
@@ -39,6 +42,8 @@ export interface WorldProfileIndexEntry {
   file: string;
   bundle0_raw_sha256: string;
   label?: string;
+  /** The game's build string, when the data carries a well-formed one. */
+  build?: string;
   [key: string]: any;
 }
 
@@ -138,6 +143,7 @@ export async function matchWorldProfileEntryByHash(
       bundle0_raw_sha256: rawSha256,
     };
     if (profile.label) entry.label = profile.label;
+    if (parseBuildString(profile.build?.string)) entry.build = profile.build!.string;
     if (profile.maps !== undefined) entry.maps = profile.maps;
     return { entry, rawSha256 };
   } catch {

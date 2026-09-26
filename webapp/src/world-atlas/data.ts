@@ -3,7 +3,7 @@
 // did not read from the user's own files, and only the 2D map: its terrain,
 // room labels and their artwork.
 //
-//   manifest.json   releases (date, label, style, art, rooms as piece ids),
+//   manifest.json   releases (date, label, build string, style, art, rooms as piece ids),
 //                   the packs, and which pack holds each piece
 //   packs/*.json    room pieces: label, colours, terrain. 'latest'
 //                   holds the newest release's rooms; the rest sit once in
@@ -19,6 +19,8 @@ import type { MapBitmap } from '../extract/maps/images.js';
 
 export interface WorldRelease {
   id: string; date: string; label: string | null; style: string;
+  /** The game's build string ("0.99.3-278abe752c42bda0"); absent in older data. */
+  build?: string | null;
   art: { terrain: string[]; images: Record<string, string> };
   rooms: number[];
 }

@@ -691,7 +691,8 @@ class App {
           const updated = await backfillProfileLabels();
           const fresh = updated.get(this.store.versionId!);
           if (fresh && this.store.version) {
-            this.store.version.profileLabel = fresh;
+            if (fresh.label) this.store.version.profileLabel = fresh.label;
+            if (fresh.build) this.store.version.buildString = fresh.build;
             this.refreshVersionChip();
           }
         } catch { /* best-effort */ }

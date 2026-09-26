@@ -15,7 +15,8 @@ project, with one exception: the world map (below). Live at
 **World map, no game files needed.** The home page,
 [brighteratlas.com](https://brighteratlas.com/), shows the game's 2D world
 map, with its room labels, for every game update. Pick an update from the
-list or slide through the dates to watch the world change. Built for phones.
+list (search by game version, like 0.99, or by date) or slide through the
+dates to watch the world change. Built for phones.
 This page, alone, draws from map data the site serves (the map's terrain,
 labels and their artwork, for each update).
 

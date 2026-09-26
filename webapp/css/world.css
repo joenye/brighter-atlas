@@ -26,10 +26,12 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 .world-ticks span { position: absolute; top: 0; width: 1px; height: 4px; background: var(--fg2); opacity: .55; }
 .world-ticks span.year { height: 7px; background: var(--fg1); opacity: .9; }
 .world-ticks span.year::after { content: attr(data-year); position: absolute; top: 6px; left: 3px; font-size: 10px; color: var(--fg2); letter-spacing: .04em; }
-.world-bubble { position: absolute; bottom: 34px; left: calc(9px + (100% - 18px) * var(--frac, 1)); transform: translateX(-50%); padding: 3px 8px;
+/* anchored at the handle, sliding from left-aligned at the start to right-aligned
+   at the end, so it never sticks out of the screen; its pointer follows the handle */
+.world-bubble { position: absolute; bottom: 34px; left: calc(9px + (100% - 18px) * var(--frac, 1)); transform: translateX(calc(-100% * var(--frac, 1))); padding: 3px 8px;
   border-radius: 6px; background: var(--accent); color: #0d0f13; font-size: 12px; font-weight: 650; white-space: nowrap; pointer-events: none;
   opacity: 0; transition: opacity .15s; z-index: 2; }
-.world-bubble::after { content: ""; position: absolute; left: 50%; bottom: -4px; width: 8px; height: 8px; background: var(--accent); transform: translateX(-50%) rotate(45deg); }
+.world-bubble::after { content: ""; position: absolute; left: clamp(8px, calc(100% * var(--frac, 1)), calc(100% - 8px)); bottom: -4px; width: 8px; height: 8px; background: var(--accent); transform: translateX(-50%) rotate(45deg); }
 .world-slider.dragging .world-bubble { opacity: 1; }
 .world-map { flex: 1; background: #0e1014; }
 .world-map canvas { outline: none; transition: filter .25s ease; }
@@ -63,6 +65,7 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
   border-radius: 6px; padding: 8px 10px; cursor: pointer; color: var(--fg1); font-variant-numeric: tabular-nums; }
 .world-list button:hover, .world-list button.current { background: var(--bg3); color: var(--fg0); }
 .world-list .when { color: var(--fg2); font-family: var(--mono); font-size: 11px; }
+.world-list b { font-weight: 600; color: var(--fg0); }
 .world-list .empty { color: var(--fg2); padding: 8px 10px; }
 
 /* phones: the toolbar stacks (update controls, then the slider), bigger targets */
@@ -71,8 +74,9 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
   .world-cta { padding: 5px 10px; font-size: 12px; }
   .world-toolbar { padding: 8px 10px; }
   .world-toolbar .btn { min-height: 36px; }
-  .world-pick { width: 100%; }
-  .world-release { flex: 1; }
+  .world-pick { width: 100%; min-width: 0; }
+  /* the release name wraps to a second line on the narrowest phones */
+  .world-release { flex: 1; min-width: 0; white-space: normal; line-height: 1.25; }
   .world-slider { min-width: 0; width: 100%; flex: none; }
   .wmap-labels { left: 8px; bottom: 8px; }
   .world-picker { align-items: flex-end; }

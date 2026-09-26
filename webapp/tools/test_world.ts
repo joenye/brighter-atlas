@@ -38,9 +38,10 @@ await writeFile(path.join(dir, 'packs', 'latest-a.json'), JSON.stringify({ forma
 // the first release also has a sealed area: a silhouette of whole tiles only
 await writeFile(path.join(dir, 'packs', '2025-01-a.json'), JSON.stringify({ format: 1, pieces: [[1, pieces[1]], [3, { sealed: 'vault', cells: [10, 0, 11, 0, 10, 1, 11, 1] }]] }));
 await writeFile(path.join(dir, 'art', 'vault.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
-const release = (id: string, date: string, ids: number[]) => ({ id, date, label: null, style: 'style-a', art: { terrain, images }, rooms: ids });
+// the newer release carries the game's build string, the older predates it
+const release = (id: string, date: string, ids: number[], build: string | null = null) => ({ id, date, label: null, build, style: 'style-a', art: { terrain, images }, rooms: ids });
 await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ format: 1,
-  releases: [release('aaaaaaaaaaaaaaaa', '2025-01-10T10:00:00Z', [0, 1, 3]), release('bbbbbbbbbbbbbbbb', '2025-03-02T12:00:00Z', [0, 2])],
+  releases: [release('aaaaaaaaaaaaaaaa', '2025-01-10T10:00:00Z', [0, 1, 3]), release('bbbbbbbbbbbbbbbb', '2025-03-02T12:00:00Z', [0, 2], '1.2.3-0123456789abcdef')],
   packs: [{ file: 'packs/2025-01-a.json', count: 2 }, { file: 'packs/latest-a.json', count: 2 }], pieces: [1, 0, 1, 0],
   sealed: { vault: { name: 'The Vault', logo: 'art/vault.png' } } }));
 
@@ -56,7 +57,7 @@ try {
   await page.setViewport({ width: 1280, height: 800 });
   await page.goto(base, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => document.documentElement.dataset.release === 'bbbbbbbbbbbbbbbb');
-  assert.equal(await page.$eval('#world-release', (e) => e.textContent), '02-Mar-2025 12:00 UTC', 'opens on the newest release');
+  assert.equal(await page.$eval('#world-release', (e) => e.textContent), '02-Mar-2025 12:00 UTC (v1.2.3)', 'opens on the newest release, named by its game version');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.rooms), '2');
   assert.match(await hash(), /^#r=bbbbbbbbbbbbbbbb&c=/, 'the release and camera are in the URL');
   assert.equal(await page.$$eval('#world-ticks span:not(.year)', (s) => s.length), 2, 'one tick per release');
@@ -78,8 +79,13 @@ try {
   // the list: search, pick
   await page.click('#world-release');
   assert.equal(await page.$eval('#world-picker', (e) => (e as any).hidden), false);
+  assert.deepEqual(await page.$$eval('#world-list button', (b) => b.map((x) => x.firstChild?.textContent)),
+    ['02-Mar-2025 12:00 UTC (v1.2.3)', '10-Jan-2025 10:00 UTC'], 'the list names each update by version where it has one');
+  await page.type('#world-search', '1.2');
+  assert.deepEqual(await page.$$eval('#world-list button', (b) => b.map((x) => x.firstChild?.textContent)), ['02-Mar-2025 12:00 UTC (v1.2.3)'], 'search finds an update by version');
+  await page.$eval('#world-search', (e: any) => { e.value = ''; });
   await page.type('#world-search', 'mar 2025');
-  assert.deepEqual(await page.$$eval('#world-list button', (b) => b.map((x) => x.firstChild?.textContent)), ['02-Mar-2025 12:00 UTC'], 'search narrows the list');
+  assert.deepEqual(await page.$$eval('#world-list button', (b) => b.map((x) => x.firstChild?.textContent)), ['02-Mar-2025 12:00 UTC (v1.2.3)'], 'search narrows the list');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.documentElement.dataset.release === 'bbbbbbbbbbbbbbbb');
   assert.equal(await page.$eval('#world-picker', (e) => (e as any).hidden), true, 'picking closes the list');
@@ -95,6 +101,7 @@ try {
   assert.equal(await page.evaluate(() => location.pathname), '/', 'still the world map');
   // a script drives it (time-lapse capture)
   assert.deepEqual(await page.evaluate(() => (window as any).__world.releases().map((r: any) => r.id)), ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb']);
+  assert.deepEqual(await page.evaluate(() => (window as any).__world.releases().map((r: any) => r.build)), [null, '1.2.3-0123456789abcdef'], 'scripts see each build string');
   assert.equal(await page.evaluate(() => (window as any).__world.show('aaaa')), true);
   assert.equal(await release(), 'aaaaaaaaaaaaaaaa');
   // the URL restores it all, and ui=0 leaves the map alone; a date picks the update in force

@@ -4,6 +4,7 @@
 // worker's cs/<versionId>/ namespace, so both versions are addressable).
 
 import { el, clear, fmtInt, badge, idLabel, versionDateLabel, versionLabel } from '../ui.js';
+import { gameVersion } from '../game-build.js';
 import { getVersion, derivedGet } from '../storage.js';
 import { diffBundles, diffVersions, diffRoomPair } from '../diff.js';
 import { effectiveName, setLocalName } from '../names.js';
@@ -75,7 +76,8 @@ export function createDiffView(app: any, baseId: string, activeId: string) {
       el('h2', { text: 'Version comparison' }),
       el('p', { class: 'dim small' },
         (() => {
-          const d = (r: any) => versionDateLabel(r) || '';
+          // a name that already carries the build date ("build 21-Sep-2026 (v0.99.3)") needs no second one
+          const d = (r: any) => (gameVersion(r?.buildString) && r?.profileLabel ? '' : versionDateLabel(r) || '');
           return `before: ${versionLabel(recA) || baseId.slice(0, 8)}${d(recA) ? ` (${d(recA)})` : ''} → `
             + `after: ${versionLabel(recB) || activeId.slice(0, 8)}${d(recB) ? ` (${d(recB)})` : ''}`;
         })()),

@@ -10,6 +10,7 @@ import { createWorldData, type WorldMap, type WorldRelease } from './data.js';
 import { SealedLayer } from './sealed.js';
 import { openWhatsNew, maybeAutoShowWhatsNew } from '../changelog.js';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
+import { gameVersion } from '../game-build.js';
 
 // Links from before the site opened on the world map (#/mesh/3, ?data=...)
 // belong to the viewer (viewer.html, at /viewer): send them on whole.
@@ -38,9 +39,14 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const dateOf = (r: WorldRelease) => new Date(r.date);
 const minutes = (r: WorldRelease) => Math.round(dateOf(r).getTime() / 60000);
 // every update as the viewer writes dates (21-Sep-2026), with its UTC time
-const releaseText = (r: WorldRelease) => {
+const dateText = (r: WorldRelease) => {
   const d = dateOf(r), p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getUTCDate())}-${MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
+};
+// with the game's own version after the date when the data has it: "21-Sep-2026 15:20 UTC (v0.99.3)"
+const releaseText = (r: WorldRelease) => {
+  const version = gameVersion(r.build);
+  return version ? `${dateText(r)} (v${version})` : dateText(r);
 };
 
 // ---------------------------------------------------------------- drawing
@@ -162,14 +168,18 @@ function buildTicks() {
 function renderList() {
   const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
   const items = [...releases].reverse().filter((r) => {
-    const text = `${releaseText(r)} ${r.label ?? ''} ${r.date.slice(0, 10)} ${r.id}`.toLowerCase();
+    const text = `${releaseText(r)} ${r.build ?? ''} ${r.label ?? ''} ${r.date.slice(0, 10)} ${r.id}`.toLowerCase();
     return words.every((w) => text.includes(w));
   });
   list.replaceChildren(...(items.length ? items.map((r) => {
     const li = document.createElement('li'), b = document.createElement('button');
     b.type = 'button'; if (r === wanted) b.classList.add('current');
     const when = document.createElement('span'); when.className = 'when'; when.textContent = r.id.slice(0, 8);
-    b.append(releaseText(r), when);
+    const version = gameVersion(r.build);
+    const name = document.createElement('span');
+    name.append(dateText(r));
+    if (version) { const v = document.createElement('b'); v.textContent = `(v${version})`; name.append(' ', v); b.title = r.build!; }
+    b.append(name, when);
     b.addEventListener('click', () => { closePicker(); slider.value = String(minutes(r)); void show(r); });
     li.append(b); return li;
   }) : [Object.assign(document.createElement('li'), { className: 'empty', textContent: 'No update matches.' })]));
@@ -265,7 +275,7 @@ addEventListener('hashchange', () => {
 // For scripts (time-lapse capture): the releases, and show() resolving once
 // the release is drawn.
 (window as any).__world = {
-  releases: () => releases.map((r) => ({ id: r.id, date: r.date, label: r.label })),
+  releases: () => releases.map((r) => ({ id: r.id, date: r.date, label: r.label, build: r.build ?? null })),
   async show(id: string) {
     const r = releases.find((x) => x.id === id || x.id.startsWith(id));
     if (!r) throw Error(`no release ${id}`);
