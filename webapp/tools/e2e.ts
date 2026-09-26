@@ -119,9 +119,10 @@ ok(Object.values<any>(catState).every((s) => s.checked || s.disabled),
 ok(catState.World && catState.World.checked && !catState.World.disabled,
   'World selectable: this build has decode data');
 // the recognized build's human label shows on the upload screen, before
-// extract: date only, the hash identity lives in the storage panel details
+// extract: its date and the game's version, the hash identity lives in the
+// storage panel details
 const validateText = await page.$eval('.ob-validate', (el) => el.textContent);
-ok(/· build \d{2}-[A-Z][a-z]{2}-\d{4}\s*$/.test(validateText),
+ok(/· build \d{2}-[A-Z][a-z]{2}-\d{4}( \(v\d+\.\d+\.\d+\))?\s*$/.test(validateText),
   `upload screen names the recognized build (${validateText.trim()})`);
 
 // ---- 2. extraction (worker): the wizard reloads the page when done ----------
@@ -142,10 +143,11 @@ if (!navigated) {
 ok(navigated, `extraction + reload completed in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 for (const line of perfLines) console.log(`  ${line}`);   // in-page stage timings (no skew)
 
-// the version chip carries the profile build label (date, no hash), not the
-// mtime-date or content-id fallbacks a label regression would leave behind
+// the version chip carries the profile build label (date, no hash) and the
+// game's version, not the mtime-date or content-id fallbacks a label
+// regression would leave behind
 const chipText = await page.$eval('#data-source', (el) => el.textContent);
-ok(/^build \d{2}-[A-Z][a-z]{2}-\d{4}$/.test(chipText.trim()),
+ok(/^build \d{2}-[A-Z][a-z]{2}-\d{4}( \(v\d+\.\d+\.\d+\))?$/.test(chipText.trim()),
   `version chip names the build from its decode data (${chipText.trim()})`);
 
 // ---- 3. catalogs populated ---------------------------------------------------
@@ -1588,10 +1590,12 @@ await page.evaluate(() => document.getElementById('data-source').click());
 await page.waitForSelector('.ver-row', { timeout: 10000 });
 ok(true, 'storage & versions panel opens from the topbar chip');
 // the identity + timing moved out of the name into the details line:
-// added/built timestamp with HH:MM:SS, the decode-data build id, the version id
+// added/built timestamp with HH:MM:SS, the game's build string, the
+// decode-data id, the version id
 const verDetails = await page.$eval('.ver-details', (el) => el.textContent);
-const decodeIdTxt = await page.$eval('.ver-details .mono', (el) => el.textContent);
-ok(/\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}/.test(verDetails) && /^build [0-9a-f]{8}$/.test(decodeIdTxt.trim()),
+const monoTexts = await page.$$eval('.ver-details .mono', (els) => els.map((el) => el.textContent.trim()));
+ok(/\d{2}-[A-Z][a-z]{2}-\d{4} \d{2}:\d{2}:\d{2}/.test(verDetails) && monoTexts.some((t) => /^id [0-9a-f]{8}$/.test(t))
+  && monoTexts.every((t) => !/^\d+\.\d+\.\d+-/.test(t) || /^\d+\.\d+\.\d+-[0-9a-f]{16}$/.test(t)),
   `version details carry the timestamp + decode-data id (${verDetails.trim()})`);
 await sleep(200);
 
