@@ -851,6 +851,9 @@ kbd {
 .world-panel .wp-check:has(input:disabled) { opacity: .45; cursor: default; }
 .world-panel .wp-sw { width: 11px; height: 11px; border-radius: 2px; border: 1px solid #0006; flex: none; }
 .world-panel .wp-range { margin-top: 6px; }
+/* a control that belongs to the box above it (Rooms away, a distance) */
+.world-panel .wp-sub { margin-left: 22px; }
+.world-panel .wp-range.wp-sub { margin-top: 2px; margin-bottom: 4px; }
 .world-panel .wp-range-head { display: flex; justify-content: space-between; gap: 8px; color: var(--fg1); font-size: 11px; }
 .world-panel .wp-range-head output { color: var(--fg0); font-variant-numeric: tabular-nums; }
 .world-panel .wp-range input[type="range"] { width: 100%; }

@@ -28,6 +28,12 @@ export interface BakeInstance {
   tint: number[] | null;
   /** The two recolour tints (half range RGBA), or null for neutral. */
   recolours?: number[][] | null;
+  /** The part's texture transform (m00, m01, tx, m10, m11, ty), applied as
+   *  the bake applies it: to the 16-bit coordinates, the offset scaled to
+   *  16 bits, each step in single precision, truncated and clamped. */
+  uvAffine?: number[];
+  /** Per vertex: the colour grid value its colour is multiplied by (rgb). */
+  vertexTints?: number[][];
 }
 
 export interface BakeInputs {
@@ -60,7 +66,8 @@ function decodeMesh(payload: any): DecodedMesh {
   return {
     positions, normals: floats(payload.normals), uvs: floats(payload.uvs),
     tangents: payload.tangents ? floats(payload.tangents) : null,
-    source: payload.idx_dtype === 'u32' ? b64u32(payload.indices) : b64u16(payload.indices),
+    source: payload.indices instanceof Uint16Array || payload.indices instanceof Uint32Array ? payload.indices
+      : payload.idx_dtype === 'u32' ? b64u32(payload.indices) : b64u16(payload.indices),
     count: positions.length / 3,
     boneIndices: payload.bone_indices ? b64u8(payload.bone_indices) : null,
     boneWeights: payload.bone_weights ? b64u8(payload.bone_weights) : null,
@@ -97,7 +104,7 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
   const opacityByte = Math.trunc(f32(f32(input.opacity) * 255));
   let first = 0, at = 0;
   for (let i = 0; i < instances.length; i++) {
-    const { matrix, tint, recolours } = instances[i];
+    const { matrix, tint, recolours, uvAffine, vertexTints } = instances[i];
     const { positions, normals, uvs, tangents, source, count: nv, boneIndices, boneWeights } = meshes[i];
     if (bones && boneIndices && boneWeights) { bones.set(boneIndices.subarray(0, nv * 4), first * 4); weights!.set(boneWeights.subarray(0, nv * 4), first * 4); }
     const tintBytes = [0, 1].map((k) => (recolours?.[k] ? packColour(recolours[k]) : neutral));
@@ -117,9 +124,18 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
         tan[o * 4] = quantise10(t.x) / 1023; tan[o * 4 + 1] = quantise10(t.y) / 1023; tan[o * 4 + 2] = quantise10(t.z) / 1023;
         tan[o * 4 + 3] = w > 0 ? 2 / 3 : 0;
       }
-      uv[o * 2] = Math.round(uvs[v * 2] * 65535); uv[o * 2 + 1] = Math.round(uvs[v * 2 + 1] * 65535);
+      const u16 = Math.round(uvs[v * 2] * 65535), v16 = Math.round(uvs[v * 2 + 1] * 65535);
+      if (uvAffine) {
+        const [m00, m01, tx, m10, m11, ty] = uvAffine;
+        const unit = (x: number) => Math.min(65535, Math.max(0, Math.trunc(x)));
+        uv[o * 2] = unit(f32(f32(tx * 65535) + f32(f32(m00 * u16) + f32(m01 * v16))));
+        uv[o * 2 + 1] = unit(f32(f32(ty * 65535) + f32(f32(m10 * u16) + f32(m11 * v16))));
+      } else {
+        uv[o * 2] = u16; uv[o * 2 + 1] = v16;
+      }
       spec[o * 4] = input.specular[0]; spec[o * 4 + 1] = input.specular[1]; spec[o * 4 + 2] = input.specular[2];
-      for (let k = 0; k < 3; k++) col[o * 4 + k] = Math.min(255, Math.trunc(f32(base[k] * 255)));
+      const grid = vertexTints?.[v];
+      for (let k = 0; k < 3; k++) col[o * 4 + k] = Math.min(255, Math.trunc(f32((grid ? f32(base[k] * grid[k]) : base[k]) * 255)));
       col[o * 4 + 3] = opacityByte;
       if (input.style) sty.set(input.style, o * 4);
       tints[0].set(tintBytes[0], o * 4); tints[1].set(tintBytes[1], o * 4);

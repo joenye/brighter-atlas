@@ -14,10 +14,11 @@
 import { THREE } from '../three-common.js';
 import { GameShaderLibrary, putFloats, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
-import { bakeGameGeometry } from './game-geometry.js';
+import { bakeGameGeometry, type BakeInstance } from './game-geometry.js';
 import { drawGroups, type DrawGroup, type EmissionKey } from './draw-order.js';
 import { styleColourBytes } from './game-water.js';
 import { detectChains } from '../../texture-roles.js';
+import { PLANE_GAME_DISTANCE, planeCount, planeGroups, TILE_QUAD, type PlaneTile } from './ground-plane.js';
 
 export interface GameRenderIndex extends GameRenderTables {
   waterPrograms: { surface: number[]; curtain: number[] };
@@ -67,14 +68,30 @@ export interface GameActorSource {
   palette: () => Float32Array | null;
 }
 
+/** One scene's draws, by pass. */
+interface SceneDraws { draws: Draw[]; actorDraws: Draw[]; waterDraws: Draw[]; planeDraws: Draw[] }
+
+/** A neighbouring room's lights against the room's (the game's scale at rest). */
+const NEIGHBOUR_LIGHT = 0.1;
+
 export interface GameRoomSource {
   roomId: number;
-  bounds: { inner: [number, number, number, number]; outer: [number, number, number, number]; layers: number };
+  bounds: {
+    inner: [number, number, number, number]; outer: [number, number, number, number]; layers: number;
+    /** With neighbours: the loaded rooms' extent (room tiles) and their most layers. */
+    loaded?: [number, number, number, number]; loadedLayers?: number;
+  };
   grid: any;                      // shard colour_grid
   batches: GameBatchSource[];
   actors?: GameActorSource[];
   water: any | null;              // world index water (styles)
   textureMeta: (id: number) => any;
+  /** The floor the game lays under and around the room (room frame),
+   *  nearest first, out to the endless floor's far pieces. */
+  plane?: PlaneTile[];
+  /** Neighbouring rooms drawn with it (placed in the same frame): the room's
+   *  own bounds, environment and vignette still govern the frame. */
+  others?: { roomId: number; batches: GameBatchSource[]; actors?: GameActorSource[] }[];
 }
 
 export interface GameCamera {
@@ -94,6 +111,10 @@ interface Draw {
   vao: WebGLVertexArrayObject;
   count: number;
   indexType: number;
+  /** A floor draw's pieces in order: the shortest distance that floors each. */
+  covers?: Float32Array;
+  /** Which room it draws: 0 the room shown, n its nth neighbour. */
+  scene?: number;
   textures: Record<number, GameTexture>;
   depth: null | { program: GameProgram; gl: GameGLProgram; vao: WebGLVertexArrayObject; textures: Record<number, GameTexture> };
   water: GameBatchSource['water'];
@@ -224,6 +245,15 @@ export class GameFrame {
   private draws: Draw[] = [];
   private actorDraws: Draw[] = [];
   private waterDraws: Draw[] = [];
+  /** The ground plane: drawn first, with its own vignette (ground-plane.ts). */
+  private planeDraws: Draw[] = [];
+  /** Draw the ground plane. */
+  showPlane = true;
+  /** How far the ground plane reaches (tiles, Infinity: endless); the game's is ten. */
+  planeDistance = Infinity;
+  /** Shade neighbouring rooms as the game does: their lights at a tenth,
+   *  their water under the room's vignette. Off: lit like the room. */
+  neighbourFade = true;
   private textures = new Map<string, Promise<GameTexture | null>>();
   private room: GameRoomSource | null = null;
   private targets: any = null;
@@ -274,36 +304,43 @@ export class GameFrame {
   lastConstants: Record<string, Uint32Array> = {};
 
   private roomBuffers: WebGLBuffer[] = [];
+  /** The scene being built (the frame keeps drawing the last one meanwhile). */
+  private building: GameRoomSource | null = null;
 
   async setRoom(room: GameRoomSource): Promise<void> {
     const p = this.index.ssao.programs;
     for (const index of [...p.mips, p.sao, p.blurH, p.blurV]) {
       if (!this.passPrograms.has(index)) this.passPrograms.set(index, await this.shaders.program(index, 'clip'));
     }
-    this.releaseRoom();
-    this.room = room;
-    this.gl.collect = this.roomBuffers;
+    // build the new scene beside the one shown, then swap them
+    const next: SceneDraws = { draws: [], actorDraws: [], waterDraws: [], planeDraws: [] };
+    const buffers: WebGLBuffer[] = [];
+    this.building = room;
+    this.gl.collect = buffers;
     try {
-      await this.buildDraws(room);
+      await this.buildDraws(room, next);
+    } catch (error) {
+      this.freeDraws([...next.draws, ...next.actorDraws, ...next.waterDraws, ...next.planeDraws], buffers);
+      throw error;
     } finally {
       this.gl.collect = null;
+      this.building = null;
     }
+    this.releaseRoom();
+    Object.assign(this, next);
+    this.roomBuffers = buffers;
+    this.room = room;
   }
 
   /** Free the current scene's vertex arrays and buffers (programs and
    *  textures stay cached for the next scene). */
   releaseRoom(): void {
-    const gl = this.context;
-    for (const d of [...this.draws, ...this.actorDraws, ...this.waterDraws]) {
-      gl.deleteVertexArray(d.vao);
-      if (d.depth) gl.deleteVertexArray(d.depth.vao);
-      if (d.bones) gl.deleteTexture(d.bones.texture.texture);
-    }
-    for (const b of this.roomBuffers) gl.deleteBuffer(b);
+    this.freeDraws([...this.draws, ...this.actorDraws, ...this.waterDraws, ...this.planeDraws], this.roomBuffers);
     this.roomBuffers = [];
     this.draws = [];
     this.actorDraws = [];
     this.waterDraws = [];
+    this.planeDraws = [];
   }
 
   /** Free the cached textures too (the frame stays usable). */
@@ -313,21 +350,69 @@ export class GameFrame {
     for (const p of textures) p.then((t) => { if (t) this.context.deleteTexture(t.texture); }).catch(() => {});
   }
 
-  private async buildDraws(room: GameRoomSource): Promise<void> {
-    for (const group of drawGroups(room.batches)) {
-      const draw = await this.buildDraw(group).catch((error) => {
-        console.warn('game shading: group skipped', group.batch.material, group.batch.renderTexture, error);
-        return null;
-      });
-      if (!draw) continue;
-      (group.batch.water ? this.waterDraws : this.draws).push(draw);
+  private freeDraws(draws: Draw[], buffers: WebGLBuffer[]): void {
+    const gl = this.context;
+    for (const d of draws) {
+      gl.deleteVertexArray(d.vao);
+      if (d.depth) gl.deleteVertexArray(d.depth.vao);
+      if (d.bones) gl.deleteTexture(d.bones.texture.texture);
     }
-    for (const actor of room.actors ?? []) {
-      const draw = await this.buildActorDraw(actor).catch((error) => {
-        console.warn('game shading: actor part skipped', actor.mesh, actor.material, error);
+    for (const b of buffers) gl.deleteBuffer(b);
+  }
+
+  private async buildDraws(room: GameRoomSource, next: SceneDraws): Promise<void> {
+    // the room, then each neighbour, each in its own draw order
+    const scenes = [room, ...(room.others ?? [])];
+    for (let k = 0; k < scenes.length; k++) {
+      const scene = scenes[k];
+      for (const group of drawGroups(scene.batches)) {
+        const draw = await this.buildDraw(group).catch((error) => {
+          console.warn('game shading: group skipped', group.batch.material, group.batch.renderTexture, error);
+          return null;
+        });
+        if (!draw) continue;
+        draw.scene = k;
+        (group.batch.water ? next.waterDraws : next.draws).push(draw);
+      }
+      for (const actor of scene.actors ?? []) {
+        const draw = await this.buildActorDraw(actor).catch((error) => {
+          console.warn('game shading: actor part skipped', actor.mesh, actor.material, error);
+          return null;
+        });
+        if (draw) {
+          draw.scene = k;
+          next.actorDraws.push(draw);
+        }
+      }
+    }
+    // The ground plane: one part per tile, the game's tile quad at the tile's
+    // centre, its texture repeat cell and the area colour at each corner.
+    // The endless floor's far pieces are the quad stretched over several
+    // tiles, within one repeat (texture coordinates are 16-bit units).
+    const units = this.tileUnits;
+    for (const { record, tiles } of planeGroups(room.plane ?? [])) {
+      const batch: GameBatchSource = {
+        category: 'terrain', mesh: -1, material: record.material, renderTexture: record.texture,
+        payload: TILE_QUAD,
+        matrices: tiles.map((t) => new THREE.Matrix4().makeTranslation((t.x + t.size[0] / 2) * units, (t.y + t.size[1] / 2) * units, 0)
+          .multiply(new THREE.Matrix4().makeScale(t.size[0], t.size[1], 1))),
+        tints: tiles.map(() => record.colour), water: null,
+      };
+      // texture transform: scale size/n, then the piece's cell in the repeat / n
+      const instances = tiles.map((t, k) => ({
+        payload: TILE_QUAD, matrix: batch.matrices[k], tint: record.colour,
+        uvAffine: [f32(t.size[0] / record.repeat), 0, f32(t.cell[0] / record.repeat),
+          0, f32(t.size[1] / record.repeat), f32(t.cell[1] / record.repeat)],
+        vertexTints: t.tints,
+      }));
+      const draw = await this.buildPartDraw(batch, instances).catch((error) => {
+        console.warn('game shading: ground plane skipped', record.material, error);
         return null;
       });
-      if (draw) this.actorDraws.push(draw);
+      if (draw) {
+        draw.covers = Float32Array.from(tiles, (t) => t.cover);
+        next.planeDraws.push(draw);
+      }
     }
   }
 
@@ -389,6 +474,17 @@ export class GameFrame {
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
+  /** Test readback: the ground plane's draws (one per floor material), the
+   *  pieces the distance draws and all it has. */
+  planeInfo(): { draws: number; tiles: number; pieces: number; distance: number | null; shown: boolean } {
+    const count = (d: Draw) => (d.covers ? planeCount(d.covers, this.planeDistance) : d.count / 6);
+    return {
+      draws: this.planeDraws.length, tiles: this.planeDraws.reduce((n, d) => n + count(d), 0),
+      pieces: this.planeDraws.reduce((n, d) => n + (d.covers?.length ?? d.count / 6), 0),
+      distance: Number.isFinite(this.planeDistance) ? this.planeDistance : null, shown: this.showPlane,
+    };
+  }
+
   /** Test readback: the actor parts built for the room, and those posed last frame. */
   actorInfo(): { built: number; live: number; meshes: number[] } {
     return { built: this.actorDraws.length, live: this.actorDraws.filter((d) => d.bones!.live).length,
@@ -401,10 +497,13 @@ export class GameFrame {
   }
 
   private async buildDraw(group: DrawGroup<GameBatchSource>): Promise<Draw | null> {
-    const batch = group.batch;
     const instances = group.parts.map(({ batch: b, index: k }) => ({
       payload: b.payload, matrix: b.matrices[k], tint: b.tints[k], recolours: b.recolours?.[k] ?? null,
     }));
+    return this.buildPartDraw(group.batch, instances);
+  }
+
+  private async buildPartDraw(batch: GameBatchSource, instances: BakeInstance[]): Promise<Draw | null> {
     let programIndex: number | null;
     if (batch.water) {
       // key (skinned, 32-bit, vignette) = (false, false, true)
@@ -415,7 +514,7 @@ export class GameFrame {
     const depthIndex = batch.water ? null : this.depthProgram(batch.material);
     const depthProgram = depthIndex === null ? null : await this.shaders.program(depthIndex, 'clip');
     const material = this.index.materials[String(batch.material)];
-    const style = batch.water?.kind === 'surface' ? this.room!.water.styles[batch.water.style] : null;
+    const style = batch.water?.kind === 'surface' ? (this.building ?? this.room)!.water.styles[batch.water.style] : null;
     // One bake serves the main and depth programs; each names the shared streams its own way.
     const [geometry, depthGeometry] = bakeGameGeometry({
       instances,
@@ -530,16 +629,17 @@ export class GameFrame {
     const names = new Map(program.translated.samplers.map((s) => [s.texture, s.textureName]));
     for (const [slot, name] of names) {
       let texture: GameTexture | null = null;
-      if (batch.water && this.room?.water) {
-        const style = this.room.water.styles[batch.water.style];
+      const scene = this.building ?? this.room;
+      if (batch.water && scene?.water) {
+        const style = scene.water.styles[batch.water.style];
         if (name === 'v_texture_normal') texture = await this.texturePlane(style.normal, [0, 1, 2], false);
         else if (name === 'v_texture_cubemap') texture = await this.cube(style.cube, 18);
         else if (name === 'v_texture_albedo_plane' && batch.renderTexture >= 0) {
-          const meta = this.room.textureMeta(batch.renderTexture);
+          const meta = scene.textureMeta(batch.renderTexture);
           if (meta?.albedo != null) texture = await this.texturePlane(batch.renderTexture, this.planeSubs(meta, meta.albedo), true);
         }
       } else if (batch.renderTexture >= 0) {
-        const meta = this.room!.textureMeta(batch.renderTexture);
+        const meta = scene!.textureMeta(batch.renderTexture);
         // The first parameter plane after the normal map carries the specular
         // and cutout channels, the last the recolour masks (red, green); a
         // material with one parameter plane uses it for both.
@@ -665,13 +765,17 @@ export class GameFrame {
     const env = this.environmentOverride ?? idx.environments[String(this.room.roomId)] ?? null;
 
     // Shadow receiver fit over the scene box.
-    const { inner, outer, layers } = this.room.bounds;
+    // (the room's rect grown by the margin, within the loaded rooms, merged
+    // with the outer rect; the height of the most layers loaded)
+    const { inner, outer } = this.room.bounds;
+    const loaded = this.room.bounds.loaded ?? inner;
+    const layers = this.room.bounds.loadedLayers ?? this.room.bounds.layers;
     const margin = idx.shadow.marginTiles;
     const box = [
-      Math.min(Math.max(inner[0] - margin, inner[0]), outer[0]) * this.tileUnits,
-      Math.min(Math.max(inner[1] - margin, inner[1]), outer[1]) * this.tileUnits, 0,
-      Math.max(Math.min(inner[2] + margin, inner[2]), outer[2]) * this.tileUnits,
-      Math.max(Math.min(inner[3] + margin, inner[3]), outer[3]) * this.tileUnits, idx.shadow.layerHeight * layers];
+      Math.min(Math.max(inner[0] - margin, loaded[0]), outer[0]) * this.tileUnits,
+      Math.min(Math.max(inner[1] - margin, loaded[1]), outer[1]) * this.tileUnits, 0,
+      Math.max(Math.min(inner[2] + margin, loaded[2]), outer[2]) * this.tileUnits,
+      Math.max(Math.min(inner[3] + margin, loaded[3]), outer[3]) * this.tileUnits, idx.shadow.layerHeight * layers];
     const shadow = shadowFit(view, camera.fov, aspect, near, far, box, idx.shadow.lightView, idx.shadow.size);
     const size = idx.shadow.size;
     const L = lightViewMatrix(idx.shadow.lightView);
@@ -684,14 +788,21 @@ export class GameFrame {
     const floorValue = env?.floor === 'avatar'
       ? (avatarZ <= z0 ? w0 : avatarZ >= z1 ? w1 : w0 + (w1 - w0) * (avatarZ - z0) / (z1 - z0))
       : (env?.floor ?? 1);
-    const rect = [0, 0, this.room.bounds.inner[2] * this.tileUnits, this.room.bounds.inner[3] * this.tileUnits];
-    const hx = (rect[2] - rect[0]) / 2, hy = (rect[3] - rect[1]) / 2;
+    // The vignette object as the game builds it, in single precision.
+    const rect = [0, 0, f32(this.room.bounds.inner[2] * this.tileUnits), f32(this.room.bounds.inner[3] * this.tileUnits)];
+    const hx = f32(f32(rect[2] - rect[0]) * 0.5), hy = f32(f32(rect[3] - rect[1]) * 0.5);
     const vignetteColour = env?.vignette ?? [0, 0, 0, 1];
-    const k = idx.vignette.radius / Math.max(hx, hy) + 1;
+    const reachK = (radius: number) => f32(f32(radius / Math.max(hx, hy)) + 1);
+    const k = reachK(idx.vignette.radius);
     // The main pass fades to the vignette colour away from the room and
     // darkens low ground; depth passes and the water (neutral vignette, as in
     // the game) do not.
-    const vsWords = (wvp: THREE.Matrix4, receiver: THREE.Matrix4 | null, offset: number, neutral = false) => {
+    // The ground plane's vignette reaches its own edge and has no height fade;
+    // a longer floor stretches it (an endless one has none).
+    const planeRadius = Number.isFinite(this.planeDistance)
+      ? idx.vignette.overlayRadius * this.planeDistance / PLANE_GAME_DISTANCE : 1e12;
+    const kPlane = reachK(planeRadius);
+    const vsWords = (wvp: THREE.Matrix4, receiver: THREE.Matrix4 | null, offset: number, neutral = false, plane = false) => {
       const words = new Uint32Array(72);
       putFloats(words, 0, rows(wvp));
       putFloats(words, 64, rows(wvp));
@@ -700,15 +811,18 @@ export class GameFrame {
       if (neutral) {
         putFloats(words, 240, [0, 0, 0, 0, 0, 0, 0, 10000, offset, 0, 0, 1]);
       } else {
-        putFloats(words, 240, [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2, 1 / hx, 1 / hy]);
-        putFloats(words, 256, [vignetteColour[0] * idx.lighting.fade, vignetteColour[1] * idx.lighting.fade, vignetteColour[2] * idx.lighting.fade, k]);
-        putFloats(words, 272, [offset, 0, height, floorValue]);
+        putFloats(words, 240, [f32(f32(rect[0] + rect[2]) * 0.5), f32(f32(rect[1] + rect[3]) * 0.5), f32(1 / hx), f32(1 / hy)]);
+        putFloats(words, 256, [vignetteColour[0] * idx.lighting.fade, vignetteColour[1] * idx.lighting.fade, vignetteColour[2] * idx.lighting.fade, plane ? kPlane : k]);
+        putFloats(words, 272, plane ? [offset, 0, 0, 1] : [offset, 0, height, floorValue]);
       }
       return words;
     };
-    // Depth-only draws of every caster (none for a card) into the bound target.
-    const drawDepths = (words: Uint32Array, targetHeight: number) => {
-      for (const d of card ? [] : solid) {
+    // Depth-only draws of every caster (none for a card) into the bound
+    // target; the ambient occlusion prepass also takes the ground plane.
+    const plane = this.showPlane && !card ? this.planeDraws : [];
+    for (const d of plane) if (d.covers) d.count = planeCount(d.covers, this.planeDistance) * 6;
+    const drawDepths = (words: Uint32Array, targetHeight: number, withPlane = false) => {
+      for (const d of card ? [] : withPlane ? [...plane, ...solid] : solid) {
         if (!d.depth) continue;
         this.gl.applyState(this.state(d.depth.program, { colourWrite: false }));
         this.gl.bindResources(d.depth.gl, { [d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs']: words },
@@ -742,7 +856,7 @@ export class GameFrame {
     gl.viewport(0, 0, t.wa, t.ha);
     gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
     const prepassWords = vsWords(prepassClip, null, 0, true);
-    drawDepths(prepassWords, t.ha);
+    drawDepths(prepassWords, t.ha, true);
     const n5 = f32(near / ssao.unit), f5 = f32(far / ssao.unit);
     const hp2 = (v: number) => { let b = 1; while (b * 2 <= v) b *= 2; return b; };
     const S = f32(2 * hp2(Math.trunc(0x7fffffff / Math.trunc(f5))));
@@ -812,33 +926,44 @@ export class GameFrame {
     gl.depthMask(true); gl.colorMask(true, true, true, true);
     gl.clearColor(0, 0, 0, 0); gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const light = (c: number[] | undefined, fallback: number[]) => {
-      const v = c ?? fallback;
-      return [0, 1, 2].map((k) => f32(f32(Math.pow(v[k], idx.lighting.gamma)) * v[3] * idx.lighting.fade));
-    };
     const d0 = card?.direction ?? idx.lighting.direction;
     const dir = new THREE.Vector3(d0[0], d0[1], d0[2]).normalize();
-    const psLight = [
-      camera.eye.x, camera.eye.y, camera.eye.z, 0,
-      ...light(env?.ground, [0.4314, 0.2863, 0.1529, 1]), 1,
-      ...light(env?.sky, [0.8157, 0.8784, 0.9412, 1]), 1,
-      ...light(env?.sun, [1, 0.8784, 0.5647, 1.5]), 1,
-      dir.x, dir.y, dir.z, 0,
-      ...ssaoOffsetScale,
-      idx.lighting.fade, 0, 0, 0,
-    ];
+    // A scene's lights at a scale: the room shown at the fade, a neighbour
+    // at a tenth of it (the game's neighbour lighting buffer at rest).
+    const lighting = (scale: number) => {
+      const light = (c: number[] | undefined, fallback: number[]) => {
+        const v = c ?? fallback;
+        return [0, 1, 2].map((k) => f32(f32(Math.pow(v[k], idx.lighting.gamma)) * v[3] * scale));
+      };
+      return [
+        camera.eye.x, camera.eye.y, camera.eye.z, 0,
+        ...light(env?.ground, [0.4314, 0.2863, 0.1529, 1]), 1,
+        ...light(env?.sky, [0.8157, 0.8784, 0.9412, 1]), 1,
+        ...light(env?.sun, [1, 0.8784, 0.5647, 1.5]), 1,
+        dir.x, dir.y, dir.z, 0,
+        ...ssaoOffsetScale,
+        scale, 0, 0, 0,
+      ];
+    };
+    const psLight = lighting(idx.lighting.fade);
+    const psNeighbour = lighting(f32(idx.lighting.fade * NEIGHBOUR_LIGHT));
+    const faded = (d: Draw) => this.neighbourFade && !!d.scene;
     const mainWords = vsWords(viewProjection, shadow.receiver, shadow.offset, !!card);
-    this.lastConstants = { caster: casterWords, prepass: prepassWords, main: mainWords };
+    const planeWords = vsWords(viewProjection, shadow.receiver, shadow.offset, !!card, true);
+    this.lastConstants = { caster: casterWords, prepass: prepassWords, main: mainWords, plane: planeWords };
     const waterVsWords = vsWords(viewProjection, shadow.receiver, shadow.offset, true);
     const shadowSampler = this.gl.sampler([0x95, 3, 3, 3, 4, 0, 15, 0, 1]);
-    const drawMain = (d: Draw, waterWords: Uint32Array | null) => {
+    const drawMain = (d: Draw, waterWords: Uint32Array | null, words = mainWords) => {
       this.gl.applyState(this.state(d.program));
       const cbs: Record<string, Uint32Array> = {};
       for (const b of d.program.translated.constantBuffers.vs) {
-        cbs[b.uniform] = b.slot === 0 ? (waterWords ? waterVsWords : mainWords) : (waterWords ?? new Uint32Array(b.sizeVec4 * 4));
+        // a neighbour's water takes the main vignette, the room's own the neutral one
+        cbs[b.uniform] = b.slot === 0 ? (waterWords ? (faded(d) ? mainWords : waterVsWords) : words) : (waterWords ?? new Uint32Array(b.sizeVec4 * 4));
       }
+      // water keeps the scene's own lights (the overlay pass)
+      const lights = faded(d) && !d.water ? psNeighbour : psLight;
       for (const b of d.program.translated.constantBuffers.ps) {
-        const words = new Uint32Array(b.sizeVec4 * 4); putFloats(words, 0, psLight); cbs[b.uniform] = words;
+        const words = new Uint32Array(b.sizeVec4 * 4); putFloats(words, 0, lights); cbs[b.uniform] = words;
       }
       const textures: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> = {};
       d.program.translated.samplers.forEach((s) => {
@@ -851,6 +976,8 @@ export class GameFrame {
       gl.bindVertexArray(d.vao);
       gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
     };
+    // the ground plane first, then the room
+    for (const d of plane) drawMain(d, null, planeWords);
     for (const d of solid) drawMain(d, null);
     const water = this.room.water;
     for (const d of this.skipWater ? [] : this.waterDraws) {

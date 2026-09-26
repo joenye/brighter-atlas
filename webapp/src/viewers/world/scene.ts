@@ -16,6 +16,10 @@ import { pad5 } from '../../ui.js';
 import { b64f32, b64u8, type AppStore } from '../../store.js';
 import type { GameRoomSource, GameBatchSource, GameActorSource } from './game-frame.js';
 import { emissionKey } from './draw-order.js';
+import {
+  planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh,
+  type PlaneUniforms,
+} from './ground-plane.js';
 
 export const WORLD_CATEGORIES: readonly string[] = Object.freeze([
   'terrain', 'models', 'spawns', 'components',
@@ -171,6 +175,8 @@ export interface WorldSceneRoom {
   collisionMesh: THREE.InstancedMesh | null;
   batchCount: number;
   meshes: THREE.InstancedMesh[];
+  /** The game's floor under and around the room (ground-plane.ts). */
+  groundPlane: THREE.Group | null;
 }
 
 interface WorldBatchEntry {
@@ -211,6 +217,13 @@ export interface WorldSceneOptions {
   showCollision?: boolean;
   showUntextured?: boolean;
   categoryVisibility?: Record<string, boolean>;
+  /** Build each room's ground plane (the all-rooms view draws its own). */
+  groundPlanes?: boolean;
+  showGroundPlane?: boolean;
+  /** How far the ground plane reaches (tiles, Infinity: endless). */
+  groundPlaneDistance?: number;
+  /** Shade neighbouring rooms as the game does. */
+  neighbourShade?: boolean;
 }
 
 function columns(names: any, required: readonly string[], label: string): ColumnMap {
@@ -340,9 +353,17 @@ function authoredMips<T extends THREE.Texture>(texture: T, mipmaps: any[], color
   return texture;
 }
 
+/** How far past its field the game frame's endless floor runs (tiles): the
+ *  game's camera sees 100 tiles, and it orbits the room from further off. */
+const GAME_PLANE_FAR = 160;
+/** A neighbouring room's lights against the room's (the game's scale at rest). */
+const NEIGHBOUR_LIGHT = 0.1;
+
 function disposeRoomGroup(group: THREE.Group): void {
   group.traverse((object: any) => {
     if (object.isInstancedMesh) object.dispose();
+    // the ground plane's geometry and material are the room's own
+    if (object.userData?.groundPlane) { object.geometry.dispose(); object.material.dispose(); }
     // water materials are per room
     object.userData?.gameWater?.water?.dispose?.();
   });
@@ -454,6 +475,14 @@ export class WorldScene {
   showAuthoredEmpty: boolean;
   showCollision: boolean;
   showUntextured: boolean;
+  groundPlanes: boolean;
+  groundPlaneVisible: boolean;
+  /** The colour the ground plane fades to (output colour space). */
+  groundPlaneFade = new THREE.Color(0, 0, 0);
+  /** How far the ground plane reaches (tiles, Infinity: endless). */
+  groundPlaneDistance: number;
+  /** The fade colour and reach every room's floor shares. */
+  groundPlaneUniforms: PlaneUniforms;
   defaultZVisible: boolean;
   meshForwardQuarterTurns: number;
   roomYSign: number;
@@ -465,6 +494,11 @@ export class WorldScene {
   root: THREE.Group;
   _generation: number;
   _onlyRoomId: number | null;
+  /** Rooms shown beside the single room (its neighbours): no floor of their
+   *  own, their tiles shape the room's (the game's floor with neighbours). */
+  _neighbourIds = new Set<number>();
+  /** Shade neighbours as the game does (a tenth of the light). */
+  neighbourShade = true;
   _indexPromise: Promise<any> | null;
   _roomMeta: Map<number, any>;
   _roomPromises: Map<number, {
@@ -518,6 +552,10 @@ export class WorldScene {
     showCollision = false,
     showUntextured = true,
     categoryVisibility = {},
+    groundPlanes = true,
+    showGroundPlane = true,
+    groundPlaneDistance = Infinity,
+    neighbourShade = true,
   }: WorldSceneOptions = {} as WorldSceneOptions) {
     if (!scene?.add || !scene?.remove) throw new TypeError('WorldScene requires a Three.js scene');
     if (!store?.worldIndex) throw new TypeError('WorldScene requires a world-capable store');
@@ -535,6 +573,11 @@ export class WorldScene {
     this.showAuthoredEmpty = !!showAuthoredEmpty;
     this.showCollision = !!showCollision;
     this.showUntextured = showUntextured !== false;
+    this.groundPlanes = groundPlanes !== false;
+    this.groundPlaneVisible = showGroundPlane !== false;
+    this.groundPlaneDistance = groundPlaneDistance;
+    this.neighbourShade = neighbourShade !== false;
+    this.groundPlaneUniforms = planeUniforms(this.groundPlaneFade, groundPlaneDistance);
     this.defaultZVisible = true;
     this.meshForwardQuarterTurns = DEFAULT_MESH_FORWARD_QUARTER_TURNS;
     this.roomYSign = 1;
@@ -1311,7 +1354,36 @@ export class WorldScene {
    *  payloads with native-frame placements, the placement tints, and the
    *  water material each water face draws with; and its actors, the rigged
    *  spawn parts the skinned programs pose from a bone palette each frame. */
-  async gameRoomSource(room: WorldSceneRoom): Promise<GameRoomSource> {
+  async gameRoomSource(room: WorldSceneRoom, neighbours: WorldSceneRoom[] = []): Promise<GameRoomSource> {
+    const source = await this._gameRoomParts(room);
+    const others = [];
+    for (const n of neighbours) {
+      const parts = await this._gameRoomParts(n);
+      others.push({ roomId: n.id, batches: parts.batches, actors: parts.actors });
+    }
+    // the floor as the game lays it with these neighbours, in the frame the
+    // parts are placed in
+    const field = this.groundPlanes ? this._planeField(room.shard, room.group.position, neighbours, new THREE.Vector3()) : null;
+    // the loaded rooms' extent (room tiles), for the shadow box
+    let bounds = source.bounds;
+    if (neighbours.length) {
+      const T = this.tileUnits;
+      const loaded: [number, number, number, number] = [...bounds.inner];
+      let loadedLayers = bounds.layers;
+      for (const n of neighbours) {
+        const [w, h] = n.shard.size ?? [n.meta?.w ?? 0, n.meta?.h ?? 0];
+        const x = Math.round((n.group.position.x - room.group.position.x) / T), y = Math.round((n.group.position.y - room.group.position.y) / T);
+        loaded[0] = Math.min(loaded[0], x); loaded[1] = Math.min(loaded[1], y);
+        loaded[2] = Math.max(loaded[2], x + w); loaded[3] = Math.max(loaded[3], y + h);
+        loadedLayers = Math.max(loadedLayers, Number(n.shard.layers) || 1);
+      }
+      bounds = { ...bounds, loaded, loadedLayers };
+    }
+    return { ...source, bounds, plane: field ? planeTiles(field, Infinity, GAME_PLANE_FAR) : [], others };
+  }
+
+  /** One room's parts and actors for the game's frame, with its bounds. */
+  async _gameRoomParts(room: WorldSceneRoom): Promise<GameRoomSource> {
     const water = this.index?.water ?? null;
     const render = this.index?.render ?? null;
     const batches: GameBatchSource[] = [];
@@ -1512,7 +1584,134 @@ export class WorldScene {
   setGameShading(on: boolean): void {
     if (this.gameShading === on) return;
     this.gameShading = on;
-    for (const room of this.rooms.values()) for (const mesh of room.meshes) this._applyMeshVisibility(mesh);
+    for (const room of this.rooms.values()) {
+      for (const mesh of room.meshes) this._applyMeshVisibility(mesh);
+      this._applyGroundPlane(room.groundPlane);
+    }
+  }
+
+  /** Show or hide every room's ground plane. */
+  setGroundPlaneVisible(visible: boolean): void {
+    this.groundPlaneVisible = !!visible;
+    for (const room of this.rooms.values()) this._applyGroundPlane(room.groundPlane);
+  }
+
+  /** The colour the ground plane fades into (the view's background). */
+  setGroundPlaneFade(colour: THREE.Color): void {
+    this.groundPlaneFade.copy(colour);
+  }
+
+  /** How far every room's ground plane reaches (tiles, Infinity: endless). */
+  setGroundPlaneDistance(distance: number): void {
+    this.groundPlaneDistance = distance;
+    setPlaneReach(this.groundPlaneUniforms, distance);
+    for (const room of this.rooms.values()) this._applyGroundPlane(room.groundPlane);
+  }
+
+  _applyGroundPlane(group: THREE.Group | null): void {
+    if (!group) return;
+    // while the game's frame draws the room it draws the floor too
+    group.visible = this.groundPlaneVisible && !this.gameShading;
+    for (const mesh of group.children as THREE.Mesh[]) showPlaneMesh(mesh, this.groundPlaneDistance);
+  }
+
+  /** The room's ground plane in its own frame (native units), one mesh per
+   *  floor material, or null: built endless, drawn to the set distance. */
+  async _buildGroundPlane(shard: any, neighbours: WorldSceneRoom[] = [], at: THREE.Vector3 | null = null): Promise<THREE.Group | null> {
+    if (!this.groundPlanes || !shard?.ground_plane) return null;
+    // in the room's own frame
+    const own = at ?? new THREE.Vector3();
+    const field = this._planeField(shard, own, neighbours, own);
+    if (!field) return null;
+    // endless: out past the fog and the farthest the camera pulls back
+    const [w, h] = shard.size ?? [0, 0];
+    const meshes = planeMeshes(field, Infinity, Math.max(1024, 64 * Math.max(w, h)));
+    if (!meshes.length) return null;
+    const group = new THREE.Group();
+    group.name = 'world-ground-plane';
+    for (const { record, geometry, covers } of meshes) {
+      const map = record.texture >= 0 ? (await this._textureSet(record.texture).catch(() => null))?.map ?? null : null;
+      const mesh = new THREE.Mesh(geometry, planeMaterial(map, this.groundPlaneUniforms));
+      mesh.name = `world-ground-plane-m${record.material}-t${record.texture}`;
+      mesh.userData.groundPlane = true;
+      mesh.userData.planeCovers = covers;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+    this._applyGroundPlane(group);
+    return group;
+  }
+
+  /** The room's floor field: alone, or laid as the game lays it with its
+   *  neighbours. Rooms sit at their group positions less `origin`. */
+  _planeField(shard: any, at: THREE.Vector3, neighbours: WorldSceneRoom[], origin: THREE.Vector3) {
+    const T = this.tileUnits;
+    const offset = (p: THREE.Vector3): [number, number] => [(p.x - origin.x) / T, (p.y - origin.y) / T];
+    return planeField([
+      { shard, offset: offset(at) },
+      ...neighbours.map((n) => ({ shard: n.shard, offset: offset(n.group.position) })),
+    ], { tileUnits: T, primary: neighbours.length > 0 });
+  }
+
+  /** Show these rooms (loaded or loading) beside the single room, as its
+   *  neighbours: visible with it, floored by its floor. */
+  setNeighbours(ids: Iterable<number>): void {
+    this._neighbourIds = new Set([...ids].map(Number));
+    for (const room of this.rooms.values()) {
+      if (this._onlyRoomId !== null) room.group.visible = room.id === this._onlyRoomId || this._neighbourIds.has(room.id);
+      this._shadeRoom(room);
+    }
+  }
+
+  /** Shade the neighbours as the game does, or light them like the room. */
+  setNeighbourShade(on: boolean): void {
+    this.neighbourShade = !!on;
+    for (const room of this.rooms.values()) this._shadeRoom(room);
+  }
+
+  /** A neighbour's light at a tenth (the game's lighting scale for rooms
+   *  beside the one you are in): its parts' colour, multiplied per instance. */
+  _shadeRoom(room: WorldSceneRoom): void {
+    const scale = this.neighbourShade && this._neighbourIds.has(room.id) ? NEIGHBOUR_LIGHT : 1;
+    const colour = new THREE.Color(scale, scale, scale);
+    for (const mesh of room.meshes as any[]) {
+      if (!mesh.isInstancedMesh || (scale === 1 && !mesh.instanceColor)) continue;
+      for (let i = 0; i < mesh.count; i++) mesh.setColorAt(i, colour);
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  /** The loaded neighbours of the single room. */
+  neighbourRooms(): WorldSceneRoom[] {
+    return [...this._neighbourIds].map((id) => this.rooms.get(id)).filter(Boolean) as WorldSceneRoom[];
+  }
+
+  /** Lay a room's floor again with the neighbours now loaded. */
+  async refreshGroundPlane(roomId: number): Promise<void> {
+    const room = this.rooms.get(Number(roomId));
+    if (!room) return;
+    const plane = await this._buildGroundPlane(room.shard, this.neighbourRooms(), room.group.position).catch((error) => {
+      console.warn(`room ${roomId}: no ground plane`, error);
+      return null;
+    });
+    if (this.rooms.get(Number(roomId)) !== room) {
+      if (plane) disposeRoomGroup(plane);
+      return;
+    }
+    if (room.groundPlane) {
+      room.group.remove(room.groundPlane);
+      disposeRoomGroup(room.groundPlane);
+    }
+    room.groundPlane = plane;
+    if (plane) room.group.add(plane);
+  }
+
+  /** Unload one retained room (a neighbour no longer shown). */
+  unloadRoom(roomId: number | string): boolean {
+    const id = Number(roomId);
+    this._roomGenerations.set(id, this._roomGeneration(id) + 1);
+    this._roomPromises.delete(id);
+    return this._detachRoom(id);
   }
 
   _gameDraws(exact: any): boolean {
@@ -1599,6 +1798,7 @@ export class WorldScene {
     created: THREE.InstancedMesh[];
     collisionGroup: THREE.Group;
     collisionMesh: THREE.InstancedMesh | null;
+    groundPlane: THREE.Group | null;
   }> {
     const group = new THREE.Group();
     group.name = `world-room-${meta.id}`;
@@ -1617,6 +1817,7 @@ export class WorldScene {
     const batches = this._batchRows(shard);
     const matrix = new THREE.Matrix4();
     const created: THREE.InstancedMesh[] = [];
+    let groundPlane: THREE.Group | null = null;
     const waterMaterials = new Map<string, Promise<THREE.ShaderMaterial | null>>();
     // Water faces carry their part colour (the placement's first recolour).
     const waterMaterialFor = (materialSlot: any, renderTexture: any, recolors: any): Promise<THREE.ShaderMaterial | null> => {
@@ -1684,6 +1885,11 @@ export class WorldScene {
         categoryGroups[batch.category].add(mesh);
         created.push(mesh);
       });
+      groundPlane = this._neighbourIds.has(Number(meta.id)) ? null : await this._buildGroundPlane(shard).catch((error) => {
+        console.warn(`room ${meta.id}: no ground plane`, error);
+        return null;
+      });
+      if (groundPlane) group.add(groundPlane);
     } catch (error) {
       disposeRoomGroup(group);
       throw error;
@@ -1706,6 +1912,7 @@ export class WorldScene {
       group, categoryGroups, batches, created,
       collisionGroup: collision.group,
       collisionMesh: collision.mesh,
+      groundPlane,
     };
   }
 
@@ -1764,7 +1971,7 @@ export class WorldScene {
           disposeRoomGroup(built.group);
           return null;
         }
-        built.group.visible = this._onlyRoomId === null || this._onlyRoomId === id;
+        built.group.visible = this._onlyRoomId === null || this._onlyRoomId === id || this._neighbourIds.has(id);
         this.root.add(built.group);
         const room: WorldSceneRoom = {
           id, meta, shard, worldRoom, origin,
@@ -1776,8 +1983,10 @@ export class WorldScene {
           // arrays would double the placement-row footprint for no reader
           batchCount: built.batches.length,
           meshes: built.created,
+          groundPlane: built.groundPlane,
         };
         this.rooms.set(id, room);
+        this._shadeRoom(room);
         this._emit('loaded', {
           room: id, meta, shard,
           batches: built.batches.length,

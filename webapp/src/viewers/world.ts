@@ -47,6 +47,10 @@ import {
 import { updateGameWaterLights } from './world/game-water.js';
 import { EffectsClock } from './world/effects-sim.js';
 import { GameFrame } from './world/game-frame.js';
+import {
+  PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_GAME_DISTANCE, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
+  planeUniforms, setPlaneReach, showPlaneMesh, type PlaneField, type PlaneSource,
+} from './world/ground-plane.js';
 import { renderCard, type CardSubject, type CardView } from './world/card.js';
 import { REVEAL_KEY } from './model-rooms.js';
 import { MergedWorld } from './world/merged.js';
@@ -108,6 +112,8 @@ const MERGED_ACTIVATION_INTERVAL_MS = 500;  // re-rank cadence
 // Bumping this discards previously saved prefs ONCE so everyone lands on the
 // current defaults (v2: water 50%, ambient 1.85, sun 2.80, no aniso control).
 const STATE_VERSION = 2;
+/** The furthest neighbouring rooms a room shows (rooms away, through doors). */
+const MAX_NEIGHBOUR_DISTANCE = 5;
 
 const DEFAULT_STATE = Object.freeze({
   terrain: true,
@@ -117,6 +123,12 @@ const DEFAULT_STATE = Object.freeze({
   untextured: true,
   collision: false,
   empty: false,
+  ground: true,
+  groundd: PLANE_ENDLESS,           // a room's ground plane distance: endless
+  groundw: PLANE_GAME_DISTANCE,     // all rooms: the game's ten tiles
+  neighbours: false,                // a room: also its neighbours
+  neighbourd: 1,                    // ... this many rooms away
+  neighbourfade: true,              // ... shaded as the game shades them
   names: true,
   spawnnames: false,
   inspect: false,
@@ -145,7 +157,8 @@ const PERSISTED = Object.keys(DEFAULT_STATE).filter((k) => k !== 'inspect');
 // accessed dynamically (category toggles, the inputs registry).
 interface WorldState {
   terrain: boolean; models: boolean; spawns: boolean; components: boolean;
-  untextured: boolean; collision: boolean; empty: boolean; names: boolean;
+  untextured: boolean; collision: boolean; empty: boolean; names: boolean; ground: boolean;
+  groundd: number; groundw: number; neighbours: boolean; neighbourd: number; neighbourfade: boolean;
   spawnnames: boolean;
   inspect: boolean; water: boolean; game: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
@@ -531,6 +544,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     showCollision: state.collision,
     showAuthoredEmpty: state.empty,
     showUntextured: state.untextured,
+    // all rooms: one floor for the whole world (see the ground plane below)
+    groundPlanes: !allMode,
+    showGroundPlane: state.ground,
+    groundPlaneDistance: planeDistance(state.groundd),
+    neighbourShade: state.neighbourfade,
     textureAnisotropy: TEXTURE_ANISOTROPY,
     assetConcurrency: 12,
     onStatus: (event: any) => {
@@ -564,6 +582,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       }
     },
   });
+  // the ground plane fades into the view's background (output colour space)
+  if ((scene3d.scene.background as any)?.isColor) {
+    world.setGroundPlaneFade((scene3d.scene.background as THREE.Color).clone().convertLinearToSRGB());
+  }
 
   // --- control panel ---------------------------------------------------------
   const hud = createWorldHud({
@@ -789,6 +811,40 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       merged?.setCategoryVisible(category, state[category]);
     }
   };
+  // the ground plane's distance: one setting for a room, one for all rooms
+  const groundKey = allMode ? 'groundw' : 'groundd';
+  const groundDistance = () => planeDistance(state[groundKey]);
+  const applyGround = () => {
+    groundRange.hidden = !state.ground;
+    world.setGroundPlaneVisible(state.ground);
+    if (gameFrame) gameFrame.showPlane = !!state.ground;
+    applyWorldGroundPlane();
+  };
+  const applyGroundDistance = () => {
+    world.setGroundPlaneDistance(groundDistance());
+    if (gameFrame) gameFrame.planeDistance = groundDistance();
+    applyWorldGroundPlane();
+  };
+  const groundRange = range(groundKey, 'Ground plane distance', 1, PLANE_ENDLESS, 1,
+    (v) => (Number(v) >= PLANE_ENDLESS ? '\u221e no limit' : Number(v) === 1 ? '1 tile' : `${v} tiles`), applyGroundDistance);
+  groundRange.title = `How far the floor reaches past each room. The game's is ${PLANE_GAME_DISTANCE} tiles; `
+    + `past ${PLANE_DISTANCE_MAX} (the far end) it never ends.`;
+  groundRange.hidden = !state.ground;
+  // a room's neighbours: the rooms through its doors, up to so many rooms away
+  const neighbourRange = range('neighbourd', 'Rooms away', 1, MAX_NEIGHBOUR_DISTANCE, 1,
+    (v) => (Number(v) === 1 ? '1 room' : `${v} rooms`), () => applyNeighbours());
+  neighbourRange.title = 'How many rooms away from this one, counted through doors';
+  neighbourRange.classList.add('wp-sub');
+  neighbourRange.hidden = !state.neighbours;
+  const applyNeighbourFade = () => {
+    world.setNeighbourShade(!!state.neighbourfade);
+    if (gameFrame) gameFrame.neighbourFade = !!state.neighbourfade;
+  };
+  const neighbourFadeCheck = check('neighbourfade', 'Dim neighbouring rooms', applyNeighbourFade,
+    { title: 'Dim the neighbouring rooms as the game does (a tenth of the light, and their water faded), so the room you are in stands out' });
+  neighbourFadeCheck.classList.add('wp-sub');
+  neighbourFadeCheck.hidden = !state.neighbours;
+  groundRange.classList.add('wp-sub');
   const applyToggles = () => {
     world.setUntexturedVisible(state.untextured);
     world.setCollisionVisible(state.collision);
@@ -805,6 +861,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     check('untextured', 'Untextured fills', applyToggles,
       { swatch: '#6a7d55', title: 'Placements with no decodable texture, drawn in flat category colours' }),
     check('collision', 'Collision extents', applyToggles, { swatch: '#79a9c9' }),
+    allMode ? null : check('neighbours', 'Neighbouring rooms', () => applyNeighbours(),
+      { swatch: '#9aa7b8', title: 'Also show the rooms through its doors, in place around it' }),
+    allMode ? null : neighbourFadeCheck,
+    allMode ? null : neighbourRange,
+    check('ground', 'Ground plane', applyGround,
+      { swatch: '#8c7b5e', title: 'The textured floor the game lays under and around each room. Each episode has its own; sea and river beds show through the water.' }),
+    groundRange,
     check('empty', 'Editor gizmos', applyToggles,
       { swatch: GIZMO_SWATCH, title: 'Untextured markers placed for the game\'s editor (effect direction arrows, sound, dig and combat markers). The game does not show them.' }),
     check('effects', 'Effects', applyEffects,
@@ -936,9 +999,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     gameBuilds++;
     try {
       const frame = new GameFrame(gl, (rel: string) => app.store.url(rel), world.index.render, world.tileUnits);
-      await frame.setRoom(await world.gameRoomSource(room));
+      await frame.setRoom(await world.gameRoomSource(room, world.neighbourRooms()));
       renderer.resetState();
       if (destroyed) return;
+      frame.showPlane = !!state.ground;
+      frame.planeDistance = groundDistance();
+      frame.neighbourFade = !!state.neighbourfade;
       gameFrame = frame;
       applyGameShading();
       setupStory(room.id);
@@ -4340,6 +4406,218 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     spawnNamesGroup = null;
   }
 
+  // --- a room's neighbouring rooms ---------------------------------------------
+  // The rooms through the room's doors (the world index's door links), up to
+  // the set number of rooms away on the room's own plane, loaded at their
+  // stitched places around it. They draw like the room (in the game's frame
+  // too, after it, under its vignette), and the room's floor is laid as the
+  // game lays it with neighbours: theirs removes it under their ground and
+  // shows their darker sea beds.
+  const neighbourOffsets = new Map<number, { x: number; y: number }>();
+  let neighbourSync: Promise<void> = Promise.resolve();
+  let gameSetup: Promise<void> = Promise.resolve();
+  function wantedNeighbours(): number[] {
+    neighbourOffsets.clear();
+    if (allMode || !entry || !state.neighbours) return [];
+    const rooms = new Map<number, any>((world.index?.rooms ?? []).map((r: any) => [Number(r.id), r]));
+    const homeId = Number(entry.i);
+    const home = rooms.get(homeId)?.world;
+    if (!home || !Number.isFinite(home.x) || !Number.isFinite(home.y)) return [];
+    const doors = new Map<number, Set<number>>();
+    const join = (a: number, b: number) => { if (!doors.has(a)) doors.set(a, new Set()); doors.get(a)!.add(b); };
+    for (const link of world.index?.links ?? []) { join(Number(link.a), Number(link.b)); join(Number(link.b), Number(link.a)); }
+    const placed = (id: number) => {
+      const at = rooms.get(id)?.world;
+      return !!at && Number.isFinite(at.x) && Number.isFinite(at.y) && (at.plane ?? 0) === (home.plane ?? 0);
+    };
+    const seen = new Set([homeId]);
+    let ring = [homeId];
+    const out: number[] = [];
+    const steps = Math.min(MAX_NEIGHBOUR_DISTANCE, Math.max(1, Number(state.neighbourd) || 1));
+    for (let step = 0; step < steps; step++) {
+      const next: number[] = [];
+      for (const id of ring) {
+        for (const n of doors.get(id) ?? []) {
+          if (seen.has(n) || !placed(n)) continue;
+          seen.add(n);
+          next.push(n);
+        }
+      }
+      out.push(...next);
+      ring = next;
+    }
+    for (const id of out) {
+      const at = rooms.get(id).world;
+      neighbourOffsets.set(id, { x: at.x - home.x, y: at.y - home.y });
+    }
+    return out;
+  }
+  function applyNeighbours(): void {
+    neighbourRange.hidden = !state.neighbours;
+    neighbourFadeCheck.hidden = !state.neighbours;
+    neighbourSync = neighbourSync.then(syncNeighbours).catch((error) => console.warn('neighbouring rooms unavailable', error));
+  }
+  async function syncNeighbours(): Promise<void> {
+    if (allMode || destroyed || !entry) return;
+    const home = world.rooms.get(Number(entry.i));
+    if (!home) return;
+    const want = wantedNeighbours();
+    world.setNeighbours(want);
+    for (const room of [...world.rooms.values()]) {
+      if (room.id !== home.id && !want.includes(room.id)) world.unloadRoom(room.id);
+    }
+    const missing = want.filter((id) => !world.rooms.has(id));
+    if (missing.length) {
+      hud.setStage(`loading neighbours 0/${missing.length}`);
+      await world.loadRooms(missing, {
+        concurrency: 3,
+        onProgress: (progress: any) => { if (!destroyed) hud.setStage(`loading neighbours ${progress.completed}/${progress.total}`); },
+      }).catch((error: any) => console.warn('some neighbouring rooms failed to load', error));
+      if (destroyed) return;
+    }
+    applyCategories();
+    applyToggles();
+    await world.refreshGroundPlane(home.id);
+    await gameSetup;
+    if (gameFrame && !destroyed) {
+      gameBuilds++;
+      try {
+        await gameFrame.setRoom(await world.gameRoomSource(home, world.neighbourRooms()));
+      } catch (error) {
+        console.warn('game shading: neighbouring rooms skipped', error);
+      } finally {
+        renderer.resetState();
+        gameBuilds--;
+      }
+    }
+    if (destroyed) return;
+    buildZUI();
+    hud.setStage(`ready · ${world.rooms.size === 1 ? `${home.meshes.length} batches` : `${world.rooms.size} rooms`}`, { steady: true });
+    syncStatus();
+  }
+
+  // --- the game's ground plane over the whole world (all-rooms) --------------
+  // One floor for every room at its stitched place: each tile goes to the
+  // room whose floor reaches it first, so where episodes meet the floor
+  // changes between their rooms (world/ground-plane). The field is worked
+  // out once every room has streamed in, before the merged bake releases
+  // their shards; the meshes hold the floor out to the distance's step (ten,
+  // twenty, thirty, forty tiles, endless) and draw the pieces the distance
+  // floors, so a shorter distance never rebuilds and a longer one rebuilds
+  // once per step.
+  let worldPlane: THREE.Group | null = null;
+  let worldPlaneField: PlaneField | null = null;
+  let worldPlaneExtent = 0;
+  let worldPlaneBuild = 0;
+  let worldPlaneTimer: ReturnType<typeof setTimeout> | null = null;
+  const worldPlaneMaterials = new Map<string, THREE.MeshStandardMaterial>();
+  const worldPlaneUniforms = planeUniforms(new THREE.Color(0, 0, 0));
+  const planeStep = (distance: number) => (distance === Infinity ? Infinity
+    : Math.min(PLANE_DISTANCE_MAX, Math.max(PLANE_GAME_DISTANCE, Math.ceil(distance / 10) * 10)));
+  async function buildWorldGroundPlane(): Promise<void> {
+    if (!allMode || !worldFrame || worldPlaneField || destroyed) return;
+    const sources: PlaneSource[] = [];
+    for (const room of world.rooms.values()) {
+      const frame = worldFrame.frames.get(Number(room.id));
+      // rooms outside the connected layout sit on a display grid: no floor
+      if (!frame || frame.detached || !room.shard?.ground_plane) continue;
+      sources.push({ shard: room.shard, offset: [frame.x + worldFrame.ox, frame.y + worldFrame.oz] });
+    }
+    worldPlaneField = planeField(sources, { tileUnits: world.tileUnits });
+    if (!worldPlaneField || destroyed) return;
+    // its own root, the world root's frame (merged rendering detaches that)
+    const group = new THREE.Group();
+    group.name = 'world-ground-plane';
+    group.rotation.copy(world.root.rotation);
+    group.scale.copy(world.root.scale);
+    group.position.copy(world.root.position);
+    worldPlane = group;
+    displayRoot.add(group);
+    if ((scene3d.scene.background as any)?.isColor) {
+      worldPlaneUniforms.planeFadeColour.value.copy((scene3d.scene.background as THREE.Color).clone().convertLinearToSRGB());
+    }
+    await rebuildWorldGroundPlane(planeStep(groundDistance()));
+  }
+  /** Lay the floor out to `extent` tiles (Infinity: endless, out past the fog). */
+  async function rebuildWorldGroundPlane(extent: number): Promise<void> {
+    if (!worldPlane || !worldPlaneField || destroyed) return;
+    const build = ++worldPlaneBuild;
+    const far = Math.max(512, Math.ceil((worldFrame?.span ?? 0) * 4));
+    const meshes = planeMeshes(worldPlaneField, extent, far);
+    const built: THREE.Mesh[] = [];
+    for (const { record, geometry, covers } of meshes) {
+      const key = `${record.material}:${record.texture}`;
+      let material = worldPlaneMaterials.get(key);
+      if (!material) {
+        const map = record.texture >= 0 ? (await world.textureSet(record.texture).catch(() => null))?.map ?? null : null;
+        material = worldPlaneMaterials.get(key) ?? planeMaterial(map, worldPlaneUniforms);
+        worldPlaneMaterials.set(key, material);
+      }
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = `world-ground-plane-m${record.material}-t${record.texture}`;
+      mesh.userData.planeCovers = covers;
+      mesh.receiveShadow = true;
+      built.push(mesh);
+    }
+    if (build !== worldPlaneBuild || destroyed || !worldPlane) {
+      for (const mesh of built) mesh.geometry.dispose();
+      return;
+    }
+    for (const mesh of [...worldPlane.children] as THREE.Mesh[]) {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+    }
+    for (const mesh of built) worldPlane.add(mesh);
+    worldPlaneExtent = extent;
+    applyWorldGroundPlane();
+  }
+  function applyWorldGroundPlane(): void {
+    if (!worldPlane) return;
+    const distance = groundDistance();
+    worldPlane.visible = !!state.ground;
+    setPlaneReach(worldPlaneUniforms, distance);
+    for (const mesh of worldPlane.children as THREE.Mesh[]) showPlaneMesh(mesh, distance);
+    // further than the meshes hold: lay the next step once the slider rests
+    const step = planeStep(distance);
+    if (state.ground && step > worldPlaneExtent) {
+      if (worldPlaneTimer) clearTimeout(worldPlaneTimer);
+      worldPlaneTimer = setTimeout(() => {
+        worldPlaneTimer = null;
+        const now = planeStep(groundDistance());
+        if (now > worldPlaneExtent) {
+          rebuildWorldGroundPlane(now).catch((error) => console.warn('world ground plane unavailable', error));
+        }
+      }, 120);
+    }
+  }
+  /** Test readback: the floor's meshes, the pieces the distance draws and all they hold. */
+  function groundPlaneInfo(): { meshes: number; tiles: number; pieces: number; distance: number | null; extent: number | null } | null {
+    const meshes = allMode ? (worldPlane?.children ?? []) as THREE.Mesh[]
+      : [...world.rooms.values()].flatMap((room: any) => (room.groundPlane?.children ?? []) as THREE.Mesh[]);
+    if (!meshes.length) return null;
+    const distance = groundDistance();
+    const covers = meshes.map((mesh) => mesh.userData.planeCovers as Float32Array);
+    return {
+      meshes: meshes.length,
+      tiles: covers.reduce((n, c) => n + planeCount(c, distance), 0),
+      pieces: covers.reduce((n, c) => n + c.length, 0),
+      distance: Number.isFinite(distance) ? distance : null,
+      extent: allMode ? (Number.isFinite(worldPlaneExtent) ? worldPlaneExtent : null) : null,
+    };
+  }
+  function disposeWorldGroundPlane(): void {
+    if (worldPlaneTimer) clearTimeout(worldPlaneTimer);
+    worldPlaneTimer = null;
+    worldPlaneBuild++;
+    worldPlaneField = null;
+    for (const material of worldPlaneMaterials.values()) material.dispose();
+    worldPlaneMaterials.clear();
+    if (!worldPlane) return;
+    worldPlane.removeFromParent();
+    for (const mesh of worldPlane.children as THREE.Mesh[]) mesh.geometry.dispose();
+    worldPlane = null;
+  }
+
   // --- board-game tabletop (all-rooms) ---------------------------------------
   // A flat wooden "table" plane just under z=0 spanning the stitched world, so
   // the merged map reads like a board game. Viewer-only: the wood is drawn
@@ -4834,10 +5112,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       focusRoom(meta);
       setStatus('loading room…');
       hud.setStage('loading room…');
+      // neighbours sit at their stitched places around the room
+      world.getWorldRoom = (roomId: any) => ({ id: Number(roomId), ...(neighbourOffsets.get(Number(roomId)) ?? { x: 0, y: 0 }) });
       const room = await world.loadRoom(entry.i);
       if (destroyed || !room) return;
       hud.setStage(`ready · ${room.meshes.length} batches`, { steady: true });
-      setupGameShading(room);
+      gameSetup = setupGameShading(room);
+      if (state.neighbours) applyNeighbours();
       loadStats = {
         batches: room.meshes.length,
         instances: room.meshes.reduce((sum: number, mesh: any) => sum + mesh.count, 0),
@@ -4939,8 +5220,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       world.shardSource = null;   // release the prefetch closure/map
       if (destroyed) return;
       // all rooms are streamed in (shards live in world.rooms): build spawn
-      // labels now, before buildMerged() releases the per-room graphs.
+      // labels and the ground plane now, before buildMerged() releases the
+      // per-room graphs.
       buildSpawnNameSprites();
+      await buildWorldGroundPlane().catch((error) => console.warn('world ground plane unavailable', error));
+      if (destroyed) return;
       buildZUI();
       applyCategories();
       applyToggles();
@@ -5165,6 +5449,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     gameApi: {
       ready: () => gameActive(),
       actors: () => gameFrame?.actorInfo() ?? null,
+      plane: () => gameFrame?.planeInfo() ?? null,
+      /** The viewer's own floor (a room's, or the all-rooms one). */
+      groundPlane: () => groundPlaneInfo(),
       setCamera(eye: number[] | null, target?: number[]) {
         gameCamera = eye && target ? { eye: new THREE.Vector3(eye[0], eye[1], eye[2]), target: new THREE.Vector3(target[0], target[1], target[2]) } : null;
       },
@@ -5364,6 +5651,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       disposeNameSprites();
       disposeSpawnNameSprites();
       disposeTableTop();
+      disposeWorldGroundPlane();
       wire?.dispose();
       wire = null;
       merged?.dispose();

@@ -31,6 +31,7 @@ import { decodeGlyphText, deriveRoomMetadata, resolveValue } from './room-metada
 import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader,type PlacementDecodeData} from './placement.js';
 import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape.js';
 import {effectLayout} from './effect-shape.js';
+import {groundPlaneLayout, roomGroundPlane, type GroundPlaneLayout} from './ground-plane.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
@@ -576,6 +577,13 @@ export async function extractWorld({
     flushInFlight = putMany(batch);
   };
   const hashPending: Promise<void>[] = [];    // bounded in-flight window (4)
+  // The ground plane (ground-plane.ts): where this build keeps it, found from
+  // the grounds and blocks the rooms place; each shard gets its floors and
+  // tile values. Unreadable data leaves rooms without one.
+  let planeLayout: GroundPlaneLayout | null = null;
+  try {
+    planeLayout = groundPlaneLayout(shapeRegistry, dt.symbols, ctx.roomIds.map((id) => ctx.occupancy(id).occurrences));
+  } catch { planeLayout = null; }
   step('shards', 0, ctx.roomIds.length);
   for (const roomId of ctx.roomIds) {
     bail();
@@ -600,6 +608,21 @@ export async function extractWorld({
     }
     const grid = colourGrids.get(roomId);
     if (grid) shard.colour_grid = encodeColourGrid(grid);
+    if (planeLayout && metadata?.episode && Array.isArray(shard.size)) {
+      let plane = null;
+      try {
+        const { occurrences, individuals } = ctx.occupancy(roomId);
+        const table = layersById.get(roomId)?.table ?? [];
+        const skip = new Set<number>();
+        for (const individual of individuals) {
+          const third = roomMod.groupFields(individual.node, table)?.[2];
+          if (third?.kind === 'array' && third.elems?.length) skip.add(individual.index);
+        }
+        plane = roomGroundPlane(planeLayout, shapeRegistry, occurrences,
+          shard.size[0], shard.size[1], metadata.episode.owner, ctx.graph.texturesByMaterial, skip);
+      } catch { plane = null; }
+      if (plane) shard.ground_plane = { records: plane.records, tiles: b64FromTyped(plane.tiles) };
+    }
     putBatch.push([`world:room:${roomId}`, shard]);
     if (putBatch.length >= 32) await flushShards();
     // ordinal-free room content hash: the diff identity for this room, so

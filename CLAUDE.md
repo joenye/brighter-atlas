@@ -92,6 +92,35 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   (v0.99.3)"
   (`src/game-build.ts`, `ui.versionLabel`) and the world map's updates;
   data without one keeps the date label. Stored versions pick it up at boot.
+- **The ground plane.** The floor the game lays at z = 0 under and around a
+  room: each episode names its floor, and each tile's ground keeps, removes
+  or replaces it (sea and river beds show through water).
+  `extract/world/ground-plane.ts` finds it by shape into each shard's
+  `ground_plane`; `viewers/world/ground-plane.ts` lays the tiles (the room's
+  area grown by ten tiles, kept within ten tiles of the room's ellipse,
+  texture anchored to world tiles, tinted by the room's colour grid). The
+  game frame draws it first with its own vignette, the default view fades
+  it into the background, and the all-rooms view gives each tile to the
+  room whose floor reaches it first, so floors change where episodes meet.
+  A distance setting (1 to 40 tiles, then endless) stretches the reach and
+  the fade: rooms default to endless, all rooms to the game's ten tiles
+  (at ten both renderers draw exactly the game's tiles). The field holds
+  each tile's shortest distance and pieces are drawn nearest first, so a
+  distance is a draw count (all rooms lays its floor in ten-tile steps,
+  rebuilding only to grow); the game frame's endless far pieces stay within
+  one texture repeat (its coordinates are 16-bit).
+- **Neighbouring rooms.** A room can show the rooms through its doors (the
+  world index's door links, 1 to 5 rooms away, its own plane only) at their
+  stitched places (`world.ts` `wantedNeighbours`, `WorldScene.setNeighbours`,
+  `unloadRoom`). The game frame draws them after the room, each in its own
+  draw order, under the room's bounds and vignette; the floor stays the
+  room's, laid as the game lays it with neighbours (`planeField` `primary`:
+  their tiles remove it or bring their darker alternates). "Dim neighbouring
+  rooms" (on by default) lights a neighbour at a tenth (its three lights and
+  emissive strength; the viewer's own shading multiplies its parts' colour
+  per instance) and gives its water the room's main vignette instead of the
+  neutral one; its water keeps full light. The shadow box grows over the
+  loaded rooms (within 20 tiles of the room).
 - **Derive by shape.** Build-specific values the user's bundles can tell are
   found by data shape at extraction, the same rule on every build:
   `extract/world/render-shape.ts` (draw tables, materials, environments),

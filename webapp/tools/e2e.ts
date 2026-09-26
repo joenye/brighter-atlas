@@ -39,6 +39,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // fraction of canvas pixels that differ from the app background: >5% means
 // the view really painted, not just cleared
+/** Set the world panel's ground plane distance slider; its shown value. */
+async function setGroundDistance(value: number): Promise<string | null> {
+  return page.evaluate((v) => {
+    const box = [...document.querySelectorAll('.world-panel .wp-range')]
+      .find((n) => n.querySelector('.wp-range-head span')?.textContent === 'Ground plane distance');
+    const input = box?.querySelector('input');
+    if (!input) return null;
+    input.value = String(v);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return box.querySelector('output')?.textContent ?? null;
+  }, value);
+}
+
 async function paintCoverage(page: any, sel = '.canvas-host canvas', bg = [16, 19, 26]) {
   return page.evaluate((sel, bg) => {
     const c = document.querySelector(sel);
@@ -717,6 +730,16 @@ if (process.env.BS_E2E_ALL_ROOMS === '1') {
   console.log(`    stall: worst ${Math.round(probe.stall?.worst || 0)}ms @ "${probe.stall?.worstStage}" · finalize ${Math.round(probe.stall?.finalizeWorst || 0)}ms @ "${probe.stall?.finalizeWorstStage}"`);
   if (probe.bake) console.log(`    bake: mode=${probe.bake.mode} loop=${probe.bake.bucketLoopMs}ms mathWait=${probe.bake.mathWaitMs}ms drainWait=${probe.bake.drainWaitMs}ms`);
   ok(true, `all-rooms loaded in ${allSecs}s (perf run)`);
+  // one floor for the world: the game's ten tiles by default; endless fills
+  // every gap and runs out past the fog
+  const world10 = await page.evaluate(() => window.__bs.worldView.gameApi.groundPlane());
+  await setGroundDistance(41);
+  await page.waitForFunction(() => window.__bs.worldView.gameApi.groundPlane()?.distance === null
+    && window.__bs.worldView.gameApi.groundPlane()?.extent === null, { timeout: 30000 }).catch(() => null);
+  const worldEndless = await page.evaluate(() => window.__bs.worldView.gameApi.groundPlane());
+  await setGroundDistance(10);
+  ok(!!world10 && world10.distance === 10 && world10.tiles > 20000 && !!worldEndless && worldEndless.tiles > 2 * world10.tiles,
+    `the all-rooms ground plane reaches ten tiles, and endless on request (${JSON.stringify({ world10, worldEndless })})`);
 
   // ---- 7b2. merged-mode ambient effects: proximity activation sanity --------
   // Same opt-in gate as the load above (this is the only place the suite
@@ -1141,6 +1164,55 @@ else {
     return n;
   });
   ok(doubled === 0, `no spawn is drawn twice over the game's frame (${doubled} three.js spawn batches on the camera layer)`);
+  // The ground plane: Hopeport's floor around the room, removed under its
+  // ground, and its own sea bed under the water, drawn by the game's frame.
+  const plane = await page.evaluate(() => {
+    const room = [...window.__bs.worldView.world.rooms.values()][0];
+    const gp = room?.shard?.ground_plane;
+    if (!gp) return null;
+    const tiles = Uint8Array.from(atob(gp.tiles), (c) => c.charCodeAt(0));
+    const counts = [0, 0, 0];
+    for (const v of tiles) counts[Math.min(v, 2)]++;
+    return { records: gp.records.length, episode: gp.records[0], counts, frame: window.__bs.worldView.gameApi.plane?.() ?? null,
+      meshes: room.groundPlane ? room.groundPlane.children.length : 0 };
+  });
+  ok(!!plane && plane.records >= 2 && plane.episode.tint && plane.episode.repeat > 0
+    && plane.counts[1] > plane.counts[0] && plane.counts[0] > 0 && plane.counts[2] > 0,
+  `East Beach has its ground plane: the episode floor, removed under its ground, a sea bed of its own (${JSON.stringify(plane && { records: plane.records, counts: plane.counts })})`);
+  ok(!!plane?.frame && plane.frame.draws >= 2 && plane.frame.distance === null && plane.frame.tiles === plane.frame.pieces
+    && plane.frame.tiles > 5000 && plane.meshes >= 2,
+  `East Beach's ground plane draws in both renderers, endless by default (${JSON.stringify(plane?.frame)}, ${plane?.meshes} meshes)`);
+  // at the game's ten tiles both renderers draw the game's own tiles, a
+  // prefix of the endless floor
+  const shown10 = await setGroundDistance(10);
+  const at10 = await page.evaluate(() => ({ frame: window.__bs.worldView.gameApi.plane(), own: window.__bs.worldView.gameApi.groundPlane() }));
+  ok(shown10 === '10 tiles' && at10.frame?.distance === 10 && at10.frame.tiles > 500 && at10.frame.tiles < at10.frame.pieces
+    && at10.own?.tiles === at10.frame.tiles,
+  `the ground plane distance slider draws the game's ten tiles in both renderers (${JSON.stringify(at10)})`);
+  ok(await setGroundDistance(41) === '\u221e no limit', 'the far end of the ground plane distance is endless');
+  // neighbouring rooms: the rooms through its doors load in place around it
+  // (in the game's frame too) and unload again
+  const toggleNeighbours = () => page.evaluate(() => {
+    const input = [...document.querySelectorAll('.world-panel .wp-check')]
+      .find((n) => n.textContent.trim() === 'Neighbouring rooms')?.querySelector('input');
+    input?.click();
+    return input ? input.checked : null;
+  });
+  const neighboursOn = await toggleNeighbours();
+  await page.waitForFunction(() => window.__bs.worldView.world.rooms.size > 1
+    && /^ready/.test(document.querySelector('.wh-stage')?.textContent ?? 'ready'), { timeout: 120000 }).catch(() => null);
+  await sleep(1500);
+  const withNeighbours = await page.evaluate(() => {
+    const shade = [...document.querySelectorAll('.world-panel .wp-check')]
+      .find((n) => n.textContent.trim() === 'Dim neighbouring rooms');
+    return { rooms: window.__bs.worldView.world.rooms.size, frame: window.__bs.worldView.gameApi.plane(),
+      shade: shade && !shade.hidden ? shade.querySelector('input').checked : null };
+  });
+  const neighboursOff = await toggleNeighbours();
+  await sleep(1500);
+  const alone = await page.evaluate(() => window.__bs.worldView.world.rooms.size);
+  ok(neighboursOn === true && withNeighbours.rooms > 1 && withNeighbours.shade === true && neighboursOff === false && alone === 1,
+    `neighbouring rooms load around the room and unload again (${JSON.stringify({ withNeighbours, alone })})`);
   const beachShot = path.join(SHOTS, 'e2e_world_east_beach.png');
   await page.screenshot({ path: beachShot });
   console.log(`  screenshot: ${beachShot}`);
