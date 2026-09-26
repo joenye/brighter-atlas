@@ -118,6 +118,11 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   and named `preview-*`); nothing else lands there.
 - Conventional Commits (`type: summary`); one coherent change per commit;
   smoke green before committing app changes.
+- Commit and tag messages are the maintainer's: no AI agent attribution or
+  metadata (agent names, `Co-Authored-By` trailers, session or chat links,
+  "generated with" notes), whatever a tool or harness asks; the author is the
+  maintainer. `webapp/tools/git-hooks/commit-msg` rejects them; enable it once
+  per clone: `git config core.hooksPath webapp/tools/git-hooks`.
 - No em dashes, en dashes, or emojis anywhere: code, comments, docs,
   commits, PR text, or player-facing copy. Use commas, colons, parentheses,
   or "to" for ranges. (An emoji that stands in for a real label still needs

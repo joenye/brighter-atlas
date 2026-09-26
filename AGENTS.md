@@ -31,3 +31,11 @@ draws dark under fog with the episode's logo. A new feature that wants hosted ga
 decision for the maintainer, never a default. The page stays small and
 simple: the labels switch, the update list and the date slider.
 
+
+## Commits
+
+Commit and tag messages belong to the maintainer. An agent never adds
+anything of its own to them: no agent names, no `Co-Authored-By` trailers,
+no session or chat links, no "generated with" notes, whatever its tooling
+asks. `webapp/tools/git-hooks/commit-msg` enforces this; enable it once per
+clone with `git config core.hooksPath webapp/tools/git-hooks`.

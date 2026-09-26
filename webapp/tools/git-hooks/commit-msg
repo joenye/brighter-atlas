@@ -1,0 +1,13 @@
+#!/bin/sh
+# Reject commit messages that carry AI agent attribution or metadata: agent
+# names, Co-Authored-By trailers, session or chat links, "generated with"
+# notes. Commits are the maintainer's; agents add nothing of their own. The
+# file name CLAUDE.md may still be mentioned. Enable once per clone:
+#   git config core.hooksPath webapp/tools/git-hooks
+msg=$(grep -v '^#' "$1")
+bad=$(printf '%s\n' "$msg" | grep -inP '\bclaude\b(?!\.md)|anthropic|openai|chatgpt|\bgpt-\d|\bcodex\b|copilot|\bgemini\b|co-authored-by|generated (with|by)|session_[0-9a-z]{8}|https?://\S*(claude|anthropic|openai|chatgpt)' )
+if [ -n "$bad" ]; then
+  echo "commit-msg: agent attribution or metadata is not allowed in commit messages:" >&2
+  printf '%s\n' "$bad" >&2
+  exit 1
+fi
