@@ -1,7 +1,8 @@
 // The hosted world map's data: every game release's 2D map, served from the
 // site (world-data/). This is the one place the app shows game content it
-// did not read from the user's own files, and only the 2D map: its terrain,
-// room labels and their artwork.
+// did not read from the user's own files: the 2D map (its terrain, room
+// labels and their artwork) and, for the releases that have them, satellite
+// pictures of the rooms seen from straight above.
 //
 //   manifest.json   releases (date, label, build string, style, art, rooms as piece ids),
 //                   the packs, and which pack holds each piece
@@ -10,17 +11,24 @@
 //                   the pack of the month they first appeared
 //   styles/*.json   label fonts and backgrounds
 //   art/*.bin       images: zlib-deflated 'BAIM' + width + height + raw RGBA
+//   satellite/<set>/index.json, <level>/<x>_<y>.webp
+//                   a release's satellite pictures (see satellite.ts)
 //
 // A release's map is assembled from its pieces with rooms numbered by
 // position (the served pieces carry no build record numbers).
 import { unzlibSync } from '../../vendor/fflate.module.js';
 import type { MapDocument } from '../extract/maps/index.js';
 import type { MapBitmap } from '../extract/maps/images.js';
+import type { SatelliteIndex, SatelliteSource } from './satellite.js';
 
 export interface WorldRelease {
   id: string; date: string; label: string | null; style: string;
   /** The game's build string ("0.99.3-278abe752c42bda0"); absent in older data. */
   build?: string | null;
+  /** Its satellite pictures (a folder under satellite/); absent when it has none. */
+  satellite?: string;
+  /** The same without roofs and whatever else is built overhead. */
+  satelliteRoofless?: string;
   art: { terrain: string[]; images: Record<string, string> };
   rooms: number[];
 }
@@ -48,6 +56,7 @@ export function createWorldData(base = 'world-data/') {
   const styles = new Map<string, Promise<any>>();
   const images = new Map<string, Promise<MapBitmap>>();
   const docs = new Map<string, WorldMap>();
+  const satellites = new Map<string, Promise<SatelliteSource>>();
 
   function loadPack(index: number): Promise<void> {
     let p = packs.get(index);
@@ -91,6 +100,24 @@ export function createWorldData(base = 'world-data/') {
         manifest = m as WorldManifest;
       }
       return manifest;
+    },
+    /** True when some release has satellite pictures. */
+    hasSatellite(): boolean { return !!manifest?.releases.some((r) => r.satellite); },
+    /** A release's satellite pictures, with or without roofs (null: it has none). */
+    satellite(release: WorldRelease, roofs = true): Promise<SatelliteSource | null> {
+      const set = roofs ? release.satellite : release.satelliteRoofless;
+      if (!set || !/^[\w-]+$/.test(set)) return Promise.resolve(null);
+      let p = satellites.get(set);
+      if (!p) {
+        const folder = `satellite/${set}/`;
+        p = get(`${folder}index.json`).then((r) => r.json()).then((index: SatelliteIndex) => {
+          if (index?.format !== 1 || !(index.tile > 0) || typeof index.levels !== 'object') throw Error(`${folder}index.json: not a satellite index`);
+          return { base: base + folder, index };
+        });
+        p.catch(() => satellites.delete(set));
+        satellites.set(set, p);
+      }
+      return p;
     },
     /** True when the release can be shown without another download. */
     ready(release: WorldRelease): boolean { return !missingPacks(release).length; },

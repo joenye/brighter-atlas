@@ -1200,7 +1200,9 @@ html.mgate-on #app { display: none; }
 .map-toolbar select { max-width: 190px; min-height: 32px; }
 .map-toolbar select, .map-toolbar input[type=number] { background: var(--bg3); color: var(--fg0); border: 1px solid var(--line); border-radius: 5px; padding: 5px; }
 .map-toolbar input[type=number] { width: 80px; }
-.map-canvas-host { position: relative; flex: 1; min-height: 160px; overflow: hidden; background: #2a2a2a; }
+.map-canvas-host { position: relative; flex: 1; min-height: 160px; overflow: hidden; background: #2a2a2a;
+  /* a map, not text: taps never select, long presses never call up the text menu */
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 .map-canvas-host canvas { position: absolute; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 .map-canvas-host canvas:active { cursor: grabbing; }
 .map-status { padding: 7px 10px; font-size: 12px; flex: none; }

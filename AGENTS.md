@@ -22,8 +22,10 @@ its memory.
 
 `webapp/maps.html` (Brighter Maps) draws the game's 2D map
 for every game update from data the site itself serves under `world-data/`
-(see `webapp/src/world-atlas/data.ts` for the layout), limited to the 2D map:
-terrain, room labels and their artwork.
+(see `webapp/src/world-atlas/data.ts` for the layout), limited to the 2D map
+(terrain, room labels and their artwork) and satellite pictures of the rooms
+seen from straight above, for the updates that have them
+(`src/world-atlas/satellite.ts`: a tile pyramid on the map's own grid).
 
 `webapp/fashion.html` (Brighter Fashion, the maintainer's decision of
 2026-09-27) dresses a character from data the site serves under
@@ -32,9 +34,11 @@ creator's and every wearable item's meshes, textures, rigs, clips and item
 pictures, and its one place (a beach scene) drawn with the game's own
 programs. Nothing else from the game is ever served. Areas the game has not shown (sealed episodes) are
 never served at all: the data carries only their silhouette, which the page
-draws dark under fog with the episode's logo. A new feature that wants hosted game content is a
+draws dark under fog with the episode's logo, and the satellite pictures
+leave them out. A new feature that wants hosted game content is a
 decision for the maintainer, never a default. The page stays small and
-simple: the labels switch, the update list and the date slider.
+simple: the map or satellite switch, the labels switch, the update list and
+the date slider.
 
 
 ## Commits

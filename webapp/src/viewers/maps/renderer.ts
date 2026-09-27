@@ -171,7 +171,9 @@ export interface MapMarker {
   id:number;x:number;y:number;source:'object'|'other'|'actor'|'enemy'|'region';glyph:number|null;
   footprint:number[]|null;linked:boolean;selected:boolean;
 }
-export interface MapView {cx:number;cy:number;scale:number;width:number;height:number;dpr?:number;labels?:boolean;markers?:MapMarker[]}
+export interface MapView {cx:number;cy:number;scale:number;width:number;height:number;dpr?:number;labels?:boolean;markers?:MapMarker[];
+  /** Draw the terrain (default); off, the labels alone (over another picture of the ground). */
+  terrain?:boolean}
 function makeMarkers(view:MapView,doc:MapDocument) {
   const rows:number[]=[],unit=64/view.scale,glyphs=new Map((doc.scene.labelFonts.annotation?.glyphs??[]).map(g=>[g.glyph,g]));
   const colors={region:[.706,.631,.812],actor:[.49,.812,1],enemy:[1,.671,.471],object:[.502,.882,.729],other:[.788,.827,.875]};
@@ -294,7 +296,7 @@ export class MapRenderer {
   }
   draw(view:MapView) {
     this.view=view;if(this.lost||!this.buffers.length)return;
-    const {cx,cy,scale,width,height,dpr=1,labels=true}=view,gl=this.gl,u=this.uniforms;
+    const {cx,cy,scale,width,height,dpr=1,labels=true,terrain=true}=view,gl=this.gl,u=this.uniforms;
     const w=Math.round(width*dpr),h=Math.round(height*dpr);if(!w||!h)return;
     if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}
     gl.viewport(0,0,w,h);gl.useProgram(this.program);gl.uniform2f(u.camera,cx*64,cy*64);gl.uniform2f(u.viewport,w,h);gl.uniform1f(u.scale,scale*dpr/64);
@@ -304,7 +306,7 @@ export class MapRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER,markerBuffer.buffer);gl.bufferData(gl.ARRAY_BUFFER,markers,gl.DYNAMIC_DRAW);markerBuffer.count=markers.length/STRIDE;
     this.stats.markers=view.markers?.length??0;
     for(const [i,b] of this.buffers.entries()){
-      if(i===1){gl.disable(gl.DEPTH_TEST);gl.depthMask(false);}if(!b.count||(!labels&&i&&b!==markerBuffer))continue;
+      if(i===1){gl.disable(gl.DEPTH_TEST);gl.depthMask(false);}if(!b.count||(!labels&&i&&b!==markerBuffer)||(!terrain&&!i))continue;
       const t=this.textures.get(b.texture!)!;gl.bindTexture(gl.TEXTURE_2D,t.texture);gl.uniform2f(u.texel,1/t.width,1/t.height);
       gl.bindVertexArray(b.vao);gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,b.count);
     }

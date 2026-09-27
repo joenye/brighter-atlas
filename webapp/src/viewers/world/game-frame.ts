@@ -102,6 +102,10 @@ export interface GameCamera {
   height: number;
   /** The camera's up (native frame); z when absent. */
   up?: THREE.Vector3;
+  /** Depth range (native units) in place of the game's own: a narrow lens
+   *  far above the ground needs its range around the ground. */
+  near?: number;
+  far?: number;
 }
 
 interface Draw {
@@ -745,7 +749,7 @@ export class GameFrame {
     if (!this.room || !this.passPrograms.size) return;
     const gl = this.context;
     const idx = this.index;
-    const { near, far } = idx.camera;
+    const near = camera.near ?? idx.camera.near, far = camera.far ?? idx.camera.far;
     const aspect = camera.width / camera.height;
     const view = gameView(camera.eye, camera.target, camera.up ?? null);
     const projection = gameProjection(camera.fov, aspect, near, far);

@@ -5,10 +5,11 @@ A fully client-side viewer for the **Brighter Shores** asset bundles
 `assetBundle8` cache files; everything decodes in-browser. **No game data is
 committed, ever, and none is distributed, with two exceptions (AGENTS.md):**
 Brighter Maps (`maps.html`) draws every game update's 2D map (terrain, room
-labels and their artwork) from data the site serves under `world-data/`, and
-Brighter Fashion (`fashion.html`) dresses a character from the equipment and
-body data the site serves under `fashion-data/`. Nothing else from the game is
-served; widening that is the maintainer's decision.
+labels and their artwork), and satellite pictures of the rooms seen from above
+for the updates that have them, from data the site serves under `world-data/`,
+and Brighter Fashion (`fashion.html`) dresses a character from the equipment
+and body data the site serves under `fashion-data/`. Nothing else from the
+game is served; widening that is the maintainer's decision.
 
 ## Layout
 - `webapp/`: the app. TypeScript in `src/`, bundled by esbuild
@@ -33,7 +34,14 @@ served; widening that is the maintainer's decision.
   and the folder it names (`src/fashion/data.ts`). The landing page's
   pictures (`landing/*.webp`) are served by the site, never committed. Sealed areas (episodes the game has
   not shown) arrive as silhouettes only and are drawn dark under fog by
-  `src/world-atlas/sealed.ts`. The world map reuses the
+  `src/world-atlas/sealed.ts`. The satellite view (`src/world-atlas/
+  satellite.ts`) draws a tile pyramid on the map's own grid under the map's
+  canvas, which then draws the labels only; a Roofs switch swaps in the
+  update's pictures drawn without what is built overhead. The pictures themselves can be
+  made from a stored World extraction by `satellite.html` (`src/satellite/`:
+  a harness that draws each room with the game's frame from straight above,
+  for scripts through `window.__satellite`; its stills are named by a
+  content fingerprint, `tools/test_satellite.ts`). The world map reuses the
   Maps renderer and camera (`viewers/maps/renderer.ts`, `pan-zoom.ts`);
   `tools/test_world.ts` (run by smoke) covers it on synthetic data.
 - Hosting, deployment and release tooling are **not part of this repo**: it
@@ -65,7 +73,7 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   portable file, and they add no save/load UI of their own.
 - **The runtime layout is a contract.** `viewer.html` loads `js/main.js`,
   `maps.html` loads `js/world.js`, `fashion.html` `js/fashion.js`,
-  `index.html` `js/home.js`;
+  `index.html` `js/home.js`, `satellite.html` `js/satellite.js`;
   workers are spawned by path (`js/extract/worker.js`, …); the service worker
   must stay at the webapp root (`sw.js`) so its scope covers the page, and it
   serves decoded payloads at `cs/<versionId>/…`. The esbuild config

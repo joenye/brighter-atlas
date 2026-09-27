@@ -2122,6 +2122,9 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       // build names: the game's build string names versions and releases
       const names = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_build_names.ts')], { encoding: 'utf8', cwd: WEBAPP });
       ok(names.status === 0, `build names${names.status === 0 ? '' : `:\n    ${(names.stderr || names.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
+      // satellite stills: the fingerprint that names each still
+      const satellite = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_satellite.ts')], { encoding: 'utf8', cwd: WEBAPP });
+      ok(satellite.status === 0, `satellite fingerprints${satellite.status === 0 ? '' : `:\n    ${(satellite.stderr || satellite.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
     }
     if (realData && existsSync(path.join(WEBAPP, realData, 'manifest.json'))) {
       await realSuite(browser, base, realData);

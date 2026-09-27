@@ -47,6 +47,7 @@ import {
 import { updateGameWaterLights } from './world/game-water.js';
 import { EffectsClock } from './world/effects-sim.js';
 import { GameFrame } from './world/game-frame.js';
+import { doorNeighbours } from './world/neighbours.js';
 import {
   PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_GAME_DISTANCE, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
   planeUniforms, setPlaneReach, showPlaneMesh, type PlaneField, type PlaneSource,
@@ -4409,25 +4410,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   function wantedNeighbours(): number[] {
     neighbourOffsets.clear();
     if (allMode || !entry || !state.neighbours) return [];
-    const rooms = new Map<number, any>((world.index?.rooms ?? []).map((r: any) => [Number(r.id), r]));
-    const homeId = Number(entry.i);
-    const home = rooms.get(homeId)?.world;
-    if (!home || !Number.isFinite(home.x) || !Number.isFinite(home.y)) return [];
-    const doors = new Map<number, Set<number>>();
-    const join = (a: number, b: number) => { if (!doors.has(a)) doors.set(a, new Set()); doors.get(a)!.add(b); };
-    for (const link of world.index?.links ?? []) { join(Number(link.a), Number(link.b)); join(Number(link.b), Number(link.a)); }
-    // every room through a door, whatever height its doors sit at: rooms
-    // outside the connected layout have no stitched place and stay out
-    const placed = (id: number) => {
-      const at = rooms.get(id)?.world;
-      return !!at && Number.isFinite(at.x) && Number.isFinite(at.y);
-    };
-    const out = [...doors.get(homeId) ?? []].filter((n) => n !== homeId && placed(n));
-    for (const id of out) {
-      const at = rooms.get(id).world;
-      neighbourOffsets.set(id, { x: at.x - home.x, y: at.y - home.y });
-    }
-    return out;
+    const out = doorNeighbours(world.index, Number(entry.i));
+    for (const n of out) neighbourOffsets.set(n.id, { x: n.x, y: n.y });
+    return out.map((n) => n.id);
   }
   function applyNeighbours(): void {
     neighbourFadeCheck.hidden = !state.neighbours;
@@ -5430,6 +5415,29 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       groundPlane: () => groundPlaneInfo(),
       setCamera(eye: number[] | null, target?: number[]) {
         gameCamera = eye && target ? { eye: new THREE.Vector3(eye[0], eye[1], eye[2]), target: new THREE.Vector3(target[0], target[1], target[2]) } : null;
+      },
+      /** A still of the game's frame from any camera (native frame; `up` defaults to z,
+       *  `near`/`far` to the game's range), at any size: `frames` frames from a fresh
+       *  occlusion history, drawn offscreen, the last read back as RGBA rows top first. */
+      still({ eye, target, up, fov, width, height, near, far, frames = 1, water = true }: {
+        eye: number[]; target: number[]; up?: number[]; fov: number; width: number; height: number;
+        near?: number; far?: number; frames?: number; water?: boolean;
+      }) {
+        if (!gameActive()) return null;
+        const v = (p: number[]) => new THREE.Vector3(p[0], p[1], p[2]);
+        const camera = { eye: v(eye), target: v(target), up: up ? v(up) : undefined, fov, width, height, near, far };
+        gameFrame!.skipWater = !water;
+        world.root.updateMatrixWorld();
+        spawnAnimRoot.updateMatrixWorld(true);
+        syncActorLayers(true);
+        gameFrame!.resetTemporal();
+        try {
+          for (let k = 0; k < frames; k++) gameFrame!.render(camera, waterTicks, camera.target.z, true);
+          return gameFrame!.readMain();
+        } finally {
+          renderer.resetState();
+          gameFrame!.skipWater = false;
+        }
       },
       /** Draw `frames` game frames (no overlays) and read the last back: RGBA rows top first,
        *  with the occlusion targets of the same frame. `fresh` starts the occlusion history anew. */

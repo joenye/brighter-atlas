@@ -12,6 +12,7 @@ const MIME: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
   '.wav': 'audio/wav',
   '.md': 'text/markdown; charset=utf-8',

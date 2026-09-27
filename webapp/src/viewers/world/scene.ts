@@ -721,6 +721,13 @@ export class WorldScene {
     return this.index?.textures?.[String(textureId)] || null;
   }
 
+  /** A stored room's shard, checked against the world index. */
+  roomShard(roomId: number | string): Promise<any> {
+    const meta = this.roomMeta(roomId);
+    if (!meta) return Promise.reject(new Error(`room ${roomId} is not in the world index`));
+    return this._roomShard(meta);
+  }
+
   async _roomShard(meta: any): Promise<any> {
     const shard = await (this.shardSource
       ? this.shardSource(Number(meta.id))

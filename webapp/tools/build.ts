@@ -35,6 +35,7 @@ const jobs: BuildOptions[] = [
     entryPoints: {
       'js/main': 'src/main.ts',
       'js/world': 'src/world-atlas/main.ts',
+      'js/satellite': 'src/satellite/main.ts',
       'js/extract/worker': 'src/extract/worker.ts',
       'js/extract/pool-worker': 'src/extract/pool-worker.ts',
       'js/extract/maps-worker': 'src/extract/maps/worker.ts',

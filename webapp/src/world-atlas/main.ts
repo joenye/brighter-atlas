@@ -1,13 +1,16 @@
 // The world map (maps.html, Brighter Maps): the 2D map of every
 // game release, no game files needed. Pick a release from the list or slide
 // through the dates; the camera stays put so the world can be watched
-// changing. The state lives in the URL hash (#r=<release id or YYYY-MM-DD>
-// &c=<x>,<y>,<scale>&l=0&ui=0) and window.__world drives it
-// from a script (a time-lapse capture).
+// changing. Like a street map, it can show satellite pictures instead: the
+// rooms seen from straight above, with the labels over them. The state lives
+// in the URL hash (#r=<release id or YYYY-MM-DD>&c=<x>,<y>,<scale>&l=0
+// &v=satellite&ui=0) and window.__world drives it from a script (a
+// time-lapse capture).
 import { MapRenderer } from '../viewers/maps/renderer.js';
 import { attachPanZoom, fitCamera, type MapCamera } from '../viewers/maps/pan-zoom.js';
 import { createWorldData, type WorldMap, type WorldRelease } from './data.js';
 import { SealedLayer } from './sealed.js';
+import { SatelliteLayer } from './satellite.js';
 import { openWhatsNew, maybeAutoShowWhatsNew } from '../changelog.js';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
 import { gameVersion } from '../game-build.js';
@@ -25,6 +28,9 @@ const releaseButton = $<HTMLButtonElement>('world-release'), status = $('world-s
 const slider = $<HTMLInputElement>('world-date'), ticks = $('world-ticks');
 const prev = $<HTMLButtonElement>('world-prev'), next = $<HTMLButtonElement>('world-next');
 const labels = $<HTMLInputElement>('world-labels');
+const roofs = $<HTMLInputElement>('world-roofs'), roofsSwitch = $('world-roofs-switch');
+const viewButton = $<HTMLButtonElement>('world-view'), viewName = $('world-view-name'), note = $('world-note');
+const thumb = $<HTMLCanvasElement>('world-view-thumb');
 const picker = $('world-picker'), search = $<HTMLInputElement>('world-search'), list = $('world-list');
 
 // Safari's own pinch zoom (its gesture events) would zoom the whole page:
@@ -55,13 +61,28 @@ const releaseText = (r: WorldRelease) => {
 // sealed areas: silhouettes under drifting fog, drawn above the map
 const sealed = new SealedLayer($<HTMLCanvasElement>('world-fog'), $('world-sealed'),
   () => ({ camera, width: host.clientWidth, height: host.clientHeight, dpr: devicePixelRatio }));
+// satellite pictures: under the map's canvas, which then draws the labels only
+const satellite = new SatelliteLayer($<HTMLCanvasElement>('world-satellite'), () => requestDraw());
+let satelliteView = false;            // the reader's choice: map or satellite
+let satelliteFor: string | null = null;   // the pictures the layer holds: release and roofs
+/** Roofs off, where the update has pictures without them. */
+const roofless = (release: WorldRelease) => !roofs.checked && !!release.satelliteRoofless;
+const pictureKey = (release: WorldRelease) => `${release.id}:${roofless(release) ? 'roofless' : 'roofs'}`;
+/** Satellite pictures are on screen: chosen, and the release shown has them. */
+const picturesShown = () => satelliteView && !!current && satelliteFor === pictureKey(current.release) && satellite.ready;
 function draw() {
   raf = 0;
   if (!renderer) return;
   sealed.draw();
-  renderer.draw({ ...camera, width: host.clientWidth, height: host.clientHeight, dpr: devicePixelRatio, labels: labels.checked });
+  const view = { ...camera, width: host.clientWidth, height: host.clientHeight, dpr: devicePixelRatio };
+  const pictures = picturesShown();
+  satellite.draw(pictures ? { camera, width: view.width, height: view.height, dpr: view.dpr } : null);
+  renderer.draw({ ...view, labels: labels.checked, terrain: !pictures });
   const root = document.documentElement.dataset;   // for tests and scripts
   root.tiles = String(renderer.stats.terrainTiles);
+  root.view = pictures ? 'satellite' : 'map';
+  root.pictures = String(pictures ? satellite.stats.drawn : 0);
+  thumbLater();
 }
 const requestDraw = () => { if (!raf) raf = requestAnimationFrame(draw); };
 function fit() {
@@ -72,9 +93,66 @@ function fit() {
   fitCamera(camera, { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, host.clientWidth, host.clientHeight, .95);
   requestDraw(); saveState();
 }
-attachPanZoom(canvas, host, camera, { changed: () => { requestDraw(); saveState(); }, fit });
+const panZoom = attachPanZoom(canvas, host, camera, { changed: () => { requestDraw(); saveState(); }, fit });
+// the zoom buttons, as on a street map (bottom right)
+$('world-zoom-in').addEventListener('click', () => panZoom.zoomBy(2));
+$('world-zoom-out').addEventListener('click', () => panZoom.zoomBy(0.5));
 new ResizeObserver(requestDraw).observe(host);
 labels.addEventListener('change', () => { requestDraw(); saveState(); });
+roofs.addEventListener('change', () => { if (wanted) void syncSatellite(wanted); saveState(); });
+
+// ---------------------------------------------------------------- map or satellite
+// The switch in the corner, as on a street map: it shows a small live picture
+// of the OTHER view of this spot, and pressing it swaps to that view.
+async function syncSatellite(release: WorldRelease) {
+  const key = pictureKey(release);
+  if (satelliteFor === key) return;
+  const source = await data.satellite(release, !roofless(release)).catch(() => null);
+  if (wanted !== release || key !== pictureKey(release)) return;
+  satellite.setSource(source); satelliteFor = key;
+  viewLook(); requestDraw();
+}
+function viewLook() {
+  const has = !!current?.release.satellite;
+  viewButton.hidden = !data.hasSatellite();
+  viewButton.setAttribute('aria-pressed', String(satelliteView));
+  viewName.textContent = satelliteView ? 'Street' : 'Satellite';
+  // the way back to the map is always open; satellite needs this update's pictures
+  viewButton.disabled = !satelliteView && !has;
+  viewButton.title = satelliteView ? 'Show the street map' : has ? 'Show satellite pictures' : 'No satellite pictures of this update yet';
+  document.getElementById('world')!.classList.toggle('satellite', satelliteView);
+  // the roofs switch: satellite pictures only, where the update has them without roofs
+  roofsSwitch.hidden = !satelliteView || !current?.release.satelliteRoofless;
+  note.textContent = satelliteView && current && !has ? 'No satellite pictures of this update yet: showing the street map.' : '';
+}
+function setSatelliteView(on: boolean) {
+  if (satelliteView === on) return;
+  satelliteView = on;
+  viewLook(); requestDraw(); saveState();
+}
+viewButton.addEventListener('click', () => setSatelliteView(!satelliteView));
+// the thumbnail: the other view around the middle of the screen, redrawn once
+// the view settles
+let thumbTimer = 0;
+function thumbLater() { clearTimeout(thumbTimer); thumbTimer = window.setTimeout(drawThumb, 120); }
+function drawThumb() {
+  if (!renderer || viewButton.hidden) return;
+  const dpr = devicePixelRatio, size = Math.round(thumb.clientWidth * dpr);
+  if (!size) return;
+  if (thumb.width !== size || thumb.height !== size) { thumb.width = size; thumb.height = size; }
+  const ctx = thumb.getContext('2d')!;
+  // the thumbnail spans a third of the screen's shorter side
+  const span = Math.min(host.clientWidth, host.clientHeight) / 3 / camera.scale;   // map tiles
+  if (!satelliteView) { satellite.drawInto(ctx, { cx: camera.cx, cy: camera.cy, scale: size / span }, size, size); return; }
+  // satellite view: the map's own terrain, drawn for a moment and copied in
+  // the same task (the frame is put back before the browser shows anything)
+  const w = host.clientWidth, h = host.clientHeight;
+  renderer.draw({ ...camera, width: w, height: h, dpr, labels: false, terrain: true });
+  const side = span * camera.scale * dpr, main = renderer.canvas;
+  ctx.fillStyle = '#0e1014'; ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(main, (main.width - side) / 2, (main.height - side) / 2, side, side, 0, 0, size, size);
+  renderer.draw({ ...camera, width: w, height: h, dpr, labels: labels.checked, terrain: !picturesShown() });
+}
 
 // ---------------------------------------------------------------- releases
 function setStatus(text: string, error = false) { status.textContent = text; status.classList.toggle('error', error); }
@@ -114,7 +192,8 @@ async function show(release: WorldRelease): Promise<void> {
       if (!cameraFromUrl) fit();
     } else renderer.setDoc(map.doc);
     if (refit) { refit = false; fit(); }
-    showLoading(null); describe(map); requestDraw(); saveState();
+    showLoading(null); describe(map); viewLook(); requestDraw(); saveState();
+    void syncSatellite(release);
     document.documentElement.dataset.release = release.id;
   } catch (e) {
     if (wanted === release) { showLoading(null); setStatus(`This update could not be loaded: ${(e as Error).message}`, true); }
@@ -207,6 +286,8 @@ function saveState() {
     if (!wanted) return;
     const parts = [`r=${wanted.id}`, `c=${camera.cx.toFixed(2)},${camera.cy.toFixed(2)},${camera.scale.toFixed(4)}`];
     if (!labels.checked) parts.push('l=0');
+    if (satelliteView) parts.push('v=satellite');
+    if (!roofs.checked) parts.push('roofs=0');
     if (document.getElementById('world')!.classList.contains('bare')) parts.push('ui=0');
     history.replaceState(null, '', `#${parts.join('&')}`);
   }, 250);
@@ -214,6 +295,9 @@ function saveState() {
 function readState(): WorldRelease {
   const q = new URLSearchParams(location.hash.slice(1));
   labels.checked = q.get('l') !== '0';
+  satelliteView = q.get('v') === 'satellite';
+  roofs.checked = q.get('roofs') !== '0';
+  viewLook();
   document.getElementById('world')!.classList.toggle('bare', q.get('ui') === '0');
   const c = q.get('c')?.split(',').map(Number);
   if (c?.length === 3 && c.every(Number.isFinite) && c[2] > 0) { [camera.cx, camera.cy, camera.scale] = c; cameraFromUrl = true; }
@@ -287,4 +371,6 @@ addEventListener('hashchange', () => {
   },
   camera,
   get current() { return current?.release.id ?? null; },
+  /** Map or satellite view: set it, or read it with no argument. */
+  satellite(on?: boolean) { if (on !== undefined) setSatelliteView(!!on); return satelliteView; },
 };
