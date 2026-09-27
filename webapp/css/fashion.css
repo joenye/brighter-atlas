@@ -9,6 +9,7 @@ html, body { touch-action: manipulation; overscroll-behavior: none; overflow: hi
 .fashion { height: 100dvh; }
 .of-title { font-weight: 650; color: var(--fg0); margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--line); }
 .of-exp { margin-left: 4px; }
+.of-gamebuild { color: var(--fg2); font-size: 11px; white-space: nowrap; }
 .fashion svg.ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .of-icon, .of-icon-sm, .of-share { display: inline-flex; align-items: center; gap: 6px; }
 .of-icon { padding: 3px 7px; }
@@ -50,7 +51,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-bgdot { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.2); flex: none; }
 /* the viewer's toggles: square icon buttons at the right edge, stacked when both show */
 /* bottom right; the sword is the bottom one, the effect above it */
-.of-controls { position: absolute; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column-reverse; gap: 8px; }
+.of-controls { position: absolute; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 3; display: flex; flex-direction: column; gap: 8px; }   /* from the top: Character, Equipment (phones), weapons, effect, background */
 .of-controls .of-pose, .of-controls .of-bgbtn { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; background: rgba(13, 15, 19, .8); backdrop-filter: blur(6px); }
 /* toggles: off is a dim icon; on is lit (white icon on a lighter glass), never the primary blue */
 .of-controls .of-pose { color: var(--fg2); }
@@ -61,22 +62,6 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-pose:disabled { opacity: .45; }
 .of-controls [hidden] { display: none; }
 .fx-glyph { color: #9fe0b8; }
-.of-loading { position: absolute; bottom: 64px; left: 50%; transform: translateX(-50%); padding: 3px 12px; border-radius: 999px; background: rgba(13, 15, 19, .8); border: 1px solid var(--line); color: var(--fg1); font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
-.of-loading.on { opacity: 1; }
-.of-placeload { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 6px;
-  min-width: 132px; padding: 14px 18px 12px; border-radius: 12px; background: rgba(13, 15, 19, .78); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.35);
-  color: var(--fg1); font-size: 12.5px; pointer-events: none; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
-.of-placeload[hidden] { display: none; }
-.of-placeload svg { width: 44px; height: 44px; transform: rotate(-90deg); }
-.of-placeload circle { fill: none; stroke-width: 3.5; }
-.of-placeload .pl-track { stroke: var(--line); }
-.of-placeload .pl-fill { stroke: var(--accent); stroke-linecap: round; stroke-dasharray: 119.4; stroke-dashoffset: 119.4; transition: stroke-dashoffset .25s; }
-.of-placeload.spin svg { animation: pl-spin 1s linear infinite; }
-.of-placeload.spin .pl-fill { stroke-dashoffset: 84; transition: none; }
-@keyframes pl-spin { to { transform: rotate(270deg); } }
-.pl-name { font-weight: 600; color: var(--fg0); }
-.pl-pct { font-variant-numeric: tabular-nums; color: var(--fg2); min-height: 1em; }
-@media (prefers-reduced-motion: reduce) { .of-placeload.spin svg { animation-duration: 3s; } }
 
 /* ---- equipment ---- */
 .of-right { background: var(--bg1); border-left: 1px solid var(--line); overflow: clip;   /* clip, not hidden: nothing may scroll the panel (it would carry the grab bar away) */ display: flex; flex-direction: column; min-height: 0; }
@@ -148,31 +133,37 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
 .of-short { display: none; }
 .of-only-sm { display: none; }
 
-/* ---- short windows: tighter equipment panel ---- */
+/* ---- desktop: the list keeps the panel's height; the worn item's tier and dye open in its place, as on
+   phones (a one-line summary under the list opens them, its back bar or Escape returns) ---- */
+@media (min-width: 861px) {
+  .details { max-height: none; padding-top: 0; flex: none; border-top: 0; }
+  .wardrobe:not(.adjusting) .details > :not(.details-summary):not(.hint) { display: none; }
+  .wardrobe.adjusting .items, .wardrobe.adjusting .search { display: none; }
+  .wardrobe.adjusting .details { flex: 1; overflow: auto; }
+  .wardrobe.adjusting .details-summary { position: sticky; top: 0; z-index: 1; margin: 0 0 10px; }
+  .details-summary { display: flex; width: 100%; align-items: center; gap: 8px; justify-content: space-between; padding: 9px 12px; margin-top: 2px; border-radius: 8px; border: 1px solid var(--accent-dim); background: var(--sel); color: var(--fg0); font: inherit; text-align: left; cursor: pointer; }
+  .details-summary:hover { border-color: var(--accent); }
+  .ds-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ds-go { color: var(--accent); font-weight: 600; white-space: nowrap; }
+}
+/* ---- short windows: tighter slots ---- */
 @media (max-height: 800px) and (min-width: 861px) {
   .slots { gap: 4px; }
   .slot { gap: 1px; min-height: 46px; padding: 3px 4px; }
   .slot img, .slot-glyph { width: 22px; height: 22px; }
   .slot-name { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-  /* the list keeps the height; the chosen item's grade and dye open in its place, as on phones */
-  .details { max-height: none; padding-top: 0; flex: none; }
-  .wardrobe:not(.adjusting) .details > :not(.details-summary):not(.hint) { display: none; }
-  .wardrobe.adjusting .items, .wardrobe.adjusting .search { display: none; }
-  .wardrobe.adjusting .details { flex: 1; overflow: auto; padding-top: 4px; }
-  .details-summary { display: flex; width: 100%; align-items: center; gap: 8px; justify-content: space-between; padding: 9px 12px; margin-top: 6px; border-radius: 8px; border: 1px solid var(--accent-dim); background: var(--sel); color: var(--fg0); font: inherit; text-align: left; cursor: pointer; }
-  .ds-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ds-go { color: var(--accent); font-weight: 600; white-space: nowrap; }
 }
 
 /* ---- phones ---- */
 @media (max-width: 860px) {
+  :root { --topbar-h: 44px; }
   .of-controls { right: 8px; bottom: 8px; }
   .of-charcard { top: 8px; left: 8px; }
-  #topbar { gap: 6px; padding: 0 8px; padding-top: env(safe-area-inset-top, 0px); height: calc(50px + env(safe-area-inset-top, 0px)); }
+  #topbar { gap: 6px; padding: 0 8px 0 14px; padding-top: env(safe-area-inset-top, 0px);   /* (the left as every page: the brand's pill in the same place) */ height: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); }
   .of-hide-sm, .of-exp { display: none; }
   .of-title { margin-left: 2px; padding-left: 8px; }
   .of-icon-sm span, .of-share span { display: none; }
-  #topbar .btn-mini, #topbar .btn { min-width: 40px; min-height: 36px; justify-content: center; }
+  #topbar .btn-mini, #topbar .btn { min-width: 38px; min-height: 34px; justify-content: center; }
   .fashion svg.ic { width: 17px; height: 17px; }
   main { display: flex; flex-direction: column; }
   .of-viewer { flex: 0 0 auto; height: 40dvh; }
@@ -222,7 +213,6 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
   .of-long { display: none; }
   .of-short { display: inline; }
 }
-}
 @media (pointer: coarse) {
   .segmented button { min-height: 36px; }
   .chips button { min-height: 32px; }
@@ -237,7 +227,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   #topbar .top-right { gap: 4px; }
 }
 /* while designing, the page underneath is out of the way (the designer's glass shows only the room) */
-#app.designing .of-right, #app.designing .of-charcard, #app.designing .of-controls, #app.designing .of-bg, #app.designing 
+#app.designing .of-right, #app.designing .of-charcard, #app.designing .of-controls > :not(.of-mode-btn) { visibility: hidden; }   /* (the column itself is in the designer then: see setDesigning) */
 /* ---- the wardrobe panel folds away (desktop: a rail on its inner edge, as the Brighter Atlas side panels) ---- */
 .of-right { position: relative; }
 .of-grip { position: absolute; left: -15px; top: 50%; transform: translateY(-50%); z-index: 27; }
@@ -339,7 +329,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .creator-keys { margin: auto 0 0; color: var(--fg2); font-size: 12px; }
 @media (max-width: 860px) {
   /* phones: the designer sits under the page's own top bar, which stays as always */
-  .creator { top: calc(50px + env(safe-area-inset-top, 0px)); padding-top: 0; background: var(--bg1); backdrop-filter: none; }
+  .creator { top: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); padding-top: 0; background: var(--bg1); backdrop-filter: none; }
   .creator-box { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; grid-template-rows: minmax(0, 1fr); }
   .creator-bar { display: none; }
   .creator-drawer { border-left: 0; }
@@ -349,7 +339,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .creator-actions .btn:not(.of-sq) { padding-left: 10px; padding-right: 10px; }
   .of-check { min-height: 36px; font-size: 12.5px; gap: 5px; }
   .creator-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--stage-h, 42%) auto minmax(0, 1fr); }
-  .creator-body .creator-grip { display: flex; position: relative; left: auto; top: auto; transform: none; height: 28px; min-height: 28px; box-sizing: border-box; align-items: center; justify-content: center; touch-action: none; cursor: row-resize; border-top: 1px solid var(--line); background: var(--bg1); }
+  .creator-body .creator-grip { display: flex; position: relative; left: auto; top: auto; transform: none; height: 25px; min-height: 25px;   /* (its border and the page grab bar's 24px: the handle stays put between the two) */ box-sizing: border-box; align-items: center; justify-content: center; touch-action: none; cursor: row-resize; border-top: 1px solid var(--line); background: var(--bg1); }
   .creator-panel { border-left: 0; border-top: 1px solid var(--line-soft); padding: 12px 12px calc(16px + env(safe-area-inset-bottom, 0px)); gap: 14px; }
   .creator-keys, .stage-hint { display: none; }
   .cp-parts button { padding: 9px 4px; }
@@ -392,7 +382,9 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .wardrobe:not(.in-slot) .crumbs, .wardrobe:not(.in-slot) .search, .wardrobe:not(.in-slot) .items, .wardrobe:not(.in-slot) .details { display: none; }
   .wardrobe.in-slot .of-wardhead, .wardrobe.in-slot .slots { display: none; }
   /* the master: all eight slots at once, each with what is worn there */
-  .wardrobe:not(.in-slot) .slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 8px; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 0; min-height: 0; }
+  /* the master view scrolls as one (its Random and Unequip row with the slots, under one scrollbar's gutter) */
+  .wardrobe:not(.in-slot) { overflow-y: auto; }
+  .wardrobe:not(.in-slot) .slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 8px; margin: 0; padding: 0; overflow: visible; flex: none; }
   .wardrobe:not(.in-slot) .slot-cell { flex: none; }
   .wardrobe:not(.in-slot) .slot { min-height: 76px; height: 100%; flex-direction: row; justify-content: flex-start; align-items: center; gap: 10px; padding: 8px 28px 8px 8px; text-align: left; }
   .wardrobe:not(.in-slot) .slot-img, .wardrobe:not(.in-slot) .slot-glyph { width: 40px; height: 40px; flex: none; }
@@ -490,3 +482,20 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 }
 @keyframes of-rotate { 0%, 30% { transform: rotate(90deg); } 60%, 100% { transform: rotate(0deg); } }
 @media (prefers-reduced-motion: reduce) { .of-rotate .ic { animation: none; } }
+
+/* no data: a note in place of the page */
+.of-nodata { position: fixed; inset: var(--topbar-h) 0 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 24px; background: var(--bg0); color: var(--fg1); text-align: center; }
+.of-nodata p { margin: 0; }
+.of-nodata p:first-child { color: var(--fg0); font-weight: 600; font-size: 15px; }
+.fashion:has(.of-nodata) #topbar .top-right { visibility: hidden; }
+.of-nodata .btn { margin-top: 12px; }
+
+/* phones: what the drawer shows, the character's design or the equipment, as the column's first two buttons
+   (desktop has the Character button and the dialog) */
+.of-controls .of-mode-btn { display: none; }
+@media (max-width: 860px) {
+  .of-controls .of-mode-btn { display: grid; }
+  /* they replace the drawer's own Character button and the designer's Cancel and Done */
+  .wardrobe .of-designer { display: none !important; }
+  .creator-actions { display: none !important; }
+}

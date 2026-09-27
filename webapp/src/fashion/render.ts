@@ -15,7 +15,7 @@ import {PartSkinnedMesh} from '../viewers/part-skinned-mesh.js';
 import {EffectsPlayer} from '../viewers/world/effects-player.js';
 import {EffectBoneAnimation} from '../viewers/world/effects-animation.js';
 import type {DrawPart} from './compose.js';
-// A failure worth knowing about on a device whose console is out of reach (a phone): sent to a local data server's log
+// A failure worth knowing about on a device whose console is out of reach (a phone): sent to a development server's log
 export function report(what: string, e?: unknown) {
   const err = e as any;
   const text = `${what}: ${err?.name ?? ''} ${err?.message ?? String(e ?? '')}\n${err?.stack ?? ''}\n${location.href} dpr ${devicePixelRatio} ${innerWidth}x${innerHeight}`;

@@ -134,7 +134,7 @@ export class Wardrobe {
     this.crumbs = h('nav', {class: 'crumbs', 'aria-label': 'Equipment'});
     this.root = h('section', {class: 'wardrobe'}, header, this.slotBar, this.crumbs, this.search, this.list, this.details);
     host.append(this.root);
-    attachScrollbar(this.list); attachScrollbar(this.details); attachScrollbar(this.slotBar);
+    attachScrollbar(this.list); attachScrollbar(this.details); attachScrollbar(this.slotBar); attachScrollbar(this.root);   // (the root: the phones' master view scrolls whole)
   }
 
   // details first: their height decides the list's, which decides where the selected row scrolls to
@@ -155,7 +155,13 @@ export class Wardrobe {
     return bits.join(' · ') || (e.kind === 'cosmetic' ? 'Cosmetic' : '');
   }
   /** the worn item's choices, in place of the list (phones: a level of its own) */
-  setAdjusting(on: boolean) { this.root.classList.toggle('adjusting', on); this.renderDetails(); this.renderCrumbs(); this.details.scrollTop = 0; }
+  // (the summary is drawn again: focus stays on it when it had it, or goes to it when asked, as from Escape)
+  setAdjusting(on: boolean, focus = false) {
+    const had = focus || this.details.contains(document.activeElement);
+    this.root.classList.toggle('adjusting', on); this.renderDetails(); this.renderCrumbs(); this.details.scrollTop = 0;
+    const summary = this.details.querySelector<HTMLElement>('.details-summary');
+    if (had && summary?.getClientRects().length) summary.focus({preventScroll: true});
+  }
   hasChoices(e: Entry) { const it = e.members[0].item; return e.members.length > 1 || dyeable(e) || (e.kind === 'cape' && it.variants.length > 1); }
   private renderCrumbs() {
     const w = this.state.equip[this.slot], e = this.entryOf(w);
@@ -337,12 +343,12 @@ export class Wardrobe {
     const e = this.entryOf(w);
     if (!w || !e) {
       this.root.classList.remove('adjusting');
-      this.details.replaceChildren(h('p', {class: 'hint'}, matchMedia('(pointer: fine)').matches ? 'Click an item to try it on; ↑ ↓ step through the list.' : 'Tap an item to try it on.'));
+      this.details.replaceChildren(h('p', {class: 'hint'}, !matchMedia('(pointer: coarse)').matches ? 'Click an item to try it on; ↑ ↓ step through the list.' : 'Tap an item to try it on.'));
       return;
     }
     const it = e.members.find(m => m.item.id === w.item)!.item;
     const v = it.variants[w.variant] ?? it.variants[0];
-    // phones: a one-line summary that opens the full controls in place of the list
+    // a one-line summary that opens the full controls in place of the list (on phones the worn row's Customise does)
     const bits = [e.members.length > 1 ? (e.kind === 'cosmetic' ? clean(v.name).split(' ')[0] : e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant))?.label) : null,
       e.kind === 'cape' && it.variants.length > 1 ? v.grade : null,
       v.colourable && it.dyeable ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null].filter(Boolean);
@@ -351,7 +357,7 @@ export class Wardrobe {
     const can = [e.members.length > 1 ? (e.kind === 'cosmetic' ? 'Colour' : 'Tier') : '', e.kind === 'cape' && it.variants.length > 1 ? 'faction' : '', dyeable(e) ? 'dye' : ''].filter(Boolean);
     const go = can.length ? `${can.join(' & ').replace(/^./, c => c.toUpperCase())} ›` : 'Details ›';
     const summary = h('button', {class: 'details-summary', 'aria-expanded': String(adjusting), onclick: () => this.setAdjusting(!this.root.classList.contains('adjusting'))},
-      adjusting ? h('span', {class: 'ds-text'}, '‹ ', h('b', {}, e.name), ' · back to the list') : h('span', {class: 'ds-text'}, h('b', {}, e.name), bits.length ? ` · ${bits.join(' · ')}` : ''),
+      adjusting ? h('span', {class: 'ds-text'}, '‹ Back to the list') : h('span', {class: 'ds-text'}, h('b', {}, e.name), bits.length ? ` · ${bits.join(' · ')}` : ''),
       adjusting ? null : h('span', {class: 'ds-go'}, go));
     const kids: Node[] = [summary, h('div', {class: 'detail-head'},
       (() => { const mm = e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant)); const m = mm ? {...mm, variant: w.variant} : e.members[0]; return this.picture(e.slot, m, 'thumb-lg', ...this.colourFor(m, w)); })(),
@@ -444,7 +450,7 @@ function tintedIcon(icon: number, hex: string): Promise<string | null> {
   if (!p) {
     p = (async () => {
       const mr = await fetch(at(`iconmask/${icon}`));
-      // (none: 204 from a local data server, an empty file on the site)
+      // (none: 204 from a development server, an empty file on the site)
       const mb = mr.status === 200 ? await mr.blob() : null;
       if (!mb?.size) return null;
       const [pic, mask] = await Promise.all([fetch(at(`icon/${icon}`)).then(r => r.blob()).then(b => createImageBitmap(b)), createImageBitmap(mb)]).catch(() => [null, null]);

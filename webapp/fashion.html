@@ -15,18 +15,18 @@
 <link rel="preload" href="fashion-data/latest.json" as="fetch" crossorigin>
 <link rel="stylesheet" href="css/app.css">
 <link rel="stylesheet" href="css/fashion.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231b2130'/%3E%3Cpath d='M4 11.5 8 3l4 8.5-4-2z' fill='%2378b7ff'/%3E%3C/svg%3E">
+<link rel="icon" href="brand/favicon.svg" type="image/svg+xml">
 </head>
 <body>
 <div id="app" class="fashion">
   <header id="topbar">
     <div class="brand">
       <a class="brand-link" data-tool="fashion" href="fashion" title="Brighter Fashion: start again">
-        <span class="brand-mark">◮</span>
+        <img class="brand-mark" src="brand/mark.svg" alt="" width="18" height="18">
         <span class="brand-name">Brighter</span>
         <span class="brand-sub">fashion</span>
       </a>
-      <span id="build" class="build-badge mono of-exp" title="The game update these clothes and faces come from"></span>
+      <span id="game-build" class="of-gamebuild mono of-exp" title="The game update these clothes and faces come from"></span>
     </div>
     <div class="top-right">
       <button id="undo" class="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9"/></svg></button>

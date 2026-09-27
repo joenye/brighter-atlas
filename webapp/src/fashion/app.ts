@@ -8,16 +8,21 @@ import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
 import {Preview, FRAMES, prefetch, Thumbnailer, report} from './render.js';
 import {Wardrobe, h, icon} from './wardrobe.js';
 import {attachScrollbar} from './scrollbar.js';
-import {linkTools} from '../sites.js';
-import {attachToolSwitch} from '../tool-switch.js';
+import {initTopbar} from '../topbar.js';
 
-// (failures on a phone under test, whose console is out of reach, go to a local data server's log)
+// (failures on a phone under test, whose console is out of reach, go to a development server's log)
 addEventListener('error', e => report('page error', e.error ?? e.message));
 addEventListener('unhandledrejection', e => report('unhandled rejection', e.reason));
 
-linkTools();
-attachToolSwitch('fashion');
-const pack = await fetch(at('pack.json')).then(r => r.json());
+initTopbar('fashion');
+// without its data (not published yet, or the connection gone) the page says so rather than staying blank
+const pack = await fetch(at('pack.json')).then(r => r.ok && /json/.test(r.headers.get('content-type') ?? '') ? r.json() : null).catch(() => null);
+if (!pack) {
+  document.getElementById('app')!.append(h('div', {class: 'of-nodata', role: 'alert'},
+    h('p', {}, 'Brighter Fashion could not load its data.'), h('p', {}, 'Check your connection and try again in a few minutes.'),
+    h('button', {class: 'btn primary', onclick: () => location.reload()}, 'Try again')));
+  throw Error('no pack');
+}
 const index = makeIndex(pack);
 const SEG_STYLE: Record<string, StyleCat | null> = {hair: 'hair', face: 'face', eyes: null, jaw: 'jaw', torso: 'torso', legs: 'legs', feet: 'feet', skin: null};
 const SEG_COLOUR: Record<string, ColourCat | null> = {hair: 'hair', face: null, eyes: 'eyes', jaw: null, torso: 'torso', legs: 'legs', feet: 'feet', skin: 'skin'};
@@ -25,7 +30,7 @@ const RELAXED = pack.creator.idleClip;   // the resting clip (it hides held item
 // the combat-ready idle most weapons share (a shield alone stands in it too)
 const DEFAULT_STANCE: number | null = (() => { const n = new Map<number, number>(); for (const i of pack.items) if (i.stance != null) n.set(i.stance, (n.get(i.stance) ?? 0) + 1); return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null; })();
 const app = document.getElementById('app')!;
-const store = {get: (k: string) => { try { return localStorage.getItem(`fashion.${k}`) ?? localStorage.getItem(`fashion.${k}`); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(`fashion.${k}`, v); } catch {} }};
+const store = {get: (k: string) => { try { return localStorage.getItem(`fashion.${k}`); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(`fashion.${k}`, v); } catch {} }};
 
 // ---- state: in the address (so any link reproduces it), remembered locally, with undo ----
 const DEFAULT: State = {gender: 'male', style: {hair: 7, face: 0, jaw: 8, torso: 9, legs: 1, feet: 1}, colour: {hair: 0, eyes: 12, torso: 2, legs: 25, feet: 20, skin: 5}, equip: {}};
@@ -75,14 +80,13 @@ let showOutfitInDesigner = false;
 const main = document.querySelector('main')!;
 const toastEl = document.getElementById('toast')!;
 const toast = (msg: string) => { toastEl.textContent = msg; toastEl.classList.add('show'); clearTimeout((toastEl as any)._t); (toastEl as any)._t = setTimeout(() => toastEl.classList.remove('show'), 2200); };
-(document.getElementById('build') as HTMLElement).textContent = `build ${pack.build.date}${pack.build.version ? ` (v${pack.build.version})` : ''}`;
+(document.getElementById('game-build') as HTMLElement).textContent = `game update ${pack.build.date}${pack.build.version ? ` (v${pack.build.version})` : ''}`;
 
 // the viewer
 const canvas = h('canvas', {tabindex: '0', 'aria-label': 'Your character. Drag to turn, scroll or pinch to zoom, arrow keys turn.'}) as HTMLCanvasElement;
-const loading = h('div', {class: 'of-loading'}, 'Loading…');
 // a place loading: a ring that fills (spins while the load cannot say how far it is), its name and how far;
 // it never takes a tap, so another place (or a colour) can be picked meanwhile
-const placeLoad = h('div', {class: 'of-placeload', hidden: true, role: 'status'});
+const placeLoad = h('div', {class: 'of-placeload load-card', hidden: true, role: 'status'});
 placeLoad.innerHTML = '<svg viewBox="0 0 44 44" aria-hidden="true"><circle class="pl-track" cx="22" cy="22" r="19"/><circle class="pl-fill" cx="22" cy="22" r="19"/></svg><span class="pl-name"></span><span class="pl-pct"></span>';
 const plFill = placeLoad.querySelector('.pl-fill') as SVGCircleElement, plPct = placeLoad.querySelector('.pl-pct')!;
 // (the character's first appearance shows it too, spinning, until the figure first draws)
@@ -93,6 +97,17 @@ function showPlaceLoad(name: string | null) {
   if (!name) return;
   placeLoad.querySelector('.pl-name')!.textContent = `Loading ${name}`;
   placeLoad.classList.add('spin'); plPct.textContent = ''; plFill.style.strokeDashoffset = '';
+}
+// the one load card: a place's (with its progress) while one loads; else the character's first look; else an
+// outfit whose parts take more than a moment (a quick change never flashes it)
+let loadTimer = 0;
+function syncLoadCard() {
+  clearTimeout(loadTimer);
+  viewerEl.dataset.loading = partsLoading ? '1' : '';   // (for tests and scripts: the outfit's parts are on their way)
+  if (roomLoading) return;
+  if (!partsLoading) { showPlaceLoad(null); return; }
+  if (firstLook) { showPlaceLoad('character'); return; }
+  loadTimer = window.setTimeout(() => { if (partsLoading && !roomLoading) showPlaceLoad('outfit'); }, 450);
 }
 function placeProgress(f: number) {
   placeLoad.classList.remove('spin');
@@ -146,7 +161,7 @@ bgPop.addEventListener('keydown', e => {
 });
 const closeBg = (refocus: boolean) => { bgPop.hidden = true; bgBtn.setAttribute('aria-expanded', 'false'); if (refocus) bgBtn.focus(); };
 const bgItem = (b: typeof BACKDROPS[number]) => h('button', {role: 'menuitemradio', 'aria-checked': 'false', 'data-bg': b.id, onclick: () => { setBackdrop(b); closeBg(true); }}, h('span', {class: `of-bgdot${b.room ? ' place' : ''}`, style: `background:${cssOf(b)}`}), b.name);
-bgPop.append(h('div', {class: 'of-bghead'}, 'Colours'), ...BACKDROPS.filter(b => !b.room).map(bgItem), h('div', {class: 'of-bghead'}, 'Places in the game'), ...BACKDROPS.filter(b => b.room).map(bgItem));
+bgPop.append(h('div', {class: 'of-bghead'}, 'Colours'), ...BACKDROPS.filter(b => !b.room).map(bgItem), h('div', {class: 'of-bghead'}, '3D Scenes'), ...BACKDROPS.filter(b => b.room).map(bgItem));
 // the disc under the character
 const FLOORS = [['ring', 'Ring and shadow'], ['shadow', 'Shadow only'], ['none', 'None']] as const;
 const floorItems = FLOORS.map(([id, name]) => h('button', {role: 'menuitemradio', 'aria-checked': 'false', 'data-floor': id,
@@ -161,10 +176,20 @@ document.addEventListener('click', e => { if (!bgPop.hidden && !bgPop.contains(e
 // keyboard: Tab out of the menu closes it. (Only when focus lands somewhere: a tap on iOS takes focus from
 // the menu without giving it to anything, and closing then would swallow the tap on the item.)
 bgPop.addEventListener('focusout', e => { const to = e.relatedTarget as Node | null; if (to && !bgPop.contains(to) && to !== bgBtn) closeBg(false); });
-const viewerEl = h('section', {class: 'of-viewer'}, canvas, loading, placeLoad, charCard,
+// the column of round buttons on the view, from the top: (phones) what the drawer shows, the character's design
+// or the equipment; weapons out; the outfit's effect (when it has one); the background
+const modeBtn = (designing: boolean) => h('button', {class: 'btn of-pose of-mode-btn', 'aria-pressed': 'false',
+  title: designing ? 'Design your character: face, body and hair' : 'Equipment: what your character wears',
+  'aria-label': designing ? 'Character' : 'Equipment',
+  onclick: () => { if (designing) { if (creatorEl.hidden) openCreator(); } else if (!creatorEl.hidden) closeCreator(); else if (panelCollapsed) setPanelCollapsed(false); }},
+  icon(designing ? 'mask' : 'torso'));
+const charModeBtn = modeBtn(true), equipModeBtn = modeBtn(false);
+const controls = h('div', {class: 'of-controls'}, charModeBtn, equipModeBtn, poseBtn, fxBtn, h('div', {class: 'of-bg'}, bgBtn, bgPop));
+equipModeBtn.classList.add('active'); equipModeBtn.setAttribute('aria-pressed', 'true');
+const viewerEl = h('section', {class: 'of-viewer'}, canvas, placeLoad, charCard,
   // the viewer's toggles, stacked at its side: weapons out, and the outfit's effect when it has one
   // bottom right, from the bottom: weapons out, the outfit's effect (when it has one), the background
-  h('div', {class: 'of-controls'}, poseBtn, fxBtn, h('div', {class: 'of-bg'}, bgBtn, bgPop)));
+  controls);
 // `remember`: the viewer's own pick (a shared link's place shows for the visit, not saved as theirs)
 function setBackdrop(b: typeof BACKDROPS[number], remember = true) {
   // a place's sky is one flat colour, the room's fog fading into it (a gradient bands behind a room)
@@ -175,7 +200,7 @@ function setBackdrop(b: typeof BACKDROPS[number], remember = true) {
   if (remember) store.set('bg', b.id);
   if (!viewer) return;
   history.replaceState(null, '', addressOf(encode(state)));
-  const done = () => { if (backdrop === b) { roomLoading = false; showPlaceLoad(null); } };
+  const done = () => { if (backdrop === b) { roomLoading = false; syncLoadCard(); } };
   roomLoading = !!b.room; showPlaceLoad(b.room ? b.name : null);
   void viewer.setRoom(b.room ?? null).then(done, () => { done(); toast(`${b.name} couldn’t be loaded`); setBackdrop(BACKDROPS[0]); });
 }
@@ -245,8 +270,8 @@ viewer.pitch = 0.07;
 viewer.frameTo(frameOf('full'), true);
 viewer.onLoading = n => {
   partsLoading = !!n;
-  if (!n && firstLook) { firstLook = false; if (!roomLoading) showPlaceLoad(null); }
-  loading.classList.toggle('on', partsLoading && !roomLoading && !firstLook);
+  if (!n && firstLook) firstLook = false;
+  syncLoadCard();
 };
 viewer.onRoomProgress = f => { if (roomLoading) placeProgress(f); };
 // turning like a game's character screen: drag with inertia; wheel or pinch zooms; double-click resets
@@ -385,15 +410,29 @@ function openCreator() {
   creatorSnapshot = JSON.stringify(state);
   // phones: the designer's divider opens where the page's is, so nothing jumps
   if (phone() && !panelCollapsed && main.clientHeight) { cSplit = viewerEl.getBoundingClientRect().height / main.clientHeight; applyCSplit(); }
-  app.classList.add('designing');
+  setDesigning(true);
   holdUndo = true;
   creatorEl.hidden = false; viewer.running = false; creatorPreview.running = true;
+  // (the designer's divider exactly where the page's is: measured, as the two frames differ by their borders)
+  if (phone() && !panelCollapsed) {
+    const body = (creatorEl.querySelector('.creator-body') as HTMLElement).getBoundingClientRect();
+    const stage = viewerEl.getBoundingClientRect().bottom - body.top;
+    if (body.height) { cSplit = stage / body.height; (creatorEl.querySelector('.creator-body') as HTMLElement).style.setProperty('--stage-h', `${stage}px`); }
+  }
   creatorReady ??= creatorPreview.init(pack.skeleton, RELAXED);
   frameCreator(true);
   refresh();
   (creatorEl.querySelector('.creator-actions .btn-cta') as HTMLElement)?.focus({preventScroll: true});
 }
-function hideCreator() { app.classList.remove('designing'); creatorEl.hidden = true; viewer.running = true; creatorPreview.running = false; canvas.focus({preventScroll: true}); }
+// (phones: the view's column of buttons goes into the designer's view, so Character and Equipment stay put; the
+// buttons with nothing to do there keep their places, unseen)
+function setDesigning(on: boolean) {
+  app.classList.toggle('designing', on);
+  (on ? creatorEl.querySelector('.creator-stage')! : viewerEl).append(controls);
+  charModeBtn.classList.toggle('active', on); charModeBtn.setAttribute('aria-pressed', String(on));
+  equipModeBtn.classList.toggle('active', !on); equipModeBtn.setAttribute('aria-pressed', String(!on));
+}
+function hideCreator() { setDesigning(false); creatorEl.hidden = true; viewer.running = true; creatorPreview.running = false; canvas.focus({preventScroll: true}); }
 function closeCreator() { holdUndo = false; commit(); hideCreator(); refresh(); }
 // Cancel drops the design, but keeps it one Redo away so a careful face is never lost to a stray Esc
 function cancelCreator() {
@@ -538,7 +577,8 @@ document.getElementById('shot')!.addEventListener('click', () => {
     g.drawImage(shot, sx, sy, sw, sh, 0, 0, sw, sh);
     // the picture page shows it and lets the mark be turned off (remembered)
     const plain = document.createElement('canvas'); plain.width = c.width; plain.height = c.height; plain.getContext('2d')!.drawImage(c, 0, 0);
-    const compose = (withMark: boolean) => new Promise<Blob | null>(res => {
+    const compose = (withMark: boolean) => new Promise<Blob | null>(async res => {
+      if (withMark) await markImage.decode().catch(() => {});
       const out = document.createElement('canvas'); out.width = plain.width; out.height = plain.height;
       const og = out.getContext('2d')!; og.drawImage(plain, 0, 0);
       if (withMark) watermark(og, out.width, out.height, mark, !backdrop.stops.length || backdrop.id === 'sand' || backdrop.id === 'studio');
@@ -548,21 +588,26 @@ document.getElementById('shot')!.addEventListener('click', () => {
   };
   shot.src = (creatorEl.hidden ? viewer : creatorPreview).snapshot(1080);
 });
-// "Made with BrighterAtlas.com", small in the bottom-right corner (the character stands in the middle)
+// "Made with BrighterAtlas.com" after the site's mark (the Obelisk and its A), small in the bottom-right corner
+// (the character stands in the middle)
+const markImage = new Image();
+markImage.src = 'brand/mark.svg';
 function watermark(g: CanvasRenderingContext2D, w: number, hgt: number, size: number, onLight: boolean) {
   const pad = Math.round(size * 0.9);
   g.save();
   g.font = `500 ${size}px -apple-system, "Segoe UI", system-ui, Roboto, sans-serif`;
   g.textAlign = 'right'; g.textBaseline = 'alphabetic';
   const text = 'Made with BrighterAtlas.com', x = w - pad, y = hgt - pad;
-  const tw = g.measureText(text).width, mw = size * 0.72, gap = size * 0.4;
+  const tw = g.measureText(text).width, gap = size * 0.4;
   g.shadowColor = onLight ? 'rgba(255,255,255,.5)' : 'rgba(0,0,0,.55)'; g.shadowBlur = size * 0.3;
   g.fillStyle = onLight ? 'rgba(20,24,32,.6)' : 'rgba(255,255,255,.55)';
   g.fillText(text, x, y);
-  // the Atlas mark (the site's triangle) before the words
-  const mx = x - tw - gap - mw, my = y - size * 0.72;
-  g.beginPath(); g.moveTo(mx + mw / 2, my); g.lineTo(mx + mw, my + size * 0.72); g.lineTo(mx, my + size * 0.72); g.closePath();
-  g.fillStyle = onLight ? 'rgba(61,110,168,.75)' : 'rgba(120,183,255,.7)'; g.fill();
+  // the mark before the words, a little taller than the letters, standing on their line
+  if (markImage.complete && markImage.naturalWidth) {
+    const ms = size * 1.5;
+    g.shadowBlur = 0; g.globalAlpha = 0.9;
+    g.drawImage(markImage, x - tw - gap - ms, y - ms * 0.92, ms, ms);
+  }
   g.restore();
 }
 // Saving a picture: shown on a page of its own, with the BrighterAtlas.com mark as an option. Phones: the share
@@ -572,7 +617,10 @@ const touch = matchMedia('(pointer: coarse)').matches;
 async function showPicture(compose: (withMark: boolean) => Promise<Blob | null>) {
   let withMark = store.get('watermark') !== '0', blob = await compose(withMark), url = blob ? URL.createObjectURL(blob) : '';
   const img = h('img', {src: url, alt: 'Your look'}) as HTMLImageElement;
-  const close = () => { sheet.remove(); if (url) URL.revokeObjectURL(url); };
+  // (Escape closes it wherever focus is, and focus goes back to what opened it)
+  const opener = document.activeElement as HTMLElement | null;
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+  const close = () => { sheet.remove(); document.removeEventListener('keydown', onKey, true); if (url) URL.revokeObjectURL(url); opener?.focus?.(); };
   const file = () => new File([blob!], 'brighter-atlas-fashion.png', {type: 'image/png'});
   const markToggle = h('label', {class: 'of-check'}, h('input', {type: 'checkbox', checked: withMark, onchange: async (e: Event) => {
     withMark = (e.target as HTMLInputElement).checked; store.set('watermark', withMark ? '1' : '0');
@@ -585,12 +633,14 @@ async function showPicture(compose: (withMark: boolean) => Promise<Blob | null>)
     if (canShare) { try { await navigator.share({files: [file()], title: 'My Brighter Shores look'}); } catch {} return; }
     const a = document.createElement('a'); a.href = url; a.download = file().name; document.body.append(a); a.click(); a.remove();
   }}, canShare ? 'Save or share' : 'Download');
-  const sheet = h('div', {class: 'of-picture', role: 'dialog', 'aria-label': 'Your picture', onclick: (e: Event) => { if (e.target === sheet) close(); }},
+  const closeBtn = h('button', {class: 'btn', onclick: close}, 'Close');
+  const sheet = h('div', {class: 'of-picture', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Your picture', onclick: (e: Event) => { if (e.target === sheet) close(); }},
     img,
     touch && !canShare ? h('p', {}, 'Press and hold the picture to save it to Photos.') : null,
-    h('div', {class: 'pic-actions'}, markToggle, h('span', {class: 'creator-gap'}), h('button', {class: 'btn', onclick: close}, 'Close'), touch && !canShare ? null : save));
-  sheet.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+    h('div', {class: 'pic-actions'}, markToggle, h('span', {class: 'creator-gap'}), closeBtn, touch && !canShare ? null : save));
+  document.addEventListener('keydown', onKey, true);
   app.append(sheet);
+  (save.isConnected ? save : closeBtn).focus();
 }
 window.addEventListener('keydown', e => {
   const typing = (e.target as HTMLElement)?.matches?.('input, textarea');
@@ -611,7 +661,12 @@ window.addEventListener('keydown', e => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
   else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y' && !typing) { e.preventDefault(); redo(); }
-  else if (e.key === 'Escape') bgPop.hidden = true;
+  // Escape closes what is open, the topmost first: the looks, the background menu, then the worn item's choices
+  else if (e.key === 'Escape') {
+    if (!looksEl.hidden) { closeLooks(); shareBtn.focus(); }
+    else if (!bgPop.hidden) { bgPop.hidden = true; bgBtn.setAttribute('aria-expanded', 'false'); }
+    else if (wardrobe.root.classList.contains('adjusting')) wardrobe.setAdjusting(false, true);
+  }
 });
 // a link pasted into this tab: like opening it fresh
 window.addEventListener('hashchange', () => { const s = decode(hashLook()); const pl = BACKDROPS.find(b => b.room && b.id === hashPlace()); if (pl && pl !== backdrop) setBackdrop(pl, false); if (s && encode(s) !== encode(state)) showShared(s); });
@@ -687,7 +742,7 @@ function refresh() {
   // a shared look isn't yours until you keep it, nor a design until Done
   if (!holdUndo) store.set('look', code);   // (a design is saved on Done)
   void viewer.apply(parts);
-  // worn-item effects: the torso appearance against the client's lists
+  // worn-item effects: the torso appearance against the pack's worn-effect lists
   const torso = state.equip.torso ? index.items.get(state.equip.torso.item) : null;
   const tv = torso?.variants[state.equip.torso!.variant];
   const wornId = tv?.[state.gender]?.worn;
