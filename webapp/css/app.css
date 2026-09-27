@@ -26,6 +26,7 @@
   --mono: "SF Mono", ui-monospace, Menlo, Consolas, "BA UI Symbols", monospace;
   --sans: -apple-system, "Segoe UI", system-ui, Roboto, "BA UI Symbols", sans-serif;
   --radius: 8px;
+  --topbar-h: 40px;      /* every page's top bar (phones: Fashion's is taller, for its buttons) */
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -47,23 +48,29 @@ button { font: inherit; color: inherit; }
 /* ---------- top bar ---------- */
 #topbar {
   display: flex; align-items: center; gap: 16px;
-  height: 46px; padding: 0 14px;
+  height: var(--topbar-h); padding: 0 14px;
   background: linear-gradient(180deg, #171b22, #12151b);
   border-bottom: 1px solid var(--line);
   flex: none; z-index: 30;
 }
-.brand { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.brand { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .brand-link { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; }
 .brand-link:hover .brand-name { color: var(--accent); }
-.brand-mark { color: var(--accent); font-size: 15px; }
+.brand-mark { width: 18px; height: 18px; flex: none; align-self: center; }   /* brand/mark.svg: the Obelisk and its A */
 .brand-name { font-weight: 650; letter-spacing: .2px; }
 .brand-sub { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; }
-/* the tool switch beside the brand (src/tool-switch.ts): a chevron that opens the Brighter tools */
+/* the tool switch (src/tool-switch.ts): the brand itself, mark to chevron, in one faint pill that opens the tools */
 .tool-switch { position: relative; align-self: center; display: inline-flex; }
-.tool-switch-btn { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-left: -4px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--fg2); cursor: pointer; }
-.tool-switch-btn:hover, .tool-switch-btn[aria-expanded="true"] { color: var(--fg0); background: var(--bg3); border-color: var(--line); }
-.tool-switch-btn svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.tool-switch-menu { position: absolute; top: calc(100% + 8px); left: -8px; z-index: 90; min-width: 250px; display: flex; flex-direction: column; gap: 2px; padding: 6px;
+.tool-switch-btn { display: inline-flex; align-items: center; gap: 6px; margin-left: -8px; padding: 2px 7px 2px 8px; border: 1px solid var(--line-soft); border-radius: 999px;
+  background: rgba(255, 255, 255, .025); color: inherit; font: inherit; cursor: pointer; }
+.tool-switch-btn .brand-link { align-items: center; }
+.tool-switch-btn:hover, .tool-switch-btn[aria-expanded="true"] { background: var(--bg3); border-color: var(--line); }
+.tool-switch-btn:hover .brand-name { color: var(--fg0); }
+.tool-switch-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tool-switch-chevron { display: inline-grid; place-items: center; color: var(--fg2); }
+.tool-switch-btn:hover .tool-switch-chevron, .tool-switch-btn[aria-expanded="true"] .tool-switch-chevron { color: var(--fg0); }
+.tool-switch-chevron svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tool-switch-menu { position: absolute; top: calc(100% + 6px); left: -8px; z-index: 90; min-width: 250px; display: flex; flex-direction: column; gap: 2px; padding: 6px;
   border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0, 0, 0, .55); white-space: normal; }
 .tool-switch-menu[hidden] { display: none; }
 .tool-switch-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 7px; color: var(--fg0); text-decoration: none; }
@@ -72,9 +79,16 @@ button { font: inherit; color: inherit; }
 .tool-switch-name .brand-name { font-weight: 650; }
 .tool-switch-name .brand-sub { margin-left: 3px; color: var(--accent); }
 .tool-switch-line { font-size: 12px; color: var(--fg2); }
-.tool-switch-home { margin-top: 2px; padding: 8px 10px; border-top: 1px solid var(--line-soft); border-radius: 0 0 7px 7px; color: var(--accent); font-size: 12.5px; text-decoration: none; }
+.tool-switch-rule { height: 1px; margin: 4px 6px; background: var(--line); }
+/* Home and the page's own entries: plain rows, as clear as the tools */
+.tool-switch-home { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 0; border-radius: 7px; background: none; color: var(--fg0); font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
+.tool-switch-home.on { background: var(--sel); }
+.tool-switch-home svg { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--fg1); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.tool-switch-extra { font-weight: 500; color: var(--fg1); }
+.tool-switch-news { margin-top: 2px; padding: 7px 10px 6px; border: 0; border-top: 1px solid var(--line-soft); border-radius: 0 0 7px 7px; background: none; text-align: left; font: 11.5px var(--mono); color: var(--fg2); cursor: pointer; }
+.tool-switch-news:hover, .tool-switch-news:focus-visible { background: var(--bg3); color: var(--accent); outline: none; }
 .build-badge {
-  align-self: baseline;   /* sit on the text baseline, aligned with the "ATLAS" wordmark */
+  align-self: center;   /* beside the brand's pill, on its middle */
   font-size: 11px; white-space: nowrap;
   color: var(--fg2); cursor: pointer;
 }
@@ -134,8 +148,6 @@ button { font: inherit; color: inherit; }
    icon up with the label and lights up on hover, no loud solid fill */
 .top-social { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
 /* the world map page (no game files needed) */
-.top-world { display: inline-flex; align-items: center; text-decoration: none; }
-.top-world:hover { background: var(--bg3); border-color: var(--accent); }
 .top-social svg { display: block; }
 .top-social:hover { background: var(--bg3); border-color: var(--accent); }
 .top-social.discord:hover { color: #5865f2; border-color: #5865f2; }
@@ -1127,7 +1139,7 @@ html.mgate-on #app { display: none; }
 .mgate-inner { max-width: 560px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; }
 /* brand: the cloned topbar lockup, scaled up for the greeting */
 .mgate-brand { display: flex; justify-content: center; padding: 4vh 0 12px; }
-.mgate-brand .brand-mark { font-size: 30px; }
+.mgate-brand .brand-mark { width: 34px; height: 34px; }
 .mgate-brand .brand-name { font-size: 24px; }
 .mgate-brand .brand-sub { font-size: 14px; }
 .mgate-title { margin: 2px 0 10px; font-size: 22px; font-weight: 650; text-align: center; }
@@ -1144,6 +1156,7 @@ html.mgate-on #app { display: none; }
 .mgate .mgate-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mgate .mgate-action svg { width: 20px; height: 20px; flex: none; }
 .mgate-action-ico { flex: none; width: 20px; text-align: center; color: var(--accent); font-size: 18px; font-weight: 700; }
+img.mgate-action-ico { height: 20px; }
 /* short landscape phones: the three cards fit side by side */
 @media (orientation: landscape) and (max-height: 480px) {
   .mgate-actions { flex-direction: row; }
@@ -1241,3 +1254,20 @@ html.mgate-on #app { display: none; }
 .card-preview { display: flex; justify-content: center; margin: 8px 0; }
 .card-preview canvas { max-width: 100%; height: auto; border-radius: 6px; }
 .card-preview canvas.checker { background: repeating-conic-gradient(#2a2d33 0% 25%, #1f2227 0% 50%) 50% / 16px 16px; }
+
+/* a load in progress, the same on every page (Fashion's places, a map update): a ring that fills, or spins
+   while the load cannot say how far it is, the name, and how far. It never takes a tap. */
+.load-card { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  min-width: 132px; padding: 14px 18px 12px; border-radius: 12px; background: rgba(13, 15, 19, .78); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.35);
+  color: var(--fg1); font-size: 12.5px; pointer-events: none; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.load-card[hidden] { display: none; }
+.load-card svg { width: 44px; height: 44px; transform: rotate(-90deg); }
+.load-card circle { fill: none; stroke-width: 3.5; }
+.load-card .pl-track { stroke: var(--line); }
+.load-card .pl-fill { stroke: var(--accent); stroke-linecap: round; stroke-dasharray: 119.4; stroke-dashoffset: 119.4; transition: stroke-dashoffset .25s; }
+.load-card.spin svg { animation: load-card-spin 1s linear infinite; }
+.load-card.spin .pl-fill { stroke-dashoffset: 84; transition: none; }
+@keyframes load-card-spin { to { transform: rotate(270deg); } }
+.pl-name { font-weight: 600; color: var(--fg0); }
+.pl-pct { font-variant-numeric: tabular-nums; color: var(--fg2); min-height: 1em; }
+@media (prefers-reduced-motion: reduce) { .load-card.spin svg { animation-duration: 3s; } }

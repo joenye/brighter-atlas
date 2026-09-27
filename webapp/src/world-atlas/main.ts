@@ -11,18 +11,15 @@ import { attachPanZoom, fitCamera, type MapCamera } from '../viewers/maps/pan-zo
 import { createWorldData, type WorldMap, type WorldRelease } from './data.js';
 import { SealedLayer } from './sealed.js';
 import { SatelliteLayer } from './satellite.js';
-import { openWhatsNew, maybeAutoShowWhatsNew } from '../changelog.js';
-import { buildVersionLabel, buildInfoReady } from '../build-info.js';
 import { gameVersion } from '../game-build.js';
-import { toolUrl, linkTools } from '../sites.js';
-import { attachToolSwitch } from '../tool-switch.js';
+import { toolUrl } from '../sites.js';
+import { initTopbar } from '../topbar.js';
 
 // Links from before the site opened on the world map (#/mesh/3, ?data=...)
 // belong to the viewer (Brighter Data): send them on whole.
 const viewerLink = location.hash.startsWith('#/') || new URLSearchParams(location.search).has('data');
 if (viewerLink) location.replace(toolUrl('data', `${location.search}${location.hash}`));
-linkTools();
-attachToolSwitch('maps');
+else initTopbar('maps', { onCurrent: () => home() });
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('world-canvas'), host = canvas.parentElement!;
@@ -111,7 +108,8 @@ async function syncSatellite(release: WorldRelease) {
   if (satelliteFor === key) return;
   const source = await data.satellite(release, !roofless(release)).catch(() => null);
   if (wanted !== release || key !== pictureKey(release)) return;
-  satellite.setSource(source); satelliteFor = key;
+  // (none, or its index failed to load: asked again the next time this update shows)
+  satellite.setSource(source); satelliteFor = source ? key : null;
   viewLook(); requestDraw();
 }
 function viewLook() {
@@ -161,9 +159,10 @@ function setStatus(text: string, error = false) { status.textContent = text; sta
 // A release still downloading: the map shown now stays, blurred, under a
 // clear notice (the first map has nothing under it yet).
 const loadingBox = $('world-loading'), loadingText = $('world-loading-text');
-function showLoading(text: string | null) {
-  loadingBox.hidden = !text; host.classList.toggle('loading', !!text && !!renderer);
-  if (text) loadingText.textContent = text;
+// the load card, as Fashion's: "Loading the map" and the update on its way
+function showLoading(update: string | null) {
+  loadingBox.hidden = !update; host.classList.toggle('loading', !!update && !!renderer);
+  if (update) { loadingText.textContent = 'Loading the map'; loadingBox.querySelector('.pl-pct')!.textContent = update; }
 }
 // nothing to say when all is well (the map explains itself); tests and
 // scripts read the counts from the page's data attributes
@@ -182,7 +181,7 @@ async function show(release: WorldRelease): Promise<void> {
   const i = releases.indexOf(release);
   prev.disabled = i <= 0; next.disabled = i >= releases.length - 1;
   const loading = !data.ready(release);
-  if (loading) showLoading(`Loading ${releaseText(release)}...`);
+  if (loading) showLoading(releaseText(release));
   try {
     const map = await data.map(release);
     if (wanted !== release) return;
@@ -313,26 +312,14 @@ function readState(): WorldRelease {
   return releases.at(-1)!;
 }
 
-// ---------------------------------------------------------------- top bar
-// The version and "What's new", as in the viewer (one record of what was seen
-// serves both pages)
-const badge = document.getElementById('build-badge');
-if (badge && !viewerLink) {
-  const setBadge = () => { badge.textContent = buildVersionLabel(); };
-  setBadge(); void buildInfoReady.then(setBadge);
-  badge.title = "What's new: this release's changes";
-  badge.addEventListener('click', () => { void openWhatsNew(); });
-  void maybeAutoShowWhatsNew();
-}
-// The brand: back to the latest update and the whole world, without a reload
-$('world-home').addEventListener('click', (e) => {
-  if (!releases.length) return;   // not started: let the link reload the page
-  e.preventDefault();
+// Maps picked in the tool switch (the brand): back to the latest update and the whole world, without a reload
+function home() {
+  if (!releases.length) { location.reload(); return; }
   const latest = releases.at(-1)!;
   slider.value = String(minutes(latest));
   if (!labels.checked) labels.checked = true;
   if (latest === wanted) fit(); else { cameraFromUrl = false; refit = true; void show(latest); }
-});
+}
 
 // ---------------------------------------------------------------- start
 (async () => {

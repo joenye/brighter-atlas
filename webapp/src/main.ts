@@ -4,8 +4,6 @@
 import { modelCards } from './viewers/model-cards.js';
 import { createStore } from './client-store.js';
 import { openHelpModal } from './help.js';
-import { buildVersionLabel, buildInfoReady } from './build-info.js';
-import { openWhatsNew, maybeAutoShowWhatsNew } from './changelog.js';
 import { animClass } from './anim-class.js';
 import { mountOnboarding } from './onboard.js';
 import { maybeMountMobileGate } from './mobile-gate.js';
@@ -35,12 +33,10 @@ import { entryByOrdinal } from './store.js';
 import type { AppStore, IndexEntry, FetchErrorDetail } from './store.js';
 import { partRecolor } from './recolor.js';
 import { episodeFilters, matchesFilters, type FilterDef } from './list-filters.js';
-import { linkTools } from './sites.js';
-import { attachToolSwitch } from './tool-switch.js';
+import { initTopbar } from './topbar.js';
 
-// the other tools' links (the world map button, the top bar's tool switch) point at their own addresses
-linkTools();
-attachToolSwitch('data');
+// the top bar every page shares: the brand and its tool switch, the version and What's new
+initTopbar('data', { extras: [{ label: 'Help & FAQs', onClick: () => openHelpModal() }] });
 
 
 // a parsed hash route ('#/mesh/12', '#/diff/<a>..<b>', …)
@@ -510,21 +506,8 @@ class App {
     this.searchInput = document.getElementById('global-search') as HTMLInputElement;
     this.search = new GlobalSearch(this, this.searchInput, document.getElementById('search-results')!);
 
-    document.getElementById('help-btn')?.addEventListener('click', () => openHelpModal());
     document.getElementById('overrides-btn')!.addEventListener('click', () => this.openOverridesPanel());
 
-    // Build version in the topbar: click it to open "What's new" (the current
-    // release's changelog). The full version + commit also lives in Help.
-    const badgeEl = document.getElementById('build-badge');
-    if (badgeEl) {
-      const setBadge = () => { badgeEl.textContent = buildVersionLabel(); };
-      setBadge();
-      buildInfoReady.then(setBadge);
-      badgeEl.title = "What's new: this release's changes";
-      badgeEl.addEventListener('click', () => openWhatsNew());
-    }
-    // Auto-show "What's new" once when the app has updated since the last visit.
-    maybeAutoShowWhatsNew();
 
     // client-extracted data can be materialized back to disk (Chromium FSA)
     const exportBtn = document.getElementById('export-btn');

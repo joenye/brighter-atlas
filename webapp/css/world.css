@@ -43,10 +43,7 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 .world-map.loading canvas:not(.wmap-thumb), .world-map.loading .world-sealed { filter: blur(5px) brightness(.75); }
 /* satellite pictures sit under the map's canvas and take no input */
 .world-map canvas.world-satellite { pointer-events: none; }
-.wmap-loading { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
-.wmap-loading[hidden] { display: none; }
-.wmap-loading span { font-size: clamp(18px, 3.2vw, 30px); font-weight: 650; letter-spacing: .02em; color: var(--fg0);
-  padding: 12px 22px; border-radius: var(--radius); background: rgba(13, 15, 19, .55); text-shadow: 0 1px 3px #000; }
+#world-loading { top: 50%; }   /* (the shared .load-card, in the middle of the map) */
 /* only a failure has anything to say: on the map, bottom right, above the zoom buttons */
 .world-status { position: absolute; right: 10px; bottom: 104px; max-width: calc(100% - 20px); margin: 0; padding: 4px 9px;
   border-radius: 6px; background: rgba(13, 15, 19, .8); color: var(--bad); font-size: 12px; pointer-events: none; }
@@ -84,8 +81,6 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 .wmap-labels input { margin: 0; accent-color: var(--accent); }
 .wmap-labels[hidden] { display: none; }
 /* the way into the viewer: the page's main action */
-.world-cta { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; text-decoration: none; white-space: nowrap; }
-.world-cta:hover { text-decoration: none; }
 
 .world-picker[hidden] { display: none; }
 .world-picker { position: fixed; inset: 0; z-index: 50; background: rgba(5, 7, 10, .6); display: flex; align-items: center; justify-content: center; }
@@ -104,7 +99,6 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 /* phones: the toolbar stacks (update controls, then the slider), bigger targets */
 @media (max-width: 640px) {
   #topbar .world-title { display: none; }
-  .world-cta { padding: 5px 10px; font-size: 12px; }
   .world-toolbar { padding: 8px 10px; }
   .world-toolbar .btn { min-height: 36px; }
   .world-pick { width: 100%; min-width: 0; }

@@ -45,12 +45,11 @@ function renderHome(root: HTMLElement): HTMLElement {
     'Help/FAQs');
   helpBtn.addEventListener('click', () => renderHelp(root));
 
-  // the parts of the site that work on a phone: the world map and Brighter Fashion
-  const worldLink = el('a', { class: 'mgate-action', href: toolUrl('maps') },
-    el('span', { class: 'mgate-action-ico', 'aria-hidden': 'true', text: '◮' }), 'World map');
-  const fashionLink = el('a', { class: 'mgate-action', href: toolUrl('fashion') },
-    el('span', { class: 'mgate-action-ico', 'aria-hidden': 'true', text: '◮' }), 'Brighter Fashion');
-  const actions = el('div', { class: 'mgate-actions' }, worldLink, fashionLink, helpBtn);
+  // the parts of the site that work on a phone, in the tools' order: Brighter Fashion and Brighter Maps
+  const mark = () => el('img', { class: 'mgate-action-ico', src: 'brand/mark.svg', alt: '', width: '20', height: '20' });
+  const fashionLink = el('a', { class: 'mgate-action', href: toolUrl('fashion') }, mark(), 'Brighter Fashion');
+  const mapsLink = el('a', { class: 'mgate-action', href: toolUrl('maps') }, mark(), 'Brighter Maps');
+  const actions = el('div', { class: 'mgate-actions' }, fashionLink, mapsLink, helpBtn);
   for (const key of ['discord', 'github']) {
     const a = cloneTopbar(`#topbar .top-social.${key}`);
     if (!a) continue;   // topbar markup moved: degrade to Help only

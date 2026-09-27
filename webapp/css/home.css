@@ -1,5 +1,7 @@
 /* The landing page (index.html): the three tools, each a picture, its name, a line on what it does and a
    way in. Cards side by side on wide screens, stacked on phones. */
+/* a page that scrolls (the tools' pages never do: app.css holds the body still) */
+body.home-page { height: auto; overflow: auto; overflow-x: hidden; }
 .home { min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg0); }
 .home-main { flex: 1; width: min(1180px, 100%); margin: 0 auto; padding: 36px 20px 28px; display: flex; flex-direction: column; gap: 28px; }
 .home-intro h1 { margin: 0 0 8px; font-size: clamp(22px, 3.2vw, 32px); font-weight: 600; color: var(--fg0); letter-spacing: -0.01em; }
@@ -7,17 +9,38 @@
 .home-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
 .home-tool { display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; background: var(--bg2); border: 1px solid var(--line);
   color: inherit; text-decoration: none; transition: border-color .15s, transform .15s, box-shadow .15s; }
+/* a card is one button: it lifts on hover, presses in on a click or tap, and its text is never underlined */
+.home-tool, .home-tool:hover, .home-tool:active { text-decoration: none; -webkit-tap-highlight-color: transparent; }
 .home-tool:hover, .home-tool:focus-visible { border-color: var(--accent-dim); transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0, 0, 0, .35); outline: none; }
+.home-tool:focus-visible { box-shadow: 0 0 0 2px var(--accent), 0 10px 28px rgba(0, 0, 0, .35); }
+.home-tool:active { transform: translateY(0) scale(.985); border-color: var(--accent); background: var(--sel); box-shadow: none; transition-duration: .06s; }
 .home-shot { display: block; aspect-ratio: 16 / 10; background: var(--bg3); overflow: hidden; }
 .home-shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .home-text { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 16px; flex: 1; }
+.home-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .home-name { font-size: 18px; color: var(--fg0); }
+/* what a tool needs: nothing (most), or the player's own game files */
+.home-badge { padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  color: var(--good); background: rgba(111, 208, 140, .1); border: 1px solid rgba(111, 208, 140, .35); }
+.home-badge.need { color: var(--warn); background: rgba(232, 180, 90, .1); border-color: rgba(232, 180, 90, .35); }
 .home-name .brand-name { font-weight: 600; }
 .home-name .brand-sub { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; color: var(--accent); margin-left: 2px; }
 .home-desc { color: var(--fg1); font-size: 14px; line-height: 1.5; flex: 1; }
 .home-go { color: var(--accent); font-weight: 600; font-size: 14px; }
-.home-foot { color: var(--fg2); font-size: 12.5px; text-align: center; }
-.home-foot p { margin: 0; }
+/* the foot of the page: the app's own status bar */
+.home-foot { display: flex; align-items: center; gap: 18px; min-height: 26px; padding: 4px 12px; background: var(--bg1); border-top: 1px solid var(--line); color: var(--fg2); font-size: 11px; }
+/* the Discord, under the intro: a card of its own in Discord's colour */
+.home-discord { display: inline-flex; align-items: center; gap: 12px; align-self: flex-start; margin-top: 16px; padding: 10px 16px 10px 14px; border-radius: 10px;
+  background: #5865f2; color: #fff; text-decoration: none; transition: background .15s, transform .15s; }
+.home-discord:hover { background: #4752c4; text-decoration: none; transform: translateY(-1px); }
+.home-discord:active { transform: scale(.985); }
+.home-discord:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.home-discord svg { flex: none; }
+.home-discord-text { display: flex; flex-direction: column; line-height: 1.3; }
+.home-discord-text b { font-size: 14px; }
+.home-discord-text span { font-size: 12px; opacity: .85; }
+.home-discord-go { font-size: 16px; margin-left: 4px; }
+.home-intro { display: flex; flex-direction: column; }
 @media (max-width: 900px) {
   .home-tools { grid-template-columns: 1fr; }
   .home-main { padding: 22px 14px 20px; gap: 20px; }

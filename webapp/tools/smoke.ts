@@ -385,7 +385,9 @@ async function fixtureSuite(browser: any, base: string) {
   ok(page.url().includes(`#/mesh/${nextId}`), `ArrowDown moves list selection (to #${nextId})`);
 
   // ---- help / FAQ modal (shared help.js) --------------------------------------
-  await page.click('#help-btn');
+  // (in the tool switch's menu: the brand opens it)
+  await page.click('#topbar .tool-switch-btn');
+  await page.$$eval('.tool-switch-menu button', (b) => (b.find((x) => x.textContent === 'Help & FAQs') as any)?.click());
   await page.waitForSelector('.help-modal', { timeout: 4000 });
   const help = await page.$eval('.help-modal', (n) => n.textContent);
   ok(/not affiliated with.*Fen Research/i.test(help), 'help: not affiliated with Fen Research');
@@ -1957,9 +1959,9 @@ async function mobileGateSuite(browser: any) {
     href: n.getAttribute('href'), target: n.getAttribute('target'), rel: n.getAttribute('rel'),
     svg: !!n.querySelector('svg'),
   })));
-  ok(acts.length === 5 && acts.every((a) => a.h >= 44) && /World map/.test(acts[0].label) && acts[0].href === '/maps'
-    && /Brighter Fashion/.test(acts[1].label) && acts[1].href === '/fashion',
-    `gate offers 5 tappable actions ≥44px, the phone-ready tools (Brighter Maps, Brighter Fashion) first (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
+  ok(acts.length === 5 && acts.every((a) => a.h >= 44) && /Brighter Fashion/.test(acts[0].label) && acts[0].href === '/fashion'
+    && /Brighter Maps/.test(acts[1].label) && acts[1].href === '/maps',
+    `gate offers 5 tappable actions ≥44px, the phone-ready tools (Brighter Fashion, Brighter Maps) first (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
   // the single source of truth for each URL/icon is the (hidden) topbar markup
   const srcLinks = await page.evaluate(() => Object.fromEntries(['discord', 'github'].map((k) =>
     [k, document.querySelector(`#topbar .top-social.${k}`)?.getAttribute('href')])));
@@ -2116,7 +2118,7 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       await worldSuite(browser, base);
       await onboardingSuite(browser);
       await mobileGateSuite(browser);
-      // the hosted world map (/world), on its own synthetic data
+      // Brighter Maps (/maps), on its own synthetic data
       console.log('\n== world map (tools/test_world.ts)');
       const world = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_world.ts')], { encoding: 'utf8' });
       ok(world.status === 0, `world map page${world.status === 0 ? '' : `:\n    ${(world.stderr || world.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);

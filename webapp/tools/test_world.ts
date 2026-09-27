@@ -224,7 +224,7 @@ try {
     const fire = (type: string) => canvas.dispatchEvent(new (window as any).PointerEvent(type, { pointerId: 31, pointerType: 'touch', isPrimary: true, clientX: 50, clientY: 50, bubbles: true }));
     fire('pointerdown'); fire('pointerup');
     const start = new Event('selectstart', { bubbles: true, cancelable: true });
-    document.getElementById('build-badge')!.dispatchEvent(start);
+    document.getElementById('world-status')!.dispatchEvent(start);
     return start.defaultPrevented;
   }), true, 'a selection starting just after a touch on the map is stopped');
   assert.deepEqual(await page.evaluate(() => ['touchstart', 'touchend', 'contextmenu'].map((type) => {
@@ -232,9 +232,10 @@ try {
     document.getElementById('world-canvas')!.dispatchEvent(e);
     return e.defaultPrevented;
   })), [true, true, true], 'the browser runs no gestures of its own on the map (no magnifier, no menu)');
-  // the brand returns to the latest update without leaving the page
+  // Maps picked in the switch (the brand) returns to the latest update without leaving the page
   await page.evaluate(() => (window as any).__world.show('aaaa'));
-  await page.click('#world-home');
+  await page.click('#topbar .tool-switch-btn');
+  await page.click('.tool-switch-menu a.on');
   await page.waitForFunction(() => document.documentElement.dataset.release === 'bbbbbbbbbbbbbbbb');
   assert.equal(await page.evaluate(() => location.pathname), '/maps', 'still the world map');
   // a script drives it (time-lapse capture)
@@ -275,20 +276,32 @@ try {
   await page.goto(`${site}/#r=2025-02-20&l=0`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => location.pathname === '/maps');
   await page.waitForFunction(() => document.documentElement.dataset.release === 'aaaaaaaaaaaaaaaa');   // (the place it named: the update of 20-Feb)
-  // the landing page names each tool and links to it; the map and the viewer link to each other
+  // the landing page names each tool and links to it, and shows the version like every top bar
   await page.goto(`${site}/`, { waitUntil: 'networkidle0' });
-  assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/maps', '/viewer', '/fashion'], 'the landing page links every tool');
+  assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/viewer'], 'the landing page links every tool, Fashion first');
+  assert.equal(await page.$eval('.tool-switch-news', (b) => b.textContent), "What's new · dev build", 'the landing page has the version in its switch');
+  // on a phone the three stacked cards run past the screen: the page scrolls (the tools' pages never do)
+  const viewport = page.viewport();
+  await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+  // (a swipe, as a finger: a script may scroll a page that fingers cannot)
+  await page.touchscreen.touchStart(200, 700); await page.touchscreen.touchMove(200, 150); await page.touchscreen.touchEnd();
+  await new Promise((r) => setTimeout(r, 600));
+  assert.ok(await page.evaluate(() => (globalThis as any).scrollY > 200), 'the landing page scrolls on a phone');
+  await page.setViewport(viewport!);
   await page.goto(base, { waitUntil: 'networkidle0' });
-  assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), '/viewer', 'the map links to the viewer');
+  // every top bar: the mark, the tool's name, its switch and the version (What's new)
+  assert.equal(await page.$eval('#topbar .brand-mark', (i) => i.getAttribute('src')), 'brand/mark.svg', 'the mark');
+  assert.equal(await page.$eval('.tool-switch-news', (b) => b.textContent), "What's new · dev build", 'the version, in the switch');
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
   // the top bar's tool switch: every tool (this one marked) and the landing page
   await page.click('#topbar .tool-switch-btn');
-  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/maps', '/viewer', '/fashion', '/'], 'the switch names every tool');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/viewer', '/'], 'the switch names every tool, then Home');
+  assert.equal(await page.$eval('.tool-switch-home', (a) => a.textContent), 'Home', 'the landing page is Home');
   assert.equal(await page.$eval('.tool-switch-menu a[aria-current=page]', (a) => a.getAttribute('href')), '/maps', 'this one marked');
   await page.keyboard.press('Escape');
   assert.equal(await page.$eval('.tool-switch-menu', (m) => (m as any).hidden), true, 'Escape closes it');
   await page.goto(`${site}/viewer`, { waitUntil: 'networkidle0' });
-  assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), '/maps', 'the viewer links to the map');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu button', (b) => b.map((x) => x.textContent)), ['Help & FAQs', "What's new · dev build"], 'the viewer\'s switch has its Help and the version');
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'data', 'Brighter Data');
   assert.deepEqual(errors.filter((e) => !/404|Failed to load resource/.test(e)), [], 'no page errors');
   console.log('world map: all checks passed');

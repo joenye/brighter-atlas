@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Brighter Atlas: the Obelisk (arches on plinths, gold caps and spires) guarding a bold A, in brass and the app's blue -->
+  <defs>
+    <clipPath id="l"><rect width="16" height="32"/></clipPath>
+    <clipPath id="r"><rect x="16" width="16" height="32"/></clipPath>
+    <path id="a" fill-rule="evenodd" d="M16 14.4 20.9 25.8H18L17.2 23.4H14.8L14 25.8H11.1ZM16 18.4 15.2 21.3H16.8Z"/>
+  </defs>
+  <g fill="none" stroke="#c9a24e" stroke-width="2.6">
+    <path d="M8 27C8 18.5 10.4 14 14 12.8"/>
+    <path d="M24 27C24 18.5 21.6 14 18 12.8"/>
+  </g>
+  <g fill="#8f7236">
+    <rect x="5" y="26.4" width="6" height="4.2" rx=".5"/>
+    <rect x="21" y="26.4" width="6" height="4.2" rx=".5"/>
+  </g>
+  <g fill="#e2c275">
+    <rect x="12.4" y="11.2" width="3.2" height="3" rx=".4"/>
+    <rect x="16.4" y="11.2" width="3.2" height="3" rx=".4"/>
+  </g>
+  <g fill="#f0d58c">
+    <path d="M13.2 11.4 14.6 1.2 15.4 11.4Z"/>
+    <path d="M16.6 11.4 17.4 1.2 18.8 11.4Z"/>
+  </g>
+  <use href="#a" fill="#78b7ff" clip-path="url(#l)"/>
+  <use href="#a" fill="#3d6ea8" clip-path="url(#r)"/>
+</svg>
