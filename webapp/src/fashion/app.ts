@@ -7,7 +7,7 @@ import {compose, makeIndex, randomise, itemParts, hiddenItems, STYLE_CATS, COLOU
 import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
 import {Preview, FRAMES, prefetch, Thumbnailer, report} from './render.js';
 import {Wardrobe, h, icon} from './wardrobe.js';
-import {attachScrollbar} from './scrollbar.js';
+import {attachScrollbar} from '../scrollbar.js';
 import {initTopbar} from '../topbar.js';
 
 // (failures on a phone under test, whose console is out of reach, go to a development server's log)
@@ -74,7 +74,6 @@ function undo() { const p = past.pop(); if (!p) return; future.push(lastSaved); 
 function redo() { const f = future.pop(); if (!f) return; past.push(lastSaved); lastSaved = f; state = JSON.parse(f); refresh(); }
 let showHeld = true;
 let selected = 'hair';
-let showOutfitInDesigner = false;
 
 // ---- layout ----
 const main = document.querySelector('main')!;
@@ -178,14 +177,30 @@ document.addEventListener('click', e => { if (!bgPop.hidden && !bgPop.contains(e
 bgPop.addEventListener('focusout', e => { const to = e.relatedTarget as Node | null; if (to && !bgPop.contains(to) && to !== bgBtn) closeBg(false); });
 // the column of round buttons on the view, from the top: (phones) what the drawer shows, the character's design
 // or the equipment; weapons out; the outfit's effect (when it has one); the background
+// (two toggles, one on at a time: turning the one that is on off leaves no drawer at all)
+let designingNow = false;
 const modeBtn = (designing: boolean) => h('button', {class: 'btn of-pose of-mode-btn', 'aria-pressed': 'false',
   title: designing ? 'Design your character: face, body and hair' : 'Equipment: what your character wears',
   'aria-label': designing ? 'Character' : 'Equipment',
-  onclick: () => { if (designing) { if (creatorEl.hidden) openCreator(); } else if (!creatorEl.hidden) closeCreator(); else if (panelCollapsed) setPanelCollapsed(false); }},
+  onclick: () => {
+    // (Character with no drawer brings the page's back first: the view and its column sit above the designer's)
+    if (designing) { if (!designingNow) { if (panelCollapsed) setPanelCollapsed(false); openCreator(); } else { closeCreator(); setPanelCollapsed(true); } }
+    else if (designingNow) {
+      // the equipment's drawer takes the designer's height to the pixel
+      const stage = creatorEl.querySelector('.creator-stage')!.getBoundingClientRect(), m = main.getBoundingClientRect();
+      if (phone() && m.height) { split = (stage.bottom - m.top) / m.height; store.set('split', String(split)); }
+      closeCreator(); setPanelCollapsed(false);
+    }
+    else setPanelCollapsed(!panelCollapsed);
+  }},
   icon(designing ? 'mask' : 'torso'));
 const charModeBtn = modeBtn(true), equipModeBtn = modeBtn(false);
+function syncModeBtns() {
+  const equip = !designingNow && !panelCollapsed;
+  charModeBtn.classList.toggle('active', designingNow); charModeBtn.setAttribute('aria-pressed', String(designingNow));
+  equipModeBtn.classList.toggle('active', equip); equipModeBtn.setAttribute('aria-pressed', String(equip));
+}
 const controls = h('div', {class: 'of-controls'}, charModeBtn, equipModeBtn, poseBtn, fxBtn, h('div', {class: 'of-bg'}, bgBtn, bgPop));
-equipModeBtn.classList.add('active'); equipModeBtn.setAttribute('aria-pressed', 'true');
 const viewerEl = h('section', {class: 'of-viewer'}, canvas, placeLoad, charCard,
   // the viewer's toggles, stacked at its side: weapons out, and the outfit's effect when it has one
   // bottom right, from the bottom: weapons out, the outfit's effect (when it has one), the background
@@ -194,6 +209,7 @@ const viewerEl = h('section', {class: 'of-viewer'}, canvas, placeLoad, charCard,
 function setBackdrop(b: typeof BACKDROPS[number], remember = true) {
   // a place's sky is one flat colour, the room's fog fading into it (a gradient bands behind a room)
   backdrop = b; viewerEl.style.background = b.room ? b.stops[1] : cssOf(b);
+  if (designingNow) stageBackdrop();
   // the disc under the character is for the colours: a place's floor takes the character's own shadow
   floorItems.forEach(x => { (x as HTMLButtonElement).disabled = !!b.room; x.title = b.room ? 'A place shows the character’s own shadow on its ground' : ''; });
   bgPop.querySelectorAll('[data-bg]').forEach(x => { const on = (x as HTMLElement).dataset.bg === b.id; x.classList.toggle('on', on); x.setAttribute('aria-checked', String(on)); });
@@ -207,6 +223,10 @@ function setBackdrop(b: typeof BACKDROPS[number], remember = true) {
 const right = h('aside', {class: 'of-right', id: 'of-right'});
 main.append(viewerEl, right);
 viewerEl.append(toastEl);   // toasts sit where the message bar does, in the same style
+// the view's own toolbar, along its top on the right: undo, redo, the picture, the looks (the top bar is the
+// same as every tool's)
+const toolbarEl = document.getElementById('of-toolbar')!;
+toolbarEl.hidden = false; viewerEl.append(toolbarEl);
 // (browsers without overflow: clip: anything that scrolls the panel itself is undone at once)
 right.addEventListener('scroll', () => { if (right.scrollTop) right.scrollTop = 0; });
 main.addEventListener('scroll', () => { if (main.scrollTop) main.scrollTop = 0; });
@@ -222,6 +242,8 @@ const grip = h('div', {class: 'of-grip', role: 'separator', 'aria-orientation': 
   'aria-label': 'Drag to resize the character view, tap to fold the equipment away'}, h('span', {class: 'of-grip-bar'}), panelTab);
 grip.addEventListener('keydown', e => { if (phone() && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setPanelCollapsed(!panelCollapsed); } });
 right.prepend(grip);
+// (the view's column follows the drawer: placeColumn, set up with the designer below)
+let placeColumnSoon = () => {};
 function setPanelCollapsed(on: boolean) {
   panelCollapsed = on; store.set('panel', on ? '1' : '0');
   document.getElementById('app')!.classList.toggle('panel-collapsed', on);
@@ -230,14 +252,16 @@ function setPanelCollapsed(on: boolean) {
   panelTab.title = `${verb} the equipment panel${phone() ? '' : '  ( ] )'}`;
   panelTab.setAttribute('aria-label', `${verb} the equipment panel`);
   panelTab.setAttribute('aria-expanded', String(!on));
+  syncModeBtns();
   applySplit();
+  placeColumnSoon();
 }
 // the phone split: the character view's share of the height, remembered
 let split = Number(store.get('split')) || 0;
 // (a share of the height, not pixels: iOS Safari's toolbar resizes the page, and a pixel height left the
 // wardrobe squeezed to nothing, grab bar included)
 function applySplit() {
-  viewerEl.style.height = phone() && !panelCollapsed && split ? `${(Math.max(0.22, Math.min(0.72, split)) * 100).toFixed(1)}%` : '';
+  viewerEl.style.height = phone() && !panelCollapsed && split ? `${(Math.max(0.22, Math.min(0.72, split)) * 100).toFixed(3)}%` : '';
 }
 grip.addEventListener('pointerdown', (e: PointerEvent) => {
   if (!phone() || (e.target as HTMLElement).closest('.of-panel-toggle')) return;
@@ -247,7 +271,7 @@ grip.addEventListener('pointerdown', (e: PointerEvent) => {
   const move = (ev: PointerEvent) => {
     if (!moved && Math.abs(ev.clientY - y0) < 6) return;
     if (!moved) { moved = true; if (panelCollapsed) setPanelCollapsed(false); }
-    split = Math.max(0.22, Math.min(0.74, (ev.clientY - top) / h0)); applySplit();
+    split = Math.max(0.22, Math.min(0.72, (ev.clientY - top) / h0)); applySplit();
   };
   // a tap (no drag) folds or unfolds; a drag resizes
   const up = () => { grip.removeEventListener('pointermove', move); grip.classList.remove('dragging'); if (moved) store.set('split', String(split)); else setPanelCollapsed(!panelCollapsed); };
@@ -347,11 +371,6 @@ const creatorEl = h('div', {class: 'creator', role: 'dialog', 'aria-modal': 'tru
 const cCanvas = h('canvas', {'aria-label': 'Preview: drag to turn'}) as HTMLCanvasElement;
 const panel = h('div', {class: 'creator-panel'});
 const cGrip = h('div', {class: 'of-grip creator-grip', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': 'Drag to resize the character view'}, h('span', {class: 'of-grip-bar'}));
-let autoZoom = store.get('autozoom') !== '0';   // on unless turned off (a new key: the old Close-up setting, off by default, is not carried over)
-const zoomToggle = h('label', {class: 'of-check', 'data-short': 'Auto-Zoom', title: 'Frame the part you are choosing: the head for hair, face, eyes and jaw, the body for torso, legs and feet'},
-  h('input', {type: 'checkbox', checked: autoZoom, onchange: (e: Event) => { autoZoom = (e.target as HTMLInputElement).checked; store.set('autozoom', autoZoom ? '1' : '0'); frameCreator(); }}), h('span', {}, 'Auto-Zoom'));
-const outfitToggle = h('label', {class: 'of-check', 'data-short': 'Outfit', title: 'Show your equipment over the body (it covers clothes and hair you are designing)'},
-  h('input', {type: 'checkbox', onchange: (e: Event) => { showOutfitInDesigner = (e.target as HTMLInputElement).checked; refresh(); }}), h('span', {class: 'of-long'}, 'Show outfit'), h('span', {class: 'of-short'}, 'Outfit'));
 // the designer's own controls lead its drawer (the page's top bar stays as it always is)
 creatorEl.append(h('div', {class: 'creator-box'},
   h('div', {class: 'creator-bar'}, h('h2', {}, 'Design your character')),
@@ -370,15 +389,36 @@ app.append(creatorEl);
 attachScrollbar(panel);
 // phones: the same grab bar as the wardrobe's, sharing the height between the character and the choices
 let cSplit = Number(store.get('csplit')) || 0;
-const applyCSplit = () => { (creatorEl.querySelector('.creator-body') as HTMLElement).style.setProperty('--stage-h', cSplit ? `${(cSplit * 100).toFixed(1)}%` : ''); };
+const applyCSplit = () => { (creatorEl.querySelector('.creator-body') as HTMLElement).style.setProperty('--stage-h', cSplit ? `${(cSplit * 100).toFixed(3)}%` : ''); };
+// Phones: the view's column of buttons stands just above the drawer's top edge, wherever that is (either grab
+// bar dragged, Character or Equipment, the browser's toolbar resizing the page), and above the page's foot
+// when there is no drawer (the stylesheet's place). Measured, not assumed: the drawer showing is the page's or
+// the designer's.
+function placeColumn() {
+  if (!phone() || panelCollapsed) { controls.style.bottom = ''; return; }
+  const top = (designingNow ? cGrip : right).getBoundingClientRect().top, view = viewerEl.getBoundingClientRect();
+  if (!view.height || !top) { controls.style.bottom = ''; return; }
+  controls.style.bottom = `${Math.max(8, Math.round(view.bottom - top + 8))}px`;
+}
+let columnFrame = 0;
+placeColumnSoon = () => { if (!columnFrame) columnFrame = requestAnimationFrame(() => { columnFrame = 0; placeColumn(); }); };
+const columnWatch = new ResizeObserver(placeColumnSoon);
+for (const el of [viewerEl, right, creatorEl.querySelector('.creator-stage')!]) columnWatch.observe(el);
+addEventListener('resize', placeColumnSoon);
+visualViewport?.addEventListener('resize', placeColumnSoon);
 applyCSplit();
 cGrip.addEventListener('pointerdown', (e: PointerEvent) => {
   if (!phone()) return;
   e.preventDefault(); cGrip.setPointerCapture(e.pointerId); cGrip.classList.add('dragging');
   const body = creatorEl.querySelector('.creator-body') as HTMLElement, top = body.getBoundingClientRect().top, h0 = body.clientHeight;
-  const move = (ev: PointerEvent) => { cSplit = Math.max(0.2, Math.min(0.75, (ev.clientY - top) / h0)); applyCSplit(); };
-  // one split for both: the page's divider follows the designer's back out
-  const up = () => { cGrip.removeEventListener('pointermove', move); cGrip.classList.remove('dragging'); store.set('csplit', String(cSplit)); if (!panelCollapsed) { split = cSplit; store.set('split', String(split)); applySplit(); } };
+  // (the page's own limits: one height for both)
+  const move = (ev: PointerEvent) => { cSplit = Math.max(0.22, Math.min(0.72, (ev.clientY - top) / h0)); applyCSplit(); placeColumnSoon(); };
+  // one split for both: the page's divider follows the designer's back out, to the pixel
+  const up = () => {
+    cGrip.removeEventListener('pointermove', move); cGrip.classList.remove('dragging'); store.set('csplit', String(cSplit));
+    const stage = creatorEl.querySelector('.creator-stage')!.getBoundingClientRect(), m = main.getBoundingClientRect();
+    if (!panelCollapsed && m.height) { split = (stage.bottom - m.top) / m.height; store.set('split', String(split)); applySplit(); }
+  };
   cGrip.addEventListener('pointermove', move); cGrip.addEventListener('pointerup', up, {once: true}); cGrip.addEventListener('pointercancel', up, {once: true});
 });
 const paletteFor = (seg: string): string[] | null => {
@@ -395,14 +435,20 @@ const paletteFor = (seg: string): string[] | null => {
 const creatorPreview = new Preview(cCanvas, {fov: 18, floor: true});
 creatorPreview.running = false;
 attachTurning(cCanvas, creatorPreview, false);
-// Auto-Zoom (on by default) frames the part being chosen; off, the whole figure
+// the part being chosen, framed (the head for hair, face, eyes and jaw; the body for torso, legs and feet)
 const PART_FRAME: Record<string, {dist: number, target: number}> = {
   hair: FRAMES.face, face: FRAMES.face, eyes: {dist: 1100, target: 1250}, jaw: FRAMES.face,
   torso: FRAMES.upper, legs: {dist: 3300, target: 480}, feet: {dist: 1900, target: 240}, skin: FRAMES.full,
 };
+// The view the design is seen in. Phones: the page's own view, under the designer's see-through top half (its
+// backdrop, 3D scenes included, the weapons and the effect all as they are, no second renderer); wider screens:
+// the dialog's own view, which takes the backdrop and weapons from the page.
+let sharedView = false;
+const designView = () => sharedView ? viewer : creatorPreview;
 function frameCreator(instant = false) {
-  creatorPreview.frameTo(autoZoom ? PART_FRAME[selected] ?? FRAMES.full : FRAMES.full, instant);
-  if (instant) { creatorPreview.yaw = 0.3; creatorPreview.yawVel = 0; }
+  const v = designView();
+  v.frameTo(PART_FRAME[selected] ?? FRAMES.full, instant);   // (the part being chosen, framed: always)
+  if (instant && !sharedView) { v.yaw = 0.3; v.yawVel = 0; }
 }
 let creatorReady: Promise<void> | null = null;
 let creatorSnapshot = '';
@@ -410,29 +456,40 @@ function openCreator() {
   creatorSnapshot = JSON.stringify(state);
   // phones: the designer's divider opens where the page's is, so nothing jumps
   if (phone() && !panelCollapsed && main.clientHeight) { cSplit = viewerEl.getBoundingClientRect().height / main.clientHeight; applyCSplit(); }
+  sharedView = phone();
   setDesigning(true);
   holdUndo = true;
-  creatorEl.hidden = false; viewer.running = false; creatorPreview.running = true;
+  creatorEl.hidden = false;
+  if (!sharedView) { viewer.running = false; creatorPreview.running = true; }
+  stageBackdrop();
   // (the designer's divider exactly where the page's is: measured, as the two frames differ by their borders)
   if (phone() && !panelCollapsed) {
     const body = (creatorEl.querySelector('.creator-body') as HTMLElement).getBoundingClientRect();
     const stage = viewerEl.getBoundingClientRect().bottom - body.top;
     if (body.height) { cSplit = stage / body.height; (creatorEl.querySelector('.creator-body') as HTMLElement).style.setProperty('--stage-h', `${stage}px`); }
   }
-  creatorReady ??= creatorPreview.init(pack.skeleton, RELAXED);
+  if (!sharedView) creatorReady ??= creatorPreview.init(pack.skeleton, RELAXED);
   frameCreator(true);
   refresh();
   (creatorEl.querySelector('.creator-actions .btn-cta') as HTMLElement)?.focus({preventScroll: true});
 }
-// (phones: the view's column of buttons goes into the designer's view, so Character and Equipment stay put; the
-// buttons with nothing to do there keep their places, unseen)
+// (wider screens: the view's column of buttons goes into the dialog's view, weapons and background working there
+// too; phones keep it where it is, over the page's view the designer shows)
 function setDesigning(on: boolean) {
   app.classList.toggle('designing', on);
-  (on ? creatorEl.querySelector('.creator-stage')! : viewerEl).append(controls);
-  charModeBtn.classList.toggle('active', on); charModeBtn.setAttribute('aria-pressed', String(on));
-  equipModeBtn.classList.toggle('active', !on); equipModeBtn.setAttribute('aria-pressed', String(!on));
+  app.classList.toggle('designing-shared', on && sharedView);
+  (on && !sharedView ? creatorEl.querySelector('.creator-stage')! : viewerEl).append(controls);
+  designingNow = on; syncModeBtns(); placeColumnSoon();
 }
-function hideCreator() { setDesigning(false); creatorEl.hidden = true; viewer.running = true; creatorPreview.running = false; canvas.focus({preventScroll: true}); }
+// the dialog's view takes the page's backdrop (a 3D scene's sky colour: the scene itself is the page's)
+function stageBackdrop() {
+  (creatorEl.querySelector('.creator-stage') as HTMLElement).style.background = backdrop.room ? backdrop.stops[1] : cssOf(backdrop);
+}
+function hideCreator() {
+  setDesigning(false); creatorEl.hidden = true; viewer.running = true; creatorPreview.running = false;
+  if (sharedView) { viewer.frameTo(frameOf(currentFrame === '' ? 'full' : currentFrame as typeof FRAME_KEYS[number])); sharedView = false; }
+  canvas.focus({preventScroll: true});
+}
 function closeCreator() { holdUndo = false; commit(); hideCreator(); refresh(); }
 // Cancel drops the design, but keeps it one Redo away so a careful face is never lost to a stray Esc
 function cancelCreator() {
@@ -450,8 +507,7 @@ function renderPanel() {
     h('div', {class: 'cp-tools'},
       h('div', {class: 'cp-row'},
         h('button', {class: 'btn cp-random', title: 'A random face, hair and clothes underneath', onclick: () => { state = randomise(pack, state); edited(); }}, icon('dice'), 'Random'),
-        h('button', {class: 'btn cp-random', title: 'Back to the default character (your equipment stays)', onclick: () => { state = {...structuredClone(DEFAULT), equip: state.equip}; edited(); }}, icon('reset'), 'Start over')),
-      h('div', {class: 'cp-row cp-checks'}, zoomToggle, outfitToggle)),
+        h('button', {class: 'btn cp-random', title: 'Back to the default character (your equipment stays)', onclick: () => { state = {...structuredClone(DEFAULT), equip: state.equip}; edited(); }}, icon('reset'), 'Start over'))),
     section('Body', null, h('div', {class: 'cp-row'},
       h('div', {class: 'segmented cp-gender'}, ...(['male', 'female'] as const).map(g => h('button', {class: state.gender === g ? 'on' : '', 'aria-pressed': String(state.gender === g), onclick: () => { if (state.gender !== g) { state.gender = g; edited(); } }}, g === 'male' ? 'Male' : 'Female'))))),
     section('Part', null, h('div', {class: 'cp-parts', role: 'tablist'}, ...SEG_NAMES.map(([id, name]) =>
@@ -470,10 +526,6 @@ function renderPanel() {
     kids.push(section('Colour', `${i + 1} of ${pal.length}`, h('div', {class: 'swatches cp-colours'}, ...pal.map((c, k) =>
       h('button', {class: `swatch${k === i ? ' on' : ''}`, 'aria-pressed': String(k === i), style: `background:${c}`, 'aria-label': `Colour ${k + 1}`, onclick: () => { state.colour[col] = k; edited(); }})))));
   }
-  // only when the outfit really hides or changes this part (a helm over the hair, a jacket over the torso)
-  const partKeys = (st: State) => compose(pack, index, st).filter(p => p.key.endsWith('/' + cat)).map(p => p.key).join('|');
-  if (showOutfitInDesigner && cat && Object.keys(state.equip).length && partKeys(state) !== partKeys({...state, equip: {}}))
-    kids.push(h('p', {class: 'creator-note'}, 'Your outfit covers this. Untick Show outfit to see it.'));
   kids.push(h('p', {class: 'creator-keys'}, 'Keys: ← → style, ↑ ↓ colour, Esc to cancel.'));
   // (keep the slider in hand while dragging it: only rebuild the rest)
   const dragging = panel.querySelector('.cp-range:active');
@@ -586,7 +638,7 @@ document.getElementById('shot')!.addEventListener('click', () => {
     });
     void showPicture(compose);
   };
-  shot.src = (creatorEl.hidden ? viewer : creatorPreview).snapshot(1080);
+  shot.src = (creatorEl.hidden ? viewer : designView()).snapshot(1080);
 });
 // "Made with BrighterAtlas.com" after the site's mark (the Obelisk and its A), small in the bottom-right corner
 // (the character stands in the middle)
@@ -690,15 +742,19 @@ function randomOutfit() {
 
 function syncControls() {
   const armed = !!(state.equip.weapon || state.equip.shield);
-  viewer.showHeld = showHeld;
+  // designing: nothing held, the resting pose (the page's own view when it shows the design, the dialog's always)
+  const plain = designingNow && sharedView;
+  viewer.showHeld = showHeld && !plain;
   // weapons out: the worn weapon's combat-ready stance (a shield alone takes the common one); away: the resting clip
   const stance = pack.items.find((i: any) => i.id === state.equip.weapon?.item)?.stance ?? DEFAULT_STANCE;
-  const clip = armed && showHeld && stance != null ? stance : RELAXED;
+  const clip = armed && showHeld && !plain && stance != null ? stance : RELAXED;
   if (viewer.clipId !== clip) void viewer.setClip(clip);
+  if (designingNow && !sharedView) { creatorPreview.showHeld = false; void creatorReady?.then(() => { if (creatorPreview.clipId !== RELAXED) void creatorPreview.setClip(RELAXED); }); }
+  (poseBtn as HTMLButtonElement).disabled = designingNow;   // (nothing to hold while designing)
   poseBtn.hidden = !armed;   // only with something to hold
-  poseBtn.classList.toggle('active', armed && showHeld);
+  poseBtn.classList.toggle('active', armed && showHeld && !designingNow);
   poseBtn.setAttribute('aria-label', 'Weapons out'); poseBtn.setAttribute('aria-pressed', String(armed && showHeld));
-  poseBtn.title = !armed ? 'Nothing held yet: pick a weapon or shield' : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance';
+  poseBtn.title = designingNow ? 'Weapons are put away while you design' : !armed ? 'Nothing held yet: pick a weapon or shield' : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance';
   const designing = !creatorEl.hidden;
   undoBtn.disabled = designing || !past.length; redoBtn.disabled = designing || !future.length;
 }
@@ -716,7 +772,7 @@ function warmStyles() {
   warmed.add(`${state.gender}/${cat}`);
   const n = pack.creator.styles[cat][state.gender].length, at = state.style[cat];
   const order = [...Array(n).keys()].sort((a, b) => Math.min(Math.abs(a - at), n - Math.abs(a - at)) - Math.min(Math.abs(b - at), n - Math.abs(b - at)));
-  const base = {...state, equip: showOutfitInDesigner ? state.equip : {}};
+  const base = {...state, equip: {}};
   let k = 0;
   const step = () => {
     for (const end = Math.min(order.length, k + 4); k < end; k++) prefetch(compose(pack, index, {...base, style: {...base.style, [cat]: order[k]}}));
@@ -741,7 +797,9 @@ function refresh() {
   history.replaceState(null, '', addressOf(code));
   // a shared look isn't yours until you keep it, nor a design until Done
   if (!holdUndo) store.set('look', code);   // (a design is saved on Done)
-  void viewer.apply(parts);
+  // designing: the body alone (nothing worn, nothing held)
+  const designParts = creatorEl.hidden ? parts : compose(pack, index, {...state, equip: {}});
+  void viewer.apply(sharedView ? designParts : parts);
   // worn-item effects: the torso appearance against the pack's worn-effect lists
   const torso = state.equip.torso ? index.items.get(state.equip.torso.item) : null;
   const tv = torso?.variants[state.equip.torso!.variant];
@@ -751,8 +809,7 @@ function refresh() {
   void viewer.setEffects(showEffects ? fx : []);
   if (!creatorEl.hidden) {
     refreshCreator();
-    const bare = showOutfitInDesigner ? parts : compose(pack, index, {...state, equip: {}});
-    void creatorReady?.then(() => creatorPreview.apply(bare));
+    if (!sharedView) void creatorReady?.then(() => creatorPreview.apply(designParts));
   }
 }
 (window as any).fashion = {THREE, viewer, creatorPreview, get state() { return state; }, compose: () => compose(pack, index, state), openCreator, closeCreator, cancelCreator, wardrobe};

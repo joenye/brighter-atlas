@@ -18,6 +18,24 @@ The per-build decode data is produced offline, purely from analysis of the
 game's own files, never by inspecting or modifying a running game process or
 its memory.
 
+## Scrollbars
+
+3. **Every vertical scroller shows the persistent themed scrollbar.** Where the
+   platform's own scrollbar floats over the content and hides between scrolls
+   (iOS, Android, Firefox on macOS), `webapp/src/scrollbar.ts` draws the
+   site's own track in a gutter at the scroller's right edge; elsewhere the
+   themed native scrollbar (`css/app.css`) already stays. `autoScrollbars()`,
+   run by every page's top bar (`src/topbar.ts`), gives it to every element
+   with `overflow-y: auto` or `scroll`, now and as they are added, so a new
+   list, panel, popover or sheet gets it without being named. Keep it that
+   way: a page that does not start with `initTopbar` must call
+   `autoScrollbars()` itself; a scroller made scrollable later by a class
+   change (not there when it was added) calls `attachScrollbar()`; a scroller
+   that must keep the platform's own carries `data-native-scroll`. A scroller
+   on a raised layer (a popover, a sheet) must not sit inside a parent with a
+   stacking context of its own below the page's panels, or its track (drawn
+   in its parent) and the sheet itself end up under them.
+
 ## Brighter Maps and Brighter Fashion (the two exceptions to "bring your own files")
 
 `webapp/maps.html` (Brighter Maps) draws the game's 2D map

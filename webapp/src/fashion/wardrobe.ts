@@ -2,7 +2,7 @@
 // searching), tiers, colour variants, dyes, and whole sets.
 import {at} from './data.js';
 import type {EquipSlot, State, Worn} from './compose.js';
-import {attachScrollbar} from './scrollbar.js';
+import {attachScrollbar} from '../scrollbar.js';
 
 export const h = (tag: string, attrs: Record<string, any> = {}, ...kids: (Node | string | null | undefined | false)[]) => {
   const e = document.createElement(tag);

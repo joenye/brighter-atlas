@@ -1,26 +1,18 @@
-// Mobile "desktop-only" gate. Phones and small touch devices boot into a
-// full-viewport greeting instead of an app they can't run. main.ts skips the
-// whole app boot when this mounts, so the gate is all the device pays for.
-// DRY by construction: the brand lockup and the Discord/GitHub links are
-// CLONED from the (hidden) topbar markup in viewer.html (their URLs and SVG
-// icons exist only there), and the inline help view renders help.ts's shared
-// content builder. Styling lives in the .mgate-* block of css/app.css, which
-// also holds the anti-flash rule keyed off the .mgate-on/.mgate-off classes
-// stamped on <html> here.
+// Brighter Data on a phone: a dialog over the app, not a page in its place. Data is built for desktop (it
+// decodes the whole game in the browser), so a phone is told so once per visit, with the tools that do work on
+// a phone (Brighter Fashion, Brighter Maps) and the Discord; the dialog then gets out of the way (Continue, the
+// close button, Escape or a tap outside), and the app beneath works as it can. The Discord link is CLONED from
+// the top bar's markup in viewer.html (its URL and icon live only there). Styles: the .mgate-* block of
+// css/app.css.
 
 import { toolUrl } from './sites.js';
-import { el, clear, DESKTOP_ONLY_LINE } from './ui.js';
-import { buildHelpContent } from './help.js';
+import { el, DESKTOP_ONLY_LINE } from './ui.js';
 
-const BYPASS_KEY = 'bs.mobileGateBypass';
+const SEEN_KEY = 'bs.mobileGateBypass';   // (dismissed this visit)
 
-// the normal app boot, kept so the escape hatch can run it in-place
-let bootApp: (() => void) | null = null;
-
-// Feature-based, evaluated ONCE at boot (no live resize gating): the PRIMARY
-// pointer must be coarse AND the device must be touch AND the viewport must
-// be phone-sized. A desktop browser in a narrow window has a fine primary
-// pointer (even on a touch-screen laptop), so it can never land here.
+// Feature-based, evaluated once: the PRIMARY pointer must be coarse AND the device must be touch AND the
+// viewport must be phone-sized. A desktop browser in a narrow window has a fine primary pointer (even on a
+// touch-screen laptop), so it never sees the dialog.
 function isSmallTouchDevice(): boolean {
   const coarse = matchMedia('(pointer: coarse)').matches;
   const touch = (navigator.maxTouchPoints || 0) > 0;
@@ -28,99 +20,42 @@ function isSmallTouchDevice(): boolean {
   return coarse && touch && small;
 }
 
-// clone a piece of the static topbar markup: the single source for the brand
-// and the community links (URLs, target/rel and inline SVG icons)
-function cloneTopbar(sel: string): HTMLElement | null {
-  const src = document.querySelector<HTMLElement>(sel);
-  return src ? (src.cloneNode(true) as HTMLElement) : null;
-}
+/** On a phone, once per visit: the desktop-only dialog over the app. */
+export function maybeShowMobileNotice(): void {
+  let seen = false;
+  try { seen = sessionStorage.getItem(SEEN_KEY) === '1'; } catch { /* no storage: show it */ }
+  if (seen || !isSmallTouchDevice()) return;
 
-// the greeting: brand, the one-line reason, three big actions, escape hatch.
-// Returns the Help card so the help view's back control can restore focus.
-function renderHome(root: HTMLElement): HTMLElement {
-  clear(root);
+  const overlay = el('div', { class: 'modal-overlay mgate-overlay' });
+  const close = () => {
+    try { sessionStorage.setItem(SEEN_KEY, '1'); } catch { /* no storage: this page only */ }
+    overlay.remove(); document.removeEventListener('keydown', onKey, true);
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  const helpBtn = el('button', { class: 'mgate-action', type: 'button' },
-    el('span', { class: 'mgate-action-ico', 'aria-hidden': 'true', text: '?' }),
-    'Help/FAQs');
-  helpBtn.addEventListener('click', () => renderHelp(root));
-
-  // the parts of the site that work on a phone, in the tools' order: Brighter Fashion and Brighter Maps
   const mark = () => el('img', { class: 'mgate-action-ico', src: 'brand/mark.svg', alt: '', width: '20', height: '20' });
-  const fashionLink = el('a', { class: 'mgate-action', href: toolUrl('fashion') }, mark(), 'Brighter Fashion');
-  const mapsLink = el('a', { class: 'mgate-action', href: toolUrl('maps') }, mark(), 'Brighter Maps');
-  const actions = el('div', { class: 'mgate-actions' }, fashionLink, mapsLink, helpBtn);
-  for (const key of ['discord', 'github']) {
-    const a = cloneTopbar(`#topbar .top-social.${key}`);
-    if (!a) continue;   // topbar markup moved: degrade to Help only
-    a.classList.remove('btn-mini');   // keep top-social (hover tints); restyle as a card
-    a.classList.add('mgate-action');
-    actions.appendChild(a);
-  }
+  const actions = el('div', { class: 'mgate-actions' },
+    el('a', { class: 'mgate-action', href: toolUrl('fashion') }, mark(), 'Brighter Fashion'),
+    el('a', { class: 'mgate-action', href: toolUrl('maps') }, mark(), 'Brighter Maps'));
+  const discord = document.querySelector<HTMLElement>('#topbar .top-social.discord')?.cloneNode(true) as HTMLElement | undefined;
+  if (discord) { discord.classList.remove('btn-mini'); discord.classList.add('mgate-action'); actions.append(discord); }
 
-  // A quiet look at what desktop offers: two curated screenshots of the
-  // app's own UI (webapp/assets/, the sanctioned home for these), lazy-loaded
-  // below the actions so the gate itself stays featherweight.
-  const previews = el('div', { class: 'mgate-previews' },
-    el('h2', { class: 'mgate-previews-label', text: 'Screenshots' }),
-    ...([
-      ['assets/preview-world.jpg', 'Every room in 3D, lit and shaded the way the game draws it'],
-      ['assets/preview-model.jpg', 'Models with their in-game card pictures, variants and animations'],
-      ['assets/preview-maps.jpg', 'The game’s own 2D maps, for every room'],
-    ] as const).map(([src, caption]) => el('figure', { class: 'mgate-preview' },
-      el('img', { src, alt: caption, loading: 'lazy', decoding: 'async' }),
-      el('figcaption', { text: caption }))));
-
-  const bypass = el('button', { class: 'mgate-bypass', type: 'button', text: 'Try the desktop site anyway' });
-  bypass.addEventListener('click', () => {
-    try { sessionStorage.setItem(BYPASS_KEY, '1'); } catch { /* no storage: still proceed this page */ }
-    root.remove();
-    document.documentElement.classList.remove('mgate-on');
-    document.documentElement.classList.add('mgate-off');
-    bootApp?.();
-  });
-
-  root.appendChild(el('div', { class: 'mgate-inner' },
-    el('div', { class: 'mgate-brand' }, cloneTopbar('#topbar .brand-link')),
-    el('h1', { class: 'mgate-title', text: 'Built for desktop' }),
+  const cont = el('button', { class: 'btn btn-cta mgate-continue', type: 'button', text: 'Continue to Brighter Data', onclick: close });
+  overlay.append(el('div', { class: 'modal card mgate', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'mgate-title' },
+    el('button', { class: 'mgate-close', type: 'button', 'aria-label': 'Close', text: '✕', onclick: close }),
+    el('h2', { class: 'mgate-title', id: 'mgate-title', text: 'Brighter Data is built for desktop' }),
     el('p', { class: 'mgate-lede' },
-      'Brighter Atlas is a fan-made viewer for the assets inside Brighter Shores: ',
-      'everything decodes from your own game files, entirely in your browser. ',
+      'It opens everything inside Brighter Shores from your own game files, entirely in your browser. ',
       DESKTOP_ONLY_LINE),
+    el('p', { class: 'mgate-lede' }, 'On your phone, try these instead:'),
     actions,
-    previews,
-    el('div', { class: 'mgate-foot' }, bypass)));
-  root.scrollTop = 0;
-  return helpBtn;
-}
-
-// the same help content the desktop modal shows, inline as a full page
-function renderHelp(root: HTMLElement): void {
-  clear(root);
-  const back = el('button', { class: 'mgate-back', type: 'button', text: '← Back' });
-  back.addEventListener('click', () => renderHome(root).focus());
-  root.appendChild(el('div', { class: 'mgate-inner' },
-    el('div', { class: 'mgate-help-head' }, back, el('h1', { class: 'mgate-title', text: 'Help/FAQs' })),
-    buildHelpContent()));
-  root.scrollTop = 0;
-  back.focus();
-}
-
-// Called FIRST at boot (main.ts). Returns true when the gate mounted: the
-// caller must then skip the app boot entirely; `boot` is only kept for the
-// escape hatch. Detection runs once; a bypassed session never re-gates.
-export function maybeMountMobileGate(boot: () => void): boolean {
-  let bypassed = false;
-  try { bypassed = sessionStorage.getItem(BYPASS_KEY) === '1'; } catch { /* no storage: gate normally */ }
-  if (bypassed || /^#\/maps?(?:\/|$)/.test(location.hash) || !isSmallTouchDevice()) {
-    document.documentElement.classList.add('mgate-off');   // release the CSS anti-flash hold
-    return false;
-  }
-  bootApp = boot;
-  document.documentElement.classList.add('mgate-on');      // keep #app hidden for good
-  const root = el('main', { class: 'mgate', tabindex: '-1' });
-  document.body.appendChild(root);
-  renderHome(root);
-  root.focus();
-  return true;
+    cont));
+  document.body.append(overlay);
+  // (on the screen as it is: the desktop app beneath is wider than a phone, which widens the page itself)
+  const vv = window.visualViewport;
+  const fit = () => { if (vv) Object.assign(overlay.style, { left: `${vv.offsetLeft}px`, top: `${vv.offsetTop}px`, width: `${vv.width}px`, height: `${vv.height}px`, right: 'auto', bottom: 'auto' }); };
+  fit(); vv?.addEventListener('resize', fit); vv?.addEventListener('scroll', fit);
+  cont.focus();
 }

@@ -162,16 +162,18 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   that thread (the 2D map's room data). Never read scattered
   bundle objects through the sequential slab reader (a fresh 16 MB slab per
   object); read them individually.
+- **Scrollbars (AGENTS.md rule 3).** Every vertical scroller shows the
+  persistent themed scrollbar: `src/scrollbar.ts` `autoScrollbars()` (run by
+  every page's `initTopbar`) gives it to each element that scrolls, as it
+  appears; see AGENTS.md for the exceptions and the stacking caveat.
 - **The production host serves a Content-Security-Policy** that must stay in
   sync with the app's loading behavior. Verify the app runs clean under a
   policy locally: `BS_CSP="<policy>" node tools/smoke.ts`.
 
 ## Git
 - Never commit game assets, bulk extraction output, `webapp/data/`,
-  build output (`webapp/js/`, `webapp/sw.js`), or screenshots. One sanctioned
-  exception: `webapp/assets/` holds the small set of curated app-UI preview
-  images the mobile gate shows (screenshots OF the app, deliberately sized
-  and named `preview-*`); nothing else lands there.
+  build output (`webapp/js/`, `webapp/sw.js`), or screenshots (the landing
+  page's pictures are served by the site, never committed).
 - Conventional Commits (`type: summary`); one coherent change per commit;
   smoke green before committing app changes.
 - Commit and tag messages are the maintainer's: no AI agent attribution or

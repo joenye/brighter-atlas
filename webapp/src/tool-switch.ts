@@ -35,6 +35,15 @@ export function attachToolSwitch(current: Tool, root: ParentNode = document, onC
   menu.className = 'tool-switch-menu';
   menu.setAttribute('role', 'menu');
   menu.hidden = true;
+  // the landing page first, a rule under it, then the tools
+  const rule = () => { const r = document.createElement('div'); r.className = 'tool-switch-rule'; r.setAttribute('role', 'separator'); return r; };
+  const home = document.createElement('a');
+  home.setAttribute('role', 'menuitem');
+  home.href = toolUrl('home');
+  home.className = `tool-switch-home${current === 'home' ? ' on' : ''}`;
+  if (current === 'home') home.setAttribute('aria-current', 'page');
+  home.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg><span>Home</span>';
+  menu.append(home, rule());
   for (const t of TOOLS) {
     const a = document.createElement('a');
     a.setAttribute('role', 'menuitem');
@@ -46,15 +55,6 @@ export function attachToolSwitch(current: Tool, root: ParentNode = document, onC
     a.querySelector('.tool-switch-line')!.textContent = t.line;
     menu.append(a);
   }
-  // the landing page, under a rule: an entry of its own, as plain as the tools
-  const rule = () => { const r = document.createElement('div'); r.className = 'tool-switch-rule'; r.setAttribute('role', 'separator'); return r; };
-  const home = document.createElement('a');
-  home.setAttribute('role', 'menuitem');
-  home.href = toolUrl('home');
-  home.className = `tool-switch-home${current === 'home' ? ' on' : ''}`;
-  if (current === 'home') home.setAttribute('aria-current', 'page');
-  home.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg><span>Home</span>';
-  menu.append(rule(), home);
   wrap.append(button, menu);
   link.replaceWith(wrap);
   if (onCurrent) menu.querySelector<HTMLElement>('a.on')?.addEventListener('click', (e) => { e.preventDefault(); open(false); button.focus(); onCurrent(); });

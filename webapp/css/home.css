@@ -23,14 +23,17 @@ body.home-page { height: auto; overflow: auto; overflow-x: hidden; }
 .home-badge { padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
   color: var(--good); background: rgba(111, 208, 140, .1); border: 1px solid rgba(111, 208, 140, .35); }
 .home-badge.need { color: var(--warn); background: rgba(232, 180, 90, .1); border-color: rgba(232, 180, 90, .35); }
+.home-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+/* where it works: a quieter badge beside what it needs */
+.home-badge.where { color: var(--fg1); background: var(--bg3); border-color: var(--line); }
 .home-name .brand-name { font-weight: 600; }
 .home-name .brand-sub { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; color: var(--accent); margin-left: 2px; }
 .home-desc { color: var(--fg1); font-size: 14px; line-height: 1.5; flex: 1; }
 .home-go { color: var(--accent); font-weight: 600; font-size: 14px; }
 /* the foot of the page: the app's own status bar */
 .home-foot { display: flex; align-items: center; gap: 18px; min-height: 26px; padding: 4px 12px; background: var(--bg1); border-top: 1px solid var(--line); color: var(--fg2); font-size: 11px; }
-/* the Discord, under the intro: a card of its own in Discord's colour */
-.home-discord { display: inline-flex; align-items: center; gap: 12px; align-self: flex-start; margin-top: 16px; padding: 10px 16px 10px 14px; border-radius: 10px;
+/* the Discord, under the tools: the width of the cards, in Discord's colour */
+.home-discord { display: flex; align-items: center; gap: 12px; padding: 14px 18px 14px 16px; border-radius: 12px;
   background: #5865f2; color: #fff; text-decoration: none; transition: background .15s, transform .15s; }
 .home-discord:hover { background: #4752c4; text-decoration: none; transform: translateY(-1px); }
 .home-discord:active { transform: scale(.985); }
@@ -39,7 +42,7 @@ body.home-page { height: auto; overflow: auto; overflow-x: hidden; }
 .home-discord-text { display: flex; flex-direction: column; line-height: 1.3; }
 .home-discord-text b { font-size: 14px; }
 .home-discord-text span { font-size: 12px; opacity: .85; }
-.home-discord-go { font-size: 16px; margin-left: 4px; }
+.home-discord-go { font-size: 16px; margin-left: auto; }
 .home-intro { display: flex; flex-direction: column; }
 @media (max-width: 900px) {
   .home-tools { grid-template-columns: 1fr; }

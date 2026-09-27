@@ -12,6 +12,11 @@ html, body { touch-action: manipulation; overscroll-behavior: none; overflow: hi
 .of-gamebuild { color: var(--fg2); font-size: 11px; white-space: nowrap; }
 .fashion svg.ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .of-icon, .of-icon-sm, .of-share { display: inline-flex; align-items: center; gap: 6px; }
+/* the view's toolbar: along its top, on the right, in the view's own glass (as the column of buttons) */
+.of-toolbar { position: absolute; top: 12px; right: 12px; z-index: 2; display: flex; gap: 6px; }
+.of-toolbar[hidden] { display: none; }
+.of-toolbar .btn-mini { min-height: 32px; padding: 0 10px; background: rgba(13, 15, 19, .8); backdrop-filter: blur(6px); }
+.of-toolbar .btn-mini:disabled { opacity: .5; }
 .of-icon { padding: 3px 7px; }
 .of-share { padding: 4px 12px; }
 .btn-mini { display: inline-flex; align-items: center; gap: 5px; }
@@ -51,7 +56,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-bgdot { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.2); flex: none; }
 /* the viewer's toggles: square icon buttons at the right edge, stacked when both show */
 /* bottom right; the sword is the bottom one, the effect above it */
-.of-controls { position: absolute; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 3; display: flex; flex-direction: column; gap: 8px; }   /* from the top: Character, Equipment (phones), weapons, effect, background */
+.of-controls { position: absolute; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; }   /* from the top: weapons, effect, background, then (phones) Character and Equipment */
 .of-controls .of-pose, .of-controls .of-bgbtn { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; background: rgba(13, 15, 19, .8); backdrop-filter: blur(6px); }
 /* toggles: off is a dim icon; on is lit (white icon on a lighter glass), never the primary blue */
 .of-controls .of-pose { color: var(--fg2); }
@@ -125,7 +130,7 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
 .fx-note .fx-badge { margin: 0 2px 0 0; }
 
 /* toasts: the message bar's look and place (top centre of the view), below it when it shows, fading in and out */
-#toast { position: absolute; left: 50%; top: 12px; transform: translate(-50%, -4px); z-index: 3; width: max-content; max-width: calc(100% - 24px);
+#toast { position: absolute; left: 50%; top: 56px; transform: translate(-50%, -4px); z-index: 3; width: max-content; max-width: calc(100% - 24px);
   background: rgba(13, 15, 19, .85); border: 1px solid var(--line); color: var(--fg1); font-size: 12.5px; line-height: 1.35; text-align: center;
   padding: 8px 12px; border-radius: 8px; backdrop-filter: blur(6px); opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
@@ -163,7 +168,8 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
   .of-hide-sm, .of-exp { display: none; }
   .of-title { margin-left: 2px; padding-left: 8px; }
   .of-icon-sm span, .of-share span { display: none; }
-  #topbar .btn-mini, #topbar .btn { min-width: 38px; min-height: 34px; justify-content: center; }
+  .of-toolbar { top: 8px; right: 8px; }
+  .of-toolbar .btn-mini { min-width: 38px; min-height: 36px; justify-content: center; padding: 0 8px; }
   .fashion svg.ic { width: 17px; height: 17px; }
   main { display: flex; flex-direction: column; }
   .of-viewer { flex: 0 0 auto; height: 40dvh; }
@@ -227,7 +233,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   #topbar .top-right { gap: 4px; }
 }
 /* while designing, the page underneath is out of the way (the designer's glass shows only the room) */
-#app.designing .of-right, #app.designing .of-charcard, #app.designing .of-controls > :not(.of-mode-btn) { visibility: hidden; }   /* (the column itself is in the designer then: see setDesigning) */
+#app.designing .of-right, #app.designing .of-charcard { visibility: hidden; }   /* (the column of buttons works on: see setDesigning) */
 /* ---- the wardrobe panel folds away (desktop: a rail on its inner edge, as the Brighter Atlas side panels) ---- */
 .of-right { position: relative; }
 .of-grip { position: absolute; left: -15px; top: 50%; transform: translateY(-50%); z-index: 27; }
@@ -256,16 +262,13 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 }
 @media (max-width: 860px) and (orientation: portrait) {
   #app.panel-collapsed .of-viewer { flex: 1 1 auto; height: auto !important; }
-  /* folded: only the grab bar stays (tap or drag it to bring the equipment back) */
-  /* folded: the character fills the screen and the whole grab bar floats over its bottom edge, clear of the
-     home indicator (and of iOS Safari's floating toolbar), with nothing under it but the scene */
+  /* folded (Character and Equipment both off): no drawer at all, the character fills the screen; the
+     column's buttons stay clear of the home indicator and of iOS Safari's floating toolbar */
   main { position: relative; }
-  #app.panel-collapsed .of-right { position: absolute; left: 0; right: 0; bottom: env(safe-area-inset-bottom, 0px); min-height: 0; border: 0; background: none; }
-  .ios-browser #app.panel-collapsed .of-right { bottom: max(env(safe-area-inset-bottom, 0px), 30px); }
-  #app.panel-collapsed .of-right .of-grip { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgba(13, 15, 19, .82); backdrop-filter: blur(6px); }
-  #app.panel-collapsed .wardrobe { display: none; }
-  #app.panel-collapsed .of-controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 40px); }
-  .ios-browser #app.panel-collapsed .of-controls { bottom: calc(max(env(safe-area-inset-bottom, 0px), 30px) + 40px); }
+  #app.panel-collapsed .of-right { display: none; }
+  #app.panel-collapsed .of-controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+  /* (iOS Safari's toolbar floats over the page's foot, taller than the home indicator's inset) */
+  .ios-browser #app.panel-collapsed .of-controls { bottom: calc(max(env(safe-area-inset-bottom, 0px), 30px) + 56px); }
 }
 /* iPhone Safari's toolbar floats over the page's bottom strip: keep the controls clear of it */
 @media (max-width: 860px) {
@@ -297,12 +300,8 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .creator-title { font-weight: 650; color: var(--fg0); }
 .cp-tools { display: flex; flex-direction: column; gap: 10px; }
 .cp-tools .cp-random { flex: 1; justify-content: center; }
-.cp-checks { gap: 18px; }
-.cp-checks .of-check .of-short { display: none; }
-.cp-checks .of-check .of-long { display: inline; }
 .of-sq { width: 34px; height: 34px; padding: 0; display: inline-grid; place-items: center; flex: none; }
 .of-sq svg.ic { width: 16px; height: 16px; }
-.creator-actions .of-check { margin-right: 2px; }
 .of-check { display: inline-flex; align-items: center; gap: 6px; color: var(--fg1); cursor: pointer; white-space: nowrap; font-size: 13px; }
 .of-check input { accent-color: var(--accent); margin: 0; }
 .creator-body { display: grid; grid-template-columns: minmax(0, 1fr) 400px; min-height: 0; }
@@ -339,8 +338,8 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .creator-actions .btn:not(.of-sq) { padding-left: 10px; padding-right: 10px; }
   .of-check { min-height: 36px; font-size: 12.5px; gap: 5px; }
   .creator-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--stage-h, 42%) auto minmax(0, 1fr); }
-  .creator-body .creator-grip { display: flex; position: relative; left: auto; top: auto; transform: none; height: 25px; min-height: 25px;   /* (its border and the page grab bar's 24px: the handle stays put between the two) */ box-sizing: border-box; align-items: center; justify-content: center; touch-action: none; cursor: row-resize; border-top: 1px solid var(--line); background: var(--bg1); }
-  .creator-panel { border-left: 0; border-top: 1px solid var(--line-soft); padding: 12px 12px calc(16px + env(safe-area-inset-bottom, 0px)); gap: 14px; }
+  .creator-body .creator-grip { display: flex; position: relative; left: auto; top: auto; transform: none; height: 29px; min-height: 29px; border-bottom: 1px solid var(--line-soft);   /* (the page's grab bar to the pixel: its drawer's top border, 27px, a soft line) */ box-sizing: border-box; align-items: center; justify-content: center; touch-action: none; cursor: row-resize; border-top: 1px solid var(--line); background: var(--bg1); }
+  .creator-panel { border-left: 0; padding: 10px 10px calc(16px + env(safe-area-inset-bottom, 0px)); gap: 14px; }   /* (the wardrobe's padding) */
   .creator-keys, .stage-hint { display: none; }
   .cp-parts button { padding: 9px 4px; }
   .cp-step { grid-template-columns: 44px minmax(0, 1fr) 44px; }
@@ -356,14 +355,6 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 }
 
 /* touch screens: the always-visible scrollbar (scrollbar.ts) in a gutter of its own; the browser's is hidden */
-.vbar-host { scrollbar-width: none; }
-.vbar-host.vbar-on { padding-right: 16px !important; }
-.vbar-host::-webkit-scrollbar { display: none; }
-.vbar { position: absolute; width: 6px; border-radius: 3px; background: rgba(255, 255, 255, .05); z-index: 3; touch-action: none; }
-.vbar::before { content: ''; position: absolute; inset: 0 -10px; }   /* a finger-sized hit area */
-.vbar[hidden] { display: none; }
-.vbar-thumb { width: 100%; border-radius: 3px; background: #3a4150; }
-.vbar:active .vbar-thumb { background: #4f5a6e; }
 
 /* a saved picture on phones: shown to press and hold (iOS over http has no download or share) */
 .of-picture { position: fixed; inset: 0; z-index: 80; background: rgba(6, 8, 11, .9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 20px; }
@@ -437,7 +428,6 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-designer svg.ic, .of-design svg.ic { width: 18px; height: 18px; stroke-width: 1.9; }
 
 @media (max-width: 380px) {
-  .creator-actions .of-check { font-size: 11.5px; gap: 4px; margin-right: 0; }
   .creator-actions .btn:not(.of-sq) { padding-left: 8px; padding-right: 8px; font-size: 12.5px; }
   .creator-actions .of-sq { width: 32px; }
 }
@@ -487,7 +477,6 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-nodata { position: fixed; inset: var(--topbar-h) 0 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 24px; background: var(--bg0); color: var(--fg1); text-align: center; }
 .of-nodata p { margin: 0; }
 .of-nodata p:first-child { color: var(--fg0); font-weight: 600; font-size: 15px; }
-.fashion:has(.of-nodata) #topbar .top-right { visibility: hidden; }
 .of-nodata .btn { margin-top: 12px; }
 
 /* phones: what the drawer shows, the character's design or the equipment, as the column's first two buttons
@@ -498,4 +487,19 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   /* they replace the drawer's own Character button and the designer's Cancel and Done */
   .wardrobe .of-designer { display: none !important; }
   .creator-actions { display: none !important; }
+}
+@media (max-width: 860px) {
+  /* the drawers' leading rows are one design: Random and Unequip all, Random and Start over */
+  .cp-tools .cp-row:first-child { gap: 6px; }
+  .cp-tools .cp-row:first-child .btn, .of-wardactions .btn-mini { min-height: 34px; padding: 0 8px; font-size: 12.5px; gap: 5px; }
+  .cp-tools .cp-row:first-child .btn svg.ic, .of-wardactions .btn-mini svg.ic { width: 14px; height: 14px; }
+}
+/* phones designing: the designer's top half is see-through, over the page's own view (which frames the part
+   being designed, with the page's backdrop, weapons and effect); only its grab bar and drawer take touches */
+@media (max-width: 860px) {
+  #app.designing-shared .creator { background: none; pointer-events: none; }
+  #app.designing-shared .creator-box { background: none; }
+  #app.designing-shared .creator-stage { background: none !important; }
+  #app.designing-shared .creator-stage canvas { display: none; }
+  #app.designing-shared .creator-grip, #app.designing-shared .creator-drawer { pointer-events: auto; background: var(--bg1); }
 }

@@ -6,7 +6,7 @@ import { createStore } from './client-store.js';
 import { openHelpModal } from './help.js';
 import { animClass } from './anim-class.js';
 import { mountOnboarding } from './onboard.js';
-import { maybeMountMobileGate } from './mobile-gate.js';
+import { maybeShowMobileNotice } from './mobile-gate.js';
 import { derivedGet, getVersion } from './storage.js';
 import { diffIndexes } from './diff.js';
 import { VList } from './virtual-list.js';
@@ -1715,7 +1715,7 @@ async function boot(): Promise<void> {
   app.start();
 }
 
-// Phones get the desktop-only gate INSTEAD of the app: when it mounts, the
-// whole boot is skipped (no store, no service worker, no hydration): the
-// gate is all the device pays for. Its escape hatch calls back into boot().
-if (!maybeMountMobileGate(boot)) await boot();
+// Phones get the app, with a dialog over it once per visit saying it is built for desktop (and where to go
+// on a phone instead)
+maybeShowMobileNotice();
+await boot();

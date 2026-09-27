@@ -1947,69 +1947,41 @@ async function mobileGateSuite(browser: any) {
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
   });
   await page.goto(`${base}/viewer.html`, { waitUntil: 'networkidle0' });
+  // a dialog over the app, not a page in its place: the app boots beneath it
   await page.waitForSelector('.mgate', { timeout: 15000 });
-  ok(await page.$('.ob-drop') === null, 'phone boot mounts the gate, not the onboarding wizard');
-  ok(await page.$eval('#app', (n) => getComputedStyle(n).display === 'none'), 'app chrome stays hidden behind the gate');
-  ok(await page.$eval('.mgate', (n) => n.textContent.includes('mobile lacks the memory + storage this needs')),
-    'gate states the shared desktop-only reason');
-
-  // three large actions; the community links are clones of the topbar anchors
+  ok(await page.$('.ob-drop') !== null, 'phone boot runs the app (its onboarding) under the dialog');
+  ok(await page.$eval('.mgate', (n) => n.getAttribute('role') === 'dialog' && n.textContent.includes('mobile lacks the memory + storage this needs')),
+    'the dialog states the shared desktop-only reason');
   const acts = await page.$$eval('.mgate .mgate-action', (els) => els.map((n) => ({
     label: n.textContent.trim(), h: n.getBoundingClientRect().height,
-    href: n.getAttribute('href'), target: n.getAttribute('target'), rel: n.getAttribute('rel'),
-    svg: !!n.querySelector('svg'),
+    href: n.getAttribute('href'), target: n.getAttribute('target'), rel: n.getAttribute('rel'), svg: !!n.querySelector('svg'),
   })));
-  ok(acts.length === 5 && acts.every((a) => a.h >= 44) && /Brighter Fashion/.test(acts[0].label) && acts[0].href === '/fashion'
+  ok(acts.length === 3 && acts.every((a) => a.h >= 44) && /Brighter Fashion/.test(acts[0].label) && acts[0].href === '/fashion'
     && /Brighter Maps/.test(acts[1].label) && acts[1].href === '/maps',
-    `gate offers 5 tappable actions ≥44px, the phone-ready tools (Brighter Fashion, Brighter Maps) first (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
-  // the single source of truth for each URL/icon is the (hidden) topbar markup
-  const srcLinks = await page.evaluate(() => Object.fromEntries(['discord', 'github'].map((k) =>
-    [k, document.querySelector(`#topbar .top-social.${k}`)?.getAttribute('href')])));
+    `the dialog offers the phone-ready tools (Brighter Fashion, Brighter Maps) and the Discord, each ≥44px (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
+  const srcDiscord = await page.evaluate(() => document.querySelector('#topbar .top-social.discord')?.getAttribute('href'));
   const discord = acts.find((a) => /Discord/.test(a.label));
-  const github = acts.find((a) => /GitHub/.test(a.label));
-  ok(!!discord && discord.href === srcLinks.discord && /discord\.gg\//.test(discord.href || '')
-    && discord.target === '_blank' && /noopener/.test(discord.rel || '') && discord.svg,
-  `Discord action clones the topbar anchor (${discord?.href})`);
-  ok(!!github && github.href === srcLinks.github && /github\.com\//.test(github.href || '')
-    && github.target === '_blank' && /noopener/.test(github.rel || '') && github.svg,
-  `GitHub action clones the topbar anchor (${github?.href})`);
-
-  // the desktop showcase: all curated previews load real pixels, and each
-  // caption lives INSIDE its image's card (same figure) so association is
-  // unambiguous
-  await page.waitForFunction(() => {
-    const imgs = [...document.querySelectorAll('.mgate-preview img')] as any[];
-    return imgs.length === 3 && imgs.every((i) => i.complete && i.naturalWidth > 0);
-  }, { timeout: 15000 });
-  const prevs = await page.$$eval('.mgate-preview', (els) => els.map((f: any) => ({
-    src: f.querySelector('img')?.getAttribute('src'),
-    alt: f.querySelector('img')?.getAttribute('alt'),
-    caption: f.querySelector('figcaption')?.textContent?.trim(),
-  })));
-  ok(prevs.length === 3 && prevs.every((p) => /^assets\/preview-.*\.jpg$/.test(p.src || '') && p.alt === p.caption),
-    `gate shows 3 desktop previews, captions enclosed with their images (${prevs.map((p) => p.src).join(', ')})`);
-
-  // Help/FAQs renders the SHARED help content inline: full page, no modal
-  await page.$$eval('.mgate .mgate-action', (els) => (els.find((n) => /Help\/FAQs/.test(n.textContent)) as any)?.click());
-  await page.waitForSelector('.mgate .help-body', { timeout: 5000 });
-  const helpTxt = await page.$eval('.mgate .help-body', (n) => n.textContent);
-  ok(/not affiliated with.*Fen Research/i.test(helpTxt) && /no upload, no account/i.test(helpTxt),
-    'help renders inline with the shared help.ts content');
-  ok(await page.$('.modal-overlay') === null, 'inline help mounts no modal overlay');
-  ok(await page.$eval('.mgate-back', (n) => n === document.activeElement), 'back control takes focus (keyboard-reachable)');
-  await page.click('.mgate-back');
-  await page.waitForSelector('.mgate-actions', { timeout: 5000 });
-  ok(await page.$('.mgate .help-body') === null, 'back control returns to the gate');
-
-  // the escape hatch: sets the session flag and proceeds to the normal boot
-  await page.click('.mgate-bypass');
-  await page.waitForSelector('.ob-drop', { timeout: 20000 });
-  ok(await page.$('.mgate') === null
-    && await page.evaluate(() => sessionStorage.getItem('bs.mobileGateBypass') === '1'),
-  'bypass proceeds to onboarding in-place (bs.mobileGateBypass set)');
+  ok(!!discord && discord.href === srcDiscord && /discord\.gg\//.test(discord.href || '') && discord.target === '_blank' && /noopener/.test(discord.rel || '') && discord.svg,
+    `its Discord link clones the top bar's (${discord?.href})`);
+  ok(await page.$eval('.mgate-continue', (n) => n === document.activeElement), 'Continue takes focus');
+  // dismissed: gone, and not again this visit
+  await page.click('.mgate-continue');
+  ok(await page.$('.mgate') === null && await page.evaluate(() => sessionStorage.getItem('bs.mobileGateBypass') === '1'),
+    'Continue dismisses it (bs.mobileGateBypass set)');
   await page.reload({ waitUntil: 'networkidle0' });
   await page.waitForSelector('.ob-drop', { timeout: 20000 });
-  ok(await page.$('.mgate') === null, 'bypass persists for the session (reload boots the app)');
+  ok(await page.$('.mgate') === null, 'dismissed stays dismissed for the visit');
+  // the other ways out: Escape and a tap outside
+  await page.evaluate(() => sessionStorage.removeItem('bs.mobileGateBypass'));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('.mgate', { timeout: 15000 });
+  await page.keyboard.press('Escape');
+  ok(await page.$('.mgate') === null, 'Escape dismisses it');
+  await page.evaluate(() => sessionStorage.removeItem('bs.mobileGateBypass'));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('.mgate', { timeout: 15000 });
+  await page.mouse.click(10, 10);
+  ok(await page.$('.mgate') === null, 'a tap outside dismisses it');
   ok(errors.length === 0, `zero console errors in mobile gate suite${errors.length ? `:\n    ${errors.join('\n    ')}` : ''}`);
   await page.close();
 

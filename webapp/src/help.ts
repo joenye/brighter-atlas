@@ -1,6 +1,5 @@
-// Help / FAQ content + modal. buildHelpContent() returns the content column,
-// shared verbatim by the desktop modal here and the mobile gate's inline view
-// (mobile-gate.ts); openHelpModal() adds the modal chrome. The overlay /
+// Help / FAQ content + modal. buildHelpContent() returns the content column;
+// openHelpModal() adds the modal chrome. The overlay /
 // overlay-click-close / capture-phase Escape pattern mirrors main.js
 // openOverridesPanel(); the content reuses only existing app.css classes plus
 // a small scoped .help-* block. Copy follows the app's terse, second-person,

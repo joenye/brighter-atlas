@@ -5,6 +5,7 @@
 import { linkTools, type Tool } from './sites.js';
 import { attachToolSwitch } from './tool-switch.js';
 import { buildVersionLabel, buildInfoReady } from './build-info.js';
+import { autoScrollbars } from './scrollbar.js';
 
 export interface TopbarOptions {
   /** A pick of this page's own tool in the switch, handled in place (see attachToolSwitch). */
@@ -15,6 +16,8 @@ export interface TopbarOptions {
 
 export function initTopbar(tool: Tool, { onCurrent, extras = [] }: TopbarOptions = {}): void {
   linkTools();
+  // every page's scrollers take the themed scrollbar (scrollbar.ts), whatever the platform does with its own
+  autoScrollbars();
   attachToolSwitch(tool, document, onCurrent);
   const menu = document.querySelector<HTMLElement>('#topbar .tool-switch-menu');
   if (!menu) return;
@@ -29,6 +32,8 @@ export function initTopbar(tool: Tool, { onCurrent, extras = [] }: TopbarOptions
     menu.append(item);
     return item;
   };
+  // the page's own entries under the tools, a rule between
+  if (extras.length) { const r = document.createElement('div'); r.className = 'tool-switch-rule'; r.setAttribute('role', 'separator'); menu.append(r); }
   for (const x of extras) entry('tool-switch-home tool-switch-extra', x.label, x.onClick);
   // the app's version, last: it opens What's new
   const news = entry('tool-switch-news', '', () => { void import('./changelog.js').then((m) => m.openWhatsNew()); });

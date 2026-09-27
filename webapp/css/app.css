@@ -76,6 +76,9 @@ button { font: inherit; color: inherit; }
 .tool-switch-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 7px; color: var(--fg0); text-decoration: none; }
 .tool-switch-item:hover, .tool-switch-item:focus-visible, .tool-switch-home:hover, .tool-switch-home:focus-visible { background: var(--bg3); outline: none; }
 .tool-switch-item.on { background: var(--sel); }
+/* an entry is one button, as the landing page's cards: pressed in on a click or tap, its text never underlined */
+.tool-switch-item, .tool-switch-item:hover, .tool-switch-item:active, .tool-switch-home, .tool-switch-home:hover, .tool-switch-home:active { text-decoration: none; -webkit-tap-highlight-color: transparent; }
+.tool-switch-item:active, .tool-switch-home:active, .tool-switch-news:active { transform: scale(.98); background: var(--sel); transition: transform .06s; }
 .tool-switch-name .brand-name { font-weight: 650; }
 .tool-switch-name .brand-sub { margin-left: 3px; color: var(--accent); }
 .tool-switch-line { font-size: 12px; color: var(--fg2); }
@@ -146,7 +149,7 @@ button { font: inherit; color: inherit; }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 /* community/source links (Discord, GitHub): neutral .btn-mini that lines its
    icon up with the label and lights up on hover, no loud solid fill */
-.top-social { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
+.top-social { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; box-sizing: border-box; text-decoration: none; }   /* (the brand pill's height, on every page) */
 /* the world map page (no game files needed) */
 .top-social svg { display: block; }
 .top-social:hover { background: var(--bg3); border-color: var(--accent); }
@@ -521,6 +524,17 @@ input[type="range"] { accent-color: var(--accent); }
 ::-webkit-scrollbar-thumb { background: #2c323e; border-radius: 6px; border: 2px solid var(--bg1); }
 ::-webkit-scrollbar-thumb:hover { background: #3a4150; }
 ::-webkit-scrollbar-corner { background: transparent; }
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-color: #2c323e transparent; } }   /* (Firefox: the same colours) */
+/* the persistent themed scrollbar where the platform's own floats and hides (src/scrollbar.ts): a gutter at the
+   scroller's right edge, a track in it */
+.vbar-host { scrollbar-width: none; }
+.vbar-host.vbar-on { padding-right: 16px !important; }
+.vbar-host::-webkit-scrollbar { display: none; }
+.vbar { position: absolute; width: 6px; border-radius: 3px; background: rgba(255, 255, 255, .05); z-index: 3; touch-action: none; }
+.vbar::before { content: ''; position: absolute; inset: 0 -10px; }   /* a finger-sized hit area */
+.vbar[hidden] { display: none; }
+.vbar-thumb { width: 100%; border-radius: 3px; background: #3a4150; }
+.vbar:active .vbar-thumb { background: #4f5a6e; }
 
 kbd {
   font-family: var(--mono); font-size: 10px; background: var(--bg3); padding: 1px 5px;
@@ -1116,95 +1130,27 @@ kbd {
 .we-thumb { width: 28px; height: 28px; border-radius: 4px; border: 1px solid var(--line); object-fit: cover; background: var(--bg3); image-rendering: pixelated; }
 .we-nav { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 
-/* ------------------------------------------------------------------ mobile
-   desktop-only gate (src/mobile-gate.ts)
-   Anti-flash: on coarse-pointer (touch-first) devices the static app chrome
-   stays hidden until boot decides: mobile-gate.ts stamps .mgate-on (gate
-   mounted) or .mgate-off (normal boot) on <html>. A fine-pointer desktop
-   never matches the media query, so it can never blank. */
-@media (pointer: coarse) {
-  html:not(.mgate-off) #app { display: none; }
-}
-html.mgate-on #app { display: none; }
-
-.mgate {
-  position: fixed; inset: 0; z-index: 60; overflow-y: auto;
-  background: var(--bg0); color: var(--fg0);
-  font-size: 15px; line-height: 1.55;
-  outline: none; -webkit-tap-highlight-color: transparent;
-  /* notched phones: keep content out of the sensor housing / home bar */
-  padding: calc(18px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
-           calc(18px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
-}
-.mgate-inner { max-width: 560px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; }
-/* brand: the cloned topbar lockup, scaled up for the greeting */
-.mgate-brand { display: flex; justify-content: center; padding: 4vh 0 12px; }
-.mgate-brand .brand-mark { width: 34px; height: 34px; }
-.mgate-brand .brand-name { font-size: 24px; }
-.mgate-brand .brand-sub { font-size: 14px; }
-.mgate-title { margin: 2px 0 10px; font-size: 22px; font-weight: 650; text-align: center; }
-.mgate-lede { margin: 0; color: var(--fg1); text-align: center; }
-.mgate-actions { display: flex; flex-direction: column; gap: 10px; margin: 26px 0 8px; }
+/* ------------------------------------------------------------------ Brighter Data on a phone
+   (src/mobile-gate.ts): a dialog over the app, once per visit */
+.mgate-overlay { z-index: 70; padding: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+.modal.card.mgate { position: relative; width: min(440px, 100%); max-height: 88dvh; overflow-y: auto; gap: 12px; padding: 22px 18px 18px;
+  font-size: 15px; line-height: 1.5; }
+.mgate-close { position: absolute; top: 8px; right: 8px; width: 36px; height: 36px; border: 0; border-radius: 8px; background: none; color: var(--fg2); font-size: 16px; cursor: pointer; }
+.mgate-close:hover, .mgate-close:focus-visible { background: var(--bg3); color: var(--fg0); outline: none; }
+.modal.card .mgate-title { margin: 0 28px 0 0; font-size: 19px; font-weight: 650; line-height: 1.3; text-wrap: balance; }
+.mgate-lede { margin: 0; color: var(--fg1); }
+.mgate-actions { display: flex; flex-direction: column; gap: 8px; }
 .mgate .mgate-action {
-  display: flex; align-items: center; gap: 12px;
-  min-height: 56px; padding: 12px 16px;
-  background: var(--bg1); border: 1px solid var(--line); border-radius: 10px;
-  color: var(--fg0); font-size: 16px; font-weight: 600;
-  text-decoration: none; cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); color: var(--fg0);
+  font-size: 15px; font-weight: 600; text-decoration: none; -webkit-tap-highlight-color: transparent;
 }
-.mgate .mgate-action:hover { background: var(--bg2); border-color: var(--accent-dim); text-decoration: none; }
+.mgate .mgate-action:hover { border-color: var(--accent-dim); text-decoration: none; }
+.mgate .mgate-action:active { transform: scale(.985); background: var(--sel); }
 .mgate .mgate-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mgate .mgate-action svg { width: 20px; height: 20px; flex: none; }
-.mgate-action-ico { flex: none; width: 20px; text-align: center; color: var(--accent); font-size: 18px; font-weight: 700; }
-img.mgate-action-ico { height: 20px; }
-/* short landscape phones: the three cards fit side by side */
-@media (orientation: landscape) and (max-height: 480px) {
-  .mgate-actions { flex-direction: row; }
-  .mgate .mgate-action { flex: 1; flex-direction: column; justify-content: center; gap: 6px; text-align: center; }
-}
-/* desktop previews: quiet showcase cards under the actions. Each figure is
-   one enclosed card (image + caption inside the same border) so a caption
-   can never read as belonging to a neighbouring image. */
-.mgate-previews { margin-top: 26px; display: flex; flex-direction: column; gap: 14px; }
-.mgate-previews-label { color: var(--fg1); font-size: 15px; font-weight: 600; margin: 0; }
-.mgate-preview {
-  margin: 0; overflow: hidden;
-  background: var(--bg1); border: 1px solid var(--line); border-radius: 10px;
-}
-.mgate-preview img { display: block; width: 100%; height: auto; }
-.mgate-preview figcaption {
-  color: var(--fg2); font-size: 12px;
-  padding: 8px 12px; border-top: 1px solid var(--line);
-}
-@media (orientation: landscape) and (min-width: 640px) {
-  .mgate-previews { flex-direction: row; align-items: flex-start; flex-wrap: wrap; }
-  .mgate-previews-label { flex-basis: 100%; }
-  .mgate-preview { flex: 1; min-width: 0; }
-}
-/* the escape hatch: real (44px) tap target, quiet look */
-.mgate-foot { margin-top: auto; padding-top: 24px; text-align: center; }
-.mgate-bypass {
-  min-height: 44px; padding: 8px 12px;
-  background: none; border: none; cursor: pointer;
-  color: var(--fg2); font-size: 12px; text-decoration: underline;
-}
-.mgate-bypass:hover { color: var(--fg1); }
-/* inline help view: back control + the shared modal content, full-page */
-.mgate-help-head { display: flex; align-items: center; gap: 12px; margin: 2px 0 8px; }
-.mgate-help-head .mgate-title { margin: 0; text-align: left; }
-.mgate-back {
-  flex: none; min-height: 44px; min-width: 44px; padding: 8px 14px;
-  background: var(--bg2); border: 1px solid var(--line); border-radius: 8px;
-  color: var(--fg1); font-size: 14px; cursor: pointer;
-}
-.mgate-back:hover { background: var(--bg3); color: var(--fg0); }
-.mgate-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* the help content was sized for a modal column: give it document flow and
-   phone-readable type */
-.mgate .help-body { flex: none; min-height: auto; overflow: visible; padding-right: 0; font-size: 15px; }
-.mgate .help-body .small { font-size: 13px; }
-.mgate .help-a code, .mgate .help-intro code { font-size: 14px; }
-.mgate .help-section { font-size: 11px; }
+.mgate-action-ico { flex: none; width: 20px; height: 20px; }
+.mgate-continue { min-height: 44px; margin-top: 4px; font-size: 15px; font-weight: 600; }
 
 /* 2D maps: the canvas owns touch gestures, controls retain normal scrolling. */
 .map-view { height: 100%; display: flex; flex-direction: column; min-height: 200px; }

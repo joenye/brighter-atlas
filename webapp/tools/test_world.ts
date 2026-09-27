@@ -295,7 +295,7 @@ try {
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
   // the top bar's tool switch: every tool (this one marked) and the landing page
   await page.click('#topbar .tool-switch-btn');
-  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/viewer', '/'], 'the switch names every tool, then Home');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/viewer'], 'the switch leads with Home, then every tool');
   assert.equal(await page.$eval('.tool-switch-home', (a) => a.textContent), 'Home', 'the landing page is Home');
   assert.equal(await page.$eval('.tool-switch-menu a[aria-current=page]', (a) => a.getAttribute('href')), '/maps', 'this one marked');
   await page.keyboard.press('Escape');
