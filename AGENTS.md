@@ -18,14 +18,19 @@ The per-build decode data is produced offline, purely from analysis of the
 game's own files, never by inspecting or modifying a running game process or
 its memory.
 
-## The world map page (the one exception to "bring your own files")
+## Brighter Maps and Brighter Fashion (the two exceptions to "bring your own files")
 
-`webapp/index.html` (the site's home page) draws the game's 2D map
+`webapp/maps.html` (Brighter Maps) draws the game's 2D map
 for every game update from data the site itself serves under `world-data/`
-(see `webapp/src/world-atlas/data.ts` for the layout). That is the only game
-content the site distributes, and it is limited to the 2D map: terrain, room
-labels and their artwork. Nothing else from
-the game is ever served. Areas the game has not shown (sealed episodes) are
+(see `webapp/src/world-atlas/data.ts` for the layout), limited to the 2D map:
+terrain, room labels and their artwork.
+
+`webapp/fashion.html` (Brighter Fashion, the maintainer's decision of
+2026-09-27) dresses a character from data the site serves under
+`fashion-data/<update>/` (named by `fashion-data/latest.json`): the character
+creator's and every wearable item's meshes, textures, rigs, clips and item
+pictures, and its one place (a beach scene) drawn with the game's own
+programs. Nothing else from the game is ever served. Areas the game has not shown (sealed episodes) are
 never served at all: the data carries only their silhouette, which the page
 draws dark under fog with the episode's logo. A new feature that wants hosted game content is a
 decision for the maintainer, never a default. The page stays small and

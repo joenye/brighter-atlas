@@ -9,6 +9,7 @@
 // (the stored version record) and already-extracted categories show as done,
 // only the missing ones are offered, and the ingest merges into the record.
 
+import { toolUrl } from './sites.js';
 import { el, clear, fmtBytes, fmtInt, versionLabel, profileLabelDate, DESKTOP_ONLY_LINE } from './ui.js';
 import { gameVersion } from './game-build.js';
 import { CAT_BUNDLES, ALL_CATS, BUNDLE_LABEL, requiredBundles } from './extract/ingest.js';
@@ -132,7 +133,7 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
           'This app decodes the Brighter Shores asset bundles entirely in your browser. ',
           'Pick the files once: they are stored locally so next time it loads instantly.'),
       ...(existing ? [] : [el('p', { class: 'ob-world-link' },
-        'No game files? ', el('a', { href: './', text: 'Browse the world map for every game update' }), '.')]),
+        'No game files? ', el('a', { href: toolUrl('maps'), text: 'Browse the world map for every game update' }), '.')]),
       wherePaths,
       drop, grid,
       el('div', { class: 'ob-actions' },
@@ -141,7 +142,7 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
         el('span', { class: 'spacer' }), next),
       el('p', { class: 'dim small ob-legal' },
         'A fan-made project, not affiliated with or endorsed by Fen Research. ',
-        'Bring your own game files: nothing you pick is uploaded, and the only game data the site serves is the world map on its home page. ',
+        'Bring your own game files: nothing you pick is uploaded, and the only game data the site serves is for the world map and Brighter Fashion. ',
         DESKTOP_ONLY_LINE));
   }
 

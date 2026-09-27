@@ -1,0 +1,25 @@
+/* The landing page (index.html): the three tools, each a picture, its name, a line on what it does and a
+   way in. Cards side by side on wide screens, stacked on phones. */
+.home { min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg0); }
+.home-main { flex: 1; width: min(1180px, 100%); margin: 0 auto; padding: 36px 20px 28px; display: flex; flex-direction: column; gap: 28px; }
+.home-intro h1 { margin: 0 0 8px; font-size: clamp(22px, 3.2vw, 32px); font-weight: 600; color: var(--fg0); letter-spacing: -0.01em; }
+.home-intro p { margin: 0; max-width: 62ch; color: var(--fg1); font-size: 15px; line-height: 1.5; }
+.home-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.home-tool { display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; background: var(--bg2); border: 1px solid var(--line);
+  color: inherit; text-decoration: none; transition: border-color .15s, transform .15s, box-shadow .15s; }
+.home-tool:hover, .home-tool:focus-visible { border-color: var(--accent-dim); transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0, 0, 0, .35); outline: none; }
+.home-shot { display: block; aspect-ratio: 16 / 10; background: var(--bg3); overflow: hidden; }
+.home-shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.home-text { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 16px; flex: 1; }
+.home-name { font-size: 18px; color: var(--fg0); }
+.home-name .brand-name { font-weight: 600; }
+.home-name .brand-sub { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; color: var(--accent); margin-left: 2px; }
+.home-desc { color: var(--fg1); font-size: 14px; line-height: 1.5; flex: 1; }
+.home-go { color: var(--accent); font-weight: 600; font-size: 14px; }
+.home-foot { color: var(--fg2); font-size: 12.5px; text-align: center; }
+.home-foot p { margin: 0; }
+@media (max-width: 900px) {
+  .home-tools { grid-template-columns: 1fr; }
+  .home-main { padding: 22px 14px 20px; gap: 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .home-tool { transition: none; } .home-tool:hover { transform: none; } }

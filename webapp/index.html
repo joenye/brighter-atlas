@@ -2,65 +2,67 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Brighter Atlas</title>
-<meta name="description" content="The Brighter Shores world map for every game update. Slide through the dates to watch the world change. No game files needed.">
+<meta name="description" content="Fan-made tools for Brighter Shores: the world map for every game update, a browser for everything in your own game files, and a dressing room for every piece of equipment.">
 <meta name="theme-color" content="#12151b">
 <meta name="color-scheme" content="dark">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Brighter Atlas">
+<meta property="og:description" content="Fan-made tools for Brighter Shores: Brighter Maps, Brighter Data and Brighter Fashion.">
 <meta property="og:url" content="https://brighteratlas.com/">
-<meta property="og:description" content="The Brighter Shores world map for every game update. Slide through the dates to watch the world change.">
 <meta name="twitter:card" content="summary">
-<!-- the app's own look (css/app.css); css/world.css only lays this page out -->
-<link rel="preload" href="vendor/fonts/ui-symbols.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="vendor/fonts/ui-symbols2.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/app.css">
-<link rel="stylesheet" href="css/world.css">
+<link rel="stylesheet" href="css/home.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231b2130'/%3E%3Cpath d='M4 11.5 8 3l4 8.5-4-2z' fill='%2378b7ff'/%3E%3C/svg%3E">
 </head>
 <body>
-<div id="world" class="world">
+<div id="home" class="home">
   <header id="topbar">
     <div class="brand">
-      <a id="world-home" class="brand-link" href="./" title="Brighter Atlas: the world map at its latest update">
+      <a class="brand-link" href="./" title="Brighter Atlas">
         <span class="brand-mark">◮</span>
         <span class="brand-name">Brighter</span>
         <span class="brand-sub">atlas</span>
       </a>
-      <span id="build-badge" class="build-badge mono" title="Build version"></span>
-      <span class="world-title">World map</span>
-    </div>
-    <div class="top-right">
-      <a class="btn btn-cta top-world world-cta" href="viewer" title="Open the viewer with your own game files: every model, room, sound and text in the game">Explore more <span aria-hidden="true">→</span></a>
     </div>
   </header>
-  <div class="map-toolbar world-toolbar">
-    <div class="world-pick">
-      <button id="world-prev" class="btn" type="button" aria-label="Previous update" title="Previous update">&lsaquo;</button>
-      <button id="world-release" class="btn world-release" type="button" aria-haspopup="dialog" aria-controls="world-picker" title="Choose a game update">Loading...</button>
-      <button id="world-next" class="btn" type="button" aria-label="Next update" title="Next update">&rsaquo;</button>
-    </div>
-    <div class="world-slider">
-      <div id="world-ticks" class="world-ticks" aria-hidden="true"></div>
-      <input id="world-date" type="range" min="0" max="1" step="1" value="1" aria-label="Game update date">
-      <div id="world-bubble" class="world-bubble" aria-hidden="true"></div>
-    </div>
-  </div>
-  <div class="map-canvas-host world-map"><canvas id="world-canvas" tabindex="0" aria-label="World map. Drag to pan, pinch or scroll to zoom."></canvas><canvas id="world-fog" class="world-fog" aria-hidden="true"></canvas><div id="world-sealed" class="world-sealed"></div>
-    <label class="wmap-labels" title="Show room labels"><input id="world-labels" type="checkbox" checked><span>Labels</span></label>
-    <div id="world-loading" class="wmap-loading" hidden><span id="world-loading-text">Loading...</span></div>
-    <p id="world-status" class="world-status" role="status"></p></div>
-  <div id="world-picker" class="world-picker" role="dialog" aria-modal="true" aria-label="Choose a game update" hidden>
-    <div class="world-picker-card">
-      <div class="world-picker-head">
-        <input id="world-search" type="search" placeholder="Search updates, for example 0.99 or Sep 2026" aria-label="Search game updates" autocomplete="off">
-        <button id="world-picker-close" class="btn" type="button" aria-label="Close">&times;</button>
-      </div>
-      <ul id="world-list" class="world-list"></ul>
-    </div>
-  </div>
+  <main class="home-main">
+    <section class="home-intro">
+      <h1>Fan-made tools for Brighter Shores</h1>
+      <p>Explore the world, everything in the game, and every outfit. All three run in your browser, with nothing to install.</p>
+    </section>
+    <section class="home-tools">
+      <a class="home-tool" data-tool="maps" href="maps">
+        <span class="home-shot"><img src="landing/maps.webp" alt="The Brighter Shores world map, rooms named" loading="lazy" width="1200" height="750"></span>
+        <span class="home-text">
+          <span class="home-name"><span class="brand-name">Brighter</span> <span class="brand-sub">maps</span></span>
+          <span class="home-desc">The world map for every game update: every room and its name. Slide through the updates and watch the world grow. No game files needed.</span>
+          <span class="home-go">Open the map <span aria-hidden="true">→</span></span>
+        </span>
+      </a>
+      <a class="home-tool" data-tool="data" href="viewer">
+        <span class="home-shot"><img src="landing/data.webp" alt="A room of the game in 3D, in Brighter Data" loading="lazy" width="1200" height="750"></span>
+        <span class="home-text">
+          <span class="home-name"><span class="brand-name">Brighter</span> <span class="brand-sub">data</span></span>
+          <span class="home-desc">Everything inside the game from your own game files: models, rooms in 3D, animations, pictures, sounds and text. It all stays on your computer.</span>
+          <span class="home-go">Open Brighter Data <span aria-hidden="true">→</span></span>
+        </span>
+      </a>
+      <a class="home-tool" data-tool="fashion" href="fashion">
+        <span class="home-shot"><img src="landing/fashion.webp" alt="A character on the beach in Brighter Fashion" loading="lazy" width="1200" height="750"></span>
+        <span class="home-text">
+          <span class="home-name"><span class="brand-name">Brighter</span> <span class="brand-sub">fashion</span></span>
+          <span class="home-desc">Design a character and try on every weapon, shield, armour piece and cosmetic, in every tier and dye. Save your looks, share them, or take a picture on the beach.</span>
+          <span class="home-go">Open Brighter Fashion <span aria-hidden="true">→</span></span>
+        </span>
+      </a>
+    </section>
+    <footer class="home-foot">
+      <p>A fan project, not made or endorsed by the makers of Brighter Shores.</p>
+    </footer>
+  </main>
 </div>
-<script type="module" src="js/world.js"></script>
+<script type="module" src="js/home.js"></script>
 </body>
 </html>

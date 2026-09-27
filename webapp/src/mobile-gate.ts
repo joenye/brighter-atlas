@@ -8,6 +8,7 @@
 // also holds the anti-flash rule keyed off the .mgate-on/.mgate-off classes
 // stamped on <html> here.
 
+import { toolUrl } from './sites.js';
 import { el, clear, DESKTOP_ONLY_LINE } from './ui.js';
 import { buildHelpContent } from './help.js';
 
@@ -44,10 +45,12 @@ function renderHome(root: HTMLElement): HTMLElement {
     'Help/FAQs');
   helpBtn.addEventListener('click', () => renderHelp(root));
 
-  // the part of the site that works on a phone: the world map (home page)
-  const worldLink = el('a', { class: 'mgate-action', href: './' },
+  // the parts of the site that work on a phone: the world map and Brighter Fashion
+  const worldLink = el('a', { class: 'mgate-action', href: toolUrl('maps') },
     el('span', { class: 'mgate-action-ico', 'aria-hidden': 'true', text: '◮' }), 'World map');
-  const actions = el('div', { class: 'mgate-actions' }, worldLink, helpBtn);
+  const fashionLink = el('a', { class: 'mgate-action', href: toolUrl('fashion') },
+    el('span', { class: 'mgate-action-ico', 'aria-hidden': 'true', text: '◮' }), 'Brighter Fashion');
+  const actions = el('div', { class: 'mgate-actions' }, worldLink, fashionLink, helpBtn);
   for (const key of ['discord', 'github']) {
     const a = cloneTopbar(`#topbar .top-social.${key}`);
     if (!a) continue;   // topbar markup moved: degrade to Help only

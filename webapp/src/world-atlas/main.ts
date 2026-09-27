@@ -1,4 +1,4 @@
-// The world map (index.html: the site's home page): the 2D map of every
+// The world map (maps.html, Brighter Maps): the 2D map of every
 // game release, no game files needed. Pick a release from the list or slide
 // through the dates; the camera stays put so the world can be watched
 // changing. The state lives in the URL hash (#r=<release id or YYYY-MM-DD>
@@ -11,11 +11,13 @@ import { SealedLayer } from './sealed.js';
 import { openWhatsNew, maybeAutoShowWhatsNew } from '../changelog.js';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
 import { gameVersion } from '../game-build.js';
+import { toolUrl, linkTools } from '../sites.js';
 
 // Links from before the site opened on the world map (#/mesh/3, ?data=...)
-// belong to the viewer (viewer.html, at /viewer): send them on whole.
+// belong to the viewer (Brighter Data): send them on whole.
 const viewerLink = location.hash.startsWith('#/') || new URLSearchParams(location.search).has('data');
-if (viewerLink) location.replace(`viewer${location.search}${location.hash}`);
+if (viewerLink) location.replace(toolUrl('data', `${location.search}${location.hash}`));
+linkTools();
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('world-canvas'), host = canvas.parentElement!;
@@ -265,7 +267,7 @@ $('world-home').addEventListener('click', (e) => {
 // A new hash (typed, or set by a script) applies at once; the page's own
 // updates use replaceState, which fires no hashchange.
 addEventListener('hashchange', () => {
-  if (location.hash.startsWith('#/')) { location.replace(`viewer${location.search}${location.hash}`); return; }   // a viewer route
+  if (location.hash.startsWith('#/')) { location.replace(toolUrl('data', `${location.search}${location.hash}`)); return; }   // a viewer route
   if (!releases.length) return;
   const r = readState();
   slider.value = String(minutes(r));

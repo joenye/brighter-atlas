@@ -3,11 +3,12 @@
 A fully client-side viewer for the **Brighter Shores** asset bundles
 (engine "mahogany", Fen Research). Users provide their own `assetBundle0` to
 `assetBundle8` cache files; everything decodes in-browser. **No game data is
-committed, ever, and none is distributed, with one exception:** the world map
-page (`index.html`, the site's home page) draws every game update's 2D map
-(terrain, room labels and their artwork)
-from data the site serves under `world-data/`. Nothing else from the game is
-served; widening that is the maintainer's decision (AGENTS.md).
+committed, ever, and none is distributed, with two exceptions (AGENTS.md):**
+Brighter Maps (`maps.html`) draws every game update's 2D map (terrain, room
+labels and their artwork) from data the site serves under `world-data/`, and
+Brighter Fashion (`fashion.html`) dresses a character from the equipment and
+body data the site serves under `fashion-data/`. Nothing else from the game is
+served; widening that is the maintainer's decision.
 
 ## Layout
 - `webapp/`: the app. TypeScript in `src/`, bundled by esbuild
@@ -16,18 +17,29 @@ served; widening that is the maintainer's decision (AGENTS.md).
   libraries (npm devDeps exist only for their types). `defaults/` ships the
   shared room-name override table (no user annotations). `data-fixtures/` is
   the committed synthetic dataset the smoke test runs against.
-- Two pages. `index.html` (the home page, `/`) is the world map:
-  `src/world-atlas/` + `css/world.css`, entry `js/world.js`, no game files
-  needed. `viewer.html` (`/viewer`) is the viewer for the user's own files,
-  entry `js/main.js`. The world map forwards old viewer links (`/#/...`,
-  `/?data=...`) to `/viewer` unchanged. Sealed areas (episodes the game has
+- Four pages, each tool on its own subdomain of the site (`src/sites.ts`
+  `toolUrl`: `maps.`, `data.`, `fashion.`; served anywhere else they are
+  `/maps`, `/viewer`, `/fashion`), every top bar "Brighter" and the tool's
+  name. `index.html` (the bare domain) is the landing page, entry
+  `js/home.js`: the three tools, and it sends links from before the tools
+  had addresses of their own on whole (`#/...`, `?data=` to Brighter Data, a
+  map place `#r=...` to Brighter Maps). `maps.html` (Brighter Maps) is the
+  world map: `src/world-atlas/` + `css/world.css`, entry `js/world.js`, no
+  game files needed. `viewer.html` (Brighter Data) is the viewer for the
+  user's own files, entry `js/main.js`. `fashion.html` (Brighter Fashion):
+  `src/fashion/` + `css/fashion.css`, entry `js/fashion.js`, split (the
+  game's renderer, for its places, is a chunk under `js/chunks/`, fetched
+  only when one is picked); its data comes from `fashion-data/latest.json`
+  and the folder it names (`src/fashion/data.ts`). The landing page's
+  pictures (`landing/*.webp`) are served by the site, never committed. Sealed areas (episodes the game has
   not shown) arrive as silhouettes only and are drawn dark under fog by
   `src/world-atlas/sealed.ts`. The world map reuses the
   Maps renderer and camera (`viewers/maps/renderer.ts`, `pan-zoom.ts`);
   `tools/test_world.ts` (run by smoke) covers it on synthetic data.
 - Hosting, deployment and release tooling are **not part of this repo**: it
-  builds a static site and deliberately knows nothing about where or how
-  that site is served.
+  builds a static site and deliberately knows nothing about how that site is
+  served. It knows only the tools' public addresses, for its links
+  (`src/sites.ts`).
 
 ## Commands
 ```bash
@@ -52,7 +64,8 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   (IndexedDB `userdata`, keyed by mesh content hash) but are not part of the
   portable file, and they add no save/load UI of their own.
 - **The runtime layout is a contract.** `viewer.html` loads `js/main.js`,
-  `index.html` loads `js/world.js`;
+  `maps.html` loads `js/world.js`, `fashion.html` `js/fashion.js`,
+  `index.html` `js/home.js`;
   workers are spawned by path (`js/extract/worker.js`, …); the service worker
   must stay at the webapp root (`sw.js`) so its scope covers the page, and it
   serves decoded payloads at `cs/<versionId>/…`. The esbuild config

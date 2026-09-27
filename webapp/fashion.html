@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" class="mgate-off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Brighter Fashion</title>
+<meta name="description" content="Design a Brighter Shores character and try on every weapon, shield, armour piece and cosmetic in every tier and dye, then save the look, share it or take a picture. A fan-made tool, nothing to install.">
+<meta name="theme-color" content="#12151b">
+<meta name="color-scheme" content="dark">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Brighter Fashion">
+<meta property="og:description" content="Design a Brighter Shores character and try on every piece of equipment and every dye.">
+<meta property="og:url" content="https://fashion.brighteratlas.com/">
+<meta name="twitter:card" content="summary">
+<link rel="preload" href="fashion-data/latest.json" as="fetch" crossorigin>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/fashion.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231b2130'/%3E%3Cpath d='M4 11.5 8 3l4 8.5-4-2z' fill='%2378b7ff'/%3E%3C/svg%3E">
+</head>
+<body>
+<div id="app" class="fashion">
+  <header id="topbar">
+    <div class="brand">
+      <a class="brand-link" data-tool="fashion" href="fashion" title="Brighter Fashion: start again">
+        <span class="brand-mark">◮</span>
+        <span class="brand-name">Brighter</span>
+        <span class="brand-sub">fashion</span>
+      </a>
+      <span id="build" class="build-badge mono of-exp" title="The game update these clothes and faces come from"></span>
+    </div>
+    <div class="top-right">
+      <button id="undo" class="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9"/></svg></button>
+      <button id="redo" class="btn-mini of-icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7h5V2M20 7a9 9 0 1 0 1.5 9"/></svg></button>
+      <button id="shot" class="btn-mini of-icon-sm" title="Save the view as a picture" aria-label="Save picture"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3l2-3h6l2 3h3v13H4z"/><circle cx="12" cy="13" r="4"/></svg><span>Save picture</span></button>
+      <button id="share" class="btn btn-cta of-share" title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span>Looks</span></button>
+    </div>
+  </header>
+  <main></main>
+  <div class="of-rotate" role="alert"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg><b>Turn your phone upright</b><span>Brighter Fashion is made for holding your phone this way up.</span></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+</div>
+<script type="module" src="js/fashion.js"></script>
+</body>
+</html>

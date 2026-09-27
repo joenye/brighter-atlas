@@ -1,5 +1,6 @@
 // Build: bundle each runtime entry point with esbuild to the exact paths the
-// app expects at runtime (viewer.html loads js/main.js, index.html js/world.js; the service worker
+// app expects at runtime (viewer.html loads js/main.js, maps.html js/world.js, fashion.html js/fashion.js,
+// index.html js/home.js; the service worker
 // must sit at the app root so its scope covers the page; workers are spawned
 // by path string).
 //
@@ -44,6 +45,11 @@ const jobs: BuildOptions[] = [
     splitting: false,
   },
   { ...common, entryPoints: { sw: 'src/sw.ts' }, outdir: '.' },
+  // Brighter Fashion (fashion.html): split, so the game's renderer (its places) is a chunk of its own,
+  // fetched only when a place is picked; chunk names carry their content's hash
+  { ...common, entryPoints: { 'js/fashion': 'src/fashion/app.ts' }, outdir: '.', splitting: true, chunkNames: 'js/chunks/[name]-[hash]' },
+  // the landing page (index.html)
+  { ...common, entryPoints: { 'js/home': 'src/home.ts' }, outdir: '.' },
 ];
 
 if (watch) {

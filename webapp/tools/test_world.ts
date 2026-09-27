@@ -1,4 +1,4 @@
-// The world map (index.html, the site's home page) against synthetic world data
+// The world map (maps.html, Brighter Maps) against synthetic world data, and the landing page (index.html)
 // (tools/map-fixture.ts pixels and records, packed the way the site serves
 // them): loads the newest release, switches by slider, buttons, list search
 // and script, toggles labels, keeps state in the URL, the bare
@@ -45,7 +45,7 @@ await writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ format: 1,
   packs: [{ file: 'packs/2025-01-a.json', count: 2 }, { file: 'packs/latest-a.json', count: 2 }], pieces: [1, 0, 1, 0],
   sealed: { vault: { name: 'The Vault', logo: 'art/vault.png' } } }));
 
-const { server, port } = await serve(root), site = `http://127.0.0.1:${port}`, base = `${site}/`;
+const { server, port } = await serve(root), site = `http://127.0.0.1:${port}`, base = `${site}/maps`;
 const browser = await puppeteer.launch({ executablePath: CHROME!, headless: true, args: ['--no-sandbox', ...GL_ARGS] });
 try {
   const page = await browser.newPage(), errors: string[] = [];
@@ -98,7 +98,7 @@ try {
   await page.evaluate(() => (window as any).__world.show('aaaa'));
   await page.click('#world-home');
   await page.waitForFunction(() => document.documentElement.dataset.release === 'bbbbbbbbbbbbbbbb');
-  assert.equal(await page.evaluate(() => location.pathname), '/', 'still the world map');
+  assert.equal(await page.evaluate(() => location.pathname), '/maps', 'still the world map');
   // a script drives it (time-lapse capture)
   assert.deepEqual(await page.evaluate(() => (window as any).__world.releases().map((r: any) => r.id)), ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb']);
   assert.deepEqual(await page.evaluate(() => (window as any).__world.releases().map((r: any) => r.build)), [null, '1.2.3-0123456789abcdef'], 'scripts see each build string');
@@ -121,18 +121,26 @@ try {
   const overflow = await page.evaluate(() => [...document.querySelectorAll('#topbar, #topbar *, .world-toolbar, .world-toolbar *, .map-status')]
     .filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1).map((e) => e.className || e.tagName));
   assert.deepEqual(overflow, [], 'no control runs past a phone screen');
-  // links from before the site opened on the map belong to the viewer: sent on whole
+  // links from before the tools had addresses of their own (they name the landing page): a viewer route goes
+  // to the viewer, a place on the map to the map, whole
   await page.goto(`${site}/#/mesh/3`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => location.pathname === '/viewer');
   assert.equal(await page.evaluate(() => location.hash), '#/mesh/3', 'an old deep link keeps its route');
   await page.goto(`${site}/?data=data#/map/0`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => location.pathname === '/viewer');
   assert.equal(await page.evaluate(() => location.search + location.hash), '?data=data#/map/0', 'and its data folder');
-  // the two pages link to each other
+  await page.goto(`${site}/#r=2025-02-20&l=0`, { waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => location.pathname === '/maps');
+  await page.waitForFunction(() => document.documentElement.dataset.release === 'aaaaaaaaaaaaaaaa');   // (the place it named: the update of 20-Feb)
+  // the landing page names each tool and links to it; the map and the viewer link to each other
+  await page.goto(`${site}/`, { waitUntil: 'networkidle0' });
+  assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/maps', '/viewer', '/fashion'], 'the landing page links every tool');
   await page.goto(base, { waitUntil: 'networkidle0' });
-  assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), 'viewer', 'the map links to the viewer');
+  assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), '/viewer', 'the map links to the viewer');
+  assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
   await page.goto(`${site}/viewer`, { waitUntil: 'networkidle0' });
-  assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), './', 'the viewer links to the map');
+  assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), '/maps', 'the viewer links to the map');
+  assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'data', 'Brighter Data');
   assert.deepEqual(errors.filter((e) => !/404|Failed to load resource/.test(e)), [], 'no page errors');
   console.log('world map: all checks passed');
 } finally {

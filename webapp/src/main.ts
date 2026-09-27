@@ -35,6 +35,10 @@ import { entryByOrdinal } from './store.js';
 import type { AppStore, IndexEntry, FetchErrorDetail } from './store.js';
 import { partRecolor } from './recolor.js';
 import { episodeFilters, matchesFilters, type FilterDef } from './list-filters.js';
+import { linkTools } from './sites.js';
+
+// the other tools' links (the world map button) point at their own addresses
+linkTools();
 
 
 // a parsed hash route ('#/mesh/12', '#/diff/<a>..<b>', …)

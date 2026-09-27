@@ -41,10 +41,10 @@ export function buildHelpContent(): HTMLElement {
 
     ...section('Getting started',
       qa('What do I need?',
-        p('A desktop browser and your own Brighter Shores install. Mobile isn’t supported: it lacks the memory and storage this needs. (The world map on the home page needs neither, and works on phones.)')),
+        p('A desktop browser and your own Brighter Shores install. Mobile isn’t supported: it lacks the memory and storage this needs. (Brighter Maps and Brighter Fashion, the site’s other tools, need neither, and work on phones.)')),
       qa('Where do the assets come from? (bring your own)',
         p('You supply your own ', code('assetBundle0'), ' … ', code('assetBundle8'),
-          ' files from your own Brighter Shores install. Nothing you pick is uploaded, and the viewer serves no game data (the world map on the home page is the one part of the site that does). ',
+          ' files from your own Brighter Shores install. Nothing you pick is uploaded, and Brighter Data serves no game data (the world map and Brighter Fashion are the parts of the site that do). ',
           code('assetBundle0'), ' (the game’s master index) is always required; the others are only needed for the categories you choose to extract.')),
       qa('How do I use it?',
         p('Point it at your bundle files, pick what to extract, and it decodes everything in your browser. Return visits load instantly from storage.'))),
@@ -77,7 +77,7 @@ export function buildHelpContent(): HTMLElement {
     el('p', { class: 'help-legal small dim' },
       'A fan-made project, not affiliated with or endorsed by Fen Research. ',
       'Brighter Shores, its assets and trademarks belong to Fen Research. ',
-      'Bring your own game files: nothing you pick is uploaded, and the only game data the site serves is the world map on its home page.'));
+      'Bring your own game files: nothing you pick is uploaded, and the only game data the site serves is for the world map and Brighter Fashion.'));
 
   // build version (Git tag + commit), baked in at deploy time; "dev build" locally
   const verEl = el('b', { text: buildLabel() });
