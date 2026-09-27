@@ -36,9 +36,11 @@ import type { AppStore, IndexEntry, FetchErrorDetail } from './store.js';
 import { partRecolor } from './recolor.js';
 import { episodeFilters, matchesFilters, type FilterDef } from './list-filters.js';
 import { linkTools } from './sites.js';
+import { attachToolSwitch } from './tool-switch.js';
 
-// the other tools' links (the world map button) point at their own addresses
+// the other tools' links (the world map button, the top bar's tool switch) point at their own addresses
 linkTools();
+attachToolSwitch('data');
 
 
 // a parsed hash route ('#/mesh/12', '#/diff/<a>..<b>', …)

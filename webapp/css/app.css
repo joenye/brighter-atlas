@@ -58,6 +58,21 @@ button { font: inherit; color: inherit; }
 .brand-mark { color: var(--accent); font-size: 15px; }
 .brand-name { font-weight: 650; letter-spacing: .2px; }
 .brand-sub { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; }
+/* the tool switch beside the brand (src/tool-switch.ts): a chevron that opens the Brighter tools */
+.tool-switch { position: relative; align-self: center; display: inline-flex; }
+.tool-switch-btn { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-left: -4px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--fg2); cursor: pointer; }
+.tool-switch-btn:hover, .tool-switch-btn[aria-expanded="true"] { color: var(--fg0); background: var(--bg3); border-color: var(--line); }
+.tool-switch-btn svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tool-switch-menu { position: absolute; top: calc(100% + 8px); left: -8px; z-index: 90; min-width: 250px; display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0, 0, 0, .55); white-space: normal; }
+.tool-switch-menu[hidden] { display: none; }
+.tool-switch-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 7px; color: var(--fg0); text-decoration: none; }
+.tool-switch-item:hover, .tool-switch-item:focus-visible, .tool-switch-home:hover, .tool-switch-home:focus-visible { background: var(--bg3); outline: none; }
+.tool-switch-item.on { background: var(--sel); }
+.tool-switch-name .brand-name { font-weight: 650; }
+.tool-switch-name .brand-sub { margin-left: 3px; color: var(--accent); }
+.tool-switch-line { font-size: 12px; color: var(--fg2); }
+.tool-switch-home { margin-top: 2px; padding: 8px 10px; border-top: 1px solid var(--line-soft); border-radius: 0 0 7px 7px; color: var(--accent); font-size: 12.5px; text-decoration: none; }
 .build-badge {
   align-self: baseline;   /* sit on the text baseline, aligned with the "ATLAS" wordmark */
   font-size: 11px; white-space: nowrap;

@@ -281,6 +281,12 @@ try {
   await page.goto(base, { waitUntil: 'networkidle0' });
   assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), '/viewer', 'the map links to the viewer');
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
+  // the top bar's tool switch: every tool (this one marked) and the landing page
+  await page.click('#topbar .tool-switch-btn');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/maps', '/viewer', '/fashion', '/'], 'the switch names every tool');
+  assert.equal(await page.$eval('.tool-switch-menu a[aria-current=page]', (a) => a.getAttribute('href')), '/maps', 'this one marked');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.$eval('.tool-switch-menu', (m) => (m as any).hidden), true, 'Escape closes it');
   await page.goto(`${site}/viewer`, { waitUntil: 'networkidle0' });
   assert.equal(await page.$eval('#topbar .top-world', (a) => a.getAttribute('href')), '/maps', 'the viewer links to the map');
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'data', 'Brighter Data');

@@ -15,12 +15,14 @@ import { openWhatsNew, maybeAutoShowWhatsNew } from '../changelog.js';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
 import { gameVersion } from '../game-build.js';
 import { toolUrl, linkTools } from '../sites.js';
+import { attachToolSwitch } from '../tool-switch.js';
 
 // Links from before the site opened on the world map (#/mesh/3, ?data=...)
 // belong to the viewer (Brighter Data): send them on whole.
 const viewerLink = location.hash.startsWith('#/') || new URLSearchParams(location.search).has('data');
 if (viewerLink) location.replace(toolUrl('data', `${location.search}${location.hash}`));
 linkTools();
+attachToolSwitch('maps');
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('world-canvas'), host = canvas.parentElement!;

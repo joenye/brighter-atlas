@@ -9,12 +9,14 @@ import {Preview, FRAMES, prefetch, Thumbnailer, report} from './render.js';
 import {Wardrobe, h, icon} from './wardrobe.js';
 import {attachScrollbar} from './scrollbar.js';
 import {linkTools} from '../sites.js';
+import {attachToolSwitch} from '../tool-switch.js';
 
 // (failures on a phone under test, whose console is out of reach, go to a local data server's log)
 addEventListener('error', e => report('page error', e.error ?? e.message));
 addEventListener('unhandledrejection', e => report('unhandled rejection', e.reason));
 
 linkTools();
+attachToolSwitch('fashion');
 const pack = await fetch(at('pack.json')).then(r => r.json());
 const index = makeIndex(pack);
 const SEG_STYLE: Record<string, StyleCat | null> = {hair: 'hair', face: 'face', eyes: null, jaw: 'jaw', torso: 'torso', legs: 'legs', feet: 'feet', skin: null};

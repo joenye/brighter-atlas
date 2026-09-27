@@ -1957,8 +1957,9 @@ async function mobileGateSuite(browser: any) {
     href: n.getAttribute('href'), target: n.getAttribute('target'), rel: n.getAttribute('rel'),
     svg: !!n.querySelector('svg'),
   })));
-  ok(acts.length === 4 && acts.every((a) => a.h >= 44) && /World map/.test(acts[0].label) && acts[0].href === './',
-    `gate offers 4 tappable actions ≥44px, the world map (home page) first (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
+  ok(acts.length === 5 && acts.every((a) => a.h >= 44) && /World map/.test(acts[0].label) && acts[0].href === '/maps'
+    && /Brighter Fashion/.test(acts[1].label) && acts[1].href === '/fashion',
+    `gate offers 5 tappable actions ≥44px, the phone-ready tools (Brighter Maps, Brighter Fashion) first (${acts.map((a) => `${a.label} ${Math.round(a.h)}px`).join(', ')})`);
   // the single source of truth for each URL/icon is the (hidden) topbar markup
   const srcLinks = await page.evaluate(() => Object.fromEntries(['discord', 'github'].map((k) =>
     [k, document.querySelector(`#topbar .top-social.${k}`)?.getAttribute('href')])));

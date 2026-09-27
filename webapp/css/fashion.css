@@ -169,7 +169,7 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
   .of-controls { right: 8px; bottom: 8px; }
   .of-charcard { top: 8px; left: 8px; }
   #topbar { gap: 6px; padding: 0 8px; padding-top: env(safe-area-inset-top, 0px); height: calc(50px + env(safe-area-inset-top, 0px)); }
-  .of-hide-sm, .of-exp, .brand-sub { display: none; }
+  .of-hide-sm, .of-exp { display: none; }
   .of-title { margin-left: 2px; padding-left: 8px; }
   .of-icon-sm span, .of-share span { display: none; }
   #topbar .btn-mini, #topbar .btn { min-width: 40px; min-height: 36px; justify-content: center; }
