@@ -62,7 +62,12 @@ export const clean = (s: string) => s.replace(/[\u{F0000}-\u{FFFFD}]/gu, '').rep
 
 export interface Member { item: any; variant: number; label: string | null }
 // the game's weapon categories, in words
-const WEAPON_GROUP: Record<string, string> = {'Melee 1h': 'One-handed', 'Melee 2h': 'Two-handed', 'Ranged': 'Ranged'};
+// A weapon's hands and reach, from its type in the game's data (pack: hands 1 or 2, ranged); data exported
+// before those were kept falls back to the category, which says only "Ranged" for both hands.
+export const twoHandedItem = (it: any) => it?.hands != null ? it.hands === 2 : it?.category === 'Melee 2h';
+const isRanged = (it: any) => it.ranged ?? it.category === 'Ranged';
+const WEAPON_GROUPS = ['One-handed melee', 'Two-handed melee', 'One-handed ranged', 'Two-handed ranged'];
+const weaponGroup = (it: any) => `${twoHandedItem(it) ? 'Two' : 'One'}-handed ${isRanged(it) ? 'ranged' : 'melee'}`;
 
 export interface Entry { key: string; slot: EquipSlot; name: string; group: string; kind: string; members: Member[]; icon?: number; search: string }
 /** The two halves of every slot's list: equipment (armour, shields, weapons and capes: what gives a character
@@ -91,13 +96,13 @@ export function allEntries(pack: any): Entry[] {
       continue;
     }
     // combat gear groups by faction (the Guard gear last), weapons by how they are held, transmogs by their set
-    const group = it.kind === 'cosmetic' ? it.source ?? 'Other' : it.kind === 'weapon' ? WEAPON_GROUP[it.category] ?? it.category ?? 'Other' : it.faction ?? 'Guard';
+    const group = it.kind === 'cosmetic' ? it.source ?? 'Other' : it.kind === 'weapon' ? weaponGroup(it) : it.faction ?? 'Guard';
     out.push({key: `item:${it.id}`, slot: it.slot, name, group, kind: it.kind,
       members: it.variants.map((v: any, i: number) => ({item: it, variant: i, label: it.kind === 'cosmetic' ? clean(v.name) : v.grade})),
       icon: it.variants[0]?.icon,
       search: `${name} ${it.source ?? ''} ${it.faction ?? ''} ${it.kind} ${it.slot} ${it.variants.map((v: any) => v.name ?? '').join(' ')}`.toLowerCase()});
   }
-  const order = (g: string) => ['One-handed', 'Two-handed', 'Ranged'].includes(g) ? ['One-handed', 'Two-handed', 'Ranged'].indexOf(g) * 0.1 : (FACTIONS as readonly string[]).includes(g) ? 0 : g === 'Guard' ? 1 : g.startsWith('Profession') ? 2 : g.startsWith('Episode') ? 3 : g.startsWith('Combat') ? 4 : 5;
+  const order = (g: string) => WEAPON_GROUPS.includes(g) ? WEAPON_GROUPS.indexOf(g) * 0.1 : (FACTIONS as readonly string[]).includes(g) ? 0 : g === 'Guard' ? 1 : g.startsWith('Profession') ? 2 : g.startsWith('Episode') ? 3 : g.startsWith('Combat') ? 4 : 5;
   // equipment before transmogs, then the groups in their order
   return out.sort((a, b) => (a.kind === 'cosmetic' ? 1 : 0) - (b.kind === 'cosmetic' ? 1 : 0) || order(a.group) - order(b.group) || a.group.localeCompare(b.group) || a.name.localeCompare(b.name, undefined, {numeric: true}));
 }
@@ -163,7 +168,7 @@ export class Wardrobe {
       e.kind === 'cosmetic' ? (e.members.length > 1 ? clean(v.name).split(' ')[0] : null)
         : e.members.length > 1 ? e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant))?.label : null,
       e.kind === 'cape' && it.variants.length > 1 ? v.grade : null,
-      v?.colourable && it.dyeable ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null,
+      v?.colourable && takesDye(it) ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null,
     ].filter(Boolean);
     return bits.join(' · ') || (e.kind === 'cosmetic' ? 'Cosmetic' : '');
   }
@@ -231,7 +236,7 @@ export class Wardrobe {
       return p && (Array.isArray(p.r1) || Array.isArray(p.r2)) ? [`${hex(p.r1)}|${hex(p.r2)}`, null] : [null, null];
     }
     if (it.kind === 'cosmetic') return [v.colour?.rgb ?? null, null];
-    if (!it.dyeable) return [null, null];
+    if (!takesDye(it)) return [null, null];
     const id = (worn && worn.item === it.id ? worn.colour : null) ?? this.pack.defaultColour;
     return [this.pack.dyes.find((d: any) => d.id === id)?.colour ?? null, worn && worn.item === it.id ? worn.colour : null];
   }
@@ -336,7 +341,7 @@ export class Wardrobe {
     const keep = cur && e.members.find(m => m.item.id === cur.item);
     if (keep) return {item: keep.item.id, variant: cur!.variant, colour: cur!.colour};
     const m = e.members[e.kind === 'cape' ? e.members.length - 1 : 0];
-    return {item: m.item.id, variant: m.variant, colour: m.item.dyeable ? cur?.colour ?? null : null};
+    return {item: m.item.id, variant: m.variant, colour: takesDye(m.item) ? cur?.colour ?? null : null};
   }
   /** Wear the entry; the worn one again takes it off (the slot's None row does too, but nobody looks for it). */
   private pick(e: Entry) {
@@ -395,7 +400,7 @@ export class Wardrobe {
     // a one-line summary that opens the full controls in place of the list (on phones the worn row's Customise does)
     const bits = [e.members.length > 1 ? (e.kind === 'cosmetic' ? clean(v.name).split(' ')[0] : e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant))?.label) : null,
       e.kind === 'cape' && it.variants.length > 1 ? v.grade : null,
-      v.colourable && it.dyeable ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null].filter(Boolean);
+      v.colourable && takesDye(it) ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null].filter(Boolean);
     const adjusting = this.root.classList.contains('adjusting');
     // name what's inside: a weapon has tiers but no dye, a cosmetic colours
     const can = [e.members.length > 1 ? (e.kind === 'cosmetic' ? 'Colour' : 'Tier') : '', e.kind === 'cape' && it.variants.length > 1 ? 'faction' : '', dyeable(e) ? 'dye' : ''].filter(Boolean);
@@ -434,7 +439,7 @@ export class Wardrobe {
         const on = same(m);
         const mv = m.item.variants[m.variant];
         const variant = e.kind === 'cape' ? Math.min(w.variant, m.item.variants.length - 1) : m.variant;
-        const pick = () => this.hooks.equip(e.slot, {item: m.item.id, variant, colour: m.item.dyeable ? w.colour : null});
+        const pick = () => this.hooks.equip(e.slot, {item: m.item.id, variant, colour: takesDye(m.item) ? w.colour : null});
         return isColour
           ? el('button', {class: `swatch${on ? ' on' : ''}`, 'aria-pressed': String(on), title: clean(mv.name), 'aria-label': clean(mv.name), style: `background:${mv.swatch ?? mv.colour?.rgb ?? '#777'}`, onclick: pick})
           : el('button', {class: on ? 'on' : '', 'aria-pressed': String(on), onclick: pick,
@@ -448,7 +453,7 @@ export class Wardrobe {
       const material = materialOf(e.name);
       if (worn.length < set.length) kids.push(el('button', {class: 'btn of-wide of-set', onclick: () => {
         const changes: Partial<Record<EquipSlot, Worn>> = {};
-        for (const o of set) { const m = o.members[Math.min(w.variant, o.members.length - 1)]; changes[o.slot] = {item: m.item.id, variant: m.variant, colour: m.item.dyeable ? w.colour : null}; }
+        for (const o of set) { const m = o.members[Math.min(w.variant, o.members.length - 1)]; changes[o.slot] = {item: m.item.id, variant: m.variant, colour: takesDye(m.item) ? w.colour : null}; }
         this.hooks.equipMany(changes);
       }}, icon('set'), `Wear the matching ${material} pieces (${set.length + 1} in all)`));
       const offGrade = worn.filter(o => this.state.equip[o.slot]!.variant !== w.variant);
@@ -458,11 +463,11 @@ export class Wardrobe {
         this.hooks.equipMany(changes);
       }}, icon('set'), `Make the other ${material} pieces ${e.members[w.variant]?.label ?? 'this tier'} too`));
     }
-    if (v.colourable && it.dyeable) {
+    if (v.colourable && takesDye(it)) {
       const cur = w.colour ?? this.pack.defaultColour;
       const dye = this.pack.dyes.find((d: any) => d.id === cur);
       kids.push(el('div', {class: 'label'}, 'Dye', el('b', {}, dye?.name ?? '')));
-      const others = this.slots.filter(s => s !== this.slot && this.state.equip[s] && this.entryOf(this.state.equip[s])?.members[0].item.dyeable && this.state.equip[s]!.colour !== cur);
+      const others = this.slots.filter(s => s !== this.slot && this.state.equip[s] && takesDye(this.entryOf(this.state.equip[s])?.members[0].item ?? {}) && this.state.equip[s]!.colour !== cur);
       if (others.length) kids.push(el('button', {class: 'btn of-wide of-dyeall', onclick: () => {
         const changes: Partial<Record<EquipSlot, Worn>> = {};
         for (const s of others) changes[s] = {...this.state.equip[s]!, colour: cur};
@@ -474,7 +479,7 @@ export class Wardrobe {
           el('button', {class: `swatch${cur === d.id ? ' on' : ''}`, 'aria-pressed': String(cur === d.id), title: d.name ?? d.colour, 'aria-label': d.name, style: `background:${d.colour}`, onclick: () => this.hooks.equip(e.slot, {...w, colour: d.id})}))));
       }
     } else if (it.kind === 'armour' || it.kind === 'shield') {
-      kids.push(el('p', {class: 'hint small'}, it.dyeable ? 'This tier has no dyeable areas.' : 'Guard gear can’t be dyed; only crafted armour and shields can.'));
+      kids.push(el('p', {class: 'hint small'}, takesDye(it) ? 'This tier has no dyeable areas.' : 'This piece can’t be dyed.'));
     }
     this.details.replaceChildren(...kids);
   }
@@ -523,7 +528,10 @@ function reveal(box: HTMLElement, el: Element | null) {
   if (r.top < b.top) box.scrollTop -= b.top - r.top; else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
   if (r.left < b.left) box.scrollLeft -= b.left - r.left; else if (r.right > b.right) box.scrollLeft += r.right - b.right;
 }
-const dyeable = (e: Entry) => !!e.members[0].item.dyeable && e.members.some(m => m.item.variants[m.variant]?.colourable);
+/** Whether the game can draw an item in a dye: crafted pieces, and any other whose own parts take the dye
+ *  colour (three Guard torsos, which drop dyed). */
+export const takesDye = (it: any) => !!it.dyeable || ((it.kind === 'armour' || it.kind === 'shield') && it.variants.some((v: any) => v.colourable));
+const dyeable = (e: Entry) => takesDye(e.members[0].item) && e.members.some(m => m.item.variants[m.variant]?.colourable);
 function subtitle(e: Entry) {
   const it = e.members[0].item;
   if (e.kind === 'cosmetic') return `${it.source ?? 'Cosmetic'}${e.members.length > 1 ? ` · ${e.members.length} colours` : ''}`;

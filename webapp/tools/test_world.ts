@@ -83,6 +83,9 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.dataset.rooms), '2');
   assert.match(await hash(), /^#r=bbbbbbbbbbbbbbbb&c=/, 'the release and camera are in the URL');
   assert.equal(await page.$$eval('#world-ticks span:not(.year)', (s) => s.length), 2, 'one tick per release');
+  // the slider's thumb stands at the newest release (its right end), not at the left
+  const thumb = await page.$eval('#world-date', (e: any) => ({ value: Number(e.value), max: Number(e.max), min: Number(e.min) }));
+  assert.ok(thumb.max > thumb.min && thumb.value === thumb.max, `the slider opens at the newest release (${JSON.stringify(thumb)})`);
   // previous button: the older release comes from its own pack
   assert.equal(await page.$$eval('.sealed-badge', (b) => b.length), 0, 'no sealed area in the newest release');
   await page.click('#world-prev');

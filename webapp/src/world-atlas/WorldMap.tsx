@@ -227,6 +227,9 @@ export function Tool({ active, ready, register }: ToolProps) {
     };
   }, []);
   const lo = releases.length ? minutes(releases[0]) : 0, hi = releases.length ? minutes(releases.at(-1)!) : 1, span = Math.max(1, hi - lo);
+  // (the thumb's place, again once the range is the releases': a value set before then was clamped into the
+  // input's first 0..1 range and then to the new min, leaving the thumb at the left on the latest update)
+  useLayoutEffect(() => { const s = els.slider.current; if (s && slider != null && Number(s.value) !== slider) s.value = String(slider); }, [lo, hi, slider]);
   const frac = slider != null && hi > lo ? (slider - lo) / (hi - lo) : 1;
   const bubble = releases.length && slider != null ? releaseText(nearest(releases, slider)) : '';
   const years: number[] = [];

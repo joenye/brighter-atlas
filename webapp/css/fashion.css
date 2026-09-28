@@ -17,6 +17,9 @@ html, body { touch-action: manipulation; overscroll-behavior: none; overflow: hi
 .of-toolbar[hidden] { display: none; }
 .of-toolbar .btn-mini { min-height: 32px; padding: 0 10px; background: rgba(13, 15, 19, .8); backdrop-filter: blur(6px); }
 .of-toolbar .btn-mini:disabled { opacity: .5; }
+/* the toolbar's one primary button (Share), in the app's call-to-action colours */
+.of-toolbar .btn-mini.of-primary { background: var(--accent-dim); border-color: var(--accent); color: #fff; font-weight: 600; }
+.of-toolbar .btn-mini.of-primary:hover { background: var(--accent); color: #0d0f13; }
 .of-icon { padding: 3px 7px; }
 .of-share { padding: 4px 12px; }
 .btn-mini { display: inline-flex; align-items: center; gap: 5px; }
@@ -137,17 +140,27 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
   background: rgba(13, 15, 19, .85); border: 1px solid var(--line); color: var(--fg1); font-size: 12.5px; line-height: 1.35; text-align: center;
   padding: 8px 12px; border-radius: 8px; backdrop-filter: blur(6px); opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
-/* a shared link, copied (desktops): plain and in the middle of the page, over everything */
-.of-copied { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 1000; width: min(420px, calc(100vw - 32px));
-  display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, .55); text-align: center; animation: of-copied-in .18s ease-out; }
-.of-copied-head { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; color: var(--fg0); }
-.of-copied-tick { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; }
-.of-copied-url { font-family: var(--mono); font-size: 12.5px; color: var(--fg1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-input.of-copied-url { width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg1); }
-.of-copied .btn { align-self: center; }
-@keyframes of-copied-in { from { opacity: 0; transform: translate(-50%, -46%); } }
-@media (prefers-reduced-motion: reduce) { .of-copied { animation: none; } }
+/* a look's link (the looks' panel, the picture): the link in a field, selected to copy, and Copy beside it */
+.share-field { display: flex; align-items: stretch; gap: 6px; width: 100%; min-width: 0; }
+.share-url { flex: 1 1 auto; min-width: 0; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg1); color: var(--fg0);
+  font: 12.5px var(--mono); text-overflow: ellipsis; }
+.share-field.ready .share-url { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg1)); }
+.share-url::placeholder { color: var(--fg2); font-family: inherit; }
+.share-field .btn { flex: none; min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; }
+.share-field .share-copy { min-width: 72px; }
+.share-field .share-copy:disabled { opacity: 1; }
+.share-field .share-send svg.ic { width: 16px; height: 16px; }
+/* (the wheel in Copy while the link is made) */
+.share-wheel { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: share-spin .8s linear infinite; }
+@keyframes share-spin { to { transform: rotate(360deg); } }
+.pic-share { width: min(760px, 100%); }
+/* "Copied to clipboard", just above where the click or tap was, over everything */
+.of-bubble { position: fixed; z-index: 1100; transform: translate(-50%, calc(-100% - 10px)); display: inline-flex; align-items: center; gap: 8px;
+  padding: 9px 14px; border-radius: 999px; background: var(--accent); color: #0d0f13; font-weight: 700; font-size: 14px; white-space: nowrap;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .5); pointer-events: none; animation: of-bubble 1.8s ease-out forwards; }
+.of-bubble-tick { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #0d0f13; color: var(--accent); font-size: 12px; }
+@keyframes of-bubble { 0% { opacity: 0; transform: translate(-50%, calc(-100% + 2px)) scale(.9); } 12% { opacity: 1; transform: translate(-50%, calc(-100% - 10px)) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .of-bubble { animation: none; } .share-wheel { animation-duration: 2.4s; } }
 
 .of-short { display: none; }
 .of-only-sm { display: none; }
@@ -182,6 +195,9 @@ input.of-copied-url { width: 100%; box-sizing: border-box; padding: 7px 9px; bor
   .of-hide-sm, .of-exp { display: none; }
   .of-title { margin-left: 2px; padding-left: 8px; }
   .of-icon-sm span, .of-share span { display: none; }
+  /* (Share, the page's key action, keeps its word on phones; the others are icons) */
+  .of-toolbar .of-primary span { display: inline; }
+  .of-toolbar .btn-mini.of-primary { padding: 0 12px; }
   .of-toolbar { top: 8px; right: 8px; }
   .of-toolbar .btn-mini { min-width: 38px; min-height: 36px; justify-content: center; padding: 0 8px; }
   .fashion svg.ic { width: 17px; height: 17px; }
@@ -477,6 +493,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-looks { position: fixed; top: 52px; right: 12px; z-index: 65; width: 340px; max-height: calc(100dvh - 72px); overflow: auto; display: flex; flex-direction: column; gap: 10px;
   padding: 12px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0,0,0,.55); }
 .of-looks[hidden] { display: none; }
+/* its title and close button; the Looks button shows pressed while it is open */
+.lk-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -2px 0 2px; }
+.lk-top b { font-size: 15px; font-weight: 650; color: var(--fg0); }
+.lk-top .lk-close { width: 32px; height: 32px; padding: 0; justify-content: center; }
+.of-toolbar .btn-mini.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: var(--fg0); }
 .lk-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg2); }
 .lk-head b { font-weight: 600; }
 .lk-head .btn-mini { text-transform: none; letter-spacing: 0; display: inline-flex; align-items: center; gap: 5px; }

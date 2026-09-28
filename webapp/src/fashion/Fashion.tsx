@@ -9,7 +9,7 @@ import {at, DEV} from './data.js';
 import {compose, makeIndex, randomise, itemParts, hiddenItems, EQUIP_SLOTS} from './compose.js';
 import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
 import {Preview, FRAMES, prefetch, Thumbnailer, report, forgetCaches} from './render.js';
-import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, type Faction} from './wardrobe.js';
+import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, twoHandedItem, type Faction} from './wardrobe.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
@@ -65,16 +65,29 @@ const shortKey = (l: Shared) => `${l.code}.${l.place ?? ''}.${l.name ?? ''}`;
 const shortLinks = new Map<string, Promise<string | null>>();
 const settled = new Map<string, string>();   // (short links only)
 const SHORT_URL = /^https:\/\/[^/]+\/l\/[0-9A-Za-z]{10}$/;
-/** One ask: the short link, 'absent' (no service here: a 404 or a page instead of JSON), or null (failed). */
-async function postLook(l: Shared, wait: number): Promise<string | 'absent' | null> {
-  const stop = new AbortController(), timer = setTimeout(() => stop.abort(), wait);
-  try {
-    const r = await fetch('/api/looks', {method: 'POST', headers: {'content-type': 'application/json'}, signal: stop.signal,
-      body: JSON.stringify({code: l.code, place: l.place, name: l.name ?? null})});
-    if (r.status === 404 || (r.ok && !/json/.test(r.headers.get('content-type') ?? ''))) return 'absent';
-    const b = r.ok ? await r.json() : null;
-    return typeof b?.url === 'string' && SHORT_URL.test(b.url) ? b.url : null;
-  } catch { return null; } finally { clearTimeout(timer); }
+// (at most two asks at a time: the looks' panel asks for every saved look as it opens, and the service is rate
+// limited)
+let asking = 0;
+const waiting: (() => void)[] = [];
+async function oneAtATime<T>(ask: () => Promise<T>): Promise<T> {
+  if (asking >= 2) await new Promise<void>(r => waiting.push(r));
+  asking++;
+  try { return await ask(); } finally { asking--; waiting.shift()?.(); }
+}
+/** One ask: the short link; 'absent' (no service here: a 404 or a page instead of JSON); 'refused' (the service
+ *  answered that this is not a look it keeps: asking again cannot help); or null (failed: ask again). */
+function postLook(l: Shared, wait: number): Promise<string | 'absent' | 'refused' | null> {
+  return oneAtATime(async () => {
+    const stop = new AbortController(), timer = setTimeout(() => stop.abort(), wait);
+    try {
+      const r = await fetch('/api/looks', {method: 'POST', headers: {'content-type': 'application/json'}, signal: stop.signal,
+        body: JSON.stringify({code: l.code, place: l.place, name: l.name ?? null})});
+      if (r.status === 404 || (r.ok && !/json/.test(r.headers.get('content-type') ?? ''))) return 'absent';
+      if (r.status === 400) return 'refused';
+      const b = r.ok ? await r.json() : null;
+      return typeof b?.url === 'string' && SHORT_URL.test(b.url) ? b.url : null;
+    } catch { return null; } finally { clearTimeout(timer); }
+  });
 }
 /** The look's short link (null: none to be had just now, or no service on a development server). */
 function askShort(l: Shared): Promise<string | null> {
@@ -89,6 +102,7 @@ function askShort(l: Shared): Promise<string | null> {
       for (let attempt = 0; attempt < 4; attempt++) {
         const url = await postLook(l, 10000);
         if (url === 'absent') { if (DEV) return null; }
+        else if (url === 'refused') { console.warn('short link refused for this look', l); return null; }
         else if (url) return url;
         if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * 2 ** attempt));
       }
@@ -213,8 +227,11 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const [fx, setFx] = useState<number[]>([]);
   const [, forceRender] = useState(0);
   // (what listeners and the engine's callbacks read: the latest, not the render's)
-  const live = useRef({} as {state: State, showHeld: boolean, backdrop: Backdrop, designing: boolean, sharedView: boolean, selected: string, panelCollapsed: boolean, bgMode: boolean, bgOpen: boolean, looksOpen: boolean, active: boolean, opened: boolean, roomLoading: boolean, parts: {loading: boolean, first: boolean}, currentFrame: string, split: number, looks: SavedLook[], floor: Floor});
-  Object.assign(live.current, {state, showHeld, backdrop, designing, sharedView, selected, panelCollapsed, bgMode, bgOpen, looksOpen, active, opened, roomLoading, parts, currentFrame, split, looks, floor});
+  // the name typed for this look in Your looks (null: untouched), and as it was when typing last paused; both go
+  // when the look changes
+  const [nameDraft, setNameDraft] = useState<string | null>(null), [nameSettled, setNameSettled] = useState<string | null>(null);
+  const live = useRef({} as {nameDraft: string | null, nameSettled: string | null, state: State, showHeld: boolean, backdrop: Backdrop, designing: boolean, sharedView: boolean, selected: string, panelCollapsed: boolean, bgMode: boolean, bgOpen: boolean, looksOpen: boolean, active: boolean, opened: boolean, roomLoading: boolean, parts: {loading: boolean, first: boolean}, currentFrame: string, split: number, looks: SavedLook[], floor: Floor});
+  Object.assign(live.current, {nameDraft, nameSettled, state, showHeld, backdrop, designing, sharedView, selected, panelCollapsed, bgMode, bgOpen, looksOpen, active, opened, roomLoading, parts, currentFrame, split, looks, floor});
 
   const els = {
     main: useRef<HTMLElement>(null), viewer: useRef<HTMLElement>(null), canvas: useRef<HTMLCanvasElement>(null), right: useRef<HTMLElement>(null),
@@ -235,17 +252,25 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     return e.creatorPreview;
   };
 
-  const toast = useCallback((text: string) => setToastMsg(t => ({text, n: (t?.n ?? 0) + 1})), []);
-  // a shared link on a desktop: copied, and said so plainly in the middle of the page (or, when the browser
-  // would not copy, shown selected for copying by hand)
-  const [copied, setCopied] = useState<{url: string, failed?: boolean, n: number} | null>(null);
-  useEffect(() => { if (!toastMsg) return; const t = setTimeout(() => setToastMsg(m => m && {...m, text: m.text, n: -m.n}), 2200); return () => clearTimeout(t); }, [toastMsg?.n]);
+  const toast = useCallback((text: string) => setToastMsg(t => ({text, n: Math.abs(t?.n ?? 0) + 1})), []);
+  // "Copied to clipboard", said where the click or tap was (bubble(), below)
+  const [bubbleAt, setBubbleAt] = useState<Bubble | null>(null);
+  useEffect(() => { const t = setTimeout(() => setNameSettled(nameDraft), 700); return () => clearTimeout(t); }, [nameDraft]);
+  const lookCode = encode(state);
+  useEffect(() => { setNameDraft(null); setNameSettled(null); }, [lookCode]);
+  useEffect(() => {
+    const on = (e: Event) => setBubbleAt({...(e as CustomEvent<Bubble>).detail, n: Date.now()});
+    addEventListener('fashion-bubble', on); return () => removeEventListener('fashion-bubble', on);
+  }, []);
+  // (shown while n > 0; hidden by making it negative, which the timer leaves alone: flipping its sign each time
+  // made a toast come back every 2.2 s)
+  useEffect(() => { if (!toastMsg || toastMsg.n <= 0) return; const t = setTimeout(() => setToastMsg(m => m && {...m, n: -Math.abs(m.n)}), 2200); return () => clearTimeout(t); }, [toastMsg?.n]);
 
   const frameOf = (f: FrameKey) => f === 'full' && narrow() ? {dist: 4900, target: 840}
     : f === 'upper' && live.current.showHeld && (live.current.state.equip.weapon || live.current.state.equip.shield) ? {dist: 3900, target: 930} : FRAMES[f];
   const changed = useCallback(() => model.changed(), []);
   const edited = changed;   // (any edit of a shared look makes it yours)
-  const twoHanded = (w: Worn) => (index.items.get(w.item) as any)?.category === 'Melee 2h';
+  const twoHanded = (w: Worn) => twoHandedItem(index.items.get(w.item));
 
   // ---- the drawer's three modes (phones: Character, Equipment, Settings; one on at a time) ----
   const setPanelCollapsed = (on: boolean) => {
@@ -274,11 +299,23 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const e = engine.current!;
     creatorSnapshot.current = JSON.stringify(model.state);
     const shared = phone();
-    // phones: the designer's divider opens where the page's is (measured: the two frames differ by their borders)
-    if (shared && !live.current.panelCollapsed && els.main.current!.clientHeight) {
-      const body = els.body.current!.getBoundingClientRect(), stage = els.viewer.current!.getBoundingClientRect().bottom - body.top;
-      setCSplit(els.viewer.current!.getBoundingClientRect().height / els.main.current!.clientHeight);
-      if (body.height) setStageH(`${stage}px`);
+    // phones: the designer's divider opens where the page's is (measured: the two frames differ by their borders).
+    // Only a drawer on screen is measured: straight after no drawer at all (Settings or the designer just
+    // closed), the page has not laid its drawer out again yet, the view fills the screen, and measuring it gave
+    // the designer's view all the height and its panel none. Then the drawer's own height, as the page's
+    // returns to it (none kept: the stylesheet's).
+    if (shared) {
+      const drawerShown = !!els.right.current?.getClientRects().length && !!els.main.current!.clientHeight;
+      const clamp = (f: number) => Math.max(0.22, Math.min(0.72, f));
+      if (drawerShown) {
+        const body = els.body.current!.getBoundingClientRect(), view = els.viewer.current!.getBoundingClientRect();
+        const f = view.height / els.main.current!.clientHeight;
+        setCSplit(clamp(f));
+        setStageH(body.height && f === clamp(f) ? `${view.bottom - body.top}px` : null);
+      } else {
+        setStageH(null);
+        if (live.current.split) setCSplit(clamp(live.current.split));
+      }
     }
     live.current.sharedView = shared; setSharedView(shared);
     live.current.designing = true; setDesigningState(true);
@@ -348,7 +385,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       // (a combat cape: the faction's variant, or any)
       const variant = factionOf(m.item) === 'combat' ? (rs.faction === 'all' ? Math.floor(Math.random() * m.item.variants.length) : Math.max(0, m.item.variants.findIndex((v: any) => v.grade === rs.faction))) : m.variant;
       const v = m.item.variants[variant];
-      equip[slot] = {item: m.item.id, variant, colour: rs.dyes && v?.colourable && m.item.dyeable ? pick(pack.dyes as any[]).id : null};
+      equip[slot] = {item: m.item.id, variant, colour: rs.dyes && v?.colourable && takesDye(m.item) ? pick(pack.dyes as any[]).id : null};
     }
     if (equip.weapon && equip.shield && (twoHanded(equip.weapon) || Math.random() < 0.5)) delete equip.shield;
     model.state.equip = equip; edited();
@@ -376,7 +413,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       equip: (slot, w) => {
         const st = model.state;
         if (w) st.equip[slot] = w; else delete st.equip[slot];
-        // a two-handed weapon (the game's "Melee 2h" category) leaves no hand for a shield
+        // a two-handed weapon (by its type in the game's data: every bow among them) leaves no hand for a shield
         if (w && slot === 'weapon' && twoHanded(w) && st.equip.shield) { delete st.equip.shield; toast('Two-handed weapon: the shield comes off'); }
         else if (w && slot === 'shield' && st.equip.weapon && twoHanded(st.equip.weapon)) { delete st.equip.weapon; toast('A shield needs a free hand: the two-handed weapon comes off'); }
         // trying one on: show it in hand, turned so it isn't edge-on
@@ -545,10 +582,18 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // ---- looks ----
   const saveLooks = (next: SavedLook[]) => { setLooks(next); try { store.set('looks', JSON.stringify(next)); } catch { toast('Couldn’t save: this device’s storage is full'); } };
   /** The look worn, as it is shared (from Looks or the picture): under its saved name when it is a saved one. */
-  const wearing = (): Shared => { const code = encode(model.state); return {code, place: live.current.backdrop.room ? live.current.backdrop.id : null, name: live.current.looks.find(l => l.code === code)?.name ?? null}; };
+  // A look is shared under the name typed for it in Your looks (saved or not), else its saved name, else none (its
+  // preview then names its items). `settled`: the name as it was when typing last paused, for the link field, so
+  // typing asks for no link; a Share press takes the name as typed.
+  const wearing = (settled = false): Shared => {
+    const code = encode(model.state), typed = (settled ? live.current.nameSettled : live.current.nameDraft)?.trim();
+    return {code, place: live.current.backdrop.room ? live.current.backdrop.id : null, name: typed || live.current.looks.find(l => l.code === code)?.name || null};
+  };
   const lookName = (st: State) => {
     const pick = (['torso', 'head', 'cape', 'weapon'] as EquipSlot[]).map(s => st.equip[s] && (index.items.get(st.equip[s]!.item) as any)?.name).filter(Boolean);
-    return pick.length ? pick.slice(0, 2).join(' + ') : `${st.gender === 'male' ? 'Male' : 'Female'} character`;
+    // (within the name field's 48 characters: the first two items' names, the first alone when both are long)
+    const two = pick.slice(0, 2).join(' + '), name = two.length <= 48 ? two : String(pick[0]);
+    return pick.length ? [...name].slice(0, 48).join('').trim() : `${st.gender === 'male' ? 'Male' : 'Female'} character`;
   };
   const lookThumb = () => new Promise<string>(res => {
     const img = new Image();
@@ -565,21 +610,18 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // it hangs from its button, whatever the bar's height (phones' is taller)
   const placeLooks = () => { const b = els.share.current; if (b) setLooksTop(b.getBoundingClientRect().bottom + 6); };
   const closeLooks = () => setLooksOpen(false);
-  const shareUrl = async (url: string, name?: string | null) => {
-    if (navigator.share && touch) { try { await navigator.share({title: name || 'My Brighter Shores look', url}); return; } catch (e: any) { if (e?.name === 'AbortError') return; } }
-    const n = (copied?.n ?? 0) + 1;
-    try { await navigator.clipboard.writeText(url); setCopied({url, n}); } catch { setCopied({url, failed: true, n}); }
+  // Every share from a button goes through here (the link field has its own Copy): the look's short link, waited
+  // for, never its long address on the site (a development server, with no link service, has only that); a
+  // phone's share sheet, or a desktop's clipboard with the bubble where the button is. None to be had: said so.
+  const shareLook = async (l: Shared, from?: HTMLElement | null) => {
+    const url = (await askShort(l)) ?? (DEV ? lookUrl(l) : null);
+    if (!url) { bubble(from, 'Could not make a link just now. Please try again'); return; }
+    if (navigator.share && touch) { try { await navigator.share({title: l.name || 'My Brighter Shores look', url}); return; } catch (e: any) { if (e?.name === 'AbortError') return; } }
+    await copyLink(url, from);
   };
-  // Every share goes through here: the look's short link, waited for; never its long address on the site (a
-  // development server, with no link service, has only that). None to be had: said so, nothing shared.
-  const shareLook = async (l: Shared) => {
-    const url = await askShort(l);
-    if (url) return shareUrl(url, l.name);
-    if (DEV) return shareUrl(lookUrl(l), l.name);
-    toast('Could not make a link just now. Please try again in a moment.');
-  };
-  // the toolbar's Share: the looks open (as their button opens them) and this look is shared from there
-  const shareNow = async () => { setLooksTouched(true); setLooksOpen(true); await shareLook(wearing()); };
+  // the toolbar's Share: the looks open (as their button opens them, the link in its field there) and the look is
+  // shared at once
+  const shareNow = async (from: HTMLElement) => { setLooksTouched(true); setLooksOpen(true); await shareLook(wearing(), from); };
   const wearLook = (l: SavedLook) => {
     const st = decode(l.code); if (!st) return;
     model.set(st);
@@ -676,7 +718,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const equipOn = !designing && !panelCollapsed && !bgMode;
   const viewerHeight = isPhone && !panelCollapsed && split ? `${(Math.max(0.22, Math.min(0.72, split)) * 100).toFixed(3)}%` : undefined;
   const verb = panelCollapsed ? 'Show' : 'Hide';
-  const shareLinkBtn = (l: Shared) => <ShareLink key={shortKey(l)} look={l} onShare={() => shareLook(l)} />;
+  const shareField = (l: Shared) => <ShareField key={shortKey(l)} look={l} />;
 
   const bgPop = (
     <div ref={els.bgPop} className="of-bgpop" hidden={!bgOpen} role="menu"
@@ -745,7 +787,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   useEffect(() => { if (bgOpen && !bgMode) (els.bgPop.current?.querySelector('button.on') as HTMLElement ?? els.bgPop.current?.querySelector('button'))?.focus(); }, [bgOpen]);
   useEffect(() => { if (looksOpen) placeLooks(); }, [looksOpen]);
   useEffect(() => { if (designing) (els.creator.current?.querySelector('.creator-actions .btn-cta') as HTMLElement)?.focus({preventScroll: true}); }, [designing]);
-  const now = wearing(), current = looks.find(l => l.code === now.code);
+  const now = wearing(), nowSettled = wearing(true), current = looks.find(l => l.code === now.code);
 
   return (
     <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ' designing' : ''}${designingShared ? ' designing-shared' : ''}`}>
@@ -768,11 +810,12 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           <div id="of-toolbar" className="of-toolbar">
             <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>
             <button id="redo" className="btn-mini of-icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={designing || !model.future.length} onClick={() => model.redo()}><Ic d="M15 7h5V2M20 7a9 9 0 1 0 1.5 9" /></button>
-            <button id="shot" className="btn-mini of-icon-sm" title="Save the view as a picture" aria-label="Save picture" onClick={takePicture}><Ic><path d="M4 7h3l2-3h6l2 3h3v13H4z" /><circle cx="12" cy="13" r="4" /></Ic><span>Save picture</span></button>
-            <button id="share-now" className="btn-mini of-icon" title="Share this look: a link to it, with its picture where it is posted" aria-label="Share"
-              onClick={e => { e.stopPropagation(); void shareNow(); }}><Icon name="share" /></button>
-            <button ref={els.share} id="share" className="btn-mini of-share" title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog" aria-expanded={looksTouched ? looksOpen : undefined}
+            <button id="shot" className={`btn-mini of-icon-sm${picture ? ' active' : ''}`} aria-pressed={!!picture} title="Save the view as a picture" aria-label="Save picture" onClick={takePicture}><Ic><path d="M4 7h3l2-3h6l2 3h3v13H4z" /><circle cx="12" cy="13" r="4" /></Ic><span>Save picture</span></button>
+            <button ref={els.share} id="share" className={`btn-mini of-share${looksOpen ? ' active' : ''}`} aria-pressed={looksOpen} title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog" aria-expanded={looksTouched ? looksOpen : undefined}
               onClick={e => { e.stopPropagation(); setLooksTouched(true); setLooksOpen(o => !o); }}><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
+            {/* (the one primary button, at the far right: sharing a look is what the page leads to) */}
+            <button id="share-now" className="btn-mini of-icon-sm of-primary" title="Share this look: a link to it, with its picture where it is posted" aria-label="Share"
+              onClick={e => { e.stopPropagation(); void shareNow(e.currentTarget); }}><Icon name="share" /><span>Share</span></button>
           </div>
           {/* (last: over the toast and the toolbar, where the designer's coming and going has always left it) */}
           {!controlsInStage && controls}
@@ -824,16 +867,19 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       </div>
       <div ref={els.looks} className="of-looks" role="dialog" aria-label="Your looks" hidden={!looksOpen} style={looksOpen ? {top: `${looksTop}px`, maxHeight: `calc(100dvh - ${looksTop + 10}px)`} : undefined}
         onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closeLooks(); els.share.current?.focus(); } }}>
-        {looksOpen && <Looks now={now} current={current} looks={looks} defaultName={lookName(state)} shareLinkBtn={shareLinkBtn}
-          share={l => void shareLook(l)} wear={wearLook} remove={l => saveLooks(looks.filter(x => x !== l))}
+        {/* (what the panel is, and the way out: the Looks button, pressed while it is open, closes it too) */}
+        <div className="lk-top"><b>Your looks</b>
+          <button type="button" className="btn-mini of-icon lk-close" aria-label="Close your looks" title="Close" onClick={() => { closeLooks(); els.share.current?.focus(); }}><Icon name="x" /></button></div>
+        {looksOpen && <Looks now={now} nowSettled={nowSettled} current={current} looks={looks} name={nameDraft ?? current?.name ?? lookName(state)} setName={setNameDraft} shareField={shareField}
+          share={(l, from) => void shareLook(l, from)} wear={wearLook} remove={l => saveLooks(looks.filter(x => x !== l))}
           save={async (label, place) => {
             const thumb = await lookThumb(), name = label.trim() || lookName(model.state), code = encode(model.state);
             const cur = live.current.looks.find(l => l.code === code);
             saveLooks(cur ? live.current.looks.map(l => l === cur ? {...l, name, thumb, place, at: Date.now()} : l) : [{id: Math.random().toString(36).slice(2, 10), name, code, place, thumb, at: Date.now()}, ...live.current.looks]);
           }} />}
       </div>
-      {copied && <Copied key={copied.n} url={copied.url} failed={copied.failed} close={() => setCopied(null)} />}
-      {picture && <PictureSheet picture={picture} close={closePicture} shareLink={<ShareLink key={shortKey(wearing())} look={wearing()} primary onShare={() => shareLook(wearing())} />} />}
+      {bubbleAt && <CopiedBubble key={bubbleAt.n} at={bubbleAt} gone={() => setBubbleAt(null)} />}
+      {picture && <PictureSheet picture={picture} close={closePicture} shareField={shareField(nowSettled)} />}
     </div>
   );
 }
@@ -845,52 +891,78 @@ function BgItem({b, on, pick}: {b: Backdrop, on: boolean, pick: () => void}) {
   return <button role="menuitemradio" aria-checked={on} data-bg={b.id} className={on ? 'on' : undefined} onClick={pick}><span className={`of-bgdot${b.room ? ' place' : ''}`} style={{background: swatchOf(b)}} />{b.name}</button>;
 }
 
-/** A shared link on a desktop: "Link copied" with the link, in the middle of the page for a moment; or, when the
- *  browser would not copy, the link selected in a field to copy by hand, until closed. */
-function Copied({url, failed, close}: {url: string, failed?: boolean, close: () => void}) {
-  const field = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (failed) { field.current?.focus(); field.current?.select(); }
-    const t = failed ? 0 : window.setTimeout(close, 2600);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    addEventListener('keydown', onKey);
-    return () => { clearTimeout(t); removeEventListener('keydown', onKey); };
-  }, []);
+type Bubble = {x: number, y: number, text: string, n?: number};
+/** Say something where a click or tap was (near `from`, or its pointer): "Copied to clipboard". */
+function bubble(from: HTMLElement | null | undefined, text: string) {
+  const r = from?.getBoundingClientRect();
+  const x = r ? r.left + r.width / 2 : innerWidth / 2, y = r ? r.top : innerHeight / 2;
+  dispatchEvent(new CustomEvent<Bubble>('fashion-bubble', {detail: {x, y, text}}));
+}
+/** Copy a link, and say so where the button is; a browser that will not copy: said, the field left to copy from. */
+async function copyLink(url: string, from?: HTMLElement | null): Promise<boolean> {
+  try { await navigator.clipboard.writeText(url); bubble(from, 'Copied to clipboard'); return true; }
+  catch { bubble(from, touch ? 'Tap and hold the link to copy it' : 'Press Ctrl+C to copy the link'); return false; }
+}
+function CopiedBubble({at, gone}: {at: Bubble, gone: () => void}) {
+  useEffect(() => { const t = setTimeout(gone, 1800); return () => clearTimeout(t); }, []);
+  const x = Math.max(90, Math.min(innerWidth - 90, at.x)), y = Math.max(50, at.y);
+  return <div className="of-bubble" role="status" aria-live="polite" style={{left: `${x}px`, top: `${y}px`}}>
+    {/copied/i.test(at.text) && <span className="of-bubble-tick" aria-hidden="true">✓</span>}{at.text}
+  </div>;
+}
+
+/** A look's link, wherever it is shared (the looks' panel, the picture): the short link in a field, selected to
+ *  copy, with Copy beside it (and a phone's Share); a wheel in the button while it is made; Try again when none
+ *  came. Never the look's long address on the site. */
+function ShareField({look}: {look: Shared}) {
+  const [url, setUrl] = useState<string | null>(settled.get(shortKey(look)) ?? null);
+  const [state, setState] = useState<'getting' | 'ready' | 'failed'>(url ? 'ready' : 'getting');
+  const field = useRef<HTMLInputElement>(null), alive = useRef(true);
+  const ask = () => {
+    setState('getting');
+    void askShort(look).then(got => {
+      if (!alive.current) return;
+      const link = got ?? (DEV ? lookUrl(look) : null);
+      setUrl(link); setState(link ? 'ready' : 'failed');
+    });
+  };
+  useEffect(() => { alive.current = true; if (!url) ask(); return () => { alive.current = false; }; }, []);
+  // (ready: the link selected, to copy at once; not on a phone, where selecting pops up its own menu)
+  useEffect(() => { if (state === 'ready' && !touch) field.current?.select(); }, [state]);
+  const copy = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (state === 'failed') { ask(); return; }
+    if (!url) return;
+    const btn = e.currentTarget;
+    void copyLink(url, btn).then(ok => { if (!ok) { field.current?.focus(); field.current?.select(); } });
+  };
+  const share = async () => { if (url) try { await navigator.share({title: look.name || 'My Brighter Shores look', url}); } catch { /* cancelled */ } };
   return (
-    <div className={`of-copied${failed ? ' failed' : ''}`} role={failed ? 'dialog' : 'status'} aria-live="polite" aria-label={failed ? 'Copy this link' : undefined}>
-      <div className="of-copied-head">{failed ? <b>Copy this link</b> : <><span className="of-copied-tick" aria-hidden="true">✓</span><b>Link copied to clipboard</b></>}</div>
-      {failed ? <input ref={field} className="of-copied-url" readOnly value={url} onFocus={e => e.currentTarget.select()} /> : <div className="of-copied-url">{url}</div>}
-      <div className="dim small">Anyone with it sees this exact look.</div>
-      {failed && <button className="btn" onClick={close}>Close</button>}
+    <div className={`share-field ${state}`}>
+      <input ref={field} className="share-url" readOnly aria-label="Link to this look" value={url ?? ''}
+        placeholder={state === 'failed' ? 'Could not make a link' : 'Getting link…'} onFocus={e => e.currentTarget.select()} onClick={e => e.currentTarget.select()} />
+      <button type="button" className="btn btn-cta share-copy" disabled={state === 'getting'} onClick={copy}
+        title={state === 'failed' ? 'Ask for the link again' : 'Copy the link'}>
+        {state === 'getting' ? <span className="share-wheel" aria-label="Getting link" /> : state === 'failed' ? 'Try again' : 'Copy'}
+      </button>
+      {touch && typeof navigator.share === 'function' && <button type="button" className="btn share-send" disabled={state !== 'ready'} onClick={() => void share()} aria-label="Share"><Icon name="share" /></button>}
     </div>
   );
 }
 
-/** The one Share link button, wherever a look is shared: "Getting link…" while the short link is asked for (as
- *  the button appears, and again when a tap finds none yet). */
-function ShareLink({look, onShare, primary}: {look: Shared, onShare: () => Promise<void>, primary?: boolean}) {
-  const [busy, setBusy] = useState(!settled.has(shortKey(look)));
-  const alive = useRef(true);
-  useEffect(() => { alive.current = true; if (busy) void askShort(look).finally(() => { if (alive.current) setBusy(false); }); return () => { alive.current = false; }; }, []);
-  const share = () => { setBusy(true); void onShare().finally(() => { if (alive.current) setBusy(false); }); };
-  return <button className={primary ? 'btn btn-cta' : 'btn-mini'} title="Share a link to this exact look" disabled={busy} onClick={share}><Icon name="share" /><span>{busy ? 'Getting link…' : 'Share link'}</span></button>;
-}
-
-function Looks({now, current, looks, defaultName, shareLinkBtn, share, wear, remove, save}: {
-  now: Shared, current: SavedLook | undefined, looks: SavedLook[], defaultName: string, shareLinkBtn: (l: Shared) => ReactNode,
-  share: (l: SavedLook) => void, wear: (l: SavedLook) => void, remove: (l: SavedLook) => void, save: (label: string, place: string | null) => Promise<void>,
+function Looks({now, nowSettled, current, looks, name, setName, shareField, share, wear, remove, save}: {
+  now: Shared, nowSettled: Shared, current: SavedLook | undefined, looks: SavedLook[], name: string, setName: (n: string) => void, shareField: (l: Shared) => ReactNode,
+  share: (l: SavedLook, from: HTMLElement) => void, wear: (l: SavedLook) => void, remove: (l: SavedLook) => void, save: (label: string, place: string | null) => Promise<void>,
 }) {
-  const [name, setName] = useState(current?.name ?? defaultName);
-  useEffect(() => { setName(current?.name ?? defaultName); }, [current?.id, now.code]);
   // (every saved look's short link asked for as the looks open, so any row's Share is ready at once)
   useEffect(() => { for (const l of looks) void askShort(l); }, [looks]);
   const doSave = () => void save(name, now.place);
   return <>
-    <div className="lk-head"><b>This look</b>{shareLinkBtn(now)}</div>
+    <div className="lk-head"><b>This look</b></div>
+    {shareField(nowSettled)}
     <div className="lk-save">
       <input className="lk-name" value={name} aria-label="Name" maxLength={48} enterKeyHint="done" onChange={e => setName(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); doSave(); } }} />
-      <button className="btn btn-cta" onClick={doSave}>{current ? 'Update' : 'Save'}</button>
+      <button className="btn" onClick={doSave}>{current ? 'Update' : 'Save'}</button>
     </div>
     <div className="lk-head"><b>{`Saved looks${looks.length ? ` (${looks.length})` : ''}`}</b></div>
     {looks.length ? <div className="lk-list">{looks.map(l => {
@@ -901,7 +973,7 @@ function Looks({now, current, looks, defaultName, shareLinkBtn, share, wear, rem
             {l.thumb ? <img src={l.thumb} alt="" /> : <span className="lk-noimg"><Icon name="torso" /></span>}
             <span className="lk-text"><span className="lk-title">{l.name}</span><span className="lk-sub">{on ? 'Wearing' : new Date(l.at).toLocaleDateString()}</span></span>
           </button>
-          <button className="btn-mini of-icon" title="Share a link to this look" aria-label={`Share ${l.name}`} onClick={() => share(l)}><Icon name="share" /></button>
+          <button className="btn-mini of-icon" title="Share a link to this look" aria-label={`Share ${l.name}`} onClick={e => share(l, e.currentTarget)}><Icon name="share" /></button>
           <button className="btn-mini of-icon" title="Delete this look" aria-label={`Delete ${l.name}`} onClick={() => remove(l)}><Icon name="x" /></button>
         </div>
       );
@@ -939,7 +1011,7 @@ function DesignerPanel({state, selected, pack, paletteFor, edited, select, rando
 
 // The picture, on a page of its own, with the site's mark: Share link (the look's link, as Looks shares it) is
 // the way to share it; phones save it by pressing and holding the picture, desktops with Download.
-function PictureSheet({picture, close, shareLink}: {picture: {blob: Blob | null, url: string}, close: () => void, shareLink: ReactNode}) {
+function PictureSheet({picture, close, shareField}: {picture: {blob: Blob | null, url: string}, close: () => void, shareField: ReactNode}) {
   const closeBtn = useRef<HTMLButtonElement>(null);
   // (Escape closes it wherever focus is, and focus goes back to what opened it)
   useEffect(() => {
@@ -953,12 +1025,12 @@ function PictureSheet({picture, close, shareLink}: {picture: {blob: Blob | null,
     <div className="of-picture" role="dialog" aria-modal="true" aria-label="Your picture" onClick={e => { if (e.target === e.currentTarget) close(); }}>
       <img src={picture.url} alt="Your look" />
       {touch ? <p>Press and hold the picture to save it to Photos.</p> : null}
+      <div className="pic-share">{shareField}</div>
       <div className="pic-actions">
         <button ref={closeBtn} className="btn" onClick={close}>Close</button>
         {!touch && <button className="btn" disabled={!picture.blob} onClick={() => {
           const a = document.createElement('a'); a.href = picture.url; a.download = 'brighter-atlas-fashion.png'; document.body.append(a); a.click(); a.remove();
         }}>Download</button>}
-        {shareLink}
       </div>
     </div>
   );
