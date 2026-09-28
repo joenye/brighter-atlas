@@ -1,4 +1,4 @@
-// The world map (maps.html, Brighter Maps): the 2D map of every
+// The world map (Brighter Maps, /maps): the 2D map of every
 // game release, no game files needed. Pick a release from the list or slide
 // through the dates; the camera stays put so the world can be watched
 // changing. Like a street map, it can show satellite pictures instead: the
@@ -12,15 +12,10 @@ import { createWorldData, type WorldMap, type WorldRelease } from './data.js';
 import { SealedLayer } from './sealed.js';
 import { SatelliteLayer } from './satellite.js';
 import { gameVersion } from '../game-build.js';
-import { toolUrl } from '../sites.js';
-import { initTopbar } from '../topbar.js';
+import type { ToolContext, ToolHandle } from '../app/tool.js';
 
-// Links from before the site opened on the world map (#/mesh/3, ?data=...)
-// belong to the viewer (Brighter Data): send them on whole.
-const viewerLink = location.hash.startsWith('#/') || new URLSearchParams(location.search).has('data');
-if (viewerLink) location.replace(toolUrl('data', `${location.search}${location.hash}`));
-else initTopbar('maps', { onCurrent: () => home() });
-
+/** Mounted by the app's shell into its page (the skeleton, app/pages.tsx), once; hidden and shown after. */
+export async function mount(_root: HTMLElement, ctx: ToolContext): Promise<ToolHandle> {
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('world-canvas'), host = canvas.parentElement!;
 const releaseButton = $<HTMLButtonElement>('world-release'), status = $('world-status');
@@ -34,7 +29,7 @@ const picker = $('world-picker'), search = $<HTMLInputElement>('world-search'), 
 
 // Safari's own pinch zoom (its gesture events) would zoom the whole page:
 // the map does its own pinch, so the page never zooms
-for (const type of ['gesturestart', 'gesturechange']) document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+for (const type of ['gesturestart', 'gesturechange']) document.addEventListener(type, (e) => { if (ctx.active()) e.preventDefault(); }, { passive: false });
 
 const data = createWorldData();
 const camera: MapCamera = { cx: 0, cy: 0, scale: 1 };
@@ -323,7 +318,6 @@ function home() {
 
 // ---------------------------------------------------------------- start
 (async () => {
-  if (viewerLink) return;
   try {
     const manifest = await data.manifest();
     releases = [...manifest.releases].sort((a, b) => a.date.localeCompare(b.date));
@@ -340,8 +334,7 @@ function home() {
 // A new hash (typed, or set by a script) applies at once; the page's own
 // updates use replaceState, which fires no hashchange.
 addEventListener('hashchange', () => {
-  if (location.hash.startsWith('#/')) { location.replace(toolUrl('data', `${location.search}${location.hash}`)); return; }   // a viewer route
-  if (!releases.length) return;
+  if (!ctx.active() || !releases.length) return;
   const r = readState();
   slider.value = String(minutes(r));
   if (r !== wanted) void show(r); else { requestDraw(); saveState(); }
@@ -363,3 +356,11 @@ addEventListener('hashchange', () => {
   /** Map or satellite view: set it, or read it with no argument. */
   satellite(on?: boolean) { if (on !== undefined) setSatelliteView(!!on); return satelliteView; },
 };
+
+return {
+  current: home,
+  // (back on the page: the address may name another place, as the browser's back and forward do)
+  show() { if (releases.length && location.hash.length > 1) { const r = readState(); slider.value = String(minutes(r)); if (r !== wanted) void show(r); else requestDraw(); } else { saveState(); requestDraw(); } },
+  hide() {},
+};
+}

@@ -128,4 +128,4 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 @media (prefers-reduced-motion: reduce) { .sealed-badge { animation: none; } }
 
 /* a capture view (#ui=0): the map alone, for scripted time-lapses */
-.world.bare #topbar, .world.bare .world-toolbar, .world.bare .world-status, .world.bare .wmap-corner, .world.bare .world-note, .world.bare .wmap-zoom { display: none; }
+:root[data-tool=maps]:has(.world.bare) #topbar, .world.bare .world-toolbar, .world.bare .world-status, .world.bare .wmap-corner, .world.bare .world-note, .world.bare .wmap-zoom { display: none; }

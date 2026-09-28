@@ -40,8 +40,8 @@ export const requireBundles = (name: string): boolean =>
 
 /** Hard precondition: the esbuild output must exist before any browser test. */
 export function requireBuild(name: string): void {
-  if (existsSync(path.join(WEBAPP, 'js', 'main.js')) && existsSync(path.join(WEBAPP, 'sw.js'))) return;
-  console.error(`${name}: webapp/js/main.js or webapp/sw.js is missing. Run \`npm run build\` first`);
+  if (existsSync(path.join(WEBAPP, 'js', 'app.js')) && existsSync(path.join(WEBAPP, 'sw.js'))) return;
+  console.error(`${name}: webapp/js/app.js or webapp/sw.js is missing. Run \`npm run build\` first`);
   process.exit(2);
 }
 
@@ -50,7 +50,7 @@ export function requireBuild(name: string): void {
 // not symlinks (symlinks need admin rights on Windows). Caller cleans up.
 export async function shimWebroot(prefix = 'bs-webroot-'): Promise<{ root: string; cleanup: () => Promise<void> }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  for (const name of ['index.html', 'maps.html', 'viewer.html', 'fashion.html', 'sw.js', 'js', 'css', 'vendor', 'defaults', 'brand', 'version.json']) {
+  for (const name of ['index.html', 'sw.js', 'js', 'css', 'vendor', 'defaults', 'brand', 'version.json']) {
     const src = path.join(WEBAPP, name);
     if (existsSync(src)) await fs.cp(src, path.join(root, name), { recursive: true });
   }

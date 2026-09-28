@@ -1,4 +1,4 @@
-// The world map (maps.html, Brighter Maps) against synthetic world data, and the landing page (index.html)
+// Brighter Maps (/maps) against synthetic world data, the landing page (/) and moving between the site's pages
 // (tools/map-fixture.ts pixels and records, packed the way the site serves
 // them): loads the newest release, switches by slider, buttons, list search
 // and script, toggles labels, switches to satellite pictures and back, keeps
@@ -257,7 +257,7 @@ try {
   // the map is drawn: both rooms' terrain
   await page.waitForFunction(() => document.documentElement.dataset.tiles === '32');
   // the app's own look: its stylesheet and top bar
-  assert.equal(await page.$$eval('link[rel=stylesheet]', (l) => l.map((x) => x.getAttribute('href'))).then((h) => h.includes('css/app.css')), true, 'uses the app stylesheet');
+  assert.equal(await page.$$eval('link[rel=stylesheet]', (l) => l.map((x) => x.getAttribute('href'))).then((h) => h.includes('/css/app.css')), true, 'uses the app stylesheet');
   // a phone: nothing wider than the screen, controls reachable
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   await page.goto(base, { waitUntil: 'networkidle0' });
@@ -268,17 +268,17 @@ try {
   // links from before the tools had addresses of their own (they name the landing page): a viewer route goes
   // to the viewer, a place on the map to the map, whole
   await page.goto(`${site}/#/mesh/3`, { waitUntil: 'networkidle0' });
-  await page.waitForFunction(() => location.pathname === '/viewer');
+  await page.waitForFunction(() => location.pathname === '/data');
   assert.equal(await page.evaluate(() => location.hash), '#/mesh/3', 'an old deep link keeps its route');
   await page.goto(`${site}/?data=data#/map/0`, { waitUntil: 'networkidle0' });
-  await page.waitForFunction(() => location.pathname === '/viewer');
+  await page.waitForFunction(() => location.pathname === '/data');
   assert.equal(await page.evaluate(() => location.search + location.hash), '?data=data#/map/0', 'and its data folder');
   await page.goto(`${site}/#r=2025-02-20&l=0`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(() => location.pathname === '/maps');
   await page.waitForFunction(() => document.documentElement.dataset.release === 'aaaaaaaaaaaaaaaa');   // (the place it named: the update of 20-Feb)
   // the landing page names each tool and links to it, and shows the version like every top bar
   await page.goto(`${site}/`, { waitUntil: 'networkidle0' });
-  assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/viewer'], 'the landing page links every tool, Fashion first');
+  assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/data'], 'the landing page links every tool, Fashion first');
   assert.equal(await page.$eval('.tool-switch-news', (b) => b.textContent), "What's new · dev build", 'the landing page has the version in its switch');
   // on a phone the three stacked cards run past the screen: the page scrolls (the tools' pages never do)
   const viewport = page.viewport();
@@ -286,21 +286,45 @@ try {
   // (a swipe, as a finger: a script may scroll a page that fingers cannot)
   await page.touchscreen.touchStart(200, 700); await page.touchscreen.touchMove(200, 150); await page.touchscreen.touchEnd();
   await new Promise((r) => setTimeout(r, 600));
-  assert.ok(await page.evaluate(() => (globalThis as any).scrollY > 200), 'the landing page scrolls on a phone');
-  await page.setViewport(viewport!);
+  assert.ok(await page.evaluate(() => document.querySelector('.home')!.scrollTop > 200), 'the landing page scrolls on a phone');
+  await page.setViewport({ ...viewport!, isMobile: false, hasTouch: false });
   await page.goto(base, { waitUntil: 'networkidle0' });
   // every top bar: the mark, the tool's name, its switch and the version (What's new)
-  assert.equal(await page.$eval('#topbar .brand-mark', (i) => i.getAttribute('src')), 'brand/mark.svg', 'the mark');
+  assert.equal(await page.$eval('#topbar .brand-mark', (i) => i.getAttribute('src')), '/brand/mark.svg', 'the mark');
   assert.equal(await page.$eval('.tool-switch-news', (b) => b.textContent), "What's new · dev build", 'the version, in the switch');
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
   // the top bar's tool switch: every tool (this one marked) and the landing page
   await page.click('#topbar .tool-switch-btn');
-  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/viewer'], 'the switch leads with Home, then every tool');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/data'], 'the switch leads with Home, then every tool');
   assert.equal(await page.$eval('.tool-switch-home', (a) => a.textContent), 'Home', 'the landing page is Home');
   assert.equal(await page.$eval('.tool-switch-menu a[aria-current=page]', (a) => a.getAttribute('href')), '/maps', 'this one marked');
   await page.keyboard.press('Escape');
   assert.equal(await page.$eval('.tool-switch-menu', (m) => (m as any).hidden), true, 'Escape closes it');
-  await page.goto(`${site}/viewer`, { waitUntil: 'networkidle0' });
+  // one page for the whole site: tools open from the switch without a page load, keep their place, and the
+  // browser's back and forward move between them
+  await page.evaluate(() => { (window as any).__onePage = true; });
+  const pick = async (href: string) => {
+    await page.click('#topbar .tool-switch-btn');
+    await page.click(`.tool-switch-menu a[href="${href}"]`);
+  };
+  const mapHash = await page.evaluate(() => location.hash);
+  await pick('/data');
+  await page.waitForFunction(() => location.pathname === '/data' && document.title === 'Brighter Data');
+  await page.waitForFunction(() => !!(window as any).__bs?.app && !!document.querySelector('.ob-drop, .cat-tab'));
+  await pick('/');
+  await page.waitForFunction(() => location.pathname === '/' && !!document.querySelector('.home-tool'));
+  await page.click('.home-tool[data-tool=maps]');
+  await page.waitForFunction(() => location.pathname === '/maps');
+  assert.equal(await page.evaluate(() => location.hash), mapHash, 'Maps opened again as it was left');
+  await page.goBack(); await page.waitForFunction(() => location.pathname === '/');
+  await page.goBack(); await page.waitForFunction(() => location.pathname === '/data');
+  await page.goForward(); await page.waitForFunction(() => location.pathname === '/');
+  assert.equal(await page.evaluate(() => (window as any).__onePage), true, 'no page loaded between them');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('link[rel=stylesheet]')].filter((l: any) => !l.disabled).map((l) => l.getAttribute('href')).sort().join()), '/css/app.css,/css/home.css', 'only the page\'s own stylesheet is on');
+  // the tools' old addresses move to their paths, their query and hash kept
+  await page.goto(`${site}/viewer.html?data=data#/map/0`, { waitUntil: 'networkidle0' });
+  assert.equal(await page.evaluate(() => location.pathname + location.search + location.hash), '/data?data=data#/map/0', 'an old viewer address');
+  await page.goto(`${site}/data`, { waitUntil: 'networkidle0' });
   assert.deepEqual(await page.$$eval('.tool-switch-menu button', (b) => b.map((x) => x.textContent)), ['Help & FAQs', "What's new · dev build"], 'the viewer\'s switch has its Help and the version');
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'data', 'Brighter Data');
   assert.deepEqual(errors.filter((e) => !/404|Failed to load resource/.test(e)), [], 'no page errors');

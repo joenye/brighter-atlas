@@ -317,7 +317,7 @@ export function openTexturePicker({ host, store, imagesIdx, current, baked, fitM
       slices.forEach((slice) => {
         // Bundle-relative: this code ships inside js/main.js, and the worker
         // entry is emitted at js/viewers/fit-worker.js (tools/build.ts).
-        const worker = new Worker(new URL('./viewers/fit-worker.js', import.meta.url), { type: 'module' });
+        const worker = new Worker(new URL('/js/viewers/fit-worker.js', location.href), { type: 'module' });
         fitWorkers.push(worker);
         worker.onmessage = (ev) => {
           const d = ev.data;

@@ -21,7 +21,7 @@ function isSmallTouchDevice(): boolean {
 }
 
 /** On a phone, once per visit: the desktop-only dialog over the app. */
-export function maybeShowMobileNotice(): void {
+export function maybeShowMobileNotice(host: HTMLElement = document.body): void {
   let seen = false;
   try { seen = sessionStorage.getItem(SEEN_KEY) === '1'; } catch { /* no storage: show it */ }
   if (seen || !isSmallTouchDevice()) return;
@@ -36,9 +36,10 @@ export function maybeShowMobileNotice(): void {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   const mark = () => el('img', { class: 'mgate-action-ico', src: 'brand/mark.svg', alt: '', width: '20', height: '20' });
+  // (the tools open in place: the dialog is done with)
   const actions = el('div', { class: 'mgate-actions' },
-    el('a', { class: 'mgate-action', href: toolUrl('fashion') }, mark(), 'Brighter Fashion'),
-    el('a', { class: 'mgate-action', href: toolUrl('maps') }, mark(), 'Brighter Maps'));
+    el('a', { class: 'mgate-action', href: toolUrl('fashion'), onclick: close }, mark(), 'Brighter Fashion'),
+    el('a', { class: 'mgate-action', href: toolUrl('maps'), onclick: close }, mark(), 'Brighter Maps'));
   const discord = document.querySelector<HTMLElement>('#topbar .top-social.discord')?.cloneNode(true) as HTMLElement | undefined;
   if (discord) { discord.classList.remove('btn-mini'); discord.classList.add('mgate-action'); actions.append(discord); }
 
@@ -52,7 +53,7 @@ export function maybeShowMobileNotice(): void {
     el('p', { class: 'mgate-lede' }, 'On your phone, try these instead:'),
     actions,
     cont));
-  document.body.append(overlay);
+  host.append(overlay);   // (in Data's page: it goes with the page when another shows)
   // (on the screen as it is: the desktop app beneath is wider than a phone, which widens the page itself)
   const vv = window.visualViewport;
   const fit = () => { if (vv) Object.assign(overlay.style, { left: `${vv.offsetLeft}px`, top: `${vv.offsetTop}px`, width: `${vv.width}px`, height: `${vv.height}px`, right: 'auto', bottom: 'auto' }); };

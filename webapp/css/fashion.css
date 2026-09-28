@@ -6,7 +6,7 @@ html, body { touch-action: manipulation; overscroll-behavior: none; overflow: hi
    dismissed, left the page ignoring taps); the search box and the saved picture keep theirs */
 .fashion, .creator { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 .fashion input, .fashion textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
-.fashion { height: 100dvh; }
+.fashion { display: flex; flex-direction: column; height: 100%; position: relative; }
 .of-title { font-weight: 650; color: var(--fg0); margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--line); }
 .of-exp { margin-left: 4px; }
 .of-gamebuild { color: var(--fg2); font-size: 11px; white-space: nowrap; }
@@ -60,7 +60,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-controls .of-pose, .of-controls .of-bgbtn { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; background: rgba(13, 15, 19, .8); backdrop-filter: blur(6px); }
 /* toggles: off is a dim icon; on is lit (white icon on a lighter glass), never the primary blue */
 .of-controls .of-pose { color: var(--fg2); }
-.of-controls .of-pose.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }
+.of-controls .of-pose.active, .of-controls .of-bgbtn.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }
 .of-controls .of-pose svg.ic, .of-controls .of-bgbtn svg.ic { width: 18px; height: 18px; }
 .of-controls .fx-glyph { font-size: 17px; line-height: 1; }
 .of-round { width: 30px; height: 30px; border-radius: 50%; padding: 0; display: inline-grid; place-items: center; }
@@ -233,7 +233,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   #topbar .top-right { gap: 4px; }
 }
 /* while designing, the page underneath is out of the way (the designer's glass shows only the room) */
-#app.designing .of-right, #app.designing .of-charcard { visibility: hidden; }   /* (the column of buttons works on: see setDesigning) */
+#fashion.designing .of-right, #fashion.designing .of-charcard { visibility: hidden; }   /* (the column of buttons works on: see setDesigning) */
 /* ---- the wardrobe panel folds away (desktop: a rail on its inner edge, as the Brighter Atlas side panels) ---- */
 .of-right { position: relative; }
 .of-grip { position: absolute; left: -15px; top: 50%; transform: translateY(-50%); z-index: 27; }
@@ -242,11 +242,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-panel-toggle:hover { background: var(--bg3); color: var(--fg0); }
 .of-panel-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (min-width: 861px) {
-  #app.panel-collapsed main { grid-template-columns: minmax(0, 1fr) 32px; }
-  #app.panel-collapsed .of-right > :not(.of-grip) { display: none; }
-  #app.panel-collapsed .of-grip { inset: 0; left: 0; transform: none; }
-  #app.panel-collapsed .of-panel-toggle { width: 100%; height: 100%; border: none; border-radius: 0; background: none; }
-  #app.panel-collapsed .of-panel-toggle:hover { background: var(--bg2); }
+  #fashion.panel-collapsed main { grid-template-columns: minmax(0, 1fr) 32px; }
+  #fashion.panel-collapsed .of-right > :not(.of-grip) { display: none; }
+  #fashion.panel-collapsed .of-grip { inset: 0; left: 0; transform: none; }
+  #fashion.panel-collapsed .of-panel-toggle { width: 100%; height: 100%; border: none; border-radius: 0; background: none; }
+  #fashion.panel-collapsed .of-panel-toggle:hover { background: var(--bg2); }
 }
 /* phones: a grab bar between the character and the wardrobe; drag to resize, the chevron folds the wardrobe to its slots */
 @media (max-width: 860px) {
@@ -261,14 +261,14 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .of-viewer { flex: 0 0 auto; }
 }
 @media (max-width: 860px) and (orientation: portrait) {
-  #app.panel-collapsed .of-viewer { flex: 1 1 auto; height: auto !important; }
+  #fashion.panel-collapsed .of-viewer { flex: 1 1 auto; height: auto !important; }
   /* folded (Character and Equipment both off): no drawer at all, the character fills the screen; the
      column's buttons stay clear of the home indicator and of iOS Safari's floating toolbar */
   main { position: relative; }
-  #app.panel-collapsed .of-right { display: none; }
-  #app.panel-collapsed .of-controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+  #fashion.panel-collapsed .of-right { display: none; }
+  #fashion.panel-collapsed .of-controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
   /* (iOS Safari's toolbar floats over the page's foot, taller than the home indicator's inset) */
-  .ios-browser #app.panel-collapsed .of-controls { bottom: calc(max(env(safe-area-inset-bottom, 0px), 30px) + 56px); }
+  .ios-browser #fashion.panel-collapsed .of-controls { bottom: calc(max(env(safe-area-inset-bottom, 0px), 30px) + 56px); }
 }
 /* iPhone Safari's toolbar floats over the page's bottom strip: keep the controls clear of it */
 @media (max-width: 860px) {
@@ -468,7 +468,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
     padding: 24px; background: var(--bg0, #0d0f13); color: var(--fg1); text-align: center; font-size: 13px; }
   .of-rotate .ic { width: 44px; height: 44px; stroke: var(--accent); animation: of-rotate 2.4s ease-in-out infinite; }
   .of-rotate b { color: var(--fg0); font-size: 16px; }
-  #app > header, #app > main { visibility: hidden; }
+  #fashion > header, #fashion > main { visibility: hidden; }
 }
 @keyframes of-rotate { 0%, 30% { transform: rotate(90deg); } 60%, 100% { transform: rotate(0deg); } }
 @media (prefers-reduced-motion: reduce) { .of-rotate .ic { animation: none; } }
@@ -497,9 +497,26 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 /* phones designing: the designer's top half is see-through, over the page's own view (which frames the part
    being designed, with the page's backdrop, weapons and effect); only its grab bar and drawer take touches */
 @media (max-width: 860px) {
-  #app.designing-shared .creator { background: none; pointer-events: none; }
-  #app.designing-shared .creator-box { background: none; }
-  #app.designing-shared .creator-stage { background: none !important; }
-  #app.designing-shared .creator-stage canvas { display: none; }
-  #app.designing-shared .creator-grip, #app.designing-shared .creator-drawer { pointer-events: auto; background: var(--bg1); }
+  #fashion.designing-shared .creator { background: none; pointer-events: none; }
+  #fashion.designing-shared .creator-box { background: none; }
+  #fashion.designing-shared .creator-stage { background: none !important; }
+  #fashion.designing-shared .creator-stage canvas { display: none; }
+  #fashion.designing-shared .creator-grip, #fashion.designing-shared .creator-drawer { pointer-events: auto; background: var(--bg1); }
+}
+
+/* ?picture: the look alone for a link's preview picture (the view only, the site's mark in its corner) */
+.of-picmark { display: none; }
+#fashion.picture #topbar, #fashion.picture .of-right, #fashion.picture .of-toolbar, #fashion.picture .of-controls, #fashion.picture .of-charcard,
+#fashion.picture .load-card, #fashion.picture #toast { display: none !important; }
+#fashion.picture main { grid-template-columns: minmax(0, 1fr); }
+#fashion.picture .of-picmark { display: flex; position: absolute; right: 22px; bottom: 18px; align-items: center; gap: 9px;
+  color: rgba(232, 236, 242, .82); font-size: 20px; letter-spacing: .01em; text-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+#fashion.picture .of-picmark img { width: 30px; height: 30px; }
+/* phones: Background, the drawer's third mode: the background menu itself in the equipment's place */
+@media (max-width: 860px) {
+  #fashion.bg-mode .of-right .wardrobe { display: none; }
+  .of-right > .of-bgpop { position: static; flex: 1 1 auto; min-height: 0; max-height: none; width: auto; min-width: 0; overflow-y: auto;
+    padding: 10px 10px calc(16px + env(safe-area-inset-bottom, 0px)); border: 0; border-radius: 0; box-shadow: none; background: none; z-index: auto; }
+  .of-right > .of-bgpop button { padding: 12px 12px; font-size: 14px; }
+  .of-right > .of-bgpop .of-bghead { padding: 12px 4px 6px; }
 }

@@ -320,7 +320,7 @@ export function mountOnboarding(host: HTMLElement, { requireCats = [], existing 
 
     requestPersist();   // best effort: resist idle eviction
 
-    const worker = new Worker(new URL('extract/worker.js', import.meta.url), { type: 'module' });
+    const worker = new Worker(new URL('/js/extract/worker.js', location.href), { type: 'module' });
     cancelBtn.addEventListener('click', () => { worker.postMessage({ type: 'cancel' }); cancelBtn.disabled = true; });
 
     const barFor = (key: string, label: string) => {

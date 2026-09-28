@@ -8,20 +8,21 @@ import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
 import {Preview, FRAMES, prefetch, Thumbnailer, report} from './render.js';
 import {Wardrobe, h, icon} from './wardrobe.js';
 import {attachScrollbar} from '../scrollbar.js';
-import {initTopbar} from '../topbar.js';
+import type {ToolContext, ToolHandle} from '../app/tool.js';
 
 // (failures on a phone under test, whose console is out of reach, go to a development server's log)
 addEventListener('error', e => report('page error', e.error ?? e.message));
 addEventListener('unhandledrejection', e => report('unhandled rejection', e.reason));
 
-initTopbar('fashion');
+/** Mounted by the app's shell into its page (the skeleton, app/pages.tsx), once; hidden and shown after. */
+export async function mount(app: HTMLElement, ctx: ToolContext): Promise<ToolHandle> {
 // without its data (not published yet, or the connection gone) the page says so rather than staying blank
 const pack = await fetch(at('pack.json')).then(r => r.ok && /json/.test(r.headers.get('content-type') ?? '') ? r.json() : null).catch(() => null);
 if (!pack) {
-  document.getElementById('app')!.append(h('div', {class: 'of-nodata', role: 'alert'},
+  app.append(h('div', {class: 'of-nodata', role: 'alert'},
     h('p', {}, 'Brighter Fashion could not load its data.'), h('p', {}, 'Check your connection and try again in a few minutes.'),
     h('button', {class: 'btn primary', onclick: () => location.reload()}, 'Try again')));
-  throw Error('no pack');
+  return {show() {}, hide() {}};
 }
 const index = makeIndex(pack);
 const SEG_STYLE: Record<string, StyleCat | null> = {hair: 'hair', face: 'face', eyes: null, jaw: 'jaw', torso: 'torso', legs: 'legs', feet: 'feet', skin: null};
@@ -29,8 +30,11 @@ const SEG_COLOUR: Record<string, ColourCat | null> = {hair: 'hair', face: null, 
 const RELAXED = pack.creator.idleClip;   // the resting clip (it hides held items; the viewer can show them in hand)
 // the combat-ready idle most weapons share (a shield alone stands in it too)
 const DEFAULT_STANCE: number | null = (() => { const n = new Map<number, number>(); for (const i of pack.items) if (i.stance != null) n.set(i.stance, (n.get(i.stance) ?? 0) + 1); return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null; })();
-const app = document.getElementById('app')!;
-const store = {get: (k: string) => { try { return localStorage.getItem(`fashion.${k}`); } catch { return null; } }, set: (k: string, v: string) => { try { localStorage.setItem(`fashion.${k}`, v); } catch {} }};
+// ?picture: the look alone, framed and marked, for a link's preview picture (a renderer photographs the page
+// once it says it is drawn: <html data-picture="ready">); it keeps nothing of the visitor's own
+const PICTURE = new URLSearchParams(location.search).has('picture');
+if (PICTURE) app.classList.add('picture');
+const store = {get: (k: string) => { if (PICTURE) return null; try { return localStorage.getItem(`fashion.${k}`); } catch { return null; } }, set: (k: string, v: string) => { if (PICTURE) return; try { localStorage.setItem(`fashion.${k}`, v); } catch {} }};
 
 // ---- state: in the address (so any link reproduces it), remembered locally, with undo ----
 const DEFAULT: State = {gender: 'male', style: {hair: 7, face: 0, jaw: 8, torso: 9, legs: 1, feet: 1}, colour: {hair: 0, eyes: 12, torso: 2, legs: 25, feet: 20, skin: 5}, equip: {}};
@@ -76,10 +80,12 @@ let showHeld = true;
 let selected = 'hair';
 
 // ---- layout ----
-const main = document.querySelector('main')!;
+const main = app.querySelector('main')!;
 const toastEl = document.getElementById('toast')!;
 const toast = (msg: string) => { toastEl.textContent = msg; toastEl.classList.add('show'); clearTimeout((toastEl as any)._t); (toastEl as any)._t = setTimeout(() => toastEl.classList.remove('show'), 2200); };
-(document.getElementById('game-build') as HTMLElement).textContent = `game update ${pack.build.date}${pack.build.version ? ` (v${pack.build.version})` : ''}`;
+// (the top bar's label: none in a picture)
+const gameBuild = document.getElementById('game-build');
+if (gameBuild) gameBuild.textContent = `game update ${pack.build.date}${pack.build.version ? ` (v${pack.build.version})` : ''}`;
 
 // the viewer
 const canvas = h('canvas', {tabindex: '0', 'aria-label': 'Your character. Drag to turn, scroll or pinch to zoom, arrow keys turn.'}) as HTMLCanvasElement;
@@ -102,6 +108,7 @@ function showPlaceLoad(name: string | null) {
 let loadTimer = 0;
 function syncLoadCard() {
   clearTimeout(loadTimer);
+  if (PICTURE && !partsLoading && !firstLook) requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => { if (!partsLoading) document.documentElement.dataset.picture = 'ready'; }, 400)));
   viewerEl.dataset.loading = partsLoading ? '1' : '';   // (for tests and scripts: the outfit's parts are on their way)
   if (roomLoading) return;
   if (!partsLoading) { showPlaceLoad(null); return; }
@@ -149,7 +156,9 @@ let backdrop = BACKDROPS.find(b => b.room && b.id === hashPlace()) ?? BACKDROPS.
 const addressOf = (code: string) => `#${code}${backdrop.room ? '.' + backdrop.id : ''}`;
 const bgPop = h('div', {class: 'of-bgpop', hidden: true, role: 'menu'});
 const bgBtn = h('button', {class: 'btn of-bgbtn', 'aria-haspopup': 'menu', 'aria-label': 'Background', title: 'Background', onclick: (e: Event) => {
-  e.stopPropagation(); bgPop.hidden = !bgPop.hidden; bgBtn.setAttribute('aria-expanded', String(!bgPop.hidden));
+  e.stopPropagation();
+  if (phone()) { toggleBgMode(); return; }   // (phones: the drawer's third mode)
+  bgPop.hidden = !bgPop.hidden; bgBtn.setAttribute('aria-expanded', String(!bgPop.hidden));
   if (!bgPop.hidden) (bgPop.querySelector('button.on') as HTMLElement ?? bgPop.querySelector('button'))?.focus();
 }}, icon('image'));
 // the menu by keyboard: ↑ ↓ move, Esc closes back to its button
@@ -158,7 +167,8 @@ bgPop.addEventListener('keydown', e => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus(); }
   else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); bgPop.hidden = true; bgBtn.setAttribute('aria-expanded', 'false'); bgBtn.focus(); }
 });
-const closeBg = (refocus: boolean) => { bgPop.hidden = true; bgBtn.setAttribute('aria-expanded', 'false'); if (refocus) bgBtn.focus(); };
+// (the drawer's Background stays open on a pick: it is a place of its own, not a menu)
+const closeBg = (refocus: boolean) => { if (bgMode) return; bgPop.hidden = true; bgBtn.setAttribute('aria-expanded', 'false'); if (refocus) bgBtn.focus(); };
 const bgItem = (b: typeof BACKDROPS[number]) => h('button', {role: 'menuitemradio', 'aria-checked': 'false', 'data-bg': b.id, onclick: () => { setBackdrop(b); closeBg(true); }}, h('span', {class: `of-bgdot${b.room ? ' place' : ''}`, style: `background:${cssOf(b)}`}), b.name);
 bgPop.append(h('div', {class: 'of-bghead'}, 'Colours'), ...BACKDROPS.filter(b => !b.room).map(bgItem), h('div', {class: 'of-bghead'}, '3D Scenes'), ...BACKDROPS.filter(b => b.room).map(bgItem));
 // the disc under the character
@@ -175,35 +185,51 @@ document.addEventListener('click', e => { if (!bgPop.hidden && !bgPop.contains(e
 // keyboard: Tab out of the menu closes it. (Only when focus lands somewhere: a tap on iOS takes focus from
 // the menu without giving it to anything, and closing then would swallow the tap on the item.)
 bgPop.addEventListener('focusout', e => { const to = e.relatedTarget as Node | null; if (to && !bgPop.contains(to) && to !== bgBtn) closeBg(false); });
-// the column of round buttons on the view, from the top: (phones) what the drawer shows, the character's design
-// or the equipment; weapons out; the outfit's effect (when it has one); the background
-// (two toggles, one on at a time: turning the one that is on off leaves no drawer at all)
-let designingNow = false;
+// the column of round buttons on the view, from the top: (phones) what the drawer shows, the character's design,
+// the equipment or the background; then the outfit's effect (when it has one) and weapons out.
+// (the drawer's three are toggles, one on at a time: turning the one that is on off leaves no drawer at all)
+let designingNow = false, bgMode = false;
+const bgWrap = h('div', {class: 'of-bg'}, bgBtn, bgPop);
+/** Phones: the drawer shows the backgrounds (the background menu itself, in the drawer's place). */
+function setBgMode(on: boolean) {
+  if (bgMode === on) return;
+  bgMode = on;
+  (on ? right : bgWrap).append(bgPop);
+  bgPop.hidden = !on;
+  app.classList.toggle('bg-mode', on);
+  syncModeBtns(); placeColumnSoon();
+}
+function toggleBgMode() {
+  if (bgMode) { setBgMode(false); setPanelCollapsed(true); return; }
+  if (designingNow) leaveDesigner();
+  setPanelCollapsed(false); setBgMode(true);
+}
+// out of the designer into another of the drawer's modes, the drawer at the designer's height to the pixel
+function leaveDesigner() {
+  const stage = creatorEl.querySelector('.creator-stage')!.getBoundingClientRect(), m = main.getBoundingClientRect();
+  if (phone() && m.height) { split = (stage.bottom - m.top) / m.height; store.set('split', String(split)); }
+  closeCreator();
+}
 const modeBtn = (designing: boolean) => h('button', {class: 'btn of-pose of-mode-btn', 'aria-pressed': 'false',
   title: designing ? 'Design your character: face, body and hair' : 'Equipment: what your character wears',
   'aria-label': designing ? 'Character' : 'Equipment',
   onclick: () => {
     // (Character with no drawer brings the page's back first: the view and its column sit above the designer's)
-    if (designing) { if (!designingNow) { if (panelCollapsed) setPanelCollapsed(false); openCreator(); } else { closeCreator(); setPanelCollapsed(true); } }
-    else if (designingNow) {
-      // the equipment's drawer takes the designer's height to the pixel
-      const stage = creatorEl.querySelector('.creator-stage')!.getBoundingClientRect(), m = main.getBoundingClientRect();
-      if (phone() && m.height) { split = (stage.bottom - m.top) / m.height; store.set('split', String(split)); }
-      closeCreator(); setPanelCollapsed(false);
-    }
+    if (designing) { if (!designingNow) { setBgMode(false); if (panelCollapsed) setPanelCollapsed(false); openCreator(); } else { closeCreator(); setPanelCollapsed(true); } }
+    else if (designingNow) { leaveDesigner(); setPanelCollapsed(false); }
+    else if (bgMode) setBgMode(false);
     else setPanelCollapsed(!panelCollapsed);
   }},
   icon(designing ? 'mask' : 'torso'));
 const charModeBtn = modeBtn(true), equipModeBtn = modeBtn(false);
 function syncModeBtns() {
-  const equip = !designingNow && !panelCollapsed;
+  const equip = !designingNow && !panelCollapsed && !bgMode;
+  bgBtn.classList.toggle('active', bgMode); if (phone()) bgBtn.setAttribute('aria-pressed', String(bgMode));
   charModeBtn.classList.toggle('active', designingNow); charModeBtn.setAttribute('aria-pressed', String(designingNow));
   equipModeBtn.classList.toggle('active', equip); equipModeBtn.setAttribute('aria-pressed', String(equip));
 }
-const controls = h('div', {class: 'of-controls'}, charModeBtn, equipModeBtn, poseBtn, fxBtn, h('div', {class: 'of-bg'}, bgBtn, bgPop));
+const controls = h('div', {class: 'of-controls'}, charModeBtn, equipModeBtn, bgWrap, fxBtn, poseBtn);
 const viewerEl = h('section', {class: 'of-viewer'}, canvas, placeLoad, charCard,
-  // the viewer's toggles, stacked at its side: weapons out, and the outfit's effect when it has one
-  // bottom right, from the bottom: weapons out, the outfit's effect (when it has one), the background
   controls);
 // `remember`: the viewer's own pick (a shared link's place shows for the visit, not saved as theirs)
 function setBackdrop(b: typeof BACKDROPS[number], remember = true) {
@@ -223,6 +249,7 @@ function setBackdrop(b: typeof BACKDROPS[number], remember = true) {
 const right = h('aside', {class: 'of-right', id: 'of-right'});
 main.append(viewerEl, right);
 viewerEl.append(toastEl);   // toasts sit where the message bar does, in the same style
+if (PICTURE) viewerEl.append(h('div', {class: 'of-picmark'}, h('img', {src: 'brand/mark.svg', alt: ''}), h('span', {}, h('b', {}, 'Brighter'), ' Fashion')));
 // the view's own toolbar, along its top on the right: undo, redo, the picture, the looks (the top bar is the
 // same as every tool's)
 const toolbarEl = document.getElementById('of-toolbar')!;
@@ -245,8 +272,9 @@ right.prepend(grip);
 // (the view's column follows the drawer: placeColumn, set up with the designer below)
 let placeColumnSoon = () => {};
 function setPanelCollapsed(on: boolean) {
+  if (on && bgMode) setBgMode(false);
   panelCollapsed = on; store.set('panel', on ? '1' : '0');
-  document.getElementById('app')!.classList.toggle('panel-collapsed', on);
+  app.classList.toggle('panel-collapsed', on);
   const verb = on ? 'Show' : 'Hide';
   panelTab.textContent = phone() ? (on ? '⌃' : '⌄') : (on ? '‹' : '›');
   panelTab.title = `${verb} the equipment panel${phone() ? '' : '  ( ] )'}`;
@@ -280,6 +308,7 @@ grip.addEventListener('pointerdown', (e: PointerEvent) => {
 right.addEventListener('click', e => { if (panelCollapsed && (e.target as HTMLElement).closest('.slot')) setPanelCollapsed(false); }, true);
 window.addEventListener('resize', () => setPanelCollapsed(panelCollapsed));
 document.addEventListener('keydown', e => {
+  if (!ctx.active()) return;
   const t = e.target as HTMLElement;
   if (e.key !== ']' || e.ctrlKey || e.metaKey || e.altKey || t.matches?.('input, textarea') || !(document.querySelector('.creator') as HTMLElement | null)?.hidden) return;
   e.preventDefault(); setPanelCollapsed(!panelCollapsed);
@@ -572,12 +601,29 @@ function lookThumb(): Promise<string> {
   });
 }
 const lookUrl = (l: {code: string, place: string | null}) => `${location.origin}${location.pathname}#${l.code}${l.place ? '.' + l.place : ''}`;
+// Short links: the site keeps a look under an id of its own (/api/looks), with a picture of it for link
+// previews. Asked for as the looks open, so a tap shares at once (a phone's share sheet and clipboard take
+// only what is ready at the tap); the long link (the look in the address) stands in until then, and
+// wherever there is no such service (a local copy).
+const shortLinks = new Map<string, string | null>();
+const shortKey = (l: {code: string, place: string | null}) => `${l.code}.${l.place ?? ''}`;
+function askShort(l: {code: string, place: string | null}) {
+  const k = shortKey(l);
+  if (PICTURE || shortLinks.has(k)) return;
+  shortLinks.set(k, null);
+  fetch('/api/looks', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({code: l.code, place: l.place})})
+    .then(r => r.ok && /json/.test(r.headers.get('content-type') ?? '') ? r.json() : null)
+    .then(b => { if (typeof b?.url === 'string' && /^https:\/\/[^/]+\/l\/[0-9A-Za-z]{10}$/.test(b.url)) shortLinks.set(k, b.url); })
+    .catch(() => {});
+}
+const linkFor = (l: {code: string, place: string | null}) => shortLinks.get(shortKey(l)) ?? lookUrl(l);
 async function shareUrl(url: string) {
   if (navigator.share && matchMedia('(pointer: coarse)').matches) { try { await navigator.share({title: 'My Brighter Shores look', url}); return; } catch (e: any) { if (e?.name === 'AbortError') return; } }
   navigator.clipboard?.writeText(url).then(() => toast('Link copied: anyone with it sees this exact look'), () => toast('Copy the address bar to share this look'));
 }
 function renderLooks() {
   const code = encode(state), place = backdrop.room ? backdrop.id : null;
+  askShort({code, place}); for (const l of looks) askShort(l);
   const current = looks.find(l => l.code === code);
   const name = h('input', {class: 'lk-name', value: current?.name ?? lookName(state), 'aria-label': 'Name', maxlength: '48', enterkeyhint: 'done',
     onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); void saveCurrent(); } }}) as HTMLInputElement;
@@ -597,12 +643,12 @@ function renderLooks() {
         renderLooks();
       }}, l.thumb ? h('img', {src: l.thumb, alt: ''}) : h('span', {class: 'lk-noimg'}, icon('torso')),
         h('span', {class: 'lk-text'}, h('span', {class: 'lk-title'}, l.name), h('span', {class: 'lk-sub'}, on ? 'Wearing' : new Date(l.at).toLocaleDateString()))),
-      h('button', {class: 'btn-mini of-icon', title: 'Share a link to this look', 'aria-label': `Share ${l.name}`, onclick: () => void shareUrl(lookUrl(l))}, icon('share')),
+      h('button', {class: 'btn-mini of-icon', title: 'Share a link to this look', 'aria-label': `Share ${l.name}`, onclick: () => void shareUrl(linkFor(l))}, icon('share')),
       h('button', {class: 'btn-mini of-icon', title: 'Delete this look', 'aria-label': `Delete ${l.name}`, onclick: () => { looks = looks.filter(x => x !== l); saveLooks(); renderLooks(); }}, icon('x')));
   });
   looksEl.replaceChildren(
     h('div', {class: 'lk-head'}, h('b', {}, 'This look'),
-      h('button', {class: 'btn-mini', title: 'Copy a link to this exact look', onclick: () => void shareUrl(lookUrl({code, place}))}, icon('share'), 'Share link')),
+      h('button', {class: 'btn-mini', title: 'Copy a link to this exact look', onclick: () => void shareUrl(linkFor({code, place}))}, icon('share'), 'Share link')),
     h('div', {class: 'lk-save'}, name, h('button', {class: 'btn btn-cta', onclick: () => void saveCurrent()}, current ? 'Update' : 'Save')),
     h('div', {class: 'lk-head'}, h('b', {}, `Saved looks${looks.length ? ` (${looks.length})` : ''}`)),
     looks.length ? h('div', {class: 'lk-list'}, ...rows) : h('p', {class: 'lk-empty'}, 'Looks you save appear here, on this device. Open a shared link and save it to keep it.'));
@@ -695,6 +741,7 @@ async function showPicture(compose: (withMark: boolean) => Promise<Blob | null>)
   (save.isConnected ? save : closeBtn).focus();
 }
 window.addEventListener('keydown', e => {
+  if (!ctx.active()) return;
   const typing = (e.target as HTMLElement)?.matches?.('input, textarea');
   if (!creatorEl.hidden) {
     if (e.key === 'Escape') { cancelCreator(); return; }
@@ -716,12 +763,13 @@ window.addEventListener('keydown', e => {
   // Escape closes what is open, the topmost first: the looks, the background menu, then the worn item's choices
   else if (e.key === 'Escape') {
     if (!looksEl.hidden) { closeLooks(); shareBtn.focus(); }
+    else if (bgMode) setBgMode(false);
     else if (!bgPop.hidden) { bgPop.hidden = true; bgBtn.setAttribute('aria-expanded', 'false'); }
     else if (wardrobe.root.classList.contains('adjusting')) wardrobe.setAdjusting(false, true);
   }
 });
 // a link pasted into this tab: like opening it fresh
-window.addEventListener('hashchange', () => { const s = decode(hashLook()); const pl = BACKDROPS.find(b => b.room && b.id === hashPlace()); if (pl && pl !== backdrop) setBackdrop(pl, false); if (s && encode(s) !== encode(state)) showShared(s); });
+window.addEventListener('hashchange', () => { if (!ctx.active()) return; const s = decode(hashLook()); const pl = BACKDROPS.find(b => b.room && b.id === hashPlace()); if (pl && pl !== backdrop) setBackdrop(pl, false); if (s && encode(s) !== encode(state)) showShared(s); });
 
 function twoHanded(w: Worn) { return (index.items.get(w.item) as any)?.category === 'Melee 2h'; }
 function randomOutfit() {
@@ -814,6 +862,20 @@ function refresh() {
 }
 (window as any).fashion = {THREE, viewer, creatorPreview, get state() { return state; }, compose: () => compose(pack, index, state), openCreator, closeCreator, cancelCreator, wardrobe};
 await viewer.init(pack.skeleton, RELAXED);
-setFloor((['ring', 'shadow', 'none'] as const).find(m => m === store.get('floor')) ?? 'ring');
+setFloor(PICTURE ? 'shadow' : (['ring', 'shadow', 'none'] as const).find(m => m === store.get('floor')) ?? 'ring');
 try { setBackdrop(backdrop, !(backdrop.room && backdrop.id === hashPlace())); } catch (e) { console.warn('backdrop', e); setBackdrop(BACKDROPS[0]); }
 refresh();
+// (the picture: a three-quarter turn of the whole figure, the shield side away, so a shield never hides the outfit)
+if (PICTURE) { viewer.yaw = -0.45; viewer.yawVel = 0; viewer.frameTo({dist: FRAMES.full.dist * 0.74, target: FRAMES.full.target * 0.96}, true); }
+
+// hidden: nothing draws; shown: the view as it was, and a look the address may now name (back and forward)
+let wasRunning = {page: true, design: false};
+return {
+  hide() { wasRunning = {page: viewer.running, design: creatorPreview.running}; viewer.running = false; creatorPreview.running = false; },
+  show() {
+    viewer.running = wasRunning.page; creatorPreview.running = wasRunning.design;
+    const s = decode(hashLook()); if (s && encode(s) !== encode(state)) showShared(s);
+    else history.replaceState(null, '', addressOf(encode(state)));
+  },
+};
+}

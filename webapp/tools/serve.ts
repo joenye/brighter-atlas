@@ -1,6 +1,7 @@
 // Minimal static file server (used by smoke.ts / e2e.ts; production serving is
 // any static host, e.g. `python3 -m http.server 8321` from webapp/).
 import http from 'node:http';
+import { LEGACY, toolAt } from '../src/app/paths.ts';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -38,9 +39,14 @@ const EXTRA_ROOTS = (process.env.BS_EXTRA_ROOT || '')
 export function serve(root: string, port = 0): Promise<{ server: http.Server; port: number }> {
   const server = http.createServer(async (req, res) => {
     try {
-      const urlPath = decodeURIComponent(new URL(req.url || '/', 'http://x').pathname);
+      const url = new URL(req.url || '/', 'http://x');
+      const urlPath = decodeURIComponent(url.pathname);
+      // the site's one page at each tool's path; the tools' old addresses moved on (query kept; a browser
+      // keeps the hash itself), as the site's edge does
+      const moved = LEGACY[urlPath] ?? (urlPath.length > 1 && urlPath.endsWith('/') && toolAt(urlPath) ? urlPath.replace(/\/+$/, '') : null);
+      if (moved && moved !== urlPath) { res.writeHead(301, { location: `${moved}${url.search}` }); res.end(); return; }
       let rel = path.normalize(urlPath).replace(/^([/\\])+/, '');
-      if (rel === '' || rel === '.') rel = 'index.html';
+      if (rel === '' || rel === '.' || toolAt(urlPath)) rel = 'index.html';
       let data: Buffer | null = null;
       let file = '';
       // an extensionless page path serves its .html file (/world is world.html)

@@ -4,7 +4,7 @@
 // own in a gutter at its right edge, shown whenever it can scroll; the thumb follows the scroll and can be
 // dragged. Elsewhere the themed native scrollbar already stays.
 //
-// autoScrollbars() (run by every page's top bar, topbar.ts) gives it to every element that scrolls
+// autoScrollbars() (run by the site's shell, app/main.tsx) gives it to every element that scrolls
 // vertically, now and whenever one is added; attachScrollbar() gives it to one. A scroller that must keep
 // the platform's own carries data-native-scroll.
 

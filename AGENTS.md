@@ -25,10 +25,10 @@ its memory.
    (iOS, Android, Firefox on macOS), `webapp/src/scrollbar.ts` draws the
    site's own track in a gutter at the scroller's right edge; elsewhere the
    themed native scrollbar (`css/app.css`) already stays. `autoScrollbars()`,
-   run by every page's top bar (`src/topbar.ts`), gives it to every element
+   run by the site's shell (`src/app/main.tsx`), gives it to every element
    with `overflow-y: auto` or `scroll`, now and as they are added, so a new
    list, panel, popover or sheet gets it without being named. Keep it that
-   way: a page that does not start with `initTopbar` must call
+   way: a page outside the shell (`satellite.html`) must call
    `autoScrollbars()` itself; a scroller made scrollable later by a class
    change (not there when it was added) calls `attachScrollbar()`; a scroller
    that must keep the platform's own carries `data-native-scroll`. A scroller
@@ -38,14 +38,14 @@ its memory.
 
 ## Brighter Maps and Brighter Fashion (the two exceptions to "bring your own files")
 
-`webapp/maps.html` (Brighter Maps) draws the game's 2D map
+Brighter Maps (`/maps`, `webapp/src/world-atlas/`) draws the game's 2D map
 for every game update from data the site itself serves under `world-data/`
 (see `webapp/src/world-atlas/data.ts` for the layout), limited to the 2D map
 (terrain, room labels and their artwork) and satellite pictures of the rooms
 seen from straight above, for the updates that have them
 (`src/world-atlas/satellite.ts`: a tile pyramid on the map's own grid).
 
-`webapp/fashion.html` (Brighter Fashion, the maintainer's decision of
+Brighter Fashion (`/fashion`, `webapp/src/fashion/`, the maintainer's decision of
 2026-09-27) dresses a character from data the site serves under
 `fashion-data/<update>/` (named by `fashion-data/latest.json`): the character
 creator's and every wearable item's meshes, textures, rigs, clips and item

@@ -86,7 +86,7 @@ export class MergedBakePool {
         // and the worker entry is emitted at js/viewers/world/bake-worker.js
         // (tools/build.ts).
         const worker = new Worker(
-          new URL('./viewers/world/bake-worker.js', import.meta.url),
+          new URL('/js/viewers/world/bake-worker.js', location.href),
           { type: 'module' },
         );
         const entry: PoolWorker = {

@@ -4,10 +4,10 @@ A fully client-side viewer for the **Brighter Shores** asset bundles
 (engine "mahogany", Fen Research). Users provide their own `assetBundle0` to
 `assetBundle8` cache files; everything decodes in-browser. **No game data is
 committed, ever, and none is distributed, with two exceptions (AGENTS.md):**
-Brighter Maps (`maps.html`) draws every game update's 2D map (terrain, room
+Brighter Maps (`/maps`) draws every game update's 2D map (terrain, room
 labels and their artwork), and satellite pictures of the rooms seen from above
 for the updates that have them, from data the site serves under `world-data/`,
-and Brighter Fashion (`fashion.html`) dresses a character from the equipment
+and Brighter Fashion (`/fashion`) dresses a character from the equipment
 and body data the site serves under `fashion-data/`. Nothing else from the
 game is served; widening that is the maintainer's decision.
 
@@ -18,20 +18,28 @@ game is served; widening that is the maintainer's decision.
   libraries (npm devDeps exist only for their types). `defaults/` ships the
   shared room-name override table (no user annotations). `data-fixtures/` is
   the committed synthetic dataset the smoke test runs against.
-- Four pages, each tool on its own subdomain of the site (`src/sites.ts`
-  `toolUrl`: `maps.`, `data.`, `fashion.`; served anywhere else they are
-  `/maps`, `/viewer`, `/fashion`), every top bar "Brighter" and the tool's
-  name. `index.html` (the bare domain) is the landing page, entry
-  `js/home.js`: the three tools, and it sends links from before the tools
-  had addresses of their own on whole (`#/...`, `?data=` to Brighter Data, a
-  map place `#r=...` to Brighter Maps). `maps.html` (Brighter Maps) is the
-  world map: `src/world-atlas/` + `css/world.css`, entry `js/world.js`, no
-  game files needed. `viewer.html` (Brighter Data) is the viewer for the
-  user's own files, entry `js/main.js`. `fashion.html` (Brighter Fashion):
-  `src/fashion/` + `css/fashion.css`, entry `js/fashion.js`, split (the
-  game's renderer, for its places, is a chunk under `js/chunks/`, fetched
-  only when one is picked); its data comes from `fashion-data/latest.json`
-  and the folder it names (`src/fashion/data.ts`). The landing page's
+- One page for the whole site: `index.html`, a React shell (`src/app/`,
+  entry `js/app.js`) at `/` (the landing page, `app/Landing.tsx`),
+  `/fashion`, `/maps` and `/data` (`app/paths.ts`, shared with
+  `tools/serve.ts`). Moving between them loads no page (`app/router.ts`:
+  history, the tools' own query and hash kept per tool, old addresses such
+  as `/viewer.html` moved on, links from before the tools had paths at `/`
+  sent on whole). Every page has the same top bar (`app/Topbar.tsx`: the
+  brand is the tool switch; each tool's own parts sit beside it). Each tool
+  is a chunk of its own under `js/chunks/`, with its own stylesheet, fetched
+  the first time its page opens, and then kept, hidden and drawing nothing,
+  while others show (`app/Shell.tsx`, `app/tool.ts`: a tool exports
+  `mount(root, ctx)` returning `show`/`hide`; its listeners on the window or
+  document act only while `ctx.active()`; its page's markup is in
+  `app/pages.tsx` and it finds its elements there by id, so ids are unique
+  across the tools). The tools: Brighter Maps, the world map
+  (`src/world-atlas/` + `css/world.css`, no game files needed); Brighter
+  Data, the viewer for the user's own files (`src/main.ts`); Brighter
+  Fashion (`src/fashion/` + `css/fashion.css`; the game's renderer, for its
+  3D scenes, is a chunk of its own too, fetched only when one is picked; its
+  data comes from `fashion-data/latest.json` and the folder it names,
+  `src/fashion/data.ts`; `?picture` draws a look alone for link previews).
+  The landing page's
   pictures (`landing/*.webp`) are served by the site, never committed. Sealed areas (episodes the game has
   not shown) arrive as silhouettes only and are drawn dark under fog by
   `src/world-atlas/sealed.ts`. The satellite view (`src/world-atlas/
@@ -47,7 +55,7 @@ game is served; widening that is the maintainer's decision.
 - Hosting, deployment and release tooling are **not part of this repo**: it
   builds a static site and deliberately knows nothing about how that site is
   served. It knows only the tools' public addresses, for its links
-  (`src/sites.ts`).
+  (`src/app/paths.ts`).
 
 ## Commands
 ```bash
@@ -71,9 +79,8 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   looking at a mesh rather than what it IS. They persist the same way
   (IndexedDB `userdata`, keyed by mesh content hash) but are not part of the
   portable file, and they add no save/load UI of their own.
-- **The runtime layout is a contract.** `viewer.html` loads `js/main.js`,
-  `maps.html` loads `js/world.js`, `fashion.html` `js/fashion.js`,
-  `index.html` `js/home.js`, `satellite.html` `js/satellite.js`;
+- **The runtime layout is a contract.** `index.html` loads `js/app.js` (the
+  tools' chunks under `js/chunks/`), `satellite.html` `js/satellite.js`;
   workers are spawned by path (`js/extract/worker.js`, …); the service worker
   must stay at the webapp root (`sw.js`) so its scope covers the page, and it
   serves decoded payloads at `cs/<versionId>/…`. The esbuild config
@@ -164,7 +171,7 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   object); read them individually.
 - **Scrollbars (AGENTS.md rule 3).** Every vertical scroller shows the
   persistent themed scrollbar: `src/scrollbar.ts` `autoScrollbars()` (run by
-  every page's `initTopbar`) gives it to each element that scrolls, as it
+  the site's shell) gives it to each element that scrolls, as it
   appears; see AGENTS.md for the exceptions and the stacking caveat.
 - **The production host serves a Content-Security-Policy** that must stay in
   sync with the app's loading behavior. Verify the app runs clean under a

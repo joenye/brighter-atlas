@@ -43,7 +43,25 @@ a:hover { text-decoration: underline; }
 button { font: inherit; color: inherit; }
 ::selection { background: var(--accent-dim); }
 
-#app { display: flex; flex-direction: column; height: 100vh; }
+/* the one page (src/app/Shell.tsx): the top bar, then the page the address names, each tool's page kept
+   (hidden) once opened */
+#root { height: 100%; }
+.shell { display: flex; flex-direction: column; height: 100%; }
+.pages { flex: 1; min-height: 0; position: relative; }
+.page { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.page[hidden] { display: none; }
+.page > :first-child { flex: 1; min-height: 0; }
+.page > .page-load { top: 42%; }
+/* each tool's own parts of the top bar, in place, shown with its page */
+/* the bar is controls, never text to select (a long press on a phone opens the switch, not a selection) */
+#topbar { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+#topbar input { -webkit-user-select: text; user-select: text; }
+.topbar-slot { display: contents; }
+.topbar-slot[hidden] { display: none; }
+/* Brighter Data's own buttons in the top bar: a desktop tool's, left out where a phone's bar has no room */
+@media (max-width: 700px) { #export-btn, #overrides-btn, #data-source { display: none !important; } }
+/* Brighter Data */
+#app { display: flex; flex-direction: column; height: 100%; }
 
 /* ---------- top bar ---------- */
 #topbar {
@@ -1184,7 +1202,6 @@ kbd {
   body.map-active #sidebar, body.map-active #details { display: none; }
   body.map-active #topbar .top-social, body.map-active #topbar .searchwrap { display: none; }
   body.map-active #overrides-btn, body.map-active #data-source, body.map-active #export-btn { display: none; }
-  body.map-active #app { height: 100dvh; }
   .map-toolbar { gap: 6px; padding: 6px; }
   .map-toolbar button, .map-toolbar select { min-height: 40px; }
   .map-toolbar select { max-width: 44vw; flex: 1; }

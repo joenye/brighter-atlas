@@ -3,7 +3,6 @@
 
 import { modelCards } from './viewers/model-cards.js';
 import { createStore } from './client-store.js';
-import { openHelpModal } from './help.js';
 import { animClass } from './anim-class.js';
 import { mountOnboarding } from './onboard.js';
 import { maybeShowMobileNotice } from './mobile-gate.js';
@@ -33,10 +32,10 @@ import { entryByOrdinal } from './store.js';
 import type { AppStore, IndexEntry, FetchErrorDetail } from './store.js';
 import { partRecolor } from './recolor.js';
 import { episodeFilters, matchesFilters, type FilterDef } from './list-filters.js';
-import { initTopbar } from './topbar.js';
+import type { ToolContext, ToolHandle } from './app/tool.js';
 
-// the top bar every page shares: the brand and its tool switch, the version and What's new
-initTopbar('data', { extras: [{ label: 'Help & FAQs', onClick: () => openHelpModal() }] });
+// (the page is showing: this tool's listeners on the window and document act only then)
+let ctx: ToolContext = { active: () => true };
 
 
 // a parsed hash route ('#/mesh/12', '#/diff/<a>..<b>', …)
@@ -459,6 +458,7 @@ class App {
     });
 
     window.addEventListener('hashchange', () => {
+      if (!ctx.active()) return;
       const route = parseHash(location.hash);
       // navigating to an item lands its details in the right panel: surface it
       // if collapsed. Deliberately NOT done for the initial (load-time) route,
@@ -469,6 +469,7 @@ class App {
     });
 
     document.addEventListener('keydown', (e) => {
+      if (!ctx.active()) return;
       const target = e.target as HTMLElement;
       const tag = (target.tagName || '').toLowerCase();
       const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
@@ -1708,14 +1709,25 @@ export function parseHash(h: string | null | undefined): Route | null {
 
 // annotations hydrate from IndexedDB (authoritative) before first render;
 // a legacy localStorage set migrates transparently on first boot
-async function boot(): Promise<void> {
+async function boot(): Promise<App> {
   const [store] = await Promise.all([createStore(), hydrateOverrides(), hydrateNames(), hydrateModels(), hydrateDyes()]);
   const app = new App(store);
   (window as any).__bs = { app };   // exposed for the smoke test
   app.start();
+  return app;
 }
 
-// Phones get the app, with a dialog over it once per visit saying it is built for desktop (and where to go
-// on a phone instead)
-maybeShowMobileNotice();
-await boot();
+/** Mounted by the app's shell into its page (the skeleton, app/pages.tsx), once; hidden and shown after. A
+ *  hidden Data keeps its list and its place but lets its viewer go (nothing draws), mounted again on return. */
+export async function mount(root: HTMLElement, context: ToolContext): Promise<ToolHandle> {
+  ctx = context;
+  // Phones get the app, with a dialog over it once per visit saying it is built for desktop (and where to go
+  // on a phone instead)
+  maybeShowMobileNotice(root);
+  const app = await boot();
+  return {
+    hide() { app.view?.destroy(); app.view = null; clear(app.viewerEl); },
+    show() { void app.applyRoute(parseHash(location.hash)); },
+    current() { location.hash = ''; },
+  };
+}

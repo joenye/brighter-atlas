@@ -1,6 +1,6 @@
 // Build: bundle each runtime entry point with esbuild to the exact paths the
-// app expects at runtime (viewer.html loads js/main.js, maps.html js/world.js, fashion.html js/fashion.js,
-// index.html js/home.js; the service worker
+// app expects at runtime (index.html, the one page, loads js/app.js, which fetches each tool's code as a
+// chunk of its own under js/chunks/ when its page first opens; the service worker
 // must sit at the app root so its scope covers the page; workers are spawned
 // by path string).
 //
@@ -23,6 +23,7 @@ const common: BuildOptions = {
   sourcemap: watch ? 'inline' : false,
   metafile: !watch,
   logLevel: 'info',
+  jsx: 'automatic',
   ...(watch ? {} : {
     legalComments: 'none' as const,
     define: { 'process.env.NODE_ENV': '"production"' },
@@ -33,8 +34,6 @@ const jobs: BuildOptions[] = [
   {
     ...common,
     entryPoints: {
-      'js/main': 'src/main.ts',
-      'js/world': 'src/world-atlas/main.ts',
       'js/satellite': 'src/satellite/main.ts',
       'js/extract/worker': 'src/extract/worker.ts',
       'js/extract/pool-worker': 'src/extract/pool-worker.ts',
@@ -46,11 +45,9 @@ const jobs: BuildOptions[] = [
     splitting: false,
   },
   { ...common, entryPoints: { sw: 'src/sw.ts' }, outdir: '.' },
-  // Brighter Fashion (fashion.html): split, so the game's renderer (its places) is a chunk of its own,
-  // fetched only when a place is picked; chunk names carry their content's hash
-  { ...common, entryPoints: { 'js/fashion': 'src/fashion/app.ts' }, outdir: '.', splitting: true, chunkNames: 'js/chunks/[name]-[hash]' },
-  // the landing page (index.html)
-  { ...common, entryPoints: { 'js/home': 'src/home.ts' }, outdir: '.' },
+  // the site (index.html): the shell, and each tool (and Fashion's 3D scenes' renderer) a chunk of its own,
+  // fetched when first needed; chunk names carry their content's hash
+  { ...common, entryPoints: { 'js/app': 'src/app/main.tsx' }, outdir: '.', splitting: true, chunkNames: 'js/chunks/[name]-[hash]' },
 ];
 
 if (watch) {
