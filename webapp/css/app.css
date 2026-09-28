@@ -355,8 +355,10 @@ kbd {
   font: 10px/1 monospace; color: #06210f; background: var(--good); border-radius: 3px; padding: 1px 3px;
 }
 /* ---------- overrides manager modal ---------- */
+/* every dialog stands over every tool's own layers (Fashion's designer drawer, 50; its looks, 65; its picture
+   sheet, 80; the tool switch, 90), so its close button is never covered */
 .modal-overlay {
-  position: fixed; inset: 0; z-index: 40; background: rgba(6,8,11,.62);
+  position: fixed; inset: 0; z-index: 150; background: rgba(6,8,11,.62);
   display: flex; align-items: center; justify-content: center;
 }
 /* capture modals (screenshot / video): solid backdrop so the live 3D view isn't
