@@ -8,7 +8,6 @@
 import * as THREE from '../../../vendor/three.module.js';
 import type { WorldScene, WorldSceneRoom } from './scene.js';
 
-export const WATER_SHADER_VERSION = 'brighter-water-v4-fixed-palette';
 export const WATER_BLUE = Object.freeze([0.12, 0.28, 0.28] as const);
 // Cave of the Crystal's recovered tint, the fixed colour for the structurally
 // identified irradiated river.

@@ -53,57 +53,18 @@ export const DataButtons = memo(() => (
   </>
 ));
 
+// (the world map's layout before its code: its bar and its map; the controls come with the map, WorldMap.tsx)
 export const MapsPage = memo(() => (
   <div id="world" className="world">
-    <div className="map-toolbar world-toolbar">
-      <div className="world-pick">
-        <button id="world-prev" className="btn" type="button" aria-label="Previous update" title="Previous update">‹</button>
-        <button id="world-release" className="btn world-release" type="button" aria-haspopup="dialog" aria-controls="world-picker" title="Choose a game update">Loading...</button>
-        <button id="world-next" className="btn" type="button" aria-label="Next update" title="Next update">›</button>
-      </div>
-      <div className="world-slider">
-        <div id="world-ticks" className="world-ticks" aria-hidden="true"></div>
-        <input id="world-date" type="range" min="0" max="1" step="1" defaultValue="1" aria-label="Game update date" />
-        <div id="world-bubble" className="world-bubble" aria-hidden="true"></div>
-      </div>
-    </div>
-    <div className="map-canvas-host world-map">
-      <canvas id="world-satellite" className="world-satellite" aria-hidden="true"></canvas>
-      <canvas id="world-canvas" tabIndex={0} aria-label="World map. Drag to pan, pinch or scroll to zoom."></canvas>
-      <canvas id="world-fog" className="world-fog" aria-hidden="true"></canvas>
-      <div id="world-sealed" className="world-sealed"></div>
-      <div className="wmap-corner">
-        <button id="world-view" className="wmap-view" type="button" aria-pressed="false" title="Show satellite pictures" hidden>
-          <canvas id="world-view-thumb" className="wmap-thumb" aria-hidden="true"></canvas><span id="world-view-name">Satellite</span>
-        </button>
-        <label className="wmap-labels" title="Show room labels"><input id="world-labels" type="checkbox" defaultChecked /><span>Labels</span></label>
-        <label id="world-roofs-switch" className="wmap-labels" title="Show roofs (off: see inside the buildings)" hidden><input id="world-roofs" type="checkbox" defaultChecked /><span>Roofs</span></label>
-      </div>
-      <div className="wmap-zoom" role="group" aria-label="Zoom">
-        <button id="world-zoom-in" type="button" aria-label="Zoom in" title="Zoom in"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg></button>
-        <button id="world-zoom-out" type="button" aria-label="Zoom out" title="Zoom out"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" /></svg></button>
-      </div>
-      <p id="world-note" className="world-note" role="status"></p>
-      <LoadCard id="world-loading" textId="world-loading-text" />
-      <p id="world-status" className="world-status" role="status"></p>
-    </div>
-    <div id="world-picker" className="world-picker" role="dialog" aria-modal="true" aria-label="Choose a game update" hidden>
-      <div className="world-picker-card">
-        <div className="world-picker-head">
-          <input id="world-search" type="search" placeholder="Search updates, for example 0.99 or Sep 2026" aria-label="Search game updates" autoComplete="off" />
-          <button id="world-picker-close" className="btn" type="button" aria-label="Close">×</button>
-        </div>
-        <ul id="world-list" className="world-list"></ul>
-      </div>
-    </div>
+    <div className="map-toolbar world-toolbar" />
+    <div className="map-canvas-host world-map" />
   </div>
 ));
 
-/** The load card every page shows (Fashion builds its own the same way): a ring, a name, how far. */
-export const LoadCard = ({ id, textId }: { id: string; textId: string }) => (
-  <div id={id} className="load-card spin" role="status" hidden>
+/** The loader every page shows (Fashion builds its own the same way): a ring alone, what it loads its label. */
+export const LoadCard = ({ id, label, hidden = true }: { id: string; label: string; hidden?: boolean }) => (
+  <div id={id} className="load-card spin" role="status" aria-label={label} hidden={hidden}>
     <svg viewBox="0 0 44 44" aria-hidden="true"><circle className="pl-track" cx="22" cy="22" r="19" /><circle className="pl-fill" cx="22" cy="22" r="19" /></svg>
-    <span id={textId} className="pl-name">Loading</span><span className="pl-pct"></span>
   </div>
 );
 
@@ -117,7 +78,8 @@ export const FashionPage = memo(() => (
       <button id="shot" className="btn-mini of-icon-sm" title="Save the view as a picture" aria-label="Save picture"><Ic><path d="M4 7h3l2-3h6l2 3h3v13H4z" /><circle cx="12" cy="13" r="4" /></Ic><span>Save picture</span></button>
       <button id="share" className="btn-mini of-share" title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog"><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
     </div>
-    <main></main>
+    {/* the layout before the code: the view and the equipment panel, replaced by the real ones on mount */}
+    <main><div className="ph ph-view" /><div className="ph ph-panel" /></main>
     <div className="of-rotate" role="alert"><Ic><rect x="7" y="2" width="10" height="20" rx="2" /><path d="M11 18h2" /></Ic><b>Turn your phone upright</b><span>Brighter Fashion is made for holding your phone this way up.</span></div>
     <div id="toast" role="status" aria-live="polite"></div>
   </div>

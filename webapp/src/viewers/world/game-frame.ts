@@ -243,6 +243,10 @@ interface ClipControl {
 }
 
 /** Everything the frame needs for one room, built once per room. */
+/** One level of a texture container: its format, size and data as the GPU takes it (blocks, or pixels). */
+export interface TextureLevel { fmt: number; width: number; height: number; data: Uint8Array }
+export type TextureLevelSource = (image: number, sub: number) => Promise<TextureLevel>;
+
 export class GameFrame {
   readonly gl: GameGL;
   readonly shaders: GameShaderLibrary;
@@ -270,8 +274,9 @@ export class GameFrame {
   // GL range needs a remap that rounds depth differently.
   private readonly clipControl: ClipControl | null;
 
+  /** `levels`: where a texture's levels come from, when not one file each under `url` (images/NNNNN_eK.bc). */
   constructor(private readonly context: WebGL2RenderingContext, private readonly url: (rel: string) => string,
-    readonly index: GameRenderIndex, private readonly tileUnits: number) {
+    readonly index: GameRenderIndex, private readonly tileUnits: number, private readonly levels?: TextureLevelSource) {
     this.gl = new GameGL(context);
     this.clipControl = context.getExtension('EXT_clip_control') as ClipControl | null;
     this.shaders = new GameShaderLibrary(url, index, !!this.clipControl);
@@ -367,6 +372,7 @@ export class GameFrame {
   private async buildDraws(room: GameRoomSource, next: SceneDraws): Promise<void> {
     // the room, then each neighbour, each in its own draw order
     const scenes = [room, ...(room.others ?? [])];
+    await this.warmPrograms(scenes);
     for (let k = 0; k < scenes.length; k++) {
       const scene = scenes[k];
       for (const group of drawGroups(scene.batches)) {
@@ -507,15 +513,33 @@ export class GameFrame {
     return this.buildPartDraw(group.batch, instances);
   }
 
+  /** A batch's main and depth programs (indices). */
+  private batchPrograms(batch: GameBatchSource): [number | null, number | null] {
+    // water: key (skinned, 32-bit, vignette) = (false, false, true)
+    const main = batch.water ? this.index.waterPrograms[batch.water.kind][0] : this.mainProgram(batch.material);
+    return [main, batch.water ? null : this.depthProgram(batch.material)];
+  }
+
+  /** Every program the scenes will draw with, compiled together before the draws are built, the page
+   *  free meanwhile (GameGL.compileAsync): a place's first load no longer holds a phone's taps. */
+  private async warmPrograms(scenes: { batches: GameBatchSource[]; actors?: GameActorSource[] }[]): Promise<void> {
+    const indices = new Set<number>();
+    for (const scene of scenes) {
+      for (const group of drawGroups(scene.batches)) for (const i of this.batchPrograms(group.batch)) if (i !== null) indices.add(i);
+      for (const actor of scene.actors ?? []) {
+        const wide = actor.payload?.idx_dtype === 'u32';
+        for (const i of [this.mainProgram(actor.material, true, wide), this.depthProgram(actor.material, true, wide)]) if (i !== null) indices.add(i);
+      }
+    }
+    await Promise.all([...indices].map(async (i) => {
+      try { await this.gl.compileAsync((await this.shaders.program(i, 'clip')).translated); } catch { /* the draw that needs it reports it */ }
+    }));
+  }
+
   private async buildPartDraw(batch: GameBatchSource, instances: BakeInstance[]): Promise<Draw | null> {
-    let programIndex: number | null;
-    if (batch.water) {
-      // key (skinned, 32-bit, vignette) = (false, false, true)
-      programIndex = this.index.waterPrograms[batch.water.kind][0];
-    } else programIndex = this.mainProgram(batch.material);
+    const [programIndex, depthIndex] = this.batchPrograms(batch);
     if (programIndex === null) return null;
     const program = await this.shaders.program(programIndex, 'clip');
-    const depthIndex = batch.water ? null : this.depthProgram(batch.material);
     const depthProgram = depthIndex === null ? null : await this.shaders.program(depthIndex, 'clip');
     const material = this.index.materials[String(batch.material)];
     const style = batch.water?.kind === 'surface' ? (this.building ?? this.room)!.water.styles[batch.water.style] : null;
@@ -568,7 +592,8 @@ export class GameFrame {
 
   // ---- textures -------------------------------------------------------------
 
-  private async blocks(image: number, sub: number): Promise<{ fmt: number; width: number; height: number; data: Uint8Array }> {
+  private async blocks(image: number, sub: number): Promise<TextureLevel> {
+    if (this.levels) return this.levels(image, sub);
     const r = await fetch(this.url(`images/${pad5(image)}_e${sub}.bc`));
     if (!r.ok) throw new Error(`image ${image} sub ${sub}: ${r.status}`);
     const bytes = new Uint8Array(await r.arrayBuffer());

@@ -3,19 +3,11 @@
 import {at} from './data.js';
 import type {EquipSlot, State, Worn} from './compose.js';
 import {attachScrollbar} from '../scrollbar.js';
+import {el, openModal} from '../ui.js';
 
-export const h = (tag: string, attrs: Record<string, any> = {}, ...kids: (Node | string | null | undefined | false)[]) => {
-  const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
-    if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'class') e.className = v; else e.setAttribute(k, v === true ? '' : String(v));
-  }
-  for (const k of kids) if (k != null && k !== false) e.append(k);
-  return e;
-};
 
 // small line icons (the app's style: no emoji, which many systems draw as boxes)
-const PATHS: Record<string, string> = {
+export const PATHS: Record<string, string> = {
   edit: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
   share: 'M6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 10.7l6.8-3.4M8.6 13.3l6.8 3.4',
   person: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 20.5c.8-3.6 3.9-6 7.5-6s6.7 2.4 7.5 6',
@@ -23,6 +15,8 @@ const PATHS: Record<string, string> = {
   dice: 'M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM8.5 8.5h.01M15.5 15.5h.01M12 12h.01M15.5 8.5h.01M8.5 15.5h.01',
   x: 'M6 6l12 12M18 6L6 18',
   reset: 'M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5',
+  eyeOff: 'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10 10 0 0 1 12 5c5 0 9 4 10 7a11 11 0 0 1-2.6 3.8M6.6 6.6A11 11 0 0 0 2 12c1 3 5 7 10 7a10 10 0 0 0 3.4-.6',
+  gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   turnLeft: 'M14 6l-6 6 6 6',
   turnRight: 'M10 6l6 6-6 6',
   image: 'M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4',
@@ -45,6 +39,18 @@ export const icon = (name: string) => {
   return svg;
 };
 
+// The three factions. Crafted armour, shields and weapons are one faction's (the pack names it: metal for
+// Cryoknights, bone for Guardians, stone and cloth for Hammermages); combat capes carry the faction as their
+// variant; the Guard gear and cosmetics are common to all.
+export const FACTIONS = ['Cryoknight', 'Guardian', 'Hammermage'] as const;
+export type Faction = typeof FACTIONS[number];
+/** An item's faction: one of the three; 'Guard' for the combat gear no faction owns (the Guard gear); 'combat'
+ *  for a combat cape (its variant picks the faction); null for what is no one's (transmogs, the other capes). */
+export const factionOf = (it: any): Faction | 'Guard' | 'combat' | null =>
+  it.kind === 'cape' ? (it.variants.length > 1 ? 'combat' : null)
+  : FACTIONS.includes(it.faction) ? it.faction
+  : it.kind === 'armour' || it.kind === 'shield' || it.kind === 'weapon' ? 'Guard' : null;
+
 export const SLOT_LABEL: Record<EquipSlot, string> = {head: 'Head', torso: 'Torso', legs: 'Legs', hands: 'Hands', feet: 'Feet', cape: 'Cape', shield: 'Shield', weapon: 'Weapon'};
 const EMPTY: Record<EquipSlot, [string, string]> = {
   head: ['No hat', 'Show the hair'], torso: ['No torso armour', 'Show the character’s own top'], legs: ['No leg armour', 'Show the character’s own trousers'],
@@ -59,6 +65,9 @@ export interface Member { item: any; variant: number; label: string | null }
 const WEAPON_GROUP: Record<string, string> = {'Melee 1h': 'One-handed', 'Melee 2h': 'Two-handed', 'Ranged': 'Ranged'};
 
 export interface Entry { key: string; slot: EquipSlot; name: string; group: string; kind: string; members: Member[]; icon?: number; search: string }
+/** The two halves of every slot's list: equipment (armour, shields, weapons and capes: what gives a character
+ *  its stats) and transmogs (cosmetics: looks with no equipment behind them). */
+export const sectionOf = (e: {kind: string}) => e.kind === 'cosmetic' ? 'Transmogs' : 'Combat';
 
 // One browsable entry per look: capes fold their tiers, tiered items their tiers,
 // cosmetics their colours.
@@ -81,14 +90,16 @@ export function allEntries(pack: any): Entry[] {
       if (e.icon == null) e.icon = it.variants[0]?.icon;
       continue;
     }
-    const group = it.kind === 'cosmetic' ? `Cosmetics · ${it.source ?? 'other'}` : it.kind === 'weapon' ? `Weapons · ${WEAPON_GROUP[it.category] ?? it.category ?? 'other'}` : it.kind === 'shield' ? (it.dyeable ? `Shields · ${it.source}` : 'Shields · Guard') : it.dyeable ? `Armour · ${it.source}` : 'Armour · Guard';
+    // combat gear groups by faction (the Guard gear last), weapons by how they are held, transmogs by their set
+    const group = it.kind === 'cosmetic' ? it.source ?? 'Other' : it.kind === 'weapon' ? WEAPON_GROUP[it.category] ?? it.category ?? 'Other' : it.faction ?? 'Guard';
     out.push({key: `item:${it.id}`, slot: it.slot, name, group, kind: it.kind,
       members: it.variants.map((v: any, i: number) => ({item: it, variant: i, label: it.kind === 'cosmetic' ? clean(v.name) : v.grade})),
       icon: it.variants[0]?.icon,
-      search: `${name} ${it.source ?? ''} ${it.kind} ${it.slot} ${it.variants.map((v: any) => v.name ?? '').join(' ')}`.toLowerCase()});
+      search: `${name} ${it.source ?? ''} ${it.faction ?? ''} ${it.kind} ${it.slot} ${it.variants.map((v: any) => v.name ?? '').join(' ')}`.toLowerCase()});
   }
-  const order = (g: string) => g.startsWith('Weapons · ') ? ['One-handed', 'Two-handed', 'Ranged'].indexOf(g.slice(10)) * 0.1 : g.startsWith('Armour · Crafted') || g.startsWith('Shields · Crafted') ? 0 : g.includes('Guard') ? 1 : g.startsWith('Profession') ? 2 : g.startsWith('Episode') ? 3 : g.startsWith('Combat') ? 4 : 5;
-  return out.sort((a, b) => order(a.group) - order(b.group) || a.group.localeCompare(b.group) || a.name.localeCompare(b.name, undefined, {numeric: true}));
+  const order = (g: string) => ['One-handed', 'Two-handed', 'Ranged'].includes(g) ? ['One-handed', 'Two-handed', 'Ranged'].indexOf(g) * 0.1 : (FACTIONS as readonly string[]).includes(g) ? 0 : g === 'Guard' ? 1 : g.startsWith('Profession') ? 2 : g.startsWith('Episode') ? 3 : g.startsWith('Combat') ? 4 : 5;
+  // equipment before transmogs, then the groups in their order
+  return out.sort((a, b) => (a.kind === 'cosmetic' ? 1 : 0) - (b.kind === 'cosmetic' ? 1 : 0) || order(a.group) - order(b.group) || a.group.localeCompare(b.group) || a.name.localeCompare(b.name, undefined, {numeric: true}));
 }
 
 export interface WardrobeHooks {
@@ -101,8 +112,10 @@ export interface WardrobeHooks {
 
 // Run `fn` once `el` comes near the screen (a row scrolled toward, a list opened), never for rows no one sees.
 const BLANK = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
-const seen = new WeakMap<Element, () => void>();
+let seen = new WeakMap<Element, () => void>();
 let watcher: IntersectionObserver | null = null;
+/** Let go of the rows watched and the pictures tinted so far (the tool is leaving the page). */
+export function forgetWardrobe() { watcher?.disconnect(); watcher = null; seen = new WeakMap(); tintCache.clear(); }
 function whenSeen(el: Element, fn: () => void) {
   if (typeof IntersectionObserver === 'undefined') { fn(); return; }
   watcher ??= new IntersectionObserver(entries => {
@@ -122,17 +135,17 @@ export class Wardrobe {
   private shown: Entry[] = [];
   constructor(host: HTMLElement, private pack: any, public slots: EquipSlot[], private hooks: WardrobeHooks, header: Node) {
     this.entries = allEntries(pack);
-    this.slotBar = h('div', {class: 'slots', role: 'tablist', 'aria-label': 'Equipment slots'});
-    this.search = h('input', {type: 'search', placeholder: 'Search all equipment (“plate”, “santa”, “cape”)', class: 'search', 'aria-label': 'Search all equipment', enterkeyhint: 'search',
+    this.slotBar = el('div', {class: 'slots', role: 'tablist', 'aria-label': 'Equipment slots'});
+    this.search = el('input', {type: 'search', placeholder: 'Search all equipment (“plate”, “santa”, “cape”)', class: 'search', 'aria-label': 'Search all equipment', enterkeyhint: 'search',
       oninput: () => { this.query = this.search.value.trim().toLowerCase(); this.renderList(); this.renderCrumbs(); }}) as HTMLInputElement;
-    this.list = h('div', {class: 'items', tabindex: '0', 'aria-label': 'Items (↑ ↓ try them on)'});
+    this.list = el('div', {class: 'items', tabindex: '0', 'aria-label': 'Items (↑ ↓ try them on)'});
     this.list.addEventListener('keydown', e => this.onKey(e));
     // ↓ from the search box goes on into the results (trying the first on)
     this.search.addEventListener('keydown', e => { if (e.key === 'ArrowDown' && this.shown.length) { e.preventDefault(); this.list.focus({preventScroll: true}); this.onKey(e); } });
-    this.details = h('div', {class: 'details'});
+    this.details = el('div', {class: 'details'});
     // phones: the slots are the master view; a slot opens its detail under a breadcrumb back to them
-    this.crumbs = h('nav', {class: 'crumbs', 'aria-label': 'Equipment'});
-    this.root = h('section', {class: 'wardrobe'}, header, this.slotBar, this.crumbs, this.search, this.list, this.details);
+    this.crumbs = el('nav', {class: 'crumbs', 'aria-label': 'Equipment'});
+    this.root = el('section', {class: 'wardrobe'}, header, this.slotBar, this.crumbs, this.search, this.list, this.details);
     host.append(this.root);
     attachScrollbar(this.list); attachScrollbar(this.details); attachScrollbar(this.slotBar); attachScrollbar(this.root);   // (the root: the phones' master view scrolls whole)
   }
@@ -167,16 +180,16 @@ export class Wardrobe {
     const w = this.state.equip[this.slot], e = this.entryOf(w);
     if (this.root.classList.contains('adjusting') && e) {
       this.crumbs.replaceChildren(
-        h('button', {class: 'crumb-back', onclick: () => this.setAdjusting(false)}, icon('turnLeft'), SLOT_LABEL[this.slot]),
-        h('span', {class: 'crumb-sep', 'aria-hidden': 'true'}, '/'),
-        h('span', {class: 'crumb-here', 'aria-current': 'page'}, e.name));
+        el('button', {class: 'crumb-back', onclick: () => this.setAdjusting(false)}, icon('turnLeft'), SLOT_LABEL[this.slot]),
+        el('span', {class: 'crumb-sep', 'aria-hidden': 'true'}, '/'),
+        el('span', {class: 'crumb-here', 'aria-current': 'page'}, e.name));
       return;
     }
     this.crumbs.replaceChildren(
-      h('button', {class: 'crumb-back', onclick: () => this.showSlots()}, icon('turnLeft'), 'Equipment'),
-      h('span', {class: 'crumb-sep', 'aria-hidden': 'true'}, '/'),
-      h('span', {class: 'crumb-here', 'aria-current': 'page'}, this.query ? 'Search' : SLOT_LABEL[this.slot]),
-      ...(!this.query && e ? [h('span', {class: 'crumb-item'}, e.name)] : []));
+      el('button', {class: 'crumb-back', onclick: () => this.showSlots()}, icon('turnLeft'), 'Equipment'),
+      el('span', {class: 'crumb-sep', 'aria-hidden': 'true'}, '/'),
+      el('span', {class: 'crumb-here', 'aria-current': 'page'}, this.query ? 'Search' : SLOT_LABEL[this.slot]),
+      ...(!this.query && e ? [el('span', {class: 'crumb-item'}, e.name)] : []));
   }
   focusSlot(slot: EquipSlot) {
     this.root.classList.remove('adjusting');
@@ -192,15 +205,17 @@ export class Wardrobe {
   picture(slot: EquipSlot, m: Member, cls: string, colour: string | null = null, dye: number | null = null) {
     const v = m.item.variants[m.variant];
     if (v?.icon != null) {
-      // a tinted picture is drawn from the stored one: fetched (both) only once its row is about to show
-      const img = h('img', {src: colour ? BLANK : at(`icon/${v.icon}`), alt: '', loading: 'lazy', class: cls}) as HTMLImageElement;
-      if (colour) whenSeen(img, () => void tintedIcon(v.icon, colour).then(url => { img.src = url || at(`icon/${v.icon}`); }));
+      // a tinted picture is drawn from the stored one and its recolour mask (the pack marks the icons that have
+      // one): fetched (both) only once its row is about to show
+      const tint = colour && v.iconMask ? colour : null;
+      const img = el('img', {src: tint ? BLANK : at(`icon/${v.icon}`), alt: '', loading: 'lazy', class: cls}) as HTMLImageElement;
+      if (tint) whenSeen(img, () => void tintedIcon(v.icon, tint).then(url => { img.src = url || at(`icon/${v.icon}`); }));
       return img;
     }
-    const glyph = h('span', {class: cls === 'thumb-lg' ? 'item-glyph thumb-lg' : cls === 'slot-img' ? 'slot-glyph' : 'item-glyph'}, icon(slot));
+    const glyph = el('span', {class: cls === 'thumb-lg' ? 'item-glyph thumb-lg' : cls === 'slot-img' ? 'slot-glyph' : 'item-glyph'}, icon(slot));
     // a rendered thumbnail loads the item's meshes and textures: only for rows about to show
     whenSeen(glyph, () => void this.hooks.thumb(slot, {item: m.item.id, variant: m.variant, colour: dye}).then(url => {
-      if (url && glyph.isConnected) glyph.replaceWith(h('img', {src: url, alt: '', class: `${cls} rendered`.trim(), title: 'Rendered here: the game has no picture for this yet'}));
+      if (url && glyph.isConnected) glyph.replaceWith(el('img', {src: url, alt: '', class: `${cls} rendered`.trim(), title: 'Rendered here: the game has no picture for this yet'}));
     }));
     return glyph;
   }
@@ -232,51 +247,78 @@ export class Wardrobe {
       const m = mm ? {...mm, variant: w!.variant} : e?.members[0];
       const on = slot === this.slot && !this.query;
       const take = () => { this.refocus = slot; this.hooks.equip(slot, null); };
-      const tab = h('button', {class: `slot${on ? ' on' : ''}${w ? ' filled' : ''}${this.hidden.has(slot) ? ' covered' : ''}`, role: 'tab', 'aria-selected': String(on), 'data-slot': slot, title: e ? `${SLOT_LABEL[slot]}: ${e.name}` : `${SLOT_LABEL[slot]}: nothing`,
-        'aria-label': e ? `${SLOT_LABEL[slot]}: ${e.name}` : `${SLOT_LABEL[slot]}: nothing`, onclick: () => this.focusSlot(slot)},
-        m ? this.picture(slot, m, 'slot-img', ...this.colourFor(m, w)) : h('span', {class: 'slot-glyph'}, icon(slot)),
-        h('span', {class: 'slot-name'}, SLOT_LABEL[slot]),
+      // (covered: worn but not showing, another piece drawn over it; the slot says so, and its tooltip says why)
+      const cov = this.hidden.has(slot) ? this.covered(slot) : null;
+      const tab = el('button', {class: `slot${on ? ' on' : ''}${w ? ' filled' : ''}${cov ? ' covered' : ''}`, role: 'tab', 'aria-selected': String(on), 'data-slot': slot,
+        title: cov ? `${SLOT_LABEL[slot]}: ${e!.name}. ${cov.note}` : e ? `${SLOT_LABEL[slot]}: ${e.name}` : `${SLOT_LABEL[slot]}: nothing`,
+        'aria-label': cov ? `${SLOT_LABEL[slot]}: ${e!.name}, not showing (covered by ${cov.list ?? 'something else worn'})` : e ? `${SLOT_LABEL[slot]}: ${e.name}` : `${SLOT_LABEL[slot]}: nothing`, onclick: () => this.focusSlot(slot)},
+        m ? this.picture(slot, m, 'slot-img', ...this.colourFor(m, w)) : el('span', {class: 'slot-glyph'}, icon(slot)),
+        // (a tap on the badge says why, and offers to take the covering piece off; it sits inside the slot's own button)
+        cov ? el('span', {class: 'slot-covered', role: 'button', tabindex: '0', title: 'Not showing: tap for why', 'aria-label': 'Not showing: why',
+          onclick: (ev: Event) => { ev.stopPropagation(); this.explainCovered(slot); },
+          onkeydown: (ev: KeyboardEvent) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); this.explainCovered(slot); } }},
+          icon('eyeOff'), el('span', {class: 'slot-covered-text'}, 'Hidden')) : null,
+        el('span', {class: 'slot-name'}, SLOT_LABEL[slot]),
         // (phones' slot list: what is worn there, and its tier and colour)
-        h('span', {class: 'slot-info'}, h('span', {class: 'slot-label'}, SLOT_LABEL[slot]),
-          h('span', {class: 'slot-item'}, e ? e.name : 'Empty'),
-          e ? h('span', {class: 'slot-sub'}, this.wornSummary(e, w!)) : null));
+        el('span', {class: 'slot-info'}, el('span', {class: 'slot-label'}, SLOT_LABEL[slot]),
+          el('span', {class: 'slot-item'}, e ? e.name : 'Empty'),
+          e ? el('span', {class: 'slot-sub'}, this.wornSummary(e, w!)) : null));
       // the × beside the tab, not inside it (a button in a button is no button to a screen reader)
-      return h('div', {class: 'slot-cell'}, tab,
-        w ? h('button', {class: 'slot-x', 'aria-label': `Take off ${e?.name ?? SLOT_LABEL[slot]}`, title: `Take off ${e?.name ?? ''}`, onclick: take}, '×') : null);
+      return el('div', {class: 'slot-cell'}, tab,
+        w ? el('button', {class: 'slot-x', 'aria-label': `Take off ${e?.name ?? SLOT_LABEL[slot]}`, title: `Take off ${e?.name ?? ''}`, onclick: take}, '×') : null);
     }));
     if (this.refocus) { (this.slotBar.querySelector(`[data-slot="${this.refocus}"]`) as HTMLElement | null)?.focus({preventScroll: true}); this.refocus = null; }
   }
   private refocus: EquipSlot | null = null;
   /** equipped slots the composer dropped whole, with the slot covering each (set before update) */
   hidden = new Map<EquipSlot, EquipSlot[]>();
+  /** what covers a slot's item, named ("your Alchemist Cape"), and the note that explains it */
+  /** Why a worn piece is not showing, in the app's dialog, with the way to see it. */
+  private explainCovered(slot: EquipSlot) {
+    const {by, list, note} = this.covered(slot), e = this.entryOf(this.state.equip[slot]);
+    const off = by.length ? el('button', {class: 'btn btn-cta', onclick: () => { this.hooks.equipMany(Object.fromEntries(by.map(s => [s, undefined]))); m.close(); }}, `Take off the ${list}`) : null;
+    const m = openModal({title: `${e?.name ?? SLOT_LABEL[slot]} is not showing`, className: 'covered-note', content: [el('p', {}, note)], actions: off ? [off] : []});
+  }
+
+  private covered(slot: EquipSlot) {
+    const by = this.hidden.get(slot) ?? [], names = by.map(s => this.entryOf(this.state.equip[s])?.name ?? SLOT_LABEL[s].toLowerCase());
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
+    const note = list
+      ? `Not showing: your ${list} ${names.length > 1 ? 'cover' : 'covers'} the same place and the game draws ${names.length > 1 ? 'them' : 'it'} first, so this doesn't show while worn together (as in the game).`
+      : 'Not showing: something else you wear covers the same place (as in the game).';
+    return {by, list, note};
+  }
 
   private renderList() {
     const q = this.query;
     const words = q.split(/\s+/).filter(Boolean);
     let all = q ? this.entries.filter(e => words.every(w => e.search.includes(w))) : this.entries.filter(e => e.slot === this.slot);
-    if (q) all = [...all].sort((a, b) => this.slots.indexOf(a.slot) - this.slots.indexOf(b.slot));   // one heading per slot
+    if (q) all = [...all].sort((a, b) => this.slots.indexOf(a.slot) - this.slots.indexOf(b.slot));   // one heading per slot (equipment first within it: the sort is stable)
     this.shown = all;
     const frag: Node[] = [];
-    let group = '';
+    let group = '', section = '';
     if (!q) frag.push(this.rowNone());
     for (const e of all) {
-      const g = q ? SLOT_LABEL[e.slot] : e.group;
-      if (g !== group) { group = g; frag.push(h('div', {class: 'group'}, group)); }
+      // a slot's list is equipment, then transmogs, each under its heading; a search lists by slot the same way
+      const s = q ? `${SLOT_LABEL[e.slot]} · ${sectionOf(e)}` : sectionOf(e);
+      if (s !== section) { section = s; group = ''; frag.push(el('div', {class: 'section'}, s)); }
+      const g = q ? null : e.group;
+      if (g && g !== group) { group = g; frag.push(el('div', {class: 'group'}, group)); }
       const cur = this.state.equip[e.slot];
       const on = !!cur && e.members.some(m => m.item.id === cur.item);
       // the worn row shows the worn look (its colour or tier); the others their first
       const wornM = on ? e.members.find(m => m.item.id === cur!.item && (e.kind === 'cape' || m.variant === cur!.variant)) : undefined;
       const first = wornM ? {...wornM, variant: cur!.variant} : e.members[0];
       const count = `${e.members.length} ${e.kind === 'cosmetic' ? 'colours' : 'tiers'}`;
-      const row = h('button', {class: `item${on ? ' on' : ''}`, 'aria-pressed': String(on), 'aria-label': `${e.name}${on ? ', wearing' : ''}${dyeable(e) ? ', can be dyed' : ''}${e.members.length > 1 ? ', ' + count : ''}`, 'data-key': e.key, onclick: () => this.pick(e), onmouseenter: () => this.hooks.preview(e.slot, this.wornFor(e))},
+      const row = el('button', {class: `item${on ? ' on' : ''}`, 'aria-pressed': String(on), 'aria-label': `${e.name}${on ? ', wearing: click to take off' : ''}${dyeable(e) ? ', can be dyed' : ''}${e.members.length > 1 ? ', ' + count : ''}`, 'data-key': e.key, onclick: () => this.pick(e), onmouseenter: () => this.hooks.preview(e.slot, this.wornFor(e))},
         this.picture(e.slot, first, '', ...this.colourFor(first, this.state.equip[e.slot])),
-        h('span', {class: 'item-text'}, h('span', {class: 'item-name'}, e.name, dyeable(e) ? h('span', {class: 'dye-badge', title: 'Can be dyed'}) : null, e.members.some(m => this.hasEffect(m.item, m.variant)) ? h('span', {class: 'fx-badge', title: 'Has a particle effect'}, '✦') : null), h('span', {class: 'item-sub'}, q ? e.group : subtitle(e))),
-        e.members.length > 1 ? h('span', {class: 'item-count', title: count}, String(e.members.length)) : null);
+        el('span', {class: 'item-text'}, el('span', {class: 'item-name'}, e.name, dyeable(e) ? el('span', {class: 'dye-badge', title: 'Can be dyed'}) : null, e.members.some(m => this.hasEffect(m.item, m.variant)) ? el('span', {class: 'fx-badge', title: 'Has a particle effect'}, '✦') : null), el('span', {class: 'item-sub'}, q ? e.group : subtitle(e))),
+        e.members.length > 1 ? el('span', {class: 'item-count', title: count}, String(e.members.length)) : null);
       // phones: the worn row opens its choices (tier, faction, colour, dye), when it has any, as the next level
-      frag.push(on && this.hasChoices(e) ? h('div', {class: 'item-wrap'}, row, h('button', {class: 'btn-mini item-customise', onclick: () => this.setAdjusting(true)},
+      frag.push(on && this.hasChoices(e) ? el('div', {class: 'item-wrap'}, row, el('button', {class: 'btn-mini item-customise', onclick: () => this.setAdjusting(true)},
         'Customise', icon('turnRight'))) : row);
     }
-    if (!all.length) frag.push(h('div', {class: 'empty'}, `Nothing matches “${this.query}”.`));
+    if (!all.length) frag.push(el('div', {class: 'empty'}, `Nothing matches “${this.query}”.`));
     this.list.replaceChildren(...frag);
     reveal(this.list, this.list.querySelector('.item.on'));
   }
@@ -284,8 +326,8 @@ export class Wardrobe {
   private rowNone() {
     const on = !this.state.equip[this.slot];
     const [name, sub] = EMPTY[this.slot];
-    return h('button', {class: `item none${on ? ' on' : ''}`, onclick: () => this.hooks.equip(this.slot, null)},
-      h('span', {class: 'item-glyph'}, icon('none')), h('span', {class: 'item-text'}, h('span', {class: 'item-name'}, name), h('span', {class: 'item-sub'}, sub)));
+    return el('button', {class: `item none${on ? ' on' : ''}`, onclick: () => this.hooks.equip(this.slot, null)},
+      el('span', {class: 'item-glyph'}, icon('none')), el('span', {class: 'item-text'}, el('span', {class: 'item-name'}, name), el('span', {class: 'item-sub'}, sub)));
   }
 
   // keep the tier/colour you had when switching between looks of one entry
@@ -296,9 +338,11 @@ export class Wardrobe {
     const m = e.members[e.kind === 'cape' ? e.members.length - 1 : 0];
     return {item: m.item.id, variant: m.variant, colour: m.item.dyeable ? cur?.colour ?? null : null};
   }
+  /** Wear the entry; the worn one again takes it off (the slot's None row does too, but nobody looks for it). */
   private pick(e: Entry) {
     if (this.query) this.slot = e.slot;
-    this.hooks.equip(e.slot, this.wornFor(e));
+    const cur = this.state.equip[e.slot];
+    this.hooks.equip(e.slot, cur && e.members.some(m => m.item.id === cur.item) ? null : this.wornFor(e));
   }
 
   private onKey(ev: KeyboardEvent) {
@@ -343,7 +387,7 @@ export class Wardrobe {
     const e = this.entryOf(w);
     if (!w || !e) {
       this.root.classList.remove('adjusting');
-      this.details.replaceChildren(h('p', {class: 'hint'}, !matchMedia('(pointer: coarse)').matches ? 'Click an item to try it on; ↑ ↓ step through the list.' : 'Tap an item to try it on.'));
+      this.details.replaceChildren(el('p', {class: 'hint'}, !matchMedia('(pointer: coarse)').matches ? 'Click an item to try it on; ↑ ↓ step through the list.' : 'Tap an item to try it on.'));
       return;
     }
     const it = e.members.find(m => m.item.id === w.item)!.item;
@@ -356,31 +400,28 @@ export class Wardrobe {
     // name what's inside: a weapon has tiers but no dye, a cosmetic colours
     const can = [e.members.length > 1 ? (e.kind === 'cosmetic' ? 'Colour' : 'Tier') : '', e.kind === 'cape' && it.variants.length > 1 ? 'faction' : '', dyeable(e) ? 'dye' : ''].filter(Boolean);
     const go = can.length ? `${can.join(' & ').replace(/^./, c => c.toUpperCase())} ›` : 'Details ›';
-    const summary = h('button', {class: 'details-summary', 'aria-expanded': String(adjusting), onclick: () => this.setAdjusting(!this.root.classList.contains('adjusting'))},
-      adjusting ? h('span', {class: 'ds-text'}, '‹ Back to the list') : h('span', {class: 'ds-text'}, h('b', {}, e.name), bits.length ? ` · ${bits.join(' · ')}` : ''),
-      adjusting ? null : h('span', {class: 'ds-go'}, go));
-    const kids: Node[] = [summary, h('div', {class: 'detail-head'},
+    const summary = el('button', {class: 'details-summary', 'aria-expanded': String(adjusting), onclick: () => this.setAdjusting(!this.root.classList.contains('adjusting'))},
+      adjusting ? el('span', {class: 'ds-text'}, '‹ Back to the list') : el('span', {class: 'ds-text'}, el('b', {}, e.name), bits.length ? ` · ${bits.join(' · ')}` : ''),
+      adjusting ? null : el('span', {class: 'ds-go'}, go));
+    const kids: Node[] = [summary, el('div', {class: 'detail-head'},
       (() => { const mm = e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant)); const m = mm ? {...mm, variant: w.variant} : e.members[0]; return this.picture(e.slot, m, 'thumb-lg', ...this.colourFor(m, w)); })(),
-      h('div', {class: 'detail-title'}, h('h3', {}, it.kind === 'cosmetic' ? clean(v.name) : e.kind === 'cape' ? clean(it.name) : e.name), h('div', {class: 'item-sub'}, subtitle(e))),
-      h('button', {class: 'btn-mini', onclick: () => this.hooks.equip(this.slot, null)}, 'Take off'))];
+      el('div', {class: 'detail-title'}, el('h3', {}, it.kind === 'cosmetic' ? clean(v.name) : e.kind === 'cape' ? clean(it.name) : e.name), el('div', {class: 'item-sub'}, subtitle(e))),
+      el('button', {class: 'btn-mini', onclick: () => this.hooks.equip(this.slot, null)}, 'Take off'))];
     const examine = v.examine ?? it.examine;
-    if (examine && !/<placeholder/i.test(examine)) kids.push(h('p', {class: 'examine'}, `“${examine}”`));
+    if (examine && !/<placeholder/i.test(examine)) kids.push(el('p', {class: 'examine'}, `“${examine}”`));
     // the composer dropped it whole: something drawn earlier covers the same place (the game does the same)
     if (this.hidden.has(this.slot)) {
-      const by = this.hidden.get(this.slot)!, names = by.map(s => this.entryOf(this.state.equip[s])?.name ?? SLOT_LABEL[s].toLowerCase());
-      const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
-      kids.push(h('div', {class: 'hidden-note'}, h('p', {}, list
-        ? `Not showing: your ${list} ${names.length > 1 ? 'cover' : 'covers'} the same place and the game draws ${names.length > 1 ? 'them' : 'it'} first, so this doesn't show while worn together (as in the game).`
-        : 'Not showing: something else you wear covers the same place (as in the game).'),
-        by.length ? h('button', {class: 'btn-mini', onclick: () => this.hooks.equipMany(Object.fromEntries(by.map(s => [s, undefined])))}, `Take off the ${list}`) : null));
+      const {by, list, note} = this.covered(this.slot);
+      kids.push(el('div', {class: 'hidden-note'}, el('p', {}, note),
+        by.length ? el('button', {class: 'btn-mini', onclick: () => this.hooks.equipMany(Object.fromEntries(by.map(s => [s, undefined])))}, `Take off the ${list}`) : null));
     }
-    if (this.hasEffect(it, w.variant)) kids.push(h('p', {class: 'fx-note'}, h('span', {class: 'fx-badge'}, '✦'), ' In the game this gives off a swirling ghostly effect while worn, shown here too.'));
+    if (this.hasEffect(it, w.variant)) kids.push(el('p', {class: 'fx-note'}, el('span', {class: 'fx-badge'}, '✦'), ' In the game this gives off a swirling ghostly effect while worn, shown here too.'));
     // a combat cape's faction first (Cryoknight, Guardian, Hammermage): it sets the look of every tier below
     if (e.kind === 'cape' && it.variants.length > 1) {
-      kids.push(h('div', {class: 'label'}, 'Faction'));
-      kids.push(h('div', {class: 'chips'}, ...it.variants.map((sv: any, i: number) => {
+      kids.push(el('div', {class: 'label'}, 'Faction'));
+      kids.push(el('div', {class: 'chips'}, ...it.variants.map((sv: any, i: number) => {
         const on = i === w.variant;
-        return h('button', {class: on ? 'on' : '', 'aria-pressed': String(on), onclick: () => this.hooks.equip(e.slot, {item: it.id, variant: i, colour: null})}, sv.grade ?? `Faction ${i + 1}`);
+        return el('button', {class: on ? 'on' : '', 'aria-pressed': String(on), onclick: () => this.hooks.equip(e.slot, {item: it.id, variant: i, colour: null})}, sv.grade ?? `Faction ${i + 1}`);
       })));
     }
     if (e.members.length > 1) {
@@ -388,15 +429,15 @@ export class Wardrobe {
       // capes: a tier is an item (its factions are that item's variants, kept when changing tier)
       const same = (m: Member) => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant);
       const cur = e.members.find(same);
-      kids.push(h('div', {class: 'label'}, isColour ? 'Colour' : 'Tier', isColour ? h('b', {}, clean(v.name).split(' ')[0]) : null));
-      kids.push(h('div', {class: isColour ? 'swatches' : 'chips'}, ...e.members.map(m => {
+      kids.push(el('div', {class: 'label'}, isColour ? 'Colour' : 'Tier', isColour ? el('b', {}, clean(v.name).split(' ')[0]) : null));
+      kids.push(el('div', {class: isColour ? 'swatches' : 'chips'}, ...e.members.map(m => {
         const on = same(m);
         const mv = m.item.variants[m.variant];
         const variant = e.kind === 'cape' ? Math.min(w.variant, m.item.variants.length - 1) : m.variant;
         const pick = () => this.hooks.equip(e.slot, {item: m.item.id, variant, colour: m.item.dyeable ? w.colour : null});
         return isColour
-          ? h('button', {class: `swatch${on ? ' on' : ''}`, 'aria-pressed': String(on), title: clean(mv.name), 'aria-label': clean(mv.name), style: `background:${mv.swatch ?? mv.colour?.rgb ?? '#777'}`, onclick: pick})
-          : h('button', {class: on ? 'on' : '', 'aria-pressed': String(on), onclick: pick,
+          ? el('button', {class: `swatch${on ? ' on' : ''}`, 'aria-pressed': String(on), title: clean(mv.name), 'aria-label': clean(mv.name), style: `background:${mv.swatch ?? mv.colour?.rgb ?? '#777'}`, onclick: pick})
+          : el('button', {class: on ? 'on' : '', 'aria-pressed': String(on), onclick: pick,
             title: m.item.wip ? 'In the game files, not in the game yet' : undefined}, m.label ?? '');
       })));
     }
@@ -405,13 +446,13 @@ export class Wardrobe {
     if (set.length) {
       const worn = set.filter(o => this.state.equip[o.slot] && o.members.some(m => m.item.id === this.state.equip[o.slot]!.item));
       const material = materialOf(e.name);
-      if (worn.length < set.length) kids.push(h('button', {class: 'btn of-wide of-set', onclick: () => {
+      if (worn.length < set.length) kids.push(el('button', {class: 'btn of-wide of-set', onclick: () => {
         const changes: Partial<Record<EquipSlot, Worn>> = {};
         for (const o of set) { const m = o.members[Math.min(w.variant, o.members.length - 1)]; changes[o.slot] = {item: m.item.id, variant: m.variant, colour: m.item.dyeable ? w.colour : null}; }
         this.hooks.equipMany(changes);
       }}, icon('set'), `Wear the matching ${material} pieces (${set.length + 1} in all)`));
       const offGrade = worn.filter(o => this.state.equip[o.slot]!.variant !== w.variant);
-      if (offGrade.length && e.members.length > 1) kids.push(h('button', {class: 'btn of-wide of-set', onclick: () => {
+      if (offGrade.length && e.members.length > 1) kids.push(el('button', {class: 'btn of-wide of-set', onclick: () => {
         const changes: Partial<Record<EquipSlot, Worn>> = {};
         for (const o of offGrade) { const cur = this.state.equip[o.slot]!; changes[o.slot] = {...cur, variant: Math.min(w.variant, o.members.length - 1)}; }
         this.hooks.equipMany(changes);
@@ -420,20 +461,20 @@ export class Wardrobe {
     if (v.colourable && it.dyeable) {
       const cur = w.colour ?? this.pack.defaultColour;
       const dye = this.pack.dyes.find((d: any) => d.id === cur);
-      kids.push(h('div', {class: 'label'}, 'Dye', h('b', {}, dye?.name ?? '')));
+      kids.push(el('div', {class: 'label'}, 'Dye', el('b', {}, dye?.name ?? '')));
       const others = this.slots.filter(s => s !== this.slot && this.state.equip[s] && this.entryOf(this.state.equip[s])?.members[0].item.dyeable && this.state.equip[s]!.colour !== cur);
-      if (others.length) kids.push(h('button', {class: 'btn of-wide of-dyeall', onclick: () => {
+      if (others.length) kids.push(el('button', {class: 'btn of-wide of-dyeall', onclick: () => {
         const changes: Partial<Record<EquipSlot, Worn>> = {};
         for (const s of others) changes[s] = {...this.state.equip[s]!, colour: cur};
         this.hooks.equipMany(changes);
       }}, icon('drop'), `Dye your other pieces ${dye?.name ?? 'this colour'} too`));
       for (const vendor of ['The Color Wheel', 'City Dyes']) {
-        kids.push(h('div', {class: 'sublabel'}, vendor === 'City Dyes' ? 'City Dyes (Crenopolis)' : 'The Color Wheel (Hopeforest)'));
-        kids.push(h('div', {class: 'swatches'}, ...this.pack.dyes.filter((d: any) => d.vendor === vendor).map((d: any) =>
-          h('button', {class: `swatch${cur === d.id ? ' on' : ''}`, 'aria-pressed': String(cur === d.id), title: d.name ?? d.colour, 'aria-label': d.name, style: `background:${d.colour}`, onclick: () => this.hooks.equip(e.slot, {...w, colour: d.id})}))));
+        kids.push(el('div', {class: 'sublabel'}, vendor === 'City Dyes' ? 'City Dyes (Crenopolis)' : 'The Color Wheel (Hopeforest)'));
+        kids.push(el('div', {class: 'swatches'}, ...this.pack.dyes.filter((d: any) => d.vendor === vendor).map((d: any) =>
+          el('button', {class: `swatch${cur === d.id ? ' on' : ''}`, 'aria-pressed': String(cur === d.id), title: d.name ?? d.colour, 'aria-label': d.name, style: `background:${d.colour}`, onclick: () => this.hooks.equip(e.slot, {...w, colour: d.id})}))));
       }
     } else if (it.kind === 'armour' || it.kind === 'shield') {
-      kids.push(h('p', {class: 'hint small'}, it.dyeable ? 'This tier has no dyeable areas.' : 'Guard gear can’t be dyed; only crafted armour and shields can.'));
+      kids.push(el('p', {class: 'hint small'}, it.dyeable ? 'This tier has no dyeable areas.' : 'Guard gear can’t be dyed; only crafted armour and shields can.'));
     }
     this.details.replaceChildren(...kids);
   }
@@ -450,8 +491,7 @@ function tintedIcon(icon: number, hex: string): Promise<string | null> {
   if (!p) {
     p = (async () => {
       const mr = await fetch(at(`iconmask/${icon}`));
-      // (none: 204 from a development server, an empty file on the site)
-      const mb = mr.status === 200 ? await mr.blob() : null;
+      const mb = mr.ok ? await mr.blob() : null;
       if (!mb?.size) return null;
       const [pic, mask] = await Promise.all([fetch(at(`icon/${icon}`)).then(r => r.blob()).then(b => createImageBitmap(b)), createImageBitmap(mb)]).catch(() => [null, null]);
       if (!pic || !mask) return null;
@@ -486,8 +526,8 @@ function reveal(box: HTMLElement, el: Element | null) {
 const dyeable = (e: Entry) => !!e.members[0].item.dyeable && e.members.some(m => m.item.variants[m.variant]?.colourable);
 function subtitle(e: Entry) {
   const it = e.members[0].item;
-  if (e.kind === 'cosmetic') return `Cosmetic · ${it.source ?? ''}${e.members.length > 1 ? ` · ${e.members.length} colours` : ''}`;
+  if (e.kind === 'cosmetic') return `${it.source ?? 'Cosmetic'}${e.members.length > 1 ? ` · ${e.members.length} colours` : ''}`;
   if (e.kind === 'cape') return `${e.group.replace(/s$/, '')}${e.members.length > 1 ? ` · ${e.members.length} tiers` : ''}`;
-  if (e.kind === 'weapon') return `${it.guard ? 'Guard gear' : it.source}${e.members.length > 1 ? ` · ${e.members.length} tiers` : ''}`;
-  return `${it.dyeable ? it.source : 'Guard gear'}${e.members.length > 1 ? ` · ${e.members.length} tiers` : ''}`;
+  // combat gear: its faction (the Guard gear is everyone's)
+  return `${it.faction ?? 'Guard gear'}${e.members.length > 1 ? ` · ${e.members.length} tiers` : ''}`;
 }

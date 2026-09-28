@@ -5,7 +5,7 @@
 // and storage usage. The diff/compare UI (diff.ts) hangs off the same
 // registry via the "compare" selector.
 
-import { el, clear, fmtBytes, fmtDateTime, versionLabel, versionDateReliable, platformIcon } from './ui.js';
+import { el, clear, fmtBytes, fmtDateTime, versionLabel, versionDateReliable, platformIcon, openModal } from './ui.js';
 import { getVersionName, setVersionName } from './prefs.js';
 import {
   listVersions, getActiveVersionId, setActiveVersionId, deleteVersion,
@@ -16,17 +16,8 @@ import { mountOnboarding } from './onboard.js';
 import { ALL_CATS } from './extract/ingest.js';
 
 export async function openStoragePanel(app: any): Promise<void> {
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
   const body = el('div', { class: 'modal-body' });
-  const modal = el('div', { class: 'modal card' },
-    el('h2', { text: 'Storage & versions' }), body);
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
+  const { close } = openModal({ title: 'Storage & versions', content: [body] });
 
   const render = async () => {
     clear(body);
@@ -180,10 +171,6 @@ export async function openStoragePanel(app: any): Promise<void> {
       el('div', { class: 'modal-actions' }, addBtn),
       persistLine,
       el('p', { class: 'dim small', text: `Using ${fmtBytes(est.usage || 0)} of ~${fmtBytes(est.quota || 0)} available browser storage. Annotations (names + texture overrides) are stored separately and survive version deletion.` }));
-
-    const closeBtn = el('button', { class: 'btn', text: 'Close' });
-    closeBtn.addEventListener('click', close);
-    body.appendChild(el('div', { class: 'modal-actions' }, el('span', { class: 'spacer' }), closeBtn));
   };
 
   await render();

@@ -43,6 +43,18 @@ export function autoScrollbars(root: HTMLElement = document.body): void {
   }).observe(root, { childList: true, subtree: true });
 }
 
+// One listener on the window for every scroller, holding each weakly: a scroller that leaves the page (a tool
+// let go) is not kept alive by it.
+const resizing = new Set<WeakRef<() => void>>();
+let resizeListening = false;
+function onResize(fn: () => void) {
+  if (!resizeListening) {
+    resizeListening = true;
+    addEventListener('resize', () => { for (const r of resizing) { const f = r.deref(); if (f) f(); else resizing.delete(r); } });
+  }
+  resizing.add(new WeakRef(fn));
+}
+
 export function attachScrollbar(el: HTMLElement): void {
   if (!overlayScrollbars() || el.classList.contains('vbar-host')) return;
   el.classList.add('vbar-host');
@@ -84,8 +96,9 @@ export function attachScrollbar(el: HTMLElement): void {
   const schedule = () => { if (!frame) frame = requestAnimationFrame(place); };
   el.addEventListener('scroll', schedule, {passive: true});
   new ResizeObserver(schedule).observe(el);
-  new MutationObserver(schedule).observe(el, {childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'style']});
-  window.addEventListener('resize', schedule);
+  // (`open`: a <details> inside folding or unfolding changes what there is to scroll without resizing the scroller)
+  new MutationObserver(schedule).observe(el, {childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'style', 'open']});
+  onResize(schedule);
   // drag the thumb (or tap the track) to scroll
   track.addEventListener('pointerdown', e => {
     e.preventDefault(); track.setPointerCapture(e.pointerId);

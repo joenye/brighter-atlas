@@ -51,9 +51,12 @@ export class GameGL {
   readonly s3tc: any;
   readonly s3tcSrgb: any;
   readonly rgtc: any;
+  /** KHR_parallel_shader_compile: the driver compiles off the page's thread and says when it is done. */
+  private readonly parallel: { COMPLETION_STATUS_KHR: number } | null;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
+    this.parallel = gl.getExtension('KHR_parallel_shader_compile');
     this.s3tc = gl.getExtension('WEBGL_compressed_texture_s3tc');
     this.s3tcSrgb = gl.getExtension('WEBGL_compressed_texture_s3tc_srgb');
     this.rgtc = gl.getExtension('EXT_texture_compression_rgtc');
@@ -64,38 +67,68 @@ export class GameGL {
    *  caller can free one scene's buffers without touching the others). */
   collect: WebGLBuffer[] | null = null;
   private readonly compiledPrograms = new WeakMap<TranslatedProgram, GameGLProgram>();
+  private readonly pendingPrograms = new WeakMap<TranslatedProgram, Promise<GameGLProgram>>();
 
-  /** A linked program per translated program, built once. */
+  /** A linked program per translated program, built once (at once: the page waits for the driver). */
   compile(translated: TranslatedProgram): GameGLProgram {
     let p = this.compiledPrograms.get(translated);
-    if (!p) { p = this.link(translated); this.compiledPrograms.set(translated, p); }
+    if (!p) { p = this.describe(translated, this.finishLink(this.startLink(translated.vertex, translated.fragment, translated.attributes))); this.compiledPrograms.set(translated, p); }
+    return p;
+  }
+
+  /** The same, without holding the page: the compile and link are started, and the driver is asked each
+   *  frame whether it is done (with KHR_parallel_shader_compile; without it, once after a frame). Start
+   *  many at once (Promise.all) so the driver works on them together; compile() then finds them ready. */
+  compileAsync(translated: TranslatedProgram): Promise<GameGLProgram> {
+    const done = this.compiledPrograms.get(translated);
+    if (done) return Promise.resolve(done);
+    let p = this.pendingPrograms.get(translated);
+    if (!p) {
+      p = (async () => {
+        const started = this.startLink(translated.vertex, translated.fragment, translated.attributes);
+        const frame = () => new Promise((r) => setTimeout(r, 16));
+        if (this.parallel) { while (!this.gl.getProgramParameter(started.program, this.parallel.COMPLETION_STATUS_KHR)) await frame(); }
+        else await frame();
+        const linked = this.compiledPrograms.get(translated) ?? this.describe(translated, this.finishLink(started));
+        this.compiledPrograms.set(translated, linked);
+        return linked;
+      })();
+      p.finally(() => this.pendingPrograms.delete(translated)).catch(() => {});
+      this.pendingPrograms.set(translated, p);
+    }
     return p;
   }
 
   /** Compile and link a program, binding attributes to their registers before the link. */
   linkSources(vertex: string, fragment: string, attributes: readonly AttributeBinding[] = []): WebGLProgram {
+    return this.finishLink(this.startLink(vertex, fragment, attributes));
+  }
+
+  /** Hand the driver a program to compile and link (no status asked: asking is what waits). Attributes sit
+   *  at their source register, so every convention of a program shares one vertex array. */
+  private startLink(vertex: string, fragment: string, attributes: readonly AttributeBinding[]) {
     const gl = this.gl;
-    const shader = (type: number, source: string) => {
-      const s = gl.createShader(type)!;
-      gl.shaderSource(s, source);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader compile: ${gl.getShaderInfoLog(s)}`);
-      return s;
-    };
-    const program = gl.createProgram()!;
-    gl.attachShader(program, shader(gl.VERTEX_SHADER, vertex));
-    gl.attachShader(program, shader(gl.FRAGMENT_SHADER, fragment));
-    // Attributes sit at their source register, so every convention of a
-    // program shares one vertex array.
+    const shader = (type: number, source: string) => { const s = gl.createShader(type)!; gl.shaderSource(s, source); gl.compileShader(s); return s; };
+    const program = gl.createProgram()!, vs = shader(gl.VERTEX_SHADER, vertex), fs = shader(gl.FRAGMENT_SHADER, fragment);
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
     for (const a of attributes) gl.bindAttribLocation(program, a.register, a.name);
     gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`program link: ${gl.getProgramInfoLog(program)}`);
+    return { program, vs, fs };
+  }
+
+  /** The linked program, or the compiler's or linker's message. */
+  private finishLink({ program, vs, fs }: { program: WebGLProgram; vs: WebGLShader; fs: WebGLShader }): WebGLProgram {
+    const gl = this.gl;
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      for (const s of [vs, fs]) if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(`shader compile: ${gl.getShaderInfoLog(s)}`);
+      throw new Error(`program link: ${gl.getProgramInfoLog(program)}`);
+    }
     return program;
   }
 
-  private link(translated: TranslatedProgram): GameGLProgram {
+  private describe(translated: TranslatedProgram, program: WebGLProgram): GameGLProgram {
     const gl = this.gl;
-    const program = this.linkSources(translated.vertex, translated.fragment, translated.attributes);
     const attributes = new Map<string, number>();
     for (const a of translated.attributes) attributes.set(a.name, gl.getAttribLocation(program, a.name));
     const uniforms = new Map<string, WebGLUniformLocation>();

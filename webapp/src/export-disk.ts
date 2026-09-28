@@ -9,7 +9,7 @@
 //     as the per-asset Export button), images stay PNG, audio stays WAV: for
 //     Blender & other tools, not re-servable.
 
-import { el, fmtInt, fmtBytes, pad5 } from './ui.js';
+import { el, fmtInt, fmtBytes, pad5, openModal } from './ui.js';
 import { Zip, AsyncZipDeflate, ZipPassThrough, strToU8 } from '../vendor/fflate.module.js';
 
 const CAT_PAYLOADS: Record<string, (e: any) => string[]> = {
@@ -94,10 +94,6 @@ function zipSink(zipName: string): Sink {
 
 export function openExportDialog(app: any): void {
   const hasFsa = !!(window as any).showDirectoryPicker;
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', (e: Event) => { if (e.target === overlay) close(); });
-
   const manifest = app.store.manifest;
   const cats = Object.entries(manifest?.categories || {}).filter(([, v]: [string, any]) => v.exported > 0).map(([k]) => k);
   const checks: Record<string, HTMLInputElement> = {};
@@ -121,9 +117,6 @@ export function openExportDialog(app: any): void {
     'This browser can\'t save straight to a folder, so the files are bundled into a single .zip. ',
     'That\'s fine for a category or two; for the full multi-GB set, use a Chromium-based browser like Chrome or Edge.');
   const goBtn = el('button', { class: 'btn primary', text: hasFsa ? 'Choose folder & export' : 'Build .zip & download' });
-  const closeBtn = el('button', { class: 'btn', text: 'Close' });
-  closeBtn.addEventListener('click', close);
-
   let cancelled = false;
   goBtn.addEventListener('click', async () => {
     let sink: Sink;
@@ -267,11 +260,13 @@ export function openExportDialog(app: any): void {
     }
   });
 
-  overlay.appendChild(el('div', { class: 'modal card' },
-    el('h2', { text: 'Export decoded assets to disk' }),
-    el('div', { class: 'filter-panel', style: 'position:static;box-shadow:none' }, ...rows),
-    fmtRows, ...(cats.includes('maps')?[el('p',{class:'dim small',text:'Maps are saved as reusable scene data. For a PNG, use the Maps viewer and choose its resolution.'})]:[]), note, status,
-    el('div', { class: 'modal-actions' }, goBtn, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
-  overlay.addEventListener('remove', () => { cancelled = true; });
+  // (closing it stops an export under way)
+  openModal({
+    title: 'Export decoded assets to disk', actions: [goBtn], onClose: () => { cancelled = true; },
+    content: [
+      el('div', { class: 'filter-panel', style: 'position:static;box-shadow:none' }, ...rows),
+      fmtRows,
+      cats.includes('maps') && el('p', { class: 'dim small', text: 'Maps are saved as reusable scene data. For a PNG, use the Maps viewer and choose its resolution.' }),
+      note, status],
+  });
 }

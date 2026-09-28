@@ -108,7 +108,6 @@ export async function listVersions(): Promise<VersionRecord[]> {
   const db = await idbOpen();
   return tx(db, 'versions', 'readonly', (s) => s.getAll());
 }
-export async function getActiveVersion(): Promise<VersionRecord | null> { return getVersion(await getActiveVersionId()); }
 
 // ------------------------------------------------------------------ derived
 const dKey = (versionId: string, name: string) => `${versionId}:${name}`;
@@ -130,30 +129,6 @@ export async function derivedPutMany(versionId: string, entries: [string, any][]
   });
 }
 
-// Bulk read of every derived record whose name starts with keyPrefix, in one
-// getAll. The exclusive upper bound is the prefix's successor string, so a
-// sibling key family can never fall inside the range ('world:index' sorts
-// before 'world:room:' and 'world:room;' bounds it above).
-export async function derivedGetMany(
-  versionId: string, keyPrefix: string,
-): Promise<{ name: string; value: any }[]> {
-  const db = await idbOpen();
-  const lo = dKey(versionId, keyPrefix);   // always non-empty: `${versionId}:` at minimum
-  const hi = lo.slice(0, -1) + String.fromCharCode(lo.charCodeAt(lo.length - 1) + 1);
-  const range = IDBKeyRange.bound(lo, hi, false, true);
-  return new Promise((resolve, reject) => {
-    const t = db.transaction('derived', 'readonly');
-    const s = t.objectStore('derived');
-    const keysReq = s.getAllKeys(range);
-    const valsReq = s.getAll(range);
-    t.oncomplete = () => resolve((keysReq.result as IDBValidKey[]).map((k, at) => ({
-      name: String(k).slice(versionId.length + 1),
-      value: valsReq.result[at],
-    })));
-    t.onerror = () => reject(t.error);
-    t.onabort = () => reject(t.error || new Error('idb tx aborted'));
-  });
-}
 export async function derivedDeleteVersion(versionId: string): Promise<void> {
   const keys = await idbKeys('derived');
   for (const k of keys) if (String(k).startsWith(`${versionId}:`)) await idbDel('derived', k);

@@ -5,7 +5,7 @@
 // a small scoped .help-* block. Copy follows the app's terse, second-person,
 // local-first voice (see onboard.js).
 
-import { el } from './ui.js';
+import { el, openModal } from './ui.js';
 import { buildLabel, buildInfoReady } from './build-info.js';
 
 // inline helpers
@@ -87,17 +87,5 @@ export function buildHelpContent(): HTMLElement {
 }
 
 export function openHelpModal(): void {
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-  const closeBtn = el('button', { class: 'btn primary', text: 'Close', onclick: close });
-
-  overlay.appendChild(el('div', { class: 'modal card help-modal' },
-    el('h2', { text: 'Help/FAQs' }),
-    buildHelpContent(),
-    el('div', { class: 'modal-actions' }, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
+  openModal({ title: 'Help/FAQs', className: 'help-modal', content: [buildHelpContent()] });
 }

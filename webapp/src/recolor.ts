@@ -53,15 +53,6 @@ export function partRecolor(part: any): PartRecolorState | null {
   return null;
 }
 
-export function copyPartRecolor(part: any): Record<string, any> {
-  const state = partRecolor(part);
-  if (!state) return {};
-  return {
-    [state.field]: state.values.map((color) => [...color]),
-    ...(state.schema ? { recolor_schema: state.schema } : {}),
-  };
-}
-
 function recolorValues(input: any): number[][] | null {
   return normalizeRecolors(Array.isArray(input?.values) ? input.values : input);
 }

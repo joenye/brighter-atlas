@@ -6,7 +6,7 @@
 // model in the viewer before opening to reframe; turntable rotation is frozen
 // while the modal is open so the preview (and the shot) is a stable frame.
 
-import { el } from '../ui.js';
+import { el, openModal, type Modal } from '../ui.js';
 import { effectiveName } from '../names.js';
 import { sceneOverrides, drawComposite, makeCropOverlay, makeCaptionControls, attachCaptionDrag, attachPreviewOrbit, settingsStore } from './capture-common.js';
 
@@ -41,17 +41,13 @@ export function openScreenshotModal({ app, scene, entry, activeSize, cat = 'rigs
   const formats: [string, string][] = [['png', 'PNG (lossless)'], ['jpeg', 'JPEG']];
   if (webpSupported()) formats.push(['webp', 'WebP']);
 
-  const overlay = el('div', { class: 'modal-overlay' });   // normal dimmed backdrop: the app stays visible behind the modal
   let closed = false;
   // freeze turntable so the preview/shot is a stable frame; restore on close
   const rotWas = scene.controls.autoRotate;
   scene.controls.autoRotate = false;
   let stopOrbit: { dispose(): void; setEnabled(on: boolean): void } | null = null;
-  const close = () => {
-    closed = true; cancelAnimationFrame(rafId); stopOrbit?.dispose(); overlay.remove();
-    ov.restore(); scene.controls.autoRotate = rotWas;
-  };
-  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  let modal: Modal | null = null;
+  const close = () => modal?.close();
 
   // ---- controls -------------------------------------------------------------
   const fmtSel = el('select', { class: 'btn' });
@@ -133,8 +129,6 @@ export function openScreenshotModal({ app, scene, entry, activeSize, cat = 'rigs
 
   // ---- download -------------------------------------------------------------
   const dlBtn = el('button', { class: 'btn primary', text: '⭳ Download' });
-  const closeBtn = el('button', { class: 'btn', text: 'Close' });
-  closeBtn.addEventListener('click', close);
   dlBtn.addEventListener('click', () => {
     composite(false);   // full-res, checker-free frame (real alpha) at the current settings
     const fmt = fmtSel.value;
@@ -184,18 +178,20 @@ export function openScreenshotModal({ app, scene, entry, activeSize, cat = 'rigs
       el('span', { class: 'dim small', text: 'tiled re-render of this exact view (no caption/crop)' }));
   }
 
-  overlay.appendChild(el('div', { class: 'modal card video-modal' },
-    el('h2', { text: 'Take a screenshot' }),
-    el('div', { class: 'video-form' },
-      el('label', {}, el('span', { text: 'Format' }), fmtSel, el('span', { class: 'sep-mini' }), scaleSel, el('span', { class: 'sep-mini' }), dims),
-      el('label', {}, capCb, el('span', { text: 'Caption' }), capIn),
-      capStyle.row,
-      el('label', {}, gridCb, el('span', { text: ov.hasGrid ? 'Grid lines' : 'Grid lines (none in scene)' }),
-        el('span', { class: 'sep-mini' }), el('span', { text: 'Background' }), bgIn, bgDefBtn,
-        el('span', { class: 'sep-mini' }), transpCb, el('span', { text: 'Transparent' })),
-      hiRow),
-    crop.wrap,
-    status,
-    el('div', { class: 'modal-actions' }, dlBtn, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
+  // (the app stays visible behind it, under the usual dimmed backdrop)
+  modal = openModal({
+    title: 'Take a screenshot', className: 'video-modal', actions: [dlBtn],
+    onClose: () => { closed = true; cancelAnimationFrame(rafId); stopOrbit?.dispose(); ov.restore(); scene.controls.autoRotate = rotWas; },
+    content: [
+      el('div', { class: 'video-form' },
+        el('label', {}, el('span', { text: 'Format' }), fmtSel, el('span', { class: 'sep-mini' }), scaleSel, el('span', { class: 'sep-mini' }), dims),
+        el('label', {}, capCb, el('span', { text: 'Caption' }), capIn),
+        capStyle.row,
+        el('label', {}, gridCb, el('span', { text: ov.hasGrid ? 'Grid lines' : 'Grid lines (none in scene)' }),
+          el('span', { class: 'sep-mini' }), el('span', { text: 'Background' }), bgIn, bgDefBtn,
+          el('span', { class: 'sep-mini' }), transpCb, el('span', { text: 'Transparent' })),
+        hiRow),
+      crop.wrap,
+      status],
+  });
 }

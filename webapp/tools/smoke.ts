@@ -393,9 +393,16 @@ async function fixtureSuite(browser: any, base: string) {
   ok(/not affiliated with.*Fen Research/i.test(help), 'help: not affiliated with Fen Research');
   ok(/no upload|stay in your browser/i.test(help), 'help: data stays on device');
   ok(/already textured|System.*mesh.*texture pairings/i.test(help), 'help: explains recovered textures');
+  // every dialog is the one dialog (ui.ts openModal): marked as one, focus in it and kept there, back where it
+  // was when it closes
+  const dlg = await page.evaluate(() => { const c = document.querySelector('.help-modal')!; return { role: c.getAttribute('role'), modal: c.getAttribute('aria-modal'), label: c.getAttribute('aria-label'), focused: c.contains(document.activeElement) }; });
+  ok(dlg.role === 'dialog' && dlg.modal === 'true' && dlg.label === 'Help/FAQs' && dlg.focused, `the help dialog is a dialog, focus in it (${JSON.stringify(dlg)})`);
+  for (let k = 0; k < 40; k++) await page.keyboard.press('Tab');
+  ok(await page.evaluate(() => document.querySelector('.help-modal')!.contains(document.activeElement)), 'Tab keeps focus in the dialog');
   await page.keyboard.press('Escape');
   await sleep(150);
   ok(await page.$('.help-modal') === null, 'help modal closes on Escape');
+  ok(await page.evaluate(() => !document.activeElement || document.activeElement === document.body || !!document.activeElement.closest('#topbar')), 'and focus goes back where it was');
 
   // ---- sort dropdown ----------------------------------------------------------
   await page.select('#list-sort', 'triangles');
@@ -1940,7 +1947,8 @@ async function mobileGateSuite(browser: any) {
   const { server, port } = await serve(root);
   const base = `http://127.0.0.1:${port}`;
 
-  const { page, errors } = await newPage(browser, ['data/manifest.json', 'builds/']);
+  // (the visit to Fashion below asks for its data, which this webroot has none of)
+  const { page, errors } = await newPage(browser, ['data/manifest.json', 'builds/', 'fashion-data/', 'pack.json']);
   // feature-level phone emulation: coarse pointer + touch + small viewport + touch UA
   await page.emulate({
     viewport: { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true },
@@ -1982,6 +1990,25 @@ async function mobileGateSuite(browser: any) {
   await page.waitForSelector('.mgate', { timeout: 15000 });
   await page.mouse.click(10, 10);
   ok(await page.$('.mgate') === null, 'a tap outside dismisses it');
+  // the onboarding beneath keeps its room on a phone (the page is wider than the screen: its columns never
+  // squeeze the viewer away), and stays through a visit to another tool and back (the tools switch in place)
+  const dropBox = async () => page.$eval('.ob-drop', (n) => { const r = n.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }).catch(() => null);
+  const before = await dropBox();
+  ok(!!before && before[0] >= 240 && before[1] >= 100, `the onboarding is laid out on a phone (drop zone ${before?.join('x')})`);
+  await page.click('#topbar .tool-switch-btn');
+  await page.$$eval('.tool-switch-menu a', (as) => (as.find((x) => /Fashion/.test(x.textContent)) as any)?.click());
+  await page.waitForFunction(() => location.pathname === '/fashion', { timeout: 5000 });
+  await sleep(300);
+  await page.click('#topbar .tool-switch-btn');
+  await page.$$eval('.tool-switch-menu a', (as) => (as.find((x) => /Data/.test(x.textContent)) as any)?.click());
+  await page.waitForFunction(() => location.pathname === '/data', { timeout: 5000 });
+  await sleep(300);
+  const after = await dropBox();
+  ok(!!after && after[0] === before![0], `the onboarding is still there after Fashion and back (drop zone ${after?.join('x')})`);
+  // (the same when the wizard was scrolled to and the address's hash changed meanwhile)
+  await page.evaluate(() => { location.hash = '#/audio'; });
+  await sleep(300);
+  ok(await page.$('.ob-drop') !== null, 'a category route without game files keeps the onboarding');
   ok(errors.length === 0, `zero console errors in mobile gate suite${errors.length ? `:\n    ${errors.join('\n    ')}` : ''}`);
   await page.close();
 

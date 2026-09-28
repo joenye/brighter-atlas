@@ -15,6 +15,7 @@ import {drawGroups} from '../viewers/world/draw-order.js';
 import {Rig, ClipSampler} from '../viewers/rig.js';
 import {buildMeshGeometry} from '../viewers/mesh-geometry.js';
 import type {DrawPart} from './compose.js';
+import {TextureLevels} from './levels.js';
 
 const json = new Map<string, Promise<any>>();
 const getJson = (url: string) => {
@@ -22,8 +23,13 @@ const getJson = (url: string) => {
   if (!p) { p = fetch(url).then(r => { if (!r.ok) throw Error(`${url}: ${r.status}`); return r.json(); }); p.catch(() => json.delete(url)); json.set(url, p); }
   return p;
 };
+/** Let go of the places' data fetched so far (the tool is leaving the page). */
+export function forget() { json.clear(); }
 const pad5 = (n: number) => String(n).padStart(5, '0');
 const gf = (rel: string) => at(`gf/${rel}`);
+// a mesh, the place's as the character's: one file each, where Fashion keeps every mesh
+const meshUrl = (m: number) => at(`mesh/${m}`);
+const payloadUrl = (rel: string) => { const m = /^meshes\/(\d+)\.json$/.exec(rel); return m ? meshUrl(Number(m[1])) : gf(rel); };
 // A place's own data (its scene, cut index and shard, particles, props) changes as the scene is worked on;
 // this names the current shape of it, so a browser holding an older copy asks again
 const DATA = '?v=4';
@@ -98,6 +104,7 @@ export class GameRoom {
   /** The room's particles, in the room's native frame: the Preview hangs it under its room group. */
   readonly fxRoot = new THREE.Group();
   private frame: GameFrame;
+  private levels: TextureLevels;
   private effects: WorldEffectsLayer | null = null;
   private actorBuffers: WebGLBuffer[] = [];
   private actorGen = 0;
@@ -109,9 +116,10 @@ export class GameRoom {
 
   private constructor(readonly id: number, private gl: WebGL2RenderingContext, private world: WorldScene, render: any, private source: GameRoomSource) {
     // The game's textures are block compressed (S3TC, RGTC), which iPhones' WebGL does not take: there the
-    // site sends them decoded (.rgba in place of .bc), the signed normal maps as signed bytes.
+    // page decodes them (levels-worker.ts), the signed normal maps as signed bytes. One file per texture.
     const blocks = !/[?&]nobc\b/.test(location.search) && !!gl.getExtension('WEBGL_compressed_texture_s3tc') && !!gl.getExtension('EXT_texture_compression_rgtc');
-    this.frame = new GameFrame(gl, blocks ? gf : (rel: string) => gf(rel.replace(/\.bc$/, '.rgba')), render, world.tileUnits);
+    this.levels = new TextureLevels((i) => gf(`images/${pad5(i)}.img`), !blocks);
+    this.frame = new GameFrame(gl, gf, render, world.tileUnits, this.levels.level);
     if (!blocks) acceptSignedRG((this.frame as any).gl, gl);
     this.near = render.camera.near; this.far = render.camera.far;
   }
@@ -123,7 +131,7 @@ export class GameRoom {
     const store = {
       worldIndex: () => getJson(gf(`index/${id}.json${DATA}`)),
       worldRoom: (r: number) => getJson(gf(`rooms/${r}.json${DATA}`)),
-      payload: (rel: string) => getJson(gf(rel)),
+      payload: (rel: string) => getJson(payloadUrl(rel)),
       url: gf,
       worldIdlePoses: async () => null,
     };
@@ -142,7 +150,7 @@ export class GameRoom {
     const next = async (): Promise<void> => {
       for (let m = list.pop(); m !== undefined; m = list.pop()) {
         check();
-        await getJson(gf(`meshes/${pad5(m)}.json`)).catch(() => null);
+        await getJson(meshUrl(m)).catch(() => null);
         step(0.05 + 0.35 * ++got / meshes.size);
       }
     };
@@ -302,7 +310,7 @@ export class GameRoom {
     f.gl.collect = this.extraBuffers;
     try {
       for (const p of parts) {
-        const payload = await getJson(gf(`meshes/${pad5(p.mesh)}.json`)).catch(() => null);
+        const payload = await getJson(meshUrl(p.mesh)).catch(() => null);
         if (!payload?.skinned || !f.index.materials[String(p.material)]) continue;
         const d = await f.buildActorDraw({mesh: p.mesh, material: p.material, renderTexture: p.renderTexture, payload, bones, tint: null,
           recolours: p.recolours, palette: () => actor.ready ? actor.palette : null}).catch(() => null);
@@ -313,7 +321,7 @@ export class GameRoom {
     f.actorDraws = [...draws, ...f.actorDraws];
   }
   private async rigOf(mesh: number) {
-    const payload = await getJson(gf(`meshes/${pad5(mesh)}.json`));
+    const payload = await getJson(meshUrl(mesh));
     return new Rig(await getJson(at(`skel/${payload.skel}`)));
   }
   private clip = async (i: number) => new ClipSampler(await getJson(at(`clip/${i}`)));
@@ -353,7 +361,7 @@ export class GameRoom {
     const actors: GameActorSource[] = [];
     for (const p of parts) {
       if (p.material == null || !f.index.materials[String(p.material)]) continue;
-      const payload = await getJson(gf(`meshes/${pad5(p.mesh)}.json`)).catch(() => null);
+      const payload = await getJson(meshUrl(p.mesh)).catch(() => null);
       if (!payload?.skinned) continue;
       actors.push({mesh: p.mesh, material: p.material, renderTexture: p.mat ?? -1, payload, bones, tint: null,
         recolours: [[...p.t1, 1], [...p.t2, 1]], palette: () => this.paletteLive ? this.palette : null});
@@ -408,7 +416,7 @@ export class GameRoom {
     const extra = this.extraDraws;
     f.freeDraws(f.actorDraws.filter((d: any) => !extra.includes(d)), this.actorBuffers); f.actorDraws = []; this.actorBuffers = [];
     f.freeDraws(extra, this.extraBuffers); this.extras = []; this.extraBuffers = []; this.crab = null;
-    this.frame.releaseRoom(); this.frame.releaseTextures();
+    this.frame.releaseRoom(); this.frame.releaseTextures(); this.levels.dispose();
     this.effects?.dispose(); this.effects = null;
     this.world.dispose?.();
   }

@@ -5,7 +5,7 @@
 // retry. Browsing/search/annotations never needed the raw tier, and a re-pick
 // is never a re-extract: the derived indexes are still in IndexedDB.
 
-import { el, fmtBytes } from './ui.js';
+import { el, fmtBytes, openModal } from './ui.js';
 import { hashBlob } from './extract/hash.js';
 import { writeRaw } from './storage.js';
 import { BUNDLE_LABEL } from './extract/ingest.js';
@@ -15,15 +15,10 @@ let open = false;
 export function openRepickDialog(app: any, { n, sha }: { n: number; sha: string }): void {
   if (open) return;   // one at a time: several payloads can fail in a burst
   open = true;
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => { overlay.remove(); open = false; };
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   const status = el('p', { class: 'dim small', text: 'Your browser cleared its saved copy of this game file. Everything else (your library, search, names and texture assignments) is still here. Re-select this one file to view it again.' });
   const input = el('input', { type: 'file', style: 'display:none' });
   const pickBtn = el('button', { class: 'btn primary', text: `Re-select assetBundle${n}` });
-  const closeBtn = el('button', { class: 'btn', text: 'Not now' });
-  closeBtn.addEventListener('click', close);
   pickBtn.addEventListener('click', () => input.click());
 
   input.addEventListener('change', async () => {
@@ -55,9 +50,6 @@ export function openRepickDialog(app: any, { n, sha }: { n: number; sha: string 
     input.value = '';
   });
 
-  overlay.appendChild(el('div', { class: 'modal card' },
-    el('h2', { text: `assetBundle${n} (${BUNDLE_LABEL[n]}) needs re-selecting` }),
-    status, input,
-    el('div', { class: 'modal-actions' }, pickBtn, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
+  const { close } = openModal({ title: `assetBundle${n} (${BUNDLE_LABEL[n]}) needs re-selecting`, content: [status, input],
+    actions: [pickBtn], closeLabel: 'Not now', onClose: () => { open = false; } });
 }

@@ -34,7 +34,17 @@ export class SatelliteLayer {
   /** Tiles drawn in the last frame, at their own level or a stand-in (tests read it). */
   readonly stats = { drawn: 0, standIns: 0 };
 
+  private dead = false;
+
   constructor(private canvas: HTMLCanvasElement, private onLoad: () => void) {}
+
+  /** Let go: nothing more fetched, every picture freed. */
+  destroy() {
+    this.dead = true; this.source = null; this.wanted = []; this.warm = [];
+    for (const a of this.loading.values()) a.abort();
+    for (const b of this.tiles.values()) b.close();
+    this.tiles.clear();
+  }
 
   /** The pictures to show (null: none). */
   setSource(source: SatelliteSource | null) {
@@ -142,11 +152,12 @@ export class SatelliteLayer {
         if (!r.ok || /text\/html/.test(r.headers.get('content-type') ?? '')) throw Error(`${url}: HTTP ${r.status}`);
         return r.blob();
       }).then((blob) => createImageBitmap(blob)).then((bitmap) => {
+        if (this.dead) { bitmap.close(); return; }
         this.tiles.set(url, bitmap);
         while (this.tiles.size > CACHE) { const [old, b] = this.tiles.entries().next().value!; b.close(); this.tiles.delete(old); }
         this.onLoad();
       }).catch((error) => { if (!abort.signal.aborted) this.failed.add(url); void error; })
-        .finally(() => { this.loading.delete(url); if (this.source) this.pump(); });
+        .finally(() => { this.loading.delete(url); if (this.source && !this.dead) this.pump(); });
     }
   }
 }

@@ -279,6 +279,7 @@ try {
   // the landing page names each tool and links to it, and shows the version like every top bar
   await page.goto(`${site}/`, { waitUntil: 'networkidle0' });
   assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/data'], 'the landing page links every tool, Fashion first');
+  assert.equal(await page.$eval('.home-steam', (a) => `${a.getAttribute('href')} ${a.getAttribute('target')}`), 'https://store.steampowered.com/app/2791440/Brighter_Shores/ _blank', 'and the game on Steam, in a new tab');
   assert.equal(await page.$eval('.tool-switch-news', (b) => b.textContent), "What's new · dev build", 'the landing page has the version in its switch');
   // on a phone the three stacked cards run past the screen: the page scrolls (the tools' pages never do)
   const viewport = page.viewport();
@@ -295,7 +296,8 @@ try {
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
   // the top bar's tool switch: every tool (this one marked) and the landing page
   await page.click('#topbar .tool-switch-btn');
-  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/data'], 'the switch leads with Home, then every tool');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/data', 'https://brightershoreswiki.org'], 'the switch leads with Home, then every tool, then the game\'s wiki');
+  assert.equal(await page.$eval('.tool-switch-menu a[href^="https://brightershoreswiki"]', (a) => a.getAttribute('target') + ' ' + a.getAttribute('rel')), '_blank noopener noreferrer', 'the wiki opens in a new tab');
   assert.equal(await page.$eval('.tool-switch-home', (a) => a.textContent), 'Home', 'the landing page is Home');
   assert.equal(await page.$eval('.tool-switch-menu a[aria-current=page]', (a) => a.getAttribute('href')), '/maps', 'this one marked');
   await page.keyboard.press('Escape');
@@ -320,7 +322,38 @@ try {
   await page.goBack(); await page.waitForFunction(() => location.pathname === '/data');
   await page.goForward(); await page.waitForFunction(() => location.pathname === '/');
   assert.equal(await page.evaluate(() => (window as any).__onePage), true, 'no page loaded between them');
-  assert.equal(await page.evaluate(() => [...document.querySelectorAll('link[rel=stylesheet]')].filter((l: any) => !l.disabled).map((l) => l.getAttribute('href')).sort().join()), '/css/app.css,/css/home.css', 'only the page\'s own stylesheet is on');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('link[rel=stylesheet]')].filter((l: any) => l.sheet && !l.sheet.disabled).map((l) => l.getAttribute('href')).sort().join()), '/css/app.css,/css/home.css', 'only the page\'s own stylesheet is on');
+  // where memory is short (a phone), a tool that draws with the GPU is let go when another page shows (two
+  // kept at once are more than a phone's browser allows a page: it throws the page away and loads it again),
+  // and opened afresh on coming back, still without a page load
+  {
+    const phone = await browser.newPage();
+    await phone.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1');
+    await phone.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+    await phone.evaluateOnNewDocument(() => {
+      const all: any[] = (window as any).__gl = [];
+      const proto = (window as any).HTMLCanvasElement.prototype, get = proto.getContext;
+      proto.getContext = function (this: any, type: string, o: any) { const c = get.call(this, type, o); if (c && /webgl/.test(type) && !all.includes(c)) all.push(c); return c; };
+    });
+    phone.on('pageerror', (e) => errors.push(String(e)));
+    await phone.goto(base, { waitUntil: 'networkidle0' });
+    await phone.waitForFunction(() => !!document.documentElement.dataset.release && !document.querySelector('.page-load'));
+    await phone.evaluate(() => { (window as any).__onePage = true; });
+    const live = () => phone.evaluate(() => (window as any).__gl.filter((g: any) => !g.isContextLost()).length);
+    assert.ok(await live() > 0, 'the map draws with the GPU');
+    await phone.evaluate(() => { const w = window as any; w.history.pushState(null, '', '/'); w.dispatchEvent(new w.PopStateEvent('popstate')); });
+    await phone.waitForFunction(() => !!document.querySelector('.home-tool'));
+    assert.equal(await phone.$('[data-page=maps]'), null, 'on a phone, Maps leaves the page when another shows');
+    assert.equal(await live(), 0, 'and its GPU contexts are freed');
+    await phone.goBack();
+    await phone.waitForFunction(() => location.pathname === '/maps' && !!document.querySelector('[data-page=maps]') && !document.querySelector('.page-load'));
+    await phone.waitForFunction(() => Number(document.documentElement.dataset.tiles) > 0);
+    assert.ok(await live() > 0, 'coming back draws the map again');
+    assert.equal(await phone.evaluate(() => (window as any).__onePage), true, 'without a page load');
+    await phone.close();
+  }
+  // the landing page's own stylesheet is in before the first paint (never drawn unstyled, then moved)
+  assert.ok(/<link rel="stylesheet" href="\/css\/home.css">/.test(await (await fetch(`${site}/`)).text()), 'the landing page\'s stylesheet is linked by the page itself');
   // the tools' old addresses move to their paths, their query and hash kept
   await page.goto(`${site}/viewer.html?data=data#/map/0`, { waitUntil: 'networkidle0' });
   assert.equal(await page.evaluate(() => location.pathname + location.search + location.hash), '/data?data=data#/map/0', 'an old viewer address');

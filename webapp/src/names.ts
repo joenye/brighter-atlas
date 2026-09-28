@@ -62,8 +62,6 @@ export function setLocalName(entry: IndexEntry, cat: string, name: string | null
   save();
 }
 
-export function localNameCount(): number { return Object.keys(cur.names).length; }
-
 // Full replacement names file: baked names ∪ local edits (local wins).
 export function buildNamesFile(indexesByCat: Record<string, IndexEntry[] | null | undefined> | null | undefined): NamesFile {
   const names: Record<string, string> = {};
@@ -77,20 +75,6 @@ export function buildNamesFile(indexesByCat: Record<string, IndexEntry[] | null 
     else delete names[k];   // locally cleared
   }
   return { version: 1, algo: 'sha256/16', names };
-}
-
-// MERGE a lower-priority name map in: only keys with no local value are
-// taken (vended defaults must never stomp user edits). Returns count added.
-export function mergeNames(map: Record<string, any> | null | undefined): number {
-  let n = 0;
-  for (const [k, v] of Object.entries(map || {})) {
-    if (cur.names[k] === undefined && typeof v === 'string' && v.trim()) {
-      cur.names[k] = v.trim();
-      n++;
-    }
-  }
-  if (n) save();
-  return n;
 }
 
 // REPLACE the local name set from a parsed {hash: name} map; returns count

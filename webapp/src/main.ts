@@ -1,16 +1,17 @@
-// App shell: category tabs, virtualized sidebar list, hash router, details
-// panel, status bar, error banners, keyboard navigation, global search.
+// Brighter Data's app: the categories, the virtualized sidebar list, the hash router, the details panel, the
+// status bar, error banners, keyboard navigation and global search. Its page's chrome (the tabs, the list's tools,
+// the details panel, the banners, the status bar) is drawn by DataTool.tsx from `ui` here; the list and the
+// viewers draw themselves into the hosts that page gives them.
 
 import { modelCards } from './viewers/model-cards.js';
 import { createStore } from './client-store.js';
 import { animClass } from './anim-class.js';
 import { mountOnboarding } from './onboard.js';
-import { maybeShowMobileNotice } from './mobile-gate.js';
 import { derivedGet, getVersion } from './storage.js';
 import { diffIndexes } from './diff.js';
 import { VList } from './virtual-list.js';
 import { GlobalSearch } from './search.js';
-import { el, clear, append, badge, kvTable, rawJson, fmtInt, fmtDur, fmtBytes, fmtNum, debounce, placeholderCard, idLabel, makeResizable, versionLabel, platformIcon, plainLabel } from './ui.js';
+import { el, clear, append, badge, kvTable, fmtInt, fmtDur, fmtBytes, fmtNum, debounce, placeholderCard, idLabel, makeResizable, versionLabel, platformIcon, plainLabel, openModal } from './ui.js';
 import { initPanels, expandPanelForContent } from './panels.js';
 import { effectiveName, setLocalName, buildNamesFile, replaceNames, hydrateNames } from './names.js';
 import { bodySlot, bodySlotLabel, bodySlotTitle } from './mesh-slot.js';
@@ -32,10 +33,10 @@ import { entryByOrdinal } from './store.js';
 import type { AppStore, IndexEntry, FetchErrorDetail } from './store.js';
 import { partRecolor } from './recolor.js';
 import { episodeFilters, matchesFilters, type FilterDef } from './list-filters.js';
-import type { ToolContext, ToolHandle } from './app/tool.js';
+import type { ToolContext } from './app/tool.js';
 
 // (the page is showing: this tool's listeners on the window and document act only then)
-let ctx: ToolContext = { active: () => true };
+let ctx: ToolContext = { active: () => true, ready: () => {}, signal: new AbortController().signal };
 
 
 // a parsed hash route ('#/mesh/12', '#/diff/<a>..<b>', …)
@@ -59,7 +60,7 @@ interface AppView {
 
 interface CatDef { key: string; route: string; label: string; single: string; icon: string; row: number }
 
-const CATS: CatDef[] = [
+export const CATS: CatDef[] = [
   { key: 'audio', route: 'audio', label: 'Audio', single: 'Audio', icon: '♪', row: 34 },
   { key: 'anims', route: 'anim', label: 'Animations', single: 'Animation', icon: '∿', row: 34 },
   { key: 'images', route: 'image', label: 'Images', single: 'Image', icon: '▦', row: 48 },
@@ -228,7 +229,7 @@ const modelOwner = (m: any) => Math.min(
 const modelSkeleton = (m: any) => Number.isFinite(m.skel_i)
   ? m.skel_i
   : Math.min(...((m.skeletons || []).filter(Number.isFinite)), Number.POSITIVE_INFINITY);
-const CAT_SORTS: Record<string, SortDef[]> = {
+export const CAT_SORTS: Record<string, SortDef[]> = {
   meshes: [
     ['index', 'sort: index', (a, b) => a.i - b.i, 'asc'],
     ['vertices', 'sort: vertices', (a, b) => (a.v - b.v) || (a.i - b.i), 'desc'],
@@ -342,20 +343,41 @@ function saveCatFilters(cat: string | undefined, filters: Set<string>): void {
   try { localStorage.setItem(FILTERS_KEY, JSON.stringify(all)); } catch { /* storage unavailable */ }
 }
 
-class App {
+/** What the page's chrome draws (DataTool.tsx), kept here and announced by `emit`. */
+export interface AppUi {
+  cat: string | null;
+  sort: string; sortDir: 'asc' | 'desc';
+  filters: Set<string>;
+  banners: { msg: string; kind: string }[];
+  details: { title: string; node: HTMLElement | null; raw: any; extra: HTMLElement | null } | null;
+  rawMode: boolean;
+  status: [string, string, string];
+  /** the newest banner's message, in the status bar's middle until the next status (null: none) */
+  statusError: string | null;
+}
+export interface TabData { key: string; label: string; icon: string; countText: string; exportedText: string; partial: boolean; overviewHash: string }
+
+export class App {
   store: AppStore;
   viewerEl: HTMLElement;
-  bannersEl: HTMLElement;
-  detailsBody: HTMLElement;
-  detailsTitle: HTMLElement;
   listHost: HTMLElement;
-  tabsEl: HTMLElement;
-  chipsEl: HTMLElement;
   filterEl: HTMLInputElement;
-  sortEl: HTMLSelectElement;
-  sortDirEl: HTMLButtonElement;
   searchInput: HTMLInputElement;
   search: GlobalSearch;
+  readonly ui: AppUi = { cat: null, sort: 'index', sortDir: 'asc', filters: new Set(), banners: [], details: null, rawMode: false, status: ['', '', ''], statusError: null };
+  private subs = new Set<() => void>();
+  private version = 0;
+  subscribe = (fn: () => void) => { this.subs.add(fn); return () => { this.subs.delete(fn); }; };
+  snapshot = () => this.version;
+  /** the chrome draws again from `ui` (the sort, direction, filters and category mirrored from the app's own) */
+  emit(): void {
+    const u = this.ui;
+    u.cat = this.cur?.cat ?? null; u.sort = this.sort; u.sortDir = this.sortDir; u.filters = this.filters;
+    // (a copy: the chrome tells a change of details by their identity, and extras are set on the same object)
+    u.details = this._details ? { ...this._details } : null; u.rawMode = this._rawMode;
+    this.version++;
+    for (const fn of this.subs) fn();
+  }
 
   cur: Route | null;
   view: AppView | null;
@@ -384,16 +406,9 @@ class App {
   constructor(store: AppStore) {
     this.store = store;
     this.viewerEl = document.getElementById('viewer')!;
-    this.bannersEl = document.getElementById('banners')!;
-    this.detailsBody = document.getElementById('details-body')!;
-    this.detailsTitle = document.getElementById('details-title')!;
     this.listHost = document.getElementById('list-host')!;
     this.listHost.classList.add('kb-target');   // sidebar list owns ↑/↓ by default (picker takes over while open)
-    this.tabsEl = document.getElementById('cat-tabs')!;
-    this.chipsEl = document.getElementById('list-chips')!;
     this.filterEl = document.getElementById('list-filter') as HTMLInputElement;
-    this.sortEl = document.getElementById('list-sort') as HTMLSelectElement;
-    this.sortDirEl = document.getElementById('list-sort-dir') as HTMLButtonElement;
 
     this.cur = null;          // {cat,id,sub,pos}
     this.view = null;
@@ -410,7 +425,7 @@ class App {
     this._systemModelsLoaded = false;
     this._bannerMsgs = new Set();
 
-    this.store.addEventListener('fetcherror', (e) => this.banner((e as CustomEvent<FetchErrorDetail>).detail.message));
+    this.store.addEventListener('fetcherror', (e) => this.banner((e as CustomEvent<FetchErrorDetail>).detail.message), { signal: ctx.signal });
     // Background audit for stored client versions: a bundle that does not
     // belong with this version's datatable (mixed game versions, possible
     // for versions ingested before the per-object ingest gate) silently
@@ -433,29 +448,9 @@ class App {
     this.store.addEventListener('bundlemissing', async (e) => {
       const { openRepickDialog } = await import('./repick.js');
       openRepickDialog(this, (e as CustomEvent).detail);
-    });
-
-    document.getElementById('raw-toggle')!.addEventListener('click', () => {
-      this._rawMode = !this._rawMode;
-      document.getElementById('raw-toggle')!.classList.toggle('active', this._rawMode);
-      this.renderDetails();
-    });
+    }, { signal: ctx.signal });
 
     this.filterEl.addEventListener('input', debounce(() => this.refreshList(), 120));
-
-    this.sortEl.addEventListener('change', () => {
-      this.sort = this.sortEl.value;
-      this.sortDir = defaultDir(this.cur?.cat, this.sort);   // each sort opens in its natural direction
-      if (this.cur?.cat) saveCatSort(this.cur.cat, this.sort, this.sortDir);
-      this.syncSortDir();
-      this.refreshList({ keepScroll: false });
-    });
-    this.sortDirEl.addEventListener('click', () => {
-      this.sortDir = this.sortDir === 'desc' ? 'asc' : 'desc';
-      if (this.cur?.cat) saveCatSort(this.cur.cat, this.sort, this.sortDir);
-      this.syncSortDir();
-      this.refreshList({ keepScroll: false });
-    });
 
     window.addEventListener('hashchange', () => {
       if (!ctx.active()) return;
@@ -466,7 +461,7 @@ class App {
       // never auto-expanded.
       if (route?.id != null) expandPanelForContent('details');
       this.applyRoute(route);
-    });
+    }, { signal: ctx.signal });
 
     document.addEventListener('keydown', (e) => {
       if (!ctx.active()) return;
@@ -495,7 +490,7 @@ class App {
         e.preventDefault();   // Space would otherwise scroll the list
         this.view.togglePlay();
       }
-    });
+    }, { signal: ctx.signal });
 
     // every fixed panel is user-resizable (widths persist in localStorage)
     makeResizable(document.getElementById('sidebar'), { edge: 'right', key: 'sidebar', min: 220, max: 640 });
@@ -519,6 +514,47 @@ class App {
         openExportDialog(this);
       });
     }
+  }
+
+  // ------------------------------------------------------------------ the chrome's actions (DataTool.tsx)
+  toggleRaw(): void { this._rawMode = !this._rawMode; this.renderDetails(); }
+  setSort(value: string): void {
+    this.sort = value;
+    this.sortDir = defaultDir(this.cur?.cat, this.sort);   // each sort opens in its natural direction
+    if (this.cur?.cat) saveCatSort(this.cur.cat, this.sort, this.sortDir);
+    this.emit();
+    this.refreshList({ keepScroll: false });
+  }
+  flipSortDir(): void {
+    this.sortDir = this.sortDir === 'desc' ? 'asc' : 'desc';
+    if (this.cur?.cat) saveCatSort(this.cur.cat, this.sort, this.sortDir);
+    this.emit();
+    this.refreshList({ keepScroll: false });
+  }
+  setFilter(label: string, on: boolean): void {
+    if (on) this.filters.add(label); else this.filters.delete(label);
+    saveCatFilters(this.cur?.cat, this.filters);
+    this.emit();
+    this.refreshList();
+  }
+  clearFilters(): void {
+    this.filters.clear();
+    saveCatFilters(this.cur?.cat, this.filters);
+    this.emit();
+    this.refreshList();
+  }
+  /** a tab: the category's last item (images: the grid itself, the way back too) */
+  openTab(key: string): void {
+    if (key === 'images') { location.hash = '#/images'; return; }
+    const cat = CATS.find((c) => c.key === key)!;
+    const last = sessionStorage.getItem(`bs.last.${key}`);
+    location.hash = last != null && last !== '' ? `#/${cat.route}/${last}` : `#/${key}`;
+  }
+  dismissBanner(msg: string): void { this.ui.banners = this.ui.banners.filter((b) => b.msg !== msg); this._bannerMsgs.delete(msg); this.emit(); }
+  /** Let go (the page is leaving): its viewer, its list and its listeners (ctx.signal). */
+  destroy(): void {
+    this.view?.destroy(); this.view = null;
+    this.vlist?.destroy(); this.vlist = null;
   }
 
   // ------------------------------------------------------------------ overrides manager
@@ -561,12 +597,6 @@ class App {
   }
 
   async openOverridesPanel(): Promise<void> {
-    const overlay = el('div', { class: 'modal-overlay' });
-    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-    document.addEventListener('keydown', onKey, true);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
     const body = el('div', { class: 'modal-body' });
     const render = async () => {
       const fileObj = await this.buildAnnotationsFile();
@@ -632,15 +662,8 @@ class App {
       this.refreshList();
       this.mountView(this.cur!, ++this._navToken);
     });
-    const closeBtn = el('button', { class: 'btn', text: 'Close' });
-    closeBtn.addEventListener('click', close);
-
-    overlay.appendChild(el('div', { class: 'modal card' },
-      el('h2', { text: 'Overrides: texture assignments + names (any asset type)' }),
-      body,
-      el('div', { class: 'modal-actions' }, exportBtn, loadBtn, clearBtn, fileInput, el('span', { class: 'spacer' }), closeBtn)));
     await render();
-    document.body.appendChild(overlay);
+    openModal({ title: 'Overrides: texture assignments + names (any asset type)', content: [body], actions: [exportBtn, loadBtn, clearBtn, fileInput] });
   }
 
   // the user-created categories' sidebar lists snapshot their stores: resync
@@ -768,60 +791,33 @@ class App {
   }
 
   // ------------------------------------------------------------------ tabs
-  renderTabs(): void {
-    clear(this.tabsEl);
+  /** The category tabs as the chrome draws them: user-created categories (not in the manifest) count from
+   *  their stores; a category only partly exported says so. */
+  tabs(): TabData[] {
     const m = this.store.manifest;
-    for (const cat of CATS) {
-      // user-created categories (not in the manifest) count from their stores
+    return CATS.map((cat) => {
       const userCount = cat.key === 'models' ? modelCount() + this._systemModels.length : null;
       const catInfo: any = m?.categories?.[cat.key];
       const count = userCount ?? (catInfo?.count ?? 0);
       const exported = userCount ?? (catInfo?.exported ?? 0);
-      const partial = exported != null && exported < count;
-      const btn = el('button', { class: 'cat-tab', dataset: { cat: cat.key } },
-        el('span', { class: 'ct-icon', text: cat.icon }),
-        el('span', { class: 'ct-name', text: cat.label }),
-        el('span', {
-          class: `ct-count${partial ? ' partial' : ''}`,
-          text: count == null ? '' : fmtInt(count),
-          title: partial ? `${fmtInt(exported)} of ${fmtInt(count)} exported` : '',
-        }));
-      btn.addEventListener('click', () => {
-        // images: the tab IS the master grid, so always go there (the breadcrumb
-        // in the detail view is the way back too)
-        if (cat.key === 'images') { location.hash = '#/images'; return; }
-        const last = sessionStorage.getItem(`bs.last.${cat.key}`);
-        if (last != null && last !== '') location.hash = `#/${cat.route}/${last}`;
-        else location.hash = `#/${cat.key}`;
-      });
-      // "?" opens the category overview (the id-less route). It's a SIBLING of the
-      // tab button (never nested inside it) so the markup stays valid and each
-      // control is independently focusable/announced. It reaches the overview
-      // WITHOUT restoring bs.last.<cat>, so a normal tab click still reopens the
-      // last-viewed item.
-      const help = el('button', {
-        class: 'ct-help', type: 'button',
-        title: `What's in ${cat.label}? Open the overview`,
-        'aria-label': `About ${cat.label}`,
-      }, '?');
-      // images has no id-less "list landing" (its root is the grid), so its "?"
-      // targets a dedicated overview sub-route; every other category's root IS
-      // its overview.
-      const overviewHash = cat.key === 'images' ? '#/image/about' : `#/${cat.route}`;
-      help.addEventListener('click', () => { location.hash = overviewHash; });
-      this.tabsEl.appendChild(el('div', { class: 'cat-tab-row' }, btn, help));
-    }
+      // images has no id-less "list landing" (its root is the grid), so its "?" targets a dedicated overview
+      // sub-route; every other category's root IS its overview
+      return { key: cat.key, label: cat.label, icon: cat.icon, countText: count == null ? '' : fmtInt(count), exportedText: fmtInt(exported),
+        partial: exported != null && exported < count, overviewHash: cat.key === 'images' ? '#/image/about' : `#/${cat.route}` };
+    });
   }
+  renderTabs(): void { this.emit(); }
 
   // ------------------------------------------------------------------ routing
   async applyRoute(route: Route | null, { replace = false }: { replace?: boolean } = {}): Promise<void> {
-    if (!this.store.manifest) return;
+    // no game files yet: whatever the route, the page shows the onboarding (again, when the viewer was
+    // emptied while the tool was hidden); never anything else
+    if (!this.store.manifest) { if (!this.viewerEl.childElementCount) this.showOnboarding(); return; }
     route ||= { cat: 'meshes', id: null };
     const token = ++this._navToken;
     const catChanged = route.cat !== this.cur?.cat;
     this.cur = route;
-
-    this.tabsEl.querySelectorAll<HTMLElement>('.cat-tab').forEach((t) => t.classList.toggle('active', t.dataset.cat === route.cat));
+    this.emit();
 
     if (route.cat === 'diff') {   // full-viewer route, no sidebar list
       this.mountView(route, token);
@@ -844,7 +840,6 @@ class App {
   async loadCategoryList(cat: string, token: number): Promise<void> {
     this.vlist?.destroy();
     this.vlist = null;
-    clear(this.chipsEl);
     this.items = [];
 
     if (ASSET_CATS.has(cat)) {
@@ -940,25 +935,18 @@ class App {
       this.pendingListFilter = null;
     }
 
-    // sort dropdown (per-category options) + direction toggle
+    // the sort (per-category options) and its direction: saved per-category choice > opinionated default >
+    // index order; the filter dropdown: the chrome draws both from here
     const sorts = CAT_SORTS[cat];
-    this.sortEl.hidden = !sorts;
     if (sorts) {
-      clear(this.sortEl);
-      for (const [value, label] of sorts) this.sortEl.appendChild(el('option', { value, text: label }));
-      // saved per-category choice > opinionated default > index order
       const saved = loadCatSort(cat);
       this.sort = (saved?.sort && sorts.some(([v]) => v === saved.sort)) ? saved.sort
         : (DEFAULT_SORT[cat] && sorts.some(([v]) => v === DEFAULT_SORT[cat])) ? DEFAULT_SORT[cat] : 'index';
       this.sortDir = saved?.dir || defaultDir(cat, this.sort);
-      this.sortEl.value = this.sort;
     } else {
       this.sort = 'index';
     }
-    this.syncSortDir();
-
-    // filter dropdown (checkboxes, AND semantics)
-    this.buildFilterUI(cat);
+    this.emit();
 
     const catDef = CATS.find((c) => c.key === cat)!;
     this.vlist = new VList({
@@ -971,53 +959,10 @@ class App {
     this.setStatus2(`${CATS.find((c) => c.key === cat)!.label}: ${fmtInt(this.items.length)} entries`);
   }
 
-  // reflect the current sort direction on the toggle button (↓ desc / ↑ asc)
-  syncSortDir(): void {
-    if (!this.sortDirEl) return;
-    const on = !this.sortEl.hidden;
-    this.sortDirEl.hidden = !on;
-    this.sortDirEl.textContent = this.sortDir === 'desc' ? '↓' : '↑';
-    this.sortDirEl.title = `Sort direction: ${this.sortDir === 'desc' ? 'descending' : 'ascending'} (click to flip)`;
-  }
-
   // static per-category filters + dynamic facets (world/maps episodes,
   // strings namespaces, compare-mode diff states)
   catFilters(cat: string | undefined): FilterDef[] {
     return [...(FILTERS[cat ?? ''] || []), ...(['world','maps'].includes(cat??'') ? episodeFilters(this.items) : []), ...(this._diffFacets || [])];
-  }
-
-  // checkbox-dropdown filter for the current category (facets AND, episodes OR; see matchesFilters)
-  buildFilterUI(cat: string | undefined): void {
-    clear(this.chipsEl);
-    const filters = this.catFilters(cat);
-    if (!filters.length) return;
-    const dd = el('details', { class: 'filter-dd' });
-    const sum = el('summary', { title: 'Match all selected filters. Multiple episodes include rooms from any selected episode.' });
-    const panel = el('div', { class: 'filter-panel' });
-    const syncSum = () => { sum.textContent = this.filters.size ? `Filter · ${this.filters.size}` : 'Filter'; };
-    for (const [label, , tip] of filters) {
-      const cb = el('input', { type: 'checkbox' });
-      cb.checked = this.filters.has(label);
-      cb.addEventListener('change', () => {
-        if (cb.checked) this.filters.add(label); else this.filters.delete(label);
-        saveCatFilters(cat, this.filters);
-        syncSum();
-        this.refreshList();
-      });
-      panel.appendChild(el('label', { class: 'filter-opt', ...(tip ? { title: tip } : {}) }, cb, el('span', { text: label })));
-    }
-    const clr = el('button', { class: 'filter-clear', text: 'clear all' });
-    clr.addEventListener('click', () => {
-      this.filters.clear();
-      saveCatFilters(cat, this.filters);
-      panel.querySelectorAll('input').forEach((x) => { x.checked = false; });
-      syncSum();
-      this.refreshList();
-    });
-    panel.appendChild(clr);
-    syncSum();
-    dd.append(sum, panel);
-    this.chipsEl.appendChild(dd);
   }
 
   filteredItems(): any[] {
@@ -1270,7 +1215,7 @@ class App {
       if (this.filterEl.value || this.filters.size) {
         this.filterEl.value = '';
         this.filters.clear();
-        this.buildFilterUI(this.cur?.cat);   // rebuild dropdown reflecting the cleared state
+        this.emit();   // (the dropdown shows the cleared state)
         this.refreshList();
         selIdx = this.findSelectionIndex(this.filteredItems());
       }
@@ -1655,42 +1600,23 @@ class App {
     this.renderDetails();
   }
 
-  renderDetails(): void {
-    const d = this._details;
-    this.detailsTitle.textContent = d?.title || 'Details';
-    clear(this.detailsBody);
-    if (!d) {
-      this.detailsBody.appendChild(el('div', { class: 'center-note small', text: 'Nothing selected.' }));
-      return;
-    }
-    if (this._rawMode && d.raw != null) {
-      this.detailsBody.appendChild(rawJson(d.raw));
-      return;
-    }
-    if (d.node) this.detailsBody.appendChild(d.node);
-    else if (d.raw != null) this.detailsBody.appendChild(rawJson(d.raw));
-    if (d.extra) this.detailsBody.appendChild(d.extra);
-  }
+  // (the chrome draws the details from ui.details, the raw JSON in raw mode)
+  renderDetails(): void { this.emit(); }
 
   // ------------------------------------------------------------------ chrome
+  // a banner (at most four, each message once) and its message in the status bar's middle
   banner(msg: string, kind = ''): void {
     if (this._bannerMsgs.has(msg)) return;
-    this._bannerMsgs.add(msg);
-    while (this.bannersEl.children.length >= 4) this.bannersEl.firstChild!.remove();
-    const node = el('div', { class: `banner ${kind}` },
-      el('span', { text: msg }),
-      el('button', { class: 'bn-close', text: '✕' }));
-    node.querySelector('.bn-close')!.addEventListener('click', () => { node.remove(); this._bannerMsgs.delete(msg); });
-    this.bannersEl.appendChild(node);
-    document.getElementById('status-mid')!.innerHTML = `<span class="err">⚠ ${escapeText(msg).slice(0, 80)}</span>`;
+    this.ui.banners = [...this.ui.banners.slice(-3), { msg, kind }];
+    this._bannerMsgs = new Set(this.ui.banners.map((b) => b.msg));
+    this.ui.statusError = msg;
+    this.emit();
   }
 
-  setStatus1(t: string): void { document.getElementById('status-left')!.textContent = t; }
-  setStatus2(t: string): void { document.getElementById('status-mid')!.textContent = t; }
-  setStatus3(t: string): void { document.getElementById('status-right')!.textContent = t; }
+  setStatus1(t: string): void { this.ui.status[0] = t; this.emit(); }
+  setStatus2(t: string): void { this.ui.status[1] = t; this.ui.statusError = null; this.emit(); }
+  setStatus3(t: string): void { this.ui.status[2] = t; this.emit(); }
 }
-
-function escapeText(s: string): string { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 export function parseHash(h: string | null | undefined): Route | null {
   const dm = (h || '').match(/^#\/?diff\/([0-9a-f]{16})\.\.([0-9a-f]{16})/);
@@ -1709,25 +1635,13 @@ export function parseHash(h: string | null | undefined): Route | null {
 
 // annotations hydrate from IndexedDB (authoritative) before first render;
 // a legacy localStorage set migrates transparently on first boot
-async function boot(): Promise<App> {
+/** The app on its page (DataTool.tsx renders the page's chrome from it): its store, then started. */
+export async function boot(context: ToolContext): Promise<App> {
+  ctx = context;
   const [store] = await Promise.all([createStore(), hydrateOverrides(), hydrateNames(), hydrateModels(), hydrateDyes()]);
   const app = new App(store);
   (window as any).__bs = { app };   // exposed for the smoke test
-  app.start();
+  // (the list and the first view drawn: the shell's load card goes)
+  void app.start().finally(() => ctx.ready());
   return app;
-}
-
-/** Mounted by the app's shell into its page (the skeleton, app/pages.tsx), once; hidden and shown after. A
- *  hidden Data keeps its list and its place but lets its viewer go (nothing draws), mounted again on return. */
-export async function mount(root: HTMLElement, context: ToolContext): Promise<ToolHandle> {
-  ctx = context;
-  // Phones get the app, with a dialog over it once per visit saying it is built for desktop (and where to go
-  // on a phone instead)
-  maybeShowMobileNotice(root);
-  const app = await boot();
-  return {
-    hide() { app.view?.destroy(); app.view = null; clear(app.viewerEl); },
-    show() { void app.applyRoute(parseHash(location.hash)); },
-    current() { location.hash = ''; },
-  };
 }

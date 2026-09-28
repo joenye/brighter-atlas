@@ -5,7 +5,8 @@ import { gameVersion } from './game-build.js';
 import type { VersionRecord } from './storage.js';
 import type { IndexEntry } from './store.js';
 
-export type ElChild = Node | string | null | undefined;
+// (false, as `cond && node` gives, is nothing: a child left out)
+export type ElChild = Node | string | null | undefined | false;
 export type ElAttrs = Record<string, any>;
 
 // The one-line desktop-only rationale, shared by the onboarding legal footer
@@ -17,17 +18,18 @@ export function el(tag: string, attrs?: ElAttrs, ...children: (ElChild | ElChild
 export function el(tag: string, attrs: ElAttrs = {}, ...children: (ElChild | ElChild[])[]): HTMLElement {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
-    if (v == null) continue;
+    // (null, undefined, or false for an attribute the element has no property for: left out)
+    if (v == null || (v === false && !(k in node))) continue;
     if (k === 'class') node.className = v;
     else if (k === 'text') node.textContent = v;
     else if (k === 'html') node.innerHTML = v;
     else if (k === 'dataset') Object.assign(node.dataset, v);
     else if (k.startsWith('on') && typeof v === 'function') node.addEventListener(k.slice(2), v);
     else if (k in node && typeof v === 'boolean') (node as any)[k] = v;
-    else node.setAttribute(k, v);
+    else node.setAttribute(k, v === true ? '' : String(v));
   }
   for (const c of children.flat()) {
-    if (c == null) continue;
+    if (c == null || c === false) continue;
     node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
   }
   return node;
@@ -37,8 +39,69 @@ export function clear<T extends Node>(node: T): T { while (node.firstChild) node
 
 // append that skips null/undefined (DOM's native append stringifies them)
 export function append<T extends Node>(parent: T, ...kids: (ElChild | ElChild[])[]): T {
-  for (const k of kids.flat()) if (k != null) parent.appendChild(typeof k === 'string' ? document.createTextNode(k) : k);
+  for (const k of kids.flat()) if (k != null && k !== false) parent.appendChild(typeof k === 'string' ? document.createTextNode(k) : k);
   return parent;
+}
+
+// ---- dialogs ------------------------------------------------------------------
+export interface ModalOptions {
+  title: string;
+  /** the card's own class, beside `modal card` */
+  className?: string;
+  /** what sits between the title and the actions */
+  content: (ElChild | ElChild[])[];
+  /** the dialog's own buttons, left of Close */
+  actions?: ElChild[];
+  /** Close's own words and look (the dialog's one action: primary) */
+  closeLabel?: string;
+  closePrimary?: boolean;
+  /** after it has closed, whatever closed it */
+  onClose?: () => void;
+  /** false: only its own buttons close it (a notice that must be acknowledged), not Escape or a click outside */
+  dismissible?: boolean;
+}
+export interface Modal { card: HTMLDivElement; close(): void; readonly closed: boolean }
+const openModals: Modal[] = [];
+/**
+ * A dialog over the page, the one every dialog of the app is: its title, what it holds, its actions and Close.
+ * Escape, a click outside and Close close it (the topmost of several first); focus moves into it and stays
+ * there (Tab wraps), then goes back to where it was.
+ */
+export function openModal(o: ModalOptions): Modal {
+  const opener = document.activeElement as HTMLElement | null;
+  const overlay = el('div', { class: 'modal-overlay' });
+  const card = el('div', { class: `modal card${o.className ? ` ${o.className}` : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': o.title });
+  let closed = false;
+  const modal: Modal = { card, close, get closed() { return closed; } };
+  function close() {
+    if (closed) return;
+    closed = true;
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+    openModals.splice(openModals.indexOf(modal), 1);
+    o.onClose?.();
+    if (opener?.isConnected) opener.focus({ preventScroll: true });
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if (openModals.at(-1) !== modal) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (o.dismissible !== false) close(); return; }
+    if (e.key !== 'Tab') return;
+    const f = [...card.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, summary, [tabindex="0"]')]
+      .filter((x) => !(x as any).disabled && x.getClientRects().length > 0);
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement as HTMLElement);
+    if (e.shiftKey ? i <= 0 : i === f.length - 1 || i < 0) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0].focus(); }
+  };
+  document.addEventListener('keydown', onKey, true);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay && o.dismissible !== false) close(); });
+  const closeBtn = el('button', { class: `btn${(o.closePrimary ?? !o.actions?.length) ? ' primary' : ''}`, text: o.closeLabel ?? 'Close', onclick: close });
+  card.append(el('h2', { text: o.title }));
+  append(card, ...o.content, el('div', { class: 'modal-actions' }, ...(o.actions ?? []), el('span', { class: 'spacer' }), closeBtn));
+  overlay.append(card);
+  document.body.append(overlay);
+  openModals.push(modal);
+  (card.querySelector<HTMLElement>('[autofocus]') ?? closeBtn).focus({ preventScroll: true });
+  return modal;
 }
 
 export function badge(text: string, kind = '', title = ''): HTMLSpanElement {

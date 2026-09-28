@@ -105,7 +105,6 @@ function containsScore(i: number, queries: number[][]): number {
   return worst;
 }
 const cssColor = (c: number[]) => `rgb(${c.map((x) => Math.round(x)).join(',')})`;
-export const paletteOf = (i: number): Float32Array | undefined => _palette.get(i);   // test/debug hook
 
 export interface TexturePickerOpts {
   host: HTMLElement;               // element to dock over (#details)

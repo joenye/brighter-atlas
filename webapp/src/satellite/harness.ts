@@ -37,9 +37,15 @@ export interface StillSettings {
   /** Draw roofs and whatever else is built overhead; off, a cutaway (see
    *  cutShard): roofs and the tops of walls go, floors, furniture and trees stay. */
   roofs: boolean;
+  /** The game's floor (the ground plane it lays at z = 0 under and around a
+   *  room): 'endless' as far as the still reaches, 'room' only under the
+   *  rooms drawn (each room's own tiles: the ground between rooms stays
+   *  clear), 'none' not at all (a tile with no terrain of its own shows
+   *  nothing). */
+  floor: 'endless' | 'room' | 'none';
 }
 
-export const DEFAULT_STILL: Readonly<StillSettings> = Object.freeze({ pxPerTile: 32, margin: 12, height: 4000, neighbours: true, frames: 16, ticks: 0, roofs: true });
+export const DEFAULT_STILL: Readonly<StillSettings> = Object.freeze({ pxPerTile: 32, margin: 12, height: 4000, neighbours: true, frames: 16, ticks: 0, roofs: true, floor: 'room' });
 
 /** Height levels (half a tile each) for the cutaway (see cutShard). */
 export const OVERHEAD_LEVELS = 4;
@@ -257,18 +263,31 @@ export class SatelliteHarness {
     return shard;
   }
 
-  /** The room (and its neighbours at their offsets) as the frame takes them. */
-  private async source(roomId: number, neighbours: boolean, roofs = true): Promise<GameRoomSource> {
+  /** The room (and its neighbours at their offsets) as the frame takes them,
+   *  with the floor the settings ask for. */
+  private async source(roomId: number, s: StillSettings): Promise<GameRoomSource> {
     const T = this.world.tileUnits;
     const room = async (id: number, x: number, y: number) => {
       const group = new THREE.Group();
       group.position.set(x * T, y * T, 0);
       group.updateMatrix();
-      return { id, meta: this.world.roomMeta(id), shard: await (roofs ? this.shard(id) : this.cutShard(id)), group } as unknown as WorldSceneRoom;
+      return { id, meta: this.world.roomMeta(id), shard: await (s.roofs ? this.shard(id) : this.cutShard(id)), group } as unknown as WorldSceneRoom;
     };
     const home = await room(roomId, 0, 0);
-    const others = neighbours ? await Promise.all(doorNeighbours(this.world.index, roomId).map((n) => room(n.id, n.x, n.y))) : [];
-    return this.world.gameRoomSource(home, others);
+    const others = s.neighbours ? await Promise.all(doorNeighbours(this.world.index, roomId).map((n) => room(n.id, n.x, n.y))) : [];
+    const source = await this.world.gameRoomSource(home, others);
+    if (s.floor === 'endless') return source;
+    if (s.floor === 'none') return { ...source, plane: [] };
+    // 'room': the floor pieces under the rooms drawn (the game lays it under
+    // and around them; here only what is within each room's own tiles)
+    const rects = [home, ...others].map((r: any) => {
+      const [w, h] = r.shard.size ?? [r.meta?.w ?? 0, r.meta?.h ?? 0];
+      const x = Math.round(r.group.position.x / T), y = Math.round(r.group.position.y / T);
+      return { x0: x, y0: y, x1: x + w, y1: y + h };
+    });
+    const under = (p: { x: number; y: number; size: [number, number] }) =>
+      rects.some((r) => p.x >= r.x0 && p.y >= r.y0 && p.x + p.size[0] <= r.x1 && p.y + p.size[1] <= r.y1);
+    return { ...source, plane: (source.plane ?? []).filter(under) };
   }
 
   /** The camera over the still's rectangle (room tiles, native frame). */
@@ -293,7 +312,7 @@ export class SatelliteHarness {
     const timings: Record<string, number> = {};
     let t = performance.now();
     const lap = (name: string) => { const now = performance.now(); timings[name] = Math.round(now - t); t = now; };
-    const source = await this.source(roomId, s.neighbours, s.roofs);
+    const source = await this.source(roomId, s);
     lap('source');
     // roofs off only changes what the source holds: a room with nothing
     // overhead is the same still either way (its fingerprint says so)
@@ -319,7 +338,7 @@ export class SatelliteHarness {
    *  each mesh with a digest of every payload field. */
   async explain(roomId: number, settings: Partial<StillSettings> = {}): Promise<unknown> {
     const s: StillSettings = { ...DEFAULT_STILL, ...settings };
-    const source = await this.source(roomId, s.neighbours, s.roofs);
+    const source = await this.source(roomId, s);
     const out: Record<string, unknown>[] = [];
     const seen = new Set<object>();
     for (const scene of [source, ...(source.others ?? [])]) {

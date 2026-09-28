@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { PATHS, type Tool } from './paths.js';
 import { navigate } from './router.js';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
-import { DiscordIcon, GitHubIcon, DISCORD_URL, GITHUB_URL } from './icons.js';
+import { DiscordIcon, GitHubIcon, ExternalIcon, DISCORD_URL, GITHUB_URL, WIKI_URL } from './icons.js';
 
 export const NAMES: Record<Tool, string> = { home: 'atlas', fashion: 'fashion', maps: 'maps', data: 'data' };
 const TOOL_LINES: [Exclude<Tool, 'home'>, string, string][] = [
@@ -96,6 +96,11 @@ function ToolSwitch({ tool, extras, onCurrent }: { tool: Tool; extras: { label: 
         {extras.map((x) => (
           <button key={x.label} type="button" role="menuitem" className="tool-switch-home tool-switch-extra" onClick={() => { close(); x.onClick(); }}>{x.label}</button>
         ))}
+        {rule('r3')}
+        {/* (the game's own wiki: another site, in a new tab) */}
+        <a role="menuitem" href={WIKI_URL} target="_blank" rel="noopener noreferrer" className="tool-switch-home tool-switch-extra" title="The Brighter Shores Wiki (opens in a new tab)">
+          <ExternalIcon /><span>Brighter Shores Wiki</span>
+        </a>
         <button type="button" role="menuitem" className="tool-switch-news" title="What's new: this release's changes"
           onClick={() => { close(); void import('../changelog.js').then((m) => m.openWhatsNew()); }}>{`What's new · ${version}`}</button>
       </div>

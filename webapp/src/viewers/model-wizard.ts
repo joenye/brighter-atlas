@@ -4,7 +4,7 @@
 // a LIVE, interactive 3D preview (independent of the main view) that updates as
 // you toggle meshes / variants. Saves the result as a named Model.
 
-import { el, clear, badge, fmtInt, idLabel } from '../ui.js';
+import { el, clear, badge, fmtInt, idLabel, openModal, type Modal } from '../ui.js';
 import { effectiveName } from '../names.js';
 import { bodySlot } from '../mesh-slot.js';
 import { effectiveTex, getVariants, getActiveIndex } from '../texmap.js';
@@ -28,11 +28,8 @@ export function openModelWizard({ app, entry, active, boundMeshes, imagesIdx }:
   const byI = new Map(boundMeshes.map((m) => [m.i, m]));
 
   let previewApi: ReturnType<typeof createModelPreview> | null = null, closed = false;
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => { closed = true; previewApi?.destroy(); overlay.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  let modal: Modal | null = null;
+  const close = () => modal?.close();
 
   // ---- selection state (over ALL rig meshes) --------------------------------
   const selected = new Set([...active.keys()]);   // start from the current composite
@@ -153,8 +150,6 @@ export function openModelWizard({ app, entry, active, boundMeshes, imagesIdx }:
   // ---- actions --------------------------------------------------------------
   const status = el('p', { class: 'dim small', text: 'Pick the meshes to include and their texture variants. The preview updates live.' });
   const createBtn = el('button', { class: 'btn primary', text: '＋ Save model' });
-  const cancelBtn = el('button', { class: 'btn', text: 'Cancel' });
-  cancelBtn.addEventListener('click', close);
   createBtn.addEventListener('click', () => {
     const picked = [...selected].map((i) => byI.get(i)).filter((m): m is IndexEntry => !!(m && m.f));
     if (!picked.length) { status.textContent = 'Select at least one mesh.'; return; }
@@ -166,19 +161,20 @@ export function openModelWizard({ app, entry, active, boundMeshes, imagesIdx }:
     location.hash = `#/model/${rec.id}`;
   });
 
-  overlay.appendChild(el('div', { class: 'modal card model-wizard' },
-    el('h2', { text: 'Save as Model' }),
-    el('p', { class: 'dim small' }, 'Save a chosen set of meshes + textures as a reusable, named composite in the ',
-      badge('Models', 'b-ghost'), ' category (rename / delete later).'),
-    el('div', { class: 'mw-preview-wrap' }, preview),
-    el('label', { class: 'mw-namerow' }, el('span', { text: 'Name' }), nameIn),
-    el('div', { class: 'skel-meshes mw-picker' },
-      el('div', { class: 'sm-tools' }, filterEl, sortSel, slotSel, allBtn, noneBtn),
-      shownLbl,
-      listEl),
-    status,
-    el('div', { class: 'modal-actions' }, createBtn, el('span', { class: 'spacer' }), cancelBtn)));
-  document.body.appendChild(overlay);
+  modal = openModal({
+    title: 'Save as Model', className: 'model-wizard', actions: [createBtn], closeLabel: 'Cancel',
+    onClose: () => { closed = true; previewApi?.destroy(); },
+    content: [
+      el('p', { class: 'dim small' }, 'Save a chosen set of meshes + textures as a reusable, named composite in the ',
+        badge('Models', 'b-ghost'), ' category (rename / delete later).'),
+      el('div', { class: 'mw-preview-wrap' }, preview),
+      el('label', { class: 'mw-namerow' }, el('span', { text: 'Name' }), nameIn),
+      el('div', { class: 'skel-meshes mw-picker' },
+        el('div', { class: 'sm-tools' }, filterEl, sortSel, slotSel, allBtn, noneBtn),
+        shownLbl,
+        listEl),
+      status],
+  });
 
   renderRows();
   previewApi = createModelPreview(preview, { app, imagesIdx });

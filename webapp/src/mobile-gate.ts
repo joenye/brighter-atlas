@@ -35,7 +35,7 @@ export function maybeShowMobileNotice(host: HTMLElement = document.body): void {
   document.addEventListener('keydown', onKey, true);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
-  const mark = () => el('img', { class: 'mgate-action-ico', src: 'brand/mark.svg', alt: '', width: '20', height: '20' });
+  const mark = () => el('img', { class: 'mgate-action-ico', src: '/brand/mark.svg', alt: '', width: '20', height: '20' });
   // (the tools open in place: the dialog is done with)
   const actions = el('div', { class: 'mgate-actions' },
     el('a', { class: 'mgate-action', href: toolUrl('fashion'), onclick: close }, mark(), 'Brighter Fashion'),

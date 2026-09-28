@@ -4,7 +4,7 @@
 // rule: the smallest catalog model holding every mesh of the group. Rooms are
 // narrowed by the world index's per-room mesh lists before any shard is read.
 
-import { el } from '../ui.js';
+import { el, openModal } from '../ui.js';
 
 export const REVEAL_KEY = 'bs.model.reveal';
 
@@ -75,21 +75,14 @@ export async function modelRooms(app: any, model: any, onProgress: (done: number
 /** The "Show in world" dialog: the model's rooms, each a jump into the room
  *  with the model pinned. */
 export async function openModelRoomsModal(app: any, model: any): Promise<void> {
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
   const status = el('p', { class: 'dim small', text: 'Finding rooms…' });
   const list = el('div', { class: 'model-rooms' });
-  const closeBtn = el('button', { class: 'btn', text: 'Close' });
-  closeBtn.addEventListener('click', close);
-  overlay.appendChild(el('div', { class: 'modal card' },
-    el('h2', { text: `Show in world: ${model.name || 'model'}` }), status, list,
-    el('div', { class: 'modal-actions' }, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
+  const modal = openModal({ title: `Show in world: ${model.name || 'model'}`, content: [status, list] });
+  const close = modal.close;
 
   const rooms = await modelRooms(app, model, (done, total) => { status.textContent = `Finding rooms… ${done} of ${total}`; })
     .catch(() => []);
-  if (!overlay.isConnected) return;
+  if (modal.closed) return;
   if (!rooms.length) { status.textContent = 'This model is not placed in any room of this version.'; return; }
   status.textContent = rooms.length === 1 ? 'Placed in 1 room.' : `Placed in ${rooms.length} rooms.`;
   for (const r of rooms) {

@@ -41,12 +41,11 @@ export function serve(root: string, port = 0): Promise<{ server: http.Server; po
     try {
       const url = new URL(req.url || '/', 'http://x');
       const urlPath = decodeURIComponent(url.pathname);
-      // the site's one page at each tool's path; the tools' old addresses moved on (query kept; a browser
-      // keeps the hash itself), as the site's edge does
-      const moved = LEGACY[urlPath] ?? (urlPath.length > 1 && urlPath.endsWith('/') && toolAt(urlPath) ? urlPath.replace(/\/+$/, '') : null);
-      if (moved && moved !== urlPath) { res.writeHead(301, { location: `${moved}${url.search}` }); res.end(); return; }
+      // the site's one page at each tool's path and at the tools' old addresses (the page itself moves the
+      // address on, app/router.ts settleAddress), as the site's edge does. No redirect: one that lands on
+      // the same page with another hash leaves the browser's navigation hanging.
       let rel = path.normalize(urlPath).replace(/^([/\\])+/, '');
-      if (rel === '' || rel === '.' || toolAt(urlPath)) rel = 'index.html';
+      if (rel === '' || rel === '.' || toolAt(urlPath) || LEGACY[urlPath]) rel = 'index.html';
       let data: Buffer | null = null;
       let file = '';
       // an extensionless page path serves its .html file (/world is world.html)

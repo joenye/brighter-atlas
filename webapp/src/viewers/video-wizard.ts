@@ -16,7 +16,7 @@
 // turntable rotation, resolution (presets or custom W×H), caption (full
 // override), grid + background. All settings persist in storage.
 
-import { el } from '../ui.js';
+import { el, openModal, type Modal } from '../ui.js';
 import { effectiveName } from '../names.js';
 import { encodeGif } from './gif-encoder.js';
 import { ClipSampler, SPEEDS } from './rig.js';
@@ -55,11 +55,10 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   const saved = store.load();
   const ov = sceneOverrides(scene);   // grid/background overrides, restored on close
 
-  const overlay = el('div', { class: 'modal-overlay' });   // normal dimmed backdrop: the app stays visible behind the modal
   let closed = false;
-  let abortRec: (() => void) | null = null;   // set while recording; close() calls it to stop cleanly
-  const close = () => { closed = true; abortRec?.(); overlay.remove(); cleanupPreview(); ov.restore(); restoreEditor(); };
-  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+  let abortRec: (() => void) | null = null;   // set while recording; closing calls it to stop cleanly
+  let modal: Modal | null = null;
+  const close = () => modal?.close();
 
   // ---- controls -------------------------------------------------------------
   const fmtSel = el('select', { class: 'btn' });
@@ -437,8 +436,6 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
 
   // ---- recording ------------------------------------------------------------
   const recBtn = el('button', { class: 'btn primary', text: '● Record & download' });
-  const closeBtn = el('button', { class: 'btn', text: 'Close' });
-  closeBtn.addEventListener('click', close);
 
   // every editable control is locked while recording (changing one mid-record
   // corrupts the output); Close stays live so a recording can be aborted.
@@ -699,28 +696,30 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
     : null;
   const rotRow = el('label', {}, rotCb, el('span', { text: 'Turntable' }), rotModeSel, rotSpeedWrap, rotCountWrap);
 
-  overlay.appendChild(el('div', { class: 'modal card video-modal' },
-    el('h2', { text: 'Record a video' }),
-    // scrollable body: on short screens the form + preview scroll here so the
-    // header above and the action buttons below stay pinned and reachable.
-    el('div', { class: 'modal-body video-body' },
-      el('div', { class: 'video-form' },
-        el('label', {}, el('span', { text: 'Format' }), fmtSel, gifFpsWrap, fmtHint),
-        el('label', {}, el('span', { text: 'Resolution' }), resSel, customWrap, el('span', { class: 'sep-mini' }), el('span', { class: 'dim small', text: '→' }), dimsLbl, el('span', { class: 'sep-mini' }), sizeLbl),
-        hasClips
-          ? el('label', { class: 'video-clips-row' }, el('span', { text: 'Animations' }), clipSel)
-          : durLabel,
-        clipParamsLabel,
-        rotRow,
-        el('label', {}, capCb, el('span', { text: 'Caption' }), capIn),
-        capStyle.row,
-        el('label', {}, gridCb, el('span', { text: ov.hasGrid ? 'Grid lines' : 'Grid lines (none in scene)' }),
-          el('span', { class: 'sep-mini' }), el('span', { text: 'Background' }), bgIn, bgDefBtn,
-          el('span', { class: 'sep-mini' }), transpCb, el('span', { text: 'Transparent' }))),
-      cropWrap,
-      el('div', { class: 'video-preview-ctrls' }, prevBtn, restartBtn),
-      status),
-    el('div', { class: 'modal-actions' }, recBtn, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
+  // (the app stays visible behind it, under the usual dimmed backdrop)
+  modal = openModal({
+    title: 'Record a video', className: 'video-modal', actions: [recBtn],
+    onClose: () => { closed = true; abortRec?.(); cleanupPreview(); ov.restore(); restoreEditor(); },
+    content: [
+      // scrollable body: on short screens the form + preview scroll here so the
+      // header above and the action buttons below stay pinned and reachable.
+      el('div', { class: 'modal-body video-body' },
+        el('div', { class: 'video-form' },
+          el('label', {}, el('span', { text: 'Format' }), fmtSel, gifFpsWrap, fmtHint),
+          el('label', {}, el('span', { text: 'Resolution' }), resSel, customWrap, el('span', { class: 'sep-mini' }), el('span', { class: 'dim small', text: '→' }), dimsLbl, el('span', { class: 'sep-mini' }), sizeLbl),
+          hasClips
+            ? el('label', { class: 'video-clips-row' }, el('span', { text: 'Animations' }), clipSel)
+            : durLabel,
+          clipParamsLabel,
+          rotRow,
+          el('label', {}, capCb, el('span', { text: 'Caption' }), capIn),
+          capStyle.row,
+          el('label', {}, gridCb, el('span', { text: ov.hasGrid ? 'Grid lines' : 'Grid lines (none in scene)' }),
+            el('span', { class: 'sep-mini' }), el('span', { text: 'Background' }), bgIn, bgDefBtn,
+            el('span', { class: 'sep-mini' }), transpCb, el('span', { text: 'Transparent' }))),
+        cropWrap,
+        el('div', { class: 'video-preview-ctrls' }, prevBtn, restartBtn),
+        status)],
+  });
   syncRotUI();   // initial turntable-control visibility (speed vs rotations)
 }

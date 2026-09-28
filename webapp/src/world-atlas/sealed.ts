@@ -178,6 +178,12 @@ export class SealedLayer {
 
   // the fog drifts at up to 30 frames a second while there is fog to show
   // (none when motion is reduced: the map's own draws keep it placed)
+  /** Let go: the fog stops and its GPU memory is freed. */
+  destroy(): void {
+    cancelAnimationFrame(this.raf); this.raf = -1; this.regions = [];
+    this.gl?.getExtension('WEBGL_lose_context')?.loseContext(); this.gl = null;
+  }
+
   private loop(): void {
     if (this.raf || this.still) return;
     const tick = (now: number) => {

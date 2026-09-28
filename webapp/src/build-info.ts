@@ -7,7 +7,7 @@ export interface BuildInfo { version?: string; commit?: string; [k: string]: any
 
 let info: BuildInfo | null = null;
 
-export const buildInfoReady: Promise<BuildInfo | null> = fetch('./version.json', { cache: 'no-cache' })
+export const buildInfoReady: Promise<BuildInfo | null> = fetch('/version.json', { cache: 'no-cache' })
   .then((r) => (r.ok ? r.json() : null))
   .then((v) => { info = v && v.version ? v : null; return info; })
   .catch(() => null);

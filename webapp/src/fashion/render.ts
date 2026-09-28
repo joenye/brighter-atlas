@@ -48,6 +48,15 @@ const getTex = (kind: 'tex' | 'param', i: number) => {
   }
   return p;
 };
+// the place's code, once fetched (its own data cache goes with these)
+let gameroomChunk: typeof import('./gameroom.js') | null = null;
+/** Let go of everything fetched and built (the tool is leaving the page): meshes and textures freed. */
+export function forgetCaches() {
+  for (const p of texCache.values()) void p.then(t => t?.dispose());
+  for (const p of meshCache.values()) void p.then(m => m?.geo?.dispose(), () => {});
+  texCache.clear(); meshCache.clear(); jsonCache.clear();
+  gameroomChunk?.forget();
+}
 // warm the caches (e.g. the next item in a list) without drawing anything
 export function prefetch(parts: DrawPart[]) { for (const p of parts) { void getMesh(p.mesh).catch(() => {}); if (p.mat != null) { void getTex('tex', p.mat); void getTex('param', p.mat); } } }
 
@@ -81,6 +90,17 @@ export class Preview {
   want: Framing = {dist: 3600, target: 1030};
   ghost = false;
   running = true;
+  private dead = false;
+  private resizing = new ResizeObserver(() => this.resize());
+  /** Let go: nothing more drawn, the place and the GPU context freed (the caches are forgetCaches'). */
+  dispose() {
+    this.dead = true; this.running = false; this.roomId = null;   // (a place on its way bails: another room is wanted)
+    this.resizing.disconnect();
+    if (this.game) { this.game.fxRoot.removeFromParent(); this.game.dispose(); this.game = null; }
+    this.effectAnim?.dispose(); this.effectAnim = null;
+    this.scene.traverse(o => { const m = (o as THREE.Mesh).material; if (m) for (const x of Array.isArray(m) ? m : [m]) x.dispose(); });
+    this.renderer.dispose(); this.renderer.forceContextLoss();
+  }
   // the resting clip hides held items by scaling their bones to 0.001; show them in hand instead
   showHeld = false;
   clipId: number | null = null;
@@ -88,6 +108,8 @@ export class Preview {
   private t0 = performance.now();
   private last = performance.now();
   private parts: DrawPart[] = [];
+  /** Parts drawn now (none before the first look). */
+  get drawn() { return this.active.size; }
   private gen = 0;
   onLoading: (n: number) => void = () => {};
   /** A game place's load, 0 to 1. */
@@ -100,7 +122,8 @@ export class Preview {
   private effectSlots = new Set<number>();
   private effectAnim: EffectBoneAnimation | null = null;
 
-  constructor(public canvas: HTMLCanvasElement, opts: {fov?: number, ghost?: boolean, floor?: boolean} = {}) {
+  /** `pixelRatio`: the view's own (a thumbnail's picture: 1, the screen's pixels and no more). */
+  constructor(public canvas: HTMLCanvasElement, opts: {fov?: number, ghost?: boolean, floor?: boolean, pixelRatio?: number} = {}) {
     this.baseFov = opts.fov ?? 18;
     this.camera = new THREE.PerspectiveCamera(this.baseFov, 1, 10, 30000);
     this.ghostCamera = new THREE.PerspectiveCamera(opts.fov ?? 18, 1, 10, 30000);
@@ -108,7 +131,7 @@ export class Preview {
     this.renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: true, preserveDrawingBuffer: true});
     // at least twice the screen's pixels (on a 1x desktop the frame, which has no antialiasing of its own, is
     // drawn at 2x and scaled down: supersampled), the phone's own 3x at most
-    this.renderer.setPixelRatio(Math.min(3, Math.max(2, devicePixelRatio)));
+    this.renderer.setPixelRatio(opts.pixelRatio ?? Math.min(3, Math.max(2, devicePixelRatio)));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.autoClear = false;
     // (x, y, z) -> (x, z, y)
@@ -123,9 +146,9 @@ export class Preview {
     const rim = new THREE.DirectionalLight(0xd6e2ff, 1.0); rim.position.set(900, 1500, -1800); this.lights.add(rim);
     if (opts.floor) { this.floorGroup = floorShadow(); this.scene.add(this.floorGroup); }
     this.resize();
-    new ResizeObserver(() => this.resize()).observe(canvas);
-    canvas.addEventListener('webglcontextlost', () => report('webgl context lost'));
-    const loop = () => { if (this.running) this.frame(); requestAnimationFrame(loop); };
+    this.resizing.observe(canvas);
+    canvas.addEventListener('webglcontextlost', () => { if (!this.dead) report('webgl context lost'); });
+    const loop = () => { if (this.dead) return; if (this.running) this.frame(); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
   }
 
@@ -254,12 +277,14 @@ export class Preview {
     try {
       this.gameBuilds++;
       // (a page older than the site's build asks for a chunk that has moved on: reload it, once)
-      const {GameRoom} = await import('./gameroom.js').catch(e => {
+      const chunk = await import('./gameroom.js').catch(e => {
         let again = false;
         try { again = !sessionStorage.getItem('fashion.reloaded'); sessionStorage.setItem('fashion.reloaded', '1'); } catch {}
         if (again) location.reload();
         throw e;
       });
+      gameroomChunk = chunk;
+      const {GameRoom} = chunk;
       const g = await GameRoom.load(gl, room.id, {progress: f => { if (this.roomId === room.id) this.onRoomProgress(f); },
         cancelled: () => this.roomId !== room.id}).finally(() => this.gameBuilds--);
       this.renderer.resetState();
@@ -524,6 +549,8 @@ export class Thumbnailer {
     const key = new THREE.DirectionalLight(0xfff1dc, 2.2); key.position.set(-900, 1600, 1800); this.scene.add(key);
     const rim = new THREE.DirectionalLight(0xd6e2ff, 1.3); rim.position.set(1200, 1400, -1600); this.scene.add(rim);
   }
+  /** Let go: its GPU context freed. */
+  dispose() { this.cache.clear(); this.renderer.dispose(); this.renderer.forceContextLoss(); }
   thumb(key: string, parts: DrawPart[], skeleton: number): Promise<string> {
     let p = this.cache.get(key);
     if (!p) { p = this.queue.then(() => this.render(parts, skeleton)); this.queue = p.catch(() => {}); this.cache.set(key, p); }

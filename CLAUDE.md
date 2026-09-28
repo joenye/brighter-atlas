@@ -28,11 +28,21 @@ game is served; widening that is the maintainer's decision.
   brand is the tool switch; each tool's own parts sit beside it). Each tool
   is a chunk of its own under `js/chunks/`, with its own stylesheet, fetched
   the first time its page opens, and then kept, hidden and drawing nothing,
-  while others show (`app/Shell.tsx`, `app/tool.ts`: a tool exports
-  `mount(root, ctx)` returning `show`/`hide`; its listeners on the window or
-  document act only while `ctx.active()`; its page's markup is in
-  `app/pages.tsx` and it finds its elements there by id, so ids are unique
-  across the tools). The tools: Brighter Maps, the world map
+  while others show (`app/Shell.tsx`, `app/tool.ts`: a tool's module exports
+  `Tool`, a React component the shell renders into its page once the code
+  is in, given `active` (shown or hidden), `ready()` for its first view and
+  `register()` for what the switch asks of it; until then the page shows the
+  layout placeholders in `app/pages.tsx`. A tool's listeners on the window
+  or document act only while active; where memory is short (phones) a
+  hidden tool is unmounted and its effects free what it holds. The drawing
+  and data cores stay imperative under the components: Brighter Maps is
+  `world-atlas/WorldMap.tsx` over `engine.ts`; Brighter Fashion is
+  `fashion/Fashion.tsx` over `render.ts` and `wardrobe.ts`, the look and its
+  undo in `look-model.ts`, the link code in `look-code.ts`; Brighter Data is
+  `DataTool.tsx` drawing the page's chrome from `main.ts`'s `App.ui`, the
+  list and each viewer drawing themselves into the hosts the page gives them.
+  Every dialog is `ui.ts` `openModal` (Escape, a click outside, focus kept
+  in and given back). Element ids are unique across the tools). The tools: Brighter Maps, the world map
   (`src/world-atlas/` + `css/world.css`, no game files needed); Brighter
   Data, the viewer for the user's own files (`src/main.ts`); Brighter
   Fashion (`src/fashion/` + `css/fashion.css`; the game's renderer, for its
@@ -131,7 +141,7 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   it into the background, and the all-rooms view gives each tile to the
   room whose floor reaches it first, so floors change where episodes meet.
   A distance setting (1 to 40 tiles, then endless) stretches the reach and
-  the fade: rooms default to endless, all rooms to the game's ten tiles
+  the fade: rooms and all rooms both open at the game's ten tiles
   (at ten both renderers draw exactly the game's tiles). The field holds
   each tile's shortest distance and pieces are drawn nearest first, so a
   distance is a draw count (all rooms lays its floor in ten-tile steps,

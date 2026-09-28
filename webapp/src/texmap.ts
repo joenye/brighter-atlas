@@ -556,23 +556,6 @@ export function buildOverridesFile(meshesIndex: any, imagesIndex?: any): Overrid
 }
 
 
-// MERGE a lower-priority override map in: only keys with no local value are
-// taken (vended defaults must never stomp user edits). Returns count added.
-export function mergeOverrides(map: Record<string, any> | null | undefined): number {
-  let n = 0;
-  for (const [k, v] of Object.entries(map || {})) {
-    if (cur.overrides[k] === undefined && v && typeof v === 'object'
-        && (v.cleared || v.image != null || v.image_hash || Array.isArray(v.variants)
-          || v.mode === 'supplement' || v.active_hash || Number.isInteger(v.active_image)
-          || v.active_system_key)) {
-      cur.overrides[k] = v;
-      n++;
-    }
-  }
-  if (n) save();
-  return n;
-}
-
 // REPLACE the local override set from a parsed {hash: override} map; returns count
 export function replaceOverrides(map: Record<string, any> | null | undefined): number {
   for (const k of Object.keys(cur.overrides)) delete cur.overrides[k];

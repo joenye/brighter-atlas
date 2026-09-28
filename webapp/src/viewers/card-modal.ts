@@ -2,7 +2,7 @@
 // model's information card (model-cards.ts), with a download at a chosen
 // resolution, on the card's own backdrop or transparent.
 
-import { el } from '../ui.js';
+import { el, openModal } from '../ui.js';
 import { download } from '../asset-export.js';
 import { modelCards, type CardBackdrop } from './model-cards.js';
 import { CARD_WIDTH, CARD_HEIGHT, ICON_SIZE } from './world/card.js';
@@ -15,9 +15,6 @@ const fileName = (name: string, icon: boolean, scale: number) =>
 export async function openCardModal(app: any, model: { id: string; name?: string }): Promise<void> {
   const cards = modelCards(app.store);
   if (!(await cards.card(model.id))) { app.banner('this model has no card picture (extract the World category, or the model is not shown on a card)'); return; }
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
 
   const viewSel = el('select', { class: 'btn' },
     el('option', { value: 'card', text: 'Card view' }),
@@ -32,8 +29,6 @@ export async function openCardModal(app: any, model: { id: string; name?: string
   const status = el('div', { class: 'dim small' });
   const preview = el('div', { class: 'card-preview' });
   const dlBtn = el('button', { class: 'btn primary', text: 'Download PNG' });
-  const closeBtn = el('button', { class: 'btn', text: 'Close' });
-  closeBtn.addEventListener('click', close);
 
   const options = () => ({ icon: viewSel.value === 'icon', backdrop: bgSel.value as CardBackdrop, scale: Number(scaleSel.value) });
   const updateDims = () => {
@@ -71,15 +66,15 @@ export async function openCardModal(app: any, model: { id: string; name?: string
     } finally { dlBtn.disabled = false; }
   });
 
-  overlay.appendChild(el('div', { class: 'modal card video-modal' },
-    el('h2', { text: `Card picture: ${model.name || 'model'}` }),
-    el('div', { class: 'video-form' },
-      el('label', {}, el('span', { text: 'View' }), viewSel, el('span', { class: 'sep-mini' }),
-        el('span', { text: 'Background' }), bgSel),
-      el('label', {}, el('span', { text: 'Size' }), scaleSel, dims)),
-    preview,
-    status,
-    el('div', { class: 'modal-actions' }, dlBtn, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
+  openModal({
+    title: `Card picture: ${model.name || 'model'}`, className: 'video-modal', actions: [dlBtn],
+    content: [
+      el('div', { class: 'video-form' },
+        el('label', {}, el('span', { text: 'View' }), viewSel, el('span', { class: 'sep-mini' }),
+          el('span', { text: 'Background' }), bgSel),
+        el('label', {}, el('span', { text: 'Size' }), scaleSel, dims)),
+      preview,
+      status],
+  });
   refresh();
 }

@@ -6,7 +6,7 @@
 // changelog.json is baked into the deploy only; local/dev builds have none and
 // the UI degrades gracefully ("No release notes in this build").
 
-import { el, fmtDate } from './ui.js';
+import { el, fmtDate, openModal } from './ui.js';
 import { buildInfo, buildInfoReady } from './build-info.js';
 
 const SEEN_KEY = 'bs.lastSeenVersion';
@@ -27,7 +27,7 @@ export function changelogReady(): Promise<ChangelogEntry[] | null> {
     // Only releases with a written What's-new exist as far as the app is
     // concerned: notes-free patch tags are excluded at bake time too, but
     // filtering here guarantees they can never surface in-app.
-    cache = fetch('./changelog.json', { cache: 'no-cache' })
+    cache = fetch('/changelog.json', { cache: 'no-cache' })
       .then((r) => (r.ok ? r.json() : null))
       .then((v) => (Array.isArray(v)
         ? v.filter((e) => e && typeof e.summary === 'string' && e.summary.trim()) : null))
@@ -107,11 +107,6 @@ function renderOld(e: ChangelogEntry): HTMLElement {
 
 export async function openWhatsNew(): Promise<void> {
   const list = await changelogReady();
-  const overlay = el('div', { class: 'modal-overlay' });
-  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-  document.addEventListener('keydown', onKey, true);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   const body = el('div', { class: 'wn-body' });
   if (list && list.length) {
@@ -128,12 +123,7 @@ export async function openWhatsNew(): Promise<void> {
     body.appendChild(el('p', { class: 'dim', text: 'No release notes in this build.' }));
   }
 
-  const closeBtn = el('button', { class: 'btn primary', text: 'Close', onclick: close });
-  overlay.appendChild(el('div', { class: 'modal card wn-modal' },
-    el('h2', { text: "What's new" }),
-    body,
-    el('div', { class: 'modal-actions' }, el('span', { class: 'spacer' }), closeBtn)));
-  document.body.appendChild(overlay);
+  openModal({ title: "What's new", className: 'wn-modal', content: [body] });
   markSeen(); // opening it counts as seeing the current version
 }
 

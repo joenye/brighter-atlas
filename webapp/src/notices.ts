@@ -11,7 +11,7 @@
 //    if the user later wipes storage and re-extracts, the predicate is false
 //    anyway, so a lost ack never nags.
 
-import { el } from './ui.js';
+import { el, openModal } from './ui.js';
 
 const KEY = 'bs.noticesAck';
 
@@ -154,15 +154,9 @@ export async function showPendingNotices(app: any): Promise<void> {
     try { show = await n.when(app); } catch { /* predicate failure = skip */ }
     if (!show) continue;
     await new Promise<void>((resolve) => {
-      const overlay = el('div', { class: 'modal-overlay' });
-      const okBtn = el('button', { class: 'btn primary', text: 'Understood' });
-      okBtn.addEventListener('click', () => { ack(n.id); overlay.remove(); resolve(); });
       // deliberately NO Escape / overlay-click close: dismissal must be explicit
-      overlay.appendChild(el('div', { class: 'modal card notice-modal' },
-        el('h2', { text: n.title }),
-        ...n.paras.map((t) => el('p', { class: 'help-a', text: t })),
-        el('div', { class: 'modal-actions' }, okBtn)));
-      document.body.appendChild(overlay);
+      openModal({ title: n.title, className: 'notice-modal', content: n.paras.map((t) => el('p', { class: 'help-a', text: t })),
+        closeLabel: 'Understood', closePrimary: true, dismissible: false, onClose: () => { ack(n.id); resolve(); } });
     });
   }
 }

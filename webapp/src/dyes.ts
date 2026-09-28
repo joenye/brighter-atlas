@@ -112,8 +112,6 @@ export function clearMeshDye(meshEntry: IndexEntry): void {
   save();
 }
 
-export function dyedMeshCount(): number { return Object.keys(cur.dyes).length; }
-
 // A dye as recolor.js consumes it: tint per mask region, undyed regions taking
 // the native identity, plus the neutral output modulation. `field` names the
 // source in the material's recorded recolour state, so a dye is never mistaken

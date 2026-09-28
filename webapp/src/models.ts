@@ -221,12 +221,6 @@ export function modelParts(model: ModelRecord | null | undefined): ModelPart[] {
   }));
 }
 
-// Compatibility exports for extensions compiled against the original editor
-// terminology. New UI code uses Variant throughout.
-export const modelAppearanceIndex = modelVariantIndex;
-export const setModelAppearance = setModelVariant;
-export const modelAppearance = modelVariant;
-
 export function modelMeshCount(model: ModelRecord | null | undefined): number { return modelParts(model).length; }
 
 // Create (or overwrite by id) a model. Returns the stored record.

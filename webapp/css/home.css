@@ -2,19 +2,24 @@
    way in. Cards side by side on wide screens, stacked on phones. */
 /* a page that scrolls (the tools' pages never do) */
 .home { height: 100%; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; background: var(--bg0); }
+/* (the scrollbar's gutter held from the first frame: the page nearly always scrolls, and the text would
+   wrap again when it turned out to) */
+.home { scrollbar-gutter: stable; }
+.home.vbar-host { padding-right: 16px !important; }
 .home-main { flex: 1; width: min(1180px, 100%); margin: 0 auto; padding: 36px 20px 28px; display: flex; flex-direction: column; gap: 28px; }
-.home-intro h1 { margin: 0 0 8px; font-size: clamp(22px, 3.2vw, 32px); font-weight: 600; color: var(--fg0); letter-spacing: -0.01em; }
-.home-intro p { margin: 0; max-width: 62ch; color: var(--fg1); font-size: 15px; line-height: 1.5; }
+.home-intro h1 { margin: 0 0 6px; font-size: clamp(20px, 2.4vw, 26px); font-weight: 600; color: var(--fg0); }
+.home-intro p { margin: 0; color: var(--fg1); font-size: 15px; line-height: 1.5; }
+.ext-icon { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .home-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-.home-tool { display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; background: var(--bg2); border: 1px solid var(--line);
-  color: inherit; text-decoration: none; transition: border-color .15s, transform .15s, box-shadow .15s; }
-/* a card is one button: it lifts on hover, presses in on a click or tap, and its text is never underlined */
+/* a card is one link, with a clear edge; its button is what answers the pointer (the card itself never lights up:
+   on a phone, a touch to scroll would light it) */
+.home-tool { display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; background: var(--bg2); border: 1px solid #3a4252;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .25); color: inherit; text-decoration: none; }
 .home-tool, .home-tool:hover, .home-tool:active { text-decoration: none; -webkit-tap-highlight-color: transparent; }
-.home-tool:hover, .home-tool:focus-visible { border-color: var(--accent-dim); transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0, 0, 0, .35); outline: none; }
-.home-tool:focus-visible { box-shadow: 0 0 0 2px var(--accent), 0 10px 28px rgba(0, 0, 0, .35); }
-.home-tool:active { transform: translateY(0) scale(.985); border-color: var(--accent); background: var(--sel); box-shadow: none; transition-duration: .06s; }
-.home-shot { display: block; aspect-ratio: 16 / 10; background: var(--bg3); overflow: hidden; }
-.home-shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.home-tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.home-shot { display: block; aspect-ratio: 16 / 10; background: var(--bg3); overflow: hidden; border-bottom: 1px solid #3a4252; }
+.home-shot img { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .35s ease-out; }
+.home-shot img.in { opacity: 1; }
 .home-text { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 16px; flex: 1; }
 .home-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .home-name { font-size: 18px; color: var(--fg0); }
@@ -28,9 +33,28 @@
 .home-name .brand-name { font-weight: 600; }
 .home-name .brand-sub { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; color: var(--accent); margin-left: 2px; }
 .home-desc { color: var(--fg1); font-size: 14px; line-height: 1.5; flex: 1; }
-.home-go { color: var(--accent); font-weight: 600; font-size: 14px; }
-/* the foot of the page: the app's own status bar */
-.home-foot { display: flex; align-items: center; gap: 18px; min-height: 26px; padding: 4px 12px; background: var(--bg1); border-top: 1px solid var(--line); color: var(--fg2); font-size: 11px; }
+/* the way in: the card's one call to action, a button in the site's blue that fills as the card is pointed at */
+.home-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 8px 16px; border-radius: 999px;
+  color: var(--accent); font-weight: 600; font-size: 14px;
+  background: rgba(120, 183, 255, .12); border: 1px solid rgba(120, 183, 255, .4); transition: background .15s, color .15s; }
+.home-go-arrow { display: inline-block; transition: transform .15s; }
+@media (hover: hover) { .home-tool:hover .home-go { background: var(--accent); color: #0d0f13; } }
+.home-tool:focus-visible .home-go { background: var(--accent); color: #0d0f13; }
+@media (hover: hover) { .home-tool:hover .home-go-arrow { transform: translateX(4px); } }
+.home-tool:focus-visible .home-go-arrow { transform: translateX(4px); }
+/* the game on Steam, under the tools: the width of the cards, in Steam's own colours (its dark blues and its
+   light blue), laid out as the Discord below it */
+.home-steam { display: flex; align-items: center; gap: 12px; padding: 14px 18px 14px 16px; border-radius: 12px;
+  background: linear-gradient(90deg, #171a21 0%, #1b2838 60%, #2a475e 100%); border: 1px solid #2a475e; color: #c7d5e0;
+  text-decoration: none; transition: filter .15s, transform .15s; }
+.home-steam svg:first-child { color: #fff; }
+.home-steam b { color: #fff; }
+.home-steam .home-discord-go { color: #66c0f4; display: flex; }
+.home-steam:hover { filter: brightness(1.15); text-decoration: none; transform: translateY(-1px); }
+.home-steam:active { transform: scale(.985); }
+.home-steam:focus-visible { outline: 2px solid #66c0f4; outline-offset: 2px; }
+/* the game and the Discord, side by side under the cards (stacked on phones) */
+.home-links { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 /* the Discord, under the tools: the width of the cards, in Discord's colour */
 .home-discord { display: flex; align-items: center; gap: 12px; padding: 14px 18px 14px 16px; border-radius: 12px;
   background: #5865f2; color: #fff; text-decoration: none; transition: background .15s, transform .15s; }
@@ -43,8 +67,20 @@
 .home-discord-text span { font-size: 12px; opacity: .85; }
 .home-discord-go { font-size: 16px; margin-left: auto; }
 .home-intro { display: flex; flex-direction: column; }
+/* the page's foot: within the content's width, the mark, the fan-project line and the community links */
+.home-foot { width: min(1180px, 100%); margin: 0 auto; padding: 0 20px 26px; }
+.home-foot-in { display: flex; align-items: center; gap: 12px 24px; flex-wrap: wrap; padding-top: 18px; border-top: 1px solid var(--line);
+  color: var(--fg2); font-size: 12.5px; line-height: 1.5; }
+.home-foot-brand { display: inline-flex; align-items: center; gap: 7px; color: var(--fg1); font-weight: 600; white-space: nowrap; }
+.home-foot-note { flex: 1; min-width: 240px; }
+.home-foot-version { font: 11.5px var(--mono); color: var(--fg2); white-space: nowrap; }
 @media (max-width: 900px) {
-  .home-tools { grid-template-columns: 1fr; }
+  .home-tools, .home-links { grid-template-columns: 1fr; }
+  .home-links { gap: 14px; }
   .home-main { padding: 22px 14px 20px; gap: 20px; }
+  .home-foot { padding: 0 14px 20px; }
+  .home-foot-in { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .home-foot-note { min-width: 0; }
 }
-@media (prefers-reduced-motion: reduce) { .home-tool { transition: none; } .home-tool:hover { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .home-go, .home-go-arrow, .home-steam { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .home-shot img { transition: none; } }

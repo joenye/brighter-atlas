@@ -45,7 +45,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-link { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .of-link:hover { background: var(--bg3); }
 .of-bg { position: relative; }
-.of-bgpop { position: absolute; bottom: 0; right: calc(100% + 8px); min-width: 228px; max-height: calc(100dvh - 140px); overflow: auto; display: flex; flex-direction: column; padding: 4px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 12px 30px rgba(0,0,0,.5); z-index: 5; }
+.of-bgpop { position: absolute; bottom: 0; right: calc(100% + 8px); min-width: 300px; max-height: calc(100dvh - 140px); overflow: auto; display: flex; flex-direction: column; padding: 4px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 12px 30px rgba(0,0,0,.5); z-index: 5; }
 .of-bgpop[hidden] { display: none; }
 .of-bgpop button { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg0); text-align: left; cursor: pointer; font: inherit; }
 .of-bgpop button:hover { background: var(--bg3); }
@@ -92,6 +92,9 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .items { display: flex; flex-direction: column; gap: 1px; flex: 1 1 0; min-height: 120px; overflow: auto; padding-right: 2px; border-radius: 6px; }
 .items:focus-visible { outline: 1px solid var(--accent-dim); }
 .group { position: sticky; top: 0; z-index: 1; background: var(--bg1); padding: 8px 4px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg2); }
+/* (the list's two halves: equipment, then transmogs) */
+.section { padding: 12px 4px 2px; font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--fg1); border-bottom: 1px solid var(--line); margin-bottom: 2px; }
+.section:first-child, .item.none + .section { padding-top: 6px; }
 .item { display: flex; align-items: center; gap: 10px; text-align: left; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--fg0); cursor: pointer; font: inherit; flex: none; }
 .item:hover { background: var(--bg2); }
 .item.on { background: var(--sel); border-color: var(--accent-dim); }
@@ -134,6 +137,17 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
   background: rgba(13, 15, 19, .85); border: 1px solid var(--line); color: var(--fg1); font-size: 12.5px; line-height: 1.35; text-align: center;
   padding: 8px 12px; border-radius: 8px; backdrop-filter: blur(6px); opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
+/* a shared link, copied (desktops): plain and in the middle of the page, over everything */
+.of-copied { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 1000; width: min(420px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .55); text-align: center; animation: of-copied-in .18s ease-out; }
+.of-copied-head { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; color: var(--fg0); }
+.of-copied-tick { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; }
+.of-copied-url { font-family: var(--mono); font-size: 12.5px; color: var(--fg1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+input.of-copied-url { width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg1); }
+.of-copied .btn { align-self: center; }
+@keyframes of-copied-in { from { opacity: 0; transform: translate(-50%, -46%); } }
+@media (prefers-reduced-motion: reduce) { .of-copied { animation: none; } }
 
 .of-short { display: none; }
 .of-only-sm { display: none; }
@@ -263,12 +277,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 @media (max-width: 860px) and (orientation: portrait) {
   #fashion.panel-collapsed .of-viewer { flex: 1 1 auto; height: auto !important; }
   /* folded (Character and Equipment both off): no drawer at all, the character fills the screen; the
-     column's buttons stay clear of the home indicator and of iOS Safari's floating toolbar */
+     column's buttons sit as far from the foot as from the side, clear of the home indicator (the page
+     itself ends above iOS Safari's floating toolbar) */
   main { position: relative; }
   #fashion.panel-collapsed .of-right { display: none; }
-  #fashion.panel-collapsed .of-controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
-  /* (iOS Safari's toolbar floats over the page's foot, taller than the home indicator's inset) */
-  .ios-browser #fashion.panel-collapsed .of-controls { bottom: calc(max(env(safe-area-inset-bottom, 0px), 30px) + 56px); }
+  #fashion.panel-collapsed .of-controls { bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); }
 }
 /* iPhone Safari's toolbar floats over the page's bottom strip: keep the controls clear of it */
 @media (max-width: 860px) {
@@ -282,7 +295,34 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .hidden-note { margin: 8px 0 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--warn, #d9a441); background: rgba(217, 164, 65, .08); color: var(--fg0); font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .hidden-note p { margin: 0; }
 .slot.covered .slot-img, .slot.covered .slot-glyph { opacity: .4; }
-.slot.covered::after { content: ''; position: absolute; left: 6px; bottom: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn, #d9a441); }
+.slot.covered { cursor: help; }
+/* the badge on a covered slot: worn, not showing (its tooltip says what covers it) */
+/* a worn piece that is not showing: a pill on its slot, a tap on it says why */
+.slot-covered { position: absolute; left: 4px; bottom: 4px; height: 18px; padding: 0 7px 0 5px; display: inline-flex; align-items: center; gap: 3px; border-radius: 9px; background: var(--warn, #d9a441); color: #1a1408; font-size: 10px; font-weight: 700; letter-spacing: .2px; cursor: pointer; }
+.slot-covered:hover, .slot-covered:focus-visible { filter: brightness(1.12); outline: none; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+.slot-covered svg.ic { width: 11px; height: 11px; }
+.covered-note { max-width: 380px; }
+/* the random outfit's settings (the app's dialog) */
+/* the settings menu's two folding sections (Background; Randomize equipment), each named with its icon */
+.of-bgsec > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; letter-spacing: .3px; color: var(--fg0); cursor: pointer; user-select: none; }
+.of-bgsec > summary::-webkit-details-marker { display: none; }
+.of-bgsec > summary:hover { background: var(--bg3); }
+.of-bgsec > summary svg.ic { width: 16px; height: 16px; color: var(--fg1); }
+.of-bgsec > summary::after { content: ''; margin-left: auto; width: 7px; height: 7px; border-right: 1.5px solid var(--fg2); border-bottom: 1.5px solid var(--fg2); transform: rotate(-45deg); transition: transform .15s; }
+.of-bgsec[open] > summary::after { transform: rotate(45deg); }
+.of-bgsec + .of-bgsec { border-top: 1px solid var(--line); margin-top: 2px; padding-top: 2px; }
+/* (a section's rows: the whole width is the row, to tap and to show it picked) */
+.of-bgsec > button { width: 100%; box-sizing: border-box; text-align: left; }
+.of-bgsec > .of-bghead:first-of-type { padding-top: 2px; }
+.of-right > .of-bgpop .of-bgsec > summary { padding: 12px 8px; font-size: 14px; }
+/* the random outfit's settings, in the settings menu (a section after the background and ground) */
+.of-bgpop .rs-label { padding: 8px 10px 4px; font-size: 12px; color: var(--fg1); }
+/* (the faction picker: the tier picker's own pills, .chips) */
+.of-bgpop .rs-faction { padding: 2px 10px 8px; }
+.of-bgpop .rs-checks { display: flex; flex-direction: column; gap: 2px; padding: 0 6px; }
+.of-bgpop .rs-check { min-height: 34px; padding: 0 4px; }
+.of-bgpop .rs-reset { margin: 6px 6px 2px; justify-content: center; border: 1px solid var(--line); }
+
 
 /* ---- the designer: a dialog in Brighter Atlas's style (the character, and a panel of choices) ---- */
 .creator { position: fixed; inset: 0; z-index: 50; display: flex; background: rgba(6, 8, 11, .72); backdrop-filter: blur(3px);
@@ -459,7 +499,9 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .of-looks .btn-mini { min-height: 36px; min-width: 36px; }
 }
 
-.pic-actions { display: flex; align-items: center; gap: 8px; width: min(760px, 100%); }
+.pic-actions { display: flex; align-items: stretch; justify-content: flex-end; gap: 8px; width: min(760px, 100%); }
+.pic-actions > .btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 16px; }
+@media (max-width: 860px) { .pic-actions > .btn { flex: 1; padding: 0 8px; } }
 
 /* phones held sideways: too short for the viewer and the wardrobe together, so ask for portrait */
 .of-rotate { display: none; }
@@ -520,3 +562,8 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .of-right > .of-bgpop button { padding: 12px 12px; font-size: 14px; }
   .of-right > .of-bgpop .of-bghead { padding: 12px 4px 6px; }
 }
+
+/* the view's canvas before the first look is drawn (the page's load card is over it) */
+.of-viewer canvas.wait { visibility: hidden; }
+/* and the panel's contents, filling in piece by piece, on its own background */
+.of-right.wait > * { visibility: hidden; }

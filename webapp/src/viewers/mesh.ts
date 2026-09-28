@@ -10,7 +10,7 @@
 import { Scene3D, THREE, checkerTexture, makeGridToggle, makeLightToggle, mountImmersiveControls } from './three-common.js';
 import { Rig, SkeletonViz, PlaybackBar } from './rig.js';
 import { b64f32, b64u16, b64u32, b64u8, entryByOrdinal } from '../store.js';
-import { el, badge, fmtInt, fmtNum, notExported, hashColorRGB, idLabel } from '../ui.js';
+import { el, badge, fmtInt, fmtNum, notExported, hashColorRGB, idLabel, openModal } from '../ui.js';
 import { getPref, setPref } from '../prefs.js';
 import { SHOT_RES, captureTiledPng } from './capture-common.js';
 import { effectiveTex, resolveRoles, texFile, clearLocalTexture, removeLocalOverride,
@@ -505,19 +505,12 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
         try { skelH = (await app.store.index('rigs')).find((s: IndexEntry) => s.i === entry.skel)?.h ?? null; }
         catch { /* static fallback below */ }
       }
-      const overlay = el('div', { class: 'modal-overlay' });
-      const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); modalClose = null; };
-      const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-      document.addEventListener('keydown', onKey, true);
-      overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
-      modalClose = close;
+      let close = () => {};
       const nameIn = el('input', {
         type: 'text', class: 'video-cap', placeholder: 'model name…',
         value: effectiveName(entry, 'meshes') || `Mesh ${idLabel(entry)}`,
       });
       const createBtn = el('button', { class: 'btn primary', text: '＋ Save model' });
-      const cancelBtn = el('button', { class: 'btn', text: 'Cancel' });
-      cancelBtn.addEventListener('click', close);
       createBtn.addEventListener('click', () => {
         const rec = saveModel({ name: nameIn.value, skel: skelH, meshes: [{ h: entry.h!, img: imgHashFor() }] });
         app.renderTabs?.();
@@ -525,12 +518,13 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
         close();
         location.hash = `#/model/${rec.id}`;
       });
-      overlay.appendChild(el('div', { class: 'modal card mesh-model-modal' },
-        el('h2', { text: 'Save as Model' }),
-        el('p', { class: 'dim small', text: `This mesh${imgHashFor() ? ' with its active texture' : ' (untextured)'}${skelH ? ', on its rig,' : ''} becomes a reusable Model. Place it in Scenes, rename or delete it any time.` }),
-        el('label', { class: 'mw-namerow' }, el('span', { text: 'Name' }), nameIn),
-        el('div', { class: 'modal-actions' }, createBtn, el('span', { class: 'spacer' }), cancelBtn)));
-      document.body.appendChild(overlay);
+      ({ close } = openModal({
+        title: 'Save as Model', className: 'mesh-model-modal', actions: [createBtn], closeLabel: 'Cancel', onClose: () => { modalClose = null; },
+        content: [
+          el('p', { class: 'dim small', text: `This mesh${imgHashFor() ? ' with its active texture' : ' (untextured)'}${skelH ? ', on its rig,' : ''} becomes a reusable Model. Place it in Scenes, rename or delete it any time.` }),
+          el('label', { class: 'mw-namerow' }, el('span', { text: 'Name' }), nameIn)],
+      }));
+      modalClose = close;
       nameIn.select();
     });
     toolbar.appendChild(modelBtn);

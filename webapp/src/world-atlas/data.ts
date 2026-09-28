@@ -165,4 +165,3 @@ export function createWorldData(base = 'world-data/') {
 }
 const artSets = new Map<string, { terrainMips: MapBitmap[]; images: Record<string, MapBitmap> }>();
 
-export type WorldData = ReturnType<typeof createWorldData>;

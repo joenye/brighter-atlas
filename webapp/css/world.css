@@ -129,3 +129,6 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 
 /* a capture view (#ui=0): the map alone, for scripted time-lapses */
 :root[data-tool=maps]:has(.world.bare) #topbar, .world.bare .world-toolbar, .world.bare .world-status, .world.bare .wmap-corner, .world.bare .world-note, .world.bare .wmap-zoom { display: none; }
+
+/* the view switch before the map knows whether it has pictures: its place kept, nothing shown */
+.wmap-view.pending { visibility: hidden; pointer-events: none; }

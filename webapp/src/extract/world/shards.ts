@@ -58,7 +58,6 @@ export const CONFIDENCE: Record<string, number> = {
 export const CATEGORY: Record<string, number> = {
   terrain: 0, models: 1, spawns: 2, components: 3,
 };
-export const PLACEMENT_CATEGORIES = ['terrain', 'models', 'components'];
 export const CATEGORY_EVIDENCE: Record<string, number> = {
   terrain_secondary: 0,
   root_skinned: 1,
