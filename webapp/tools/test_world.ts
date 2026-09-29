@@ -195,7 +195,8 @@ try {
     const b = canvas.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2;
     const fire = (type: string, id: number, dx: number, dy: number, primary: boolean) =>
       canvas.dispatchEvent(new (window as any).PointerEvent(type, { pointerId: id, pointerType: 'touch', isPrimary: primary, clientX: x + dx, clientY: y + dy, bubbles: true, cancelable: true, button: 0 }));
-    cam.scale = 8;   // well inside the zoom limits
+    (window as any).__world.fit();
+    cam.scale = Math.sqrt(cam.scale * 0.5 * 512);   // well inside the zoom limits (half the fitted zoom to 512)
     const before = cam.scale;
     const settle = () => new Promise((r) => setTimeout(r, 400));   // the animated zooms
     if (steps === 'double') { for (const id of [21, 22]) { fire('pointerdown', id, 0, 0, true); fire('pointerup', id, 0, 0, true); } await settle(); }
@@ -210,7 +211,8 @@ try {
   }, steps);
   const near = (a: number, b: number) => Math.abs(a / b - 1) < 1e-3;
   await new Promise((r) => setTimeout(r, 400));
-  assert.ok(near(await touch('double'), 2), 'a double tap zooms in');
+  const doubled = await touch('double');
+  assert.ok(near(doubled, 2), `a double tap zooms in (${doubled})`);
   await new Promise((r) => setTimeout(r, 400));
   assert.ok(near(await touch('slide'), Math.E), 'double tap and slide down zooms in with the slide');
   await new Promise((r) => setTimeout(r, 400));
@@ -218,6 +220,20 @@ try {
   assert.ok(near(await touch('in'), 2), 'the plus button zooms in');
   assert.ok(near(await touch('out'), 0.5), 'the minus button zooms out');
   assert.equal(await page.$eval('.wmap-zoom', (e) => !!e.closest('.world-map')), true, 'the zoom buttons sit on the map');
+  // zooming out stops once the whole world fills half the view (it used to go on until the world was a dot)
+  const floor = await page.evaluate(async () => {
+    const w = (window as any).__world, cam = w.camera;
+    w.fit(); const fitted = cam.scale;
+    for (let k = 0; k < 5; k++) { (document.getElementById('world-zoom-out') as any).click(); await new Promise((r) => setTimeout(r, 400)); }
+    const out = cam.scale;
+    for (let k = 0; k < 5; k++) (document.getElementById('world-canvas') as any).dispatchEvent(new (window as any).WheelEvent('wheel', { deltaY: 500, clientX: 200, clientY: 200, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    const wheeled = cam.scale;
+    w.fit();
+    return { out: out / fitted, wheeled: wheeled / fitted };
+  });
+  assert.ok(near(floor.out, 0.5), `five steps out stop at half the fitted zoom (${floor.out.toFixed(3)})`);
+  assert.ok(near(floor.wheeled, 0.5), `and so does the wheel (${floor.wheeled.toFixed(3)})`);
   // taps never select text: not the page, not right after a touch on the map
   assert.deepEqual(await page.evaluate(() => ['.world', '.world-map', '#topbar', '.world-toolbar'].map((q) => getComputedStyle(document.querySelector(q)!).userSelect)),
     ['none', 'none', 'none', 'none'], 'the map page does not select text');

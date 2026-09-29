@@ -15,11 +15,16 @@ const DOUBLE_MS=300;       // a second tap this soon after the first ...
 const DOUBLE_SLOP=40;      // ... this near it is a double tap
 const SLIDE_ZOOM=.01;      // double-tap-and-slide: zoom factor e^(px * this)
 
-export function attachPanZoom(canvas:HTMLCanvasElement,host:HTMLElement,camera:MapCamera,{changed,fit,tap}:{
-  changed:()=>void; fit:()=>void; tap?:(x:number,y:number)=>void;
+/** How far out a map with known bounds zooms: until the whole of it fills this share of the view. */
+export const ZOOM_OUT_SHARE=.5;
+type Rect={x:number;y:number;width:number;height:number};
+/** `bounds`: the map's extent in tiles (null until known), which sets how far out it zooms. */
+export function attachPanZoom(canvas:HTMLCanvasElement,host:HTMLElement,camera:MapCamera,{changed,fit,tap,bounds}:{
+  changed:()=>void; fit:()=>void; tap?:(x:number,y:number)=>void; bounds?:()=>Rect|null;
 }) {
   const pointers=new Map<number,{x:number;y:number}>();
-  const clamp=(s:number)=>Math.max(MIN_SCALE,Math.min(MAX_SCALE,s));
+  const floor=()=>{const b=bounds?.();return b&&b.width>0&&b.height>0?Math.min(fitScale(b,host.clientWidth,host.clientHeight)*ZOOM_OUT_SHARE,MAX_SCALE):MIN_SCALE;};
+  const clamp=(s:number)=>Math.max(floor(),Math.min(MAX_SCALE,s));
   function zoom(factor:number,x=host.clientWidth/2,y=host.clientHeight/2) {
     const next=clamp(camera.scale*factor);
     camera.cx+=(x-host.clientWidth/2)*(1/camera.scale-1/next);camera.cy+=(y-host.clientHeight/2)*(1/camera.scale-1/next);camera.scale=next;changed();
@@ -146,8 +151,12 @@ export function attachPanZoom(canvas:HTMLCanvasElement,host:HTMLElement,camera:M
   }};
 }
 
+/** The scale at which a map-tile rectangle fits the host, with a margin. */
+export function fitScale(b:Rect,width:number,height:number,margin=.95):number {
+  return Math.max(MIN_SCALE,Math.min(width/b.width,height/b.height)*margin);
+}
 /** The camera that fits a map-tile rectangle in the host, with a margin. */
-export function fitCamera(camera:MapCamera,b:{x:number;y:number;width:number;height:number},width:number,height:number,margin=.95) {
+export function fitCamera(camera:MapCamera,b:Rect,width:number,height:number,margin=.95) {
   camera.cx=b.x+b.width/2;camera.cy=b.y+b.height/2;
-  camera.scale=Math.max(MIN_SCALE,Math.min(width/b.width,height/b.height)*margin);
+  camera.scale=fitScale(b,width,height,margin);
 }

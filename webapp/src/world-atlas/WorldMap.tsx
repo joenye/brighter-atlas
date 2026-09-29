@@ -159,6 +159,8 @@ export function Tool({ active, ready, register }: ToolProps) {
         return live.current.shown === r;
       },
       camera: v.camera,
+      /** Frame the whole world, as the 0 key does. */
+      fit() { v.fit(); },
       get current() { return live.current.wanted?.id ?? null; },
       /** Map or satellite view: set it, or read it with no argument. */
       satellite(on?: boolean) { if (on !== undefined) setSatellite(!!on); return live.current.satelliteView; },

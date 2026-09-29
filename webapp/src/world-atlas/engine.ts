@@ -31,7 +31,7 @@ export class MapView {
     this.sealed = new SealedLayer(els.fog, els.sealed,
       () => ({ camera: this.camera, width: els.host.clientWidth, height: els.host.clientHeight, dpr: devicePixelRatio }));
     this.satellite = new SatelliteLayer(els.satellite, () => this.requestDraw());
-    this.panZoom = attachPanZoom(els.canvas, els.host, this.camera, { changed: () => { this.requestDraw(); moved(); }, fit: () => this.fit() });
+    this.panZoom = attachPanZoom(els.canvas, els.host, this.camera, { changed: () => { this.requestDraw(); moved(); }, fit: () => this.fit(), bounds: () => this.worldBounds() });
     this.resize = new ResizeObserver(() => this.requestDraw());
     this.resize.observe(els.host);
   }
@@ -72,12 +72,18 @@ export class MapView {
     root.pictures = String(pictures ? this.satellite.stats.drawn : 0);
     clearTimeout(this.thumbTimer); this.thumbTimer = window.setTimeout(() => this.drawThumb(), 120);
   }
-  fit() {
-    if (!this.renderer) return;
+  /** The whole world in map tiles, sealed areas included (null before a map is shown). */
+  private worldBounds() {
+    if (!this.renderer) return null;
     const b = this.renderer.bounds(this.labels), s = this.sealed.bounds();
     const x0 = Math.min(b.x, s?.x ?? Infinity), y0 = Math.min(b.y, s?.y ?? Infinity);
     const x1 = Math.max(b.x + b.width, s ? s.x + s.width : -Infinity), y1 = Math.max(b.y + b.height, s ? s.y + s.height : -Infinity);
-    fitCamera(this.camera, { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, this.els.host.clientWidth, this.els.host.clientHeight, .95);
+    return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+  }
+  fit() {
+    const b = this.worldBounds();
+    if (!b) return;
+    fitCamera(this.camera, b, this.els.host.clientWidth, this.els.host.clientHeight, .95);
     this.requestDraw(); this.moved();
   }
   zoomBy(k: number) { this.panZoom.zoomBy(k); }

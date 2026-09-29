@@ -35,7 +35,8 @@ export function createMapView(app:any,entry:IndexEntry|null) {
   function fit() {
     if(!renderer)return;fitCamera(camera,inspection.bounds(renderer.bounds(labels.checked)),host.clientWidth,host.clientHeight);requestDraw();
   }
-  const panZoom=attachPanZoom(canvas,host,camera,{changed:requestDraw,fit,tap:(x,y)=>inspection.hit(x,y,camera.scale)});
+  const panZoom=attachPanZoom(canvas,host,camera,{changed:requestDraw,fit,tap:(x,y)=>inspection.hit(x,y,camera.scale),
+    bounds:()=>renderer?inspection.bounds(renderer.bounds(labels.checked)):null});
   const zoom=panZoom.zoom;
   labels.addEventListener('change',requestDraw);
   const resize=new ResizeObserver(()=>requestDraw());resize.observe(host);
