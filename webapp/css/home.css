@@ -24,7 +24,6 @@
 .home-shot img.in { opacity: 1; }
 .home-text { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 16px; flex: 1; }
 .home-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.home-name { font-size: 18px; color: var(--fg0); }
 /* what a tool needs: nothing (most), or the player's own game files */
 .home-badge { padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
   color: var(--good); background: rgba(111, 208, 140, .1); border: 1px solid rgba(111, 208, 140, .35); }
@@ -32,8 +31,6 @@
 .home-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 /* where it works: a quieter badge beside what it needs */
 .home-badge.where { color: var(--fg1); background: var(--bg3); border-color: var(--line); }
-.home-name .brand-name { font-weight: 600; }
-.home-name .brand-sub { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; color: var(--accent); margin-left: 2px; }
 .home-desc { color: var(--fg1); font-size: 14px; line-height: 1.5; flex: 1; }
 /* the way in: the card's one call to action, a button the card's width in the site's blue that fills as the card is
    pointed at */

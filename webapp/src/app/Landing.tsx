@@ -40,7 +40,6 @@ export const Landing = memo(() => (
               onLoad={(e) => e.currentTarget.classList.add('in')} ref={(img) => { if (img?.complete && img.naturalWidth) img.classList.add('in'); }} /></span>
             <span className="home-text">
               <span className="home-head">
-                <span className="home-name"><span className="brand-name">Brighter</span> <span className="brand-sub">{c.tool}</span></span>
                 <span className="home-badges">
                   <span className={`home-badge${c.needs ? ' need' : ''}`}>{c.needs ? 'Needs your game files' : 'No game files needed'}</span>
                   <span className="home-badge where">{c.phone ? 'Desktop & mobile' : 'Desktop only'}</span>
