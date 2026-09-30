@@ -122,7 +122,7 @@ const loadLooks = (): SavedLook[] => { try { const v = JSON.parse(store.get('loo
 
 // ---- the picture's mark: "Made with BrighterAtlas.com" after the site's mark, small in the bottom-right corner
 const markImage = new Image();
-markImage.src = 'brand/mark.svg';
+markImage.src = '/brand/mark.svg';
 function watermark(g: CanvasRenderingContext2D, w: number, hgt: number, size: number, onLight: boolean) {
   const pad = Math.round(size * 0.9);
   g.save();
@@ -411,13 +411,19 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         el('button', {class: 'btn-mini', title: 'Unequip everything', onclick: () => { model.state.equip = {}; edited(); }}, icon('x'), 'Unequip all')));
     const wardrobe = new Wardrobe(els.right.current!, pack, slots, {
       equip: (slot, w) => {
-        const st = model.state;
+        const st = model.state, hiddenBefore = hiddenItems(pack, index, st);
         if (w) st.equip[slot] = w; else delete st.equip[slot];
         // a two-handed weapon (by its type in the game's data: every bow among them) leaves no hand for a shield
         if (w && slot === 'weapon' && twoHanded(w) && st.equip.shield) { delete st.equip.shield; toast('Two-handed weapon: the shield comes off'); }
         else if (w && slot === 'shield' && st.equip.weapon && twoHanded(st.equip.weapon)) { delete st.equip.weapon; toast('A shield needs a free hand: the two-handed weapon comes off'); }
         // trying one on: show it in hand, turned so it isn't edge-on
         if (w && (slot === 'weapon' || slot === 'shield')) { live.current.showHeld = true; setShowHeld(true); if (Math.abs(viewer.yaw) < 0.2) viewer.turnTo(slot === 'weapon' ? -0.7 : 0.7); }
+        // something just put on hides a piece, or goes on under one: a toast says so (only here, where one piece is
+        // put on by hand: never for a random outfit, undo or a look opened, which the slots' own marks show)
+        if (w) {
+          const fresh = [...hiddenItems(pack, index, st)].filter(([s]) => !hiddenBefore.has(s));
+          if (fresh.length) toast(wardrobe.hiddenMessage(st, fresh));
+        }
         edited();
       },
       equipMany: (changes) => { for (const [s, w] of Object.entries(changes)) { if (w) model.state.equip[s as EquipSlot] = w; else delete model.state.equip[s as EquipSlot]; } edited(); },
@@ -429,7 +435,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     if (gameBuild) gameBuild.textContent = `game update ${pack.build.date}${pack.build.version ? ` (v${pack.build.version})` : ''}`;
     // iPhone and iPad Safari (not a home-screen app): its toolbar floats over the bottom of the page
     if (/iP(hone|ad|od)/.test(navigator.userAgent) && !(navigator as any).standalone) document.documentElement.classList.add('ios-browser');
-    (window as any).fashion = {THREE, viewer, get creatorPreview() { return engine.current?.creatorPreview; }, get state() { return model.state; }, compose: () => compose(pack, index, model.state), openCreator, closeCreator, cancelCreator, wardrobe};
+    (window as any).fashion = {THREE, viewer, pack, get creatorPreview() { return engine.current?.creatorPreview; }, get state() { return model.state; }, compose: () => compose(pack, index, model.state), openCreator, closeCreator, cancelCreator, wardrobe};
     let gone = false;
     void (async () => {
       await viewer.init(pack.skeleton, RELAXED);
@@ -805,7 +811,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           {/* the one way into face and body (Male/Female and a random look are there, in Body) */}
           <div className="of-charcard"><button className="btn of-design" aria-label="Character: face, body and hair" title="Design your character: face, body and hair" onClick={() => openCreator()}><Icon name="mask" />Character</button></div>
           <div id="toast" role="status" aria-live="polite" className={toastMsg && toastMsg.n > 0 ? 'show' : undefined}>{toastMsg?.text}</div>
-          {PICTURE && <div className="of-picmark"><img src="brand/mark.svg" alt="" /><span><b>Brighter</b> Fashion</span></div>}
+          {PICTURE && <div className="of-picmark"><img src="/brand/mark.svg" alt="" /><span><b>Brighter</b> Fashion</span></div>}
           {/* the view's own toolbar, along its top on the right: undo, redo, the picture, the looks */}
           <div id="of-toolbar" className="of-toolbar">
             <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>

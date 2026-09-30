@@ -15,6 +15,7 @@ export const PATHS: Record<string, string> = {
   dice: 'M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM8.5 8.5h.01M15.5 15.5h.01M12 12h.01M15.5 8.5h.01M8.5 15.5h.01',
   x: 'M6 6l12 12M18 6L6 18',
   reset: 'M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5',
+  help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.6 9.3a2.5 2.5 0 0 1 4.9.8c0 1.7-2.5 2.1-2.5 3.8M12 17h.01',
   eyeOff: 'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10 10 0 0 1 12 5c5 0 9 4 10 7a11 11 0 0 1-2.6 3.8M6.6 6.6A11 11 0 0 0 2 12c1 3 5 7 10 7a10 10 0 0 0 3.4-.6',
   gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   turnLeft: 'M14 6l-6 6 6 6',
@@ -252,17 +253,18 @@ export class Wardrobe {
       const m = mm ? {...mm, variant: w!.variant} : e?.members[0];
       const on = slot === this.slot && !this.query;
       const take = () => { this.refocus = slot; this.hooks.equip(slot, null); };
-      // (covered: worn but not showing, another piece drawn over it; the slot says so, and its tooltip says why)
+      // (covered: worn but not showing, another piece drawn over it: the slot is outlined amber, its picture dimmed,
+      // and a strip along its bottom says "Hidden"; a tap on the strip says why and offers to take the cover off)
       const cov = this.hidden.has(slot) ? this.covered(slot) : null;
       const tab = el('button', {class: `slot${on ? ' on' : ''}${w ? ' filled' : ''}${cov ? ' covered' : ''}`, role: 'tab', 'aria-selected': String(on), 'data-slot': slot,
         title: cov ? `${SLOT_LABEL[slot]}: ${e!.name}. ${cov.note}` : e ? `${SLOT_LABEL[slot]}: ${e.name}` : `${SLOT_LABEL[slot]}: nothing`,
         'aria-label': cov ? `${SLOT_LABEL[slot]}: ${e!.name}, not showing (covered by ${cov.list ?? 'something else worn'})` : e ? `${SLOT_LABEL[slot]}: ${e.name}` : `${SLOT_LABEL[slot]}: nothing`, onclick: () => this.focusSlot(slot)},
         m ? this.picture(slot, m, 'slot-img', ...this.colourFor(m, w)) : el('span', {class: 'slot-glyph'}, icon(slot)),
-        // (a tap on the badge says why, and offers to take the covering piece off; it sits inside the slot's own button)
-        cov ? el('span', {class: 'slot-covered', role: 'button', tabindex: '0', title: 'Not showing: tap for why', 'aria-label': 'Not showing: why',
+        // (the strip sits inside the slot's own button; its tooltip and label say what covers it)
+        cov ? el('span', {class: 'slot-covered', role: 'button', tabindex: '0', title: `${cov.summary}: click to see why`, 'aria-label': `${cov.summary}: see why`,
           onclick: (ev: Event) => { ev.stopPropagation(); this.explainCovered(slot); },
           onkeydown: (ev: KeyboardEvent) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.stopPropagation(); this.explainCovered(slot); } }},
-          icon('eyeOff'), el('span', {class: 'slot-covered-text'}, 'Hidden')) : null,
+          el('span', {class: 'slot-covered-text'}, 'Hidden'), icon('help')) : null,
         el('span', {class: 'slot-name'}, SLOT_LABEL[slot]),
         // (phones' slot list: what is worn there, and its tier and colour)
         el('span', {class: 'slot-info'}, el('span', {class: 'slot-label'}, SLOT_LABEL[slot]),
@@ -291,7 +293,18 @@ export class Wardrobe {
     const note = list
       ? `Not showing: your ${list} ${names.length > 1 ? 'cover' : 'covers'} the same place and the game draws ${names.length > 1 ? 'them' : 'it'} first, so this doesn't show while worn together (as in the game).`
       : 'Not showing: something else you wear covers the same place (as in the game).';
-    return {by, list, note};
+    const summary = list ? `Hidden under your ${list}` : 'Hidden by something you wear';
+    return {by, list, note, summary};
+  }
+
+  /** The toast for pieces a change has just hidden, named as worn in `state` ("Shark Hoodie (Up) is hidden under
+   *  your Alchemist Cape"; putting the cape on over it says the same). */
+  hiddenMessage(state: State, fresh: [EquipSlot, EquipSlot[]][]): string {
+    const name = (s: EquipSlot) => this.entryOf(state.equip[s])?.name ?? SLOT_LABEL[s].toLowerCase();
+    const join = (a: string[]) => a.length > 1 ? `${a.slice(0, -1).join(', ')} and ${a.at(-1)}` : a[0];
+    const hidden = join(fresh.map(([s]) => name(s))), verb = fresh.length > 1 ? 'are' : 'is';
+    const covers = [...new Set(fresh.flatMap(([, by]) => by))];
+    return covers.length ? `${hidden} ${verb} hidden under your ${join(covers.map(name))}` : `${hidden} ${verb} hidden by something you wear`;
   }
 
   private renderList() {

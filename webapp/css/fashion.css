@@ -311,12 +311,17 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .hidden-note { margin: 8px 0 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--warn, #d9a441); background: rgba(217, 164, 65, .08); color: var(--fg0); font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .hidden-note p { margin: 0; }
 .slot.covered .slot-img, .slot.covered .slot-glyph { opacity: .4; }
-.slot.covered { cursor: help; }
-/* the badge on a covered slot: worn, not showing (its tooltip says what covers it) */
-/* a worn piece that is not showing: a pill on its slot, a tap on it says why */
-.slot-covered { position: absolute; left: 4px; bottom: 4px; height: 18px; padding: 0 7px 0 5px; display: inline-flex; align-items: center; gap: 3px; border-radius: 9px; background: var(--warn, #d9a441); color: #1a1408; font-size: 10px; font-weight: 700; letter-spacing: .2px; cursor: pointer; }
-.slot-covered:hover, .slot-covered:focus-visible { filter: brightness(1.12); outline: none; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
-.slot-covered svg.ic { width: 11px; height: 11px; }
+/* a worn piece that is not showing: the slot outlined amber (picked or not), its picture dimmed, and a strip along
+   its bottom saying what covers it, the whole strip a button (a tap says why and offers to take that off) */
+.slot.covered, .slot.covered.on { border-color: var(--warn, #d9a441); }
+.slot.covered { padding-bottom: 22px; }
+.slot-covered { position: absolute; left: 0; right: 0; bottom: 0; height: 19px; padding: 0 4px; display: flex; align-items: center; justify-content: center; gap: 4px;
+  border-radius: 0 0 5px 5px; border-top: 1px solid rgba(217, 164, 65, .35); background: rgba(217, 164, 65, .18); color: #f0c46a;
+  font-size: 10.5px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background .12s, color .12s; }
+.slot-covered-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.slot-covered:hover, .slot-covered:focus-visible { background: rgba(217, 164, 65, .32); color: #ffd98a; outline: none; }
+.slot-covered:focus-visible { box-shadow: inset 0 0 0 2px rgba(255, 217, 138, .7); }
+.fashion .slot-covered svg.ic { width: 12px; height: 12px; flex: none; color: var(--warn, #d9a441); stroke-width: 2.4; }
 .covered-note { max-width: 380px; }
 /* the random outfit's settings (the app's dialog) */
 /* the settings menu's two folding sections (Background; Randomize equipment), each named with its icon */
@@ -438,6 +443,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .wardrobe:not(.in-slot) .slot-glyph { display: grid; place-items: center; border-radius: 6px; background: var(--bg3); }
   .wardrobe:not(.in-slot) .slot > .slot-name { display: none; }
   .wardrobe:not(.in-slot) .slot-info { display: flex; }
+  /* (a covered slot's strip: a line of its own under the row, edge to edge) */
+  .wardrobe:not(.in-slot) .slot.covered { flex-wrap: wrap; row-gap: 8px; padding-bottom: 8px; }
+  .wardrobe:not(.in-slot) .slot.covered .slot-info { flex: 1 1 0; }   /* (beside the picture still, the strip alone wrapping under them) */
+  .wardrobe:not(.in-slot) .slot-covered { order: 1; position: static; flex: 1 0 100%; margin: 0 -28px -8px -8px; height: 24px; padding: 0 10px; font-size: 11.5px; justify-content: flex-start; gap: 6px; }
+  .wardrobe:not(.in-slot) .slot-covered svg.ic { width: 13px; height: 13px; }
   .slot-info { flex-direction: column; min-width: 0; gap: 1px; line-height: 1.25; }
   .slot-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; color: var(--fg2); }
   .slot-item { font-size: 13px; color: var(--fg0); font-weight: 600; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }

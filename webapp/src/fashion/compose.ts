@@ -85,8 +85,10 @@ export function compose(pack: any, index: ReturnType<typeof makeIndex>, state: S
     else if (ap.a.held != null) heldList.push({parts: pack.held[ap.a.held], colour: ap.colour, id: ap.a.held});
   }
   const [feet, legs, torso, hands, head, back, cape] = [0, 1, 2, 3, 4, 5, 6].map(i => wornAt[i]);
-  const order = [head, back, cape,
-    ...(torso?.w.first ? [torso, hands] : [hands, torso]),
+  // (a torso piece marked `early`, the Shark Hoodies since the 29-Sep-2026 update, goes on with the hands before
+  // the head, back and cape: it claims their places first)
+  const upper = torso?.w.first ? [torso, hands] : [hands, torso];
+  const order = [...(torso?.w.early ? [...upper, head, back, cape] : [head, back, cape, ...upper]),
     ...(legs?.w.first ? [legs, feet] : [feet, legs])].filter(Boolean);
   let accum = 0;
   const useAlt = new Map<any, boolean>();
@@ -161,12 +163,13 @@ export function itemParts(pack: any, index: ReturnType<typeof makeIndex>, w: Wor
 }
 
 // Worn items the composer dropped whole: an item is skipped when an earlier one (head, back, cape, then
-// torso/hands, legs/feet) already claimed any bit of its mask. The
-// Shark Hoodies claim the back (bit 12) as every cape does, so a cape hides them, in the game as here.
+// torso/hands, legs/feet; an `early` torso piece before the head) already claimed any bit of its mask. The
+// Shark Hoodies claim the back (bit 12) as every cape does: before the 29-Sep-2026 update a cape hid them;
+// since, they go on first and hide the cape (and the hood up, a hat), in the game as here.
 // Returns each hidden slot with the equipped slots that cover it (drawn, sharing a bit of its mask).
 export function hiddenItems(pack: any, index: ReturnType<typeof makeIndex>, state: State): Map<EquipSlot, EquipSlot[]> {
   const keys = compose(pack, index, state).map(p => p.key);
-  const worn = new Map<EquipSlot, {id: number, w: any}>();
+  const worn = new Map<EquipSlot, {id: number, w: any}>();   // (id: the appearance's, inside the data)
   for (const slot of EQUIP_SLOTS) {
     const ap = itemAppearance(pack, index, state.equip[slot], state.gender);
     if (ap?.a.worn != null) worn.set(slot, {id: ap.a.worn, w: pack.worn[ap.a.worn]});
