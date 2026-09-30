@@ -18,6 +18,12 @@ game is served; widening that is the maintainer's decision.
   libraries (npm devDeps exist only for their types). `defaults/` ships the
   shared room-name override table (no user annotations). `data-fixtures/` is
   the committed synthetic dataset the smoke test runs against.
+  `brand/mark.svg` is the one source of the site's icon: the app shows it
+  as it is (top bar, landing page, Brighter Fashion's pictures), and
+  `npm run icons` (`tools/icons.ts`, its looks in one table there) derives
+  every other icon from it (favicons, `favicon.ico`, the iOS home-screen
+  icon, the manifest's app icons and the manifest itself). Never edit a
+  derived icon by hand.
 - One page for the whole site: `index.html`, a React shell (`src/app/`,
   entry `js/app.js`) at `/` (the landing page, `app/Landing.tsx`),
   `/fashion`, `/maps` and `/data` (`app/paths.ts`, shared with
