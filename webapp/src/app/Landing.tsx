@@ -28,7 +28,7 @@ export const Landing = memo(() => (
     <main className="home-main">
       <section className="home-intro">
         {/* (the game's own site, in a new tab) */}
-        <h1>Your companion tools for <a href={GAME_URL} target="_blank" rel="noopener noreferrer">Brighter Shores</a></h1>
+        <h1>Your tools for <a className="home-game" href={GAME_URL} target="_blank" rel="noopener noreferrer">Brighter Shores</a></h1>
         <p>All run in your browser, with nothing to install.</p>
       </section>
       <section className="home-tools">

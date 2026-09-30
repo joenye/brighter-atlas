@@ -8,6 +8,8 @@
 .home.vbar-host { padding-right: 16px !important; }
 .home-main { flex: 1; width: min(1180px, 100%); margin: 0 auto; padding: 36px 20px 28px; display: flex; flex-direction: column; gap: 28px; }
 .home-intro h1 { margin: 0 0 6px; font-size: clamp(20px, 2.4vw, 26px); font-weight: 600; color: var(--fg0); }
+/* the game's name, in the brand's face (css/app.css) */
+.home-game { font-family: "BA Brighter", var(--sans); }
 .home-intro p { margin: 0; color: var(--fg1); font-size: 15px; line-height: 1.5; }
 .ext-icon { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .home-tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
