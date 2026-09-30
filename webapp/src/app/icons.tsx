@@ -14,5 +14,6 @@ export const ExternalIcon = ({ size = 15 }: { size?: number }) => (
 );
 export const DISCORD_URL = 'https://discord.gg/XQeGGaBexH';
 export const WIKI_URL = 'https://brightershoreswiki.org';
+export const GAME_URL = 'https://brightershores.com';
 export const STEAM_URL = 'https://store.steampowered.com/app/2791440/Brighter_Shores/';
 export const GITHUB_URL = 'https://github.com/joenye/brighter-atlas';

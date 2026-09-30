@@ -5,7 +5,7 @@ import { memo, useEffect, useState } from 'react';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
 import { PATHS, type Tool } from './paths.js';
 import { navigate } from './router.js';
-import { DiscordIcon, SteamIcon, ExternalIcon, DISCORD_URL, STEAM_URL } from './icons.js';
+import { DiscordIcon, SteamIcon, ExternalIcon, DISCORD_URL, GAME_URL, STEAM_URL } from './icons.js';
 
 // the site's version, as the tool switch names it
 function Version() {
@@ -27,7 +27,8 @@ export const Landing = memo(() => (
   <div className="home">
     <main className="home-main">
       <section className="home-intro">
-        <h1>Fan-made tools for Brighter Shores</h1>
+        {/* (the game's own site, in a new tab) */}
+        <h1>Fan-made tools for <a href={GAME_URL} target="_blank" rel="noopener noreferrer">Brighter Shores</a></h1>
         <p>All run in your browser, with nothing to install.</p>
       </section>
       <section className="home-tools">
