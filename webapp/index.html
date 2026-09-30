@@ -20,7 +20,14 @@
 <!-- the landing page's own (all under .home), in before the first paint so it never draws unstyled; the tools'
      sheets come with their code, their pages hidden until they are in -->
 <link rel="stylesheet" href="/css/home.css">
+<!-- icons: all derived from brand/mark.svg by tools/icons.ts (npm run icons): the SVG favicon, a PNG one for
+     browsers without SVG favicons, the home-screen icon iOS asks for (it reads no manifest for it), and the
+     installed app's manifest (favicon.ico at the root is one more, found without a link) -->
+<link rel="icon" href="/brand/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png">
+<link rel="manifest" href="/brand/site.webmanifest">
+<meta name="apple-mobile-web-app-title" content="Brighter Atlas">
 </head>
 <body>
 <div id="root"></div>
