@@ -90,6 +90,9 @@ button { font: inherit; color: inherit; }
   background: linear-gradient(180deg, #171b22, #12151b);
   border-bottom: 1px solid var(--line);
   flex: none; z-index: 30;
+  /* (a pinned header: iOS home-screen apps blur and darken the top edge of the page unless a sticky or fixed
+     header is there; the bar is at the top of a page that does not scroll, so its place is unchanged) */
+  position: sticky; top: 0;
 }
 .brand { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .brand-link { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; }
