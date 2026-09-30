@@ -244,32 +244,18 @@ export class Preview {
     const fill = new THREE.DirectionalLight(0xc8d6ff, 0.55); fill.position.set(1400, 900, 900); this.lights.add(fill);
     const rim = new THREE.DirectionalLight(0xd6e2ff, 1.0); rim.position.set(900, 1500, -1800); this.lights.add(rim);
     if (opts.floor) { this.floorGroup = floorShadow(); this.scene.add(this.floorGroup); }
-    // the game's sun, for the character's own shadow on the plain backgrounds (three's light, at no intensity: the
+    // the game's sun, for the character's own shadow on the plain backgrounds (on itself only: the ground disc takes
+    // none; a place drawn by the game casts its own) (three's light, at no intensity: the
     // game's lighting is the materials' own; this only draws the shadow map). A single filtered comparison, as the
     // game's (radius 0: every tap of three's kernel at the same place)
     const small = Math.min(screen.width, screen.height) < 700;
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(small ? 1024 : 2048, small ? 1024 : 2048);
-    Object.assign(this.sun.shadow.camera, {left: -1700, right: 1700, top: 1700, bottom: -1700, near: 100, far: 16000});
+    Object.assign(this.sun.shadow.camera, {left: -1400, right: 1400, top: 1400, bottom: -1400, near: 100, far: 16000});
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 3; this.sun.shadow.radius = 0;
     this.sun.target.position.set(0, 1000, 0);
     this.scene.add(this.sun, this.sun.target);
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    if (this.floorGroup) {
-      // the character's shadow on the ground, where the disc is (the game draws no ground here: the disc and this
-      // shadow are the page's own)
-      // (fading out well inside the shadow map's reach: a long shadow never ends at an edge)
-      const shadowMat = new THREE.ShadowMaterial({opacity: 0.28, depthWrite: false});
-      shadowMat.onBeforeCompile = (sh: any) => {
-        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vGroundXZ;')
-          .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGroundXZ = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;');
-        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vGroundXZ;')
-          .replace('#include <tonemapping_fragment>', 'gl_FragColor.a *= 1.0 - smoothstep( 800.0, 1700.0, length( vGroundXZ ) );\n#include <tonemapping_fragment>');
-      };
-      const g = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), shadowMat);
-      g.rotation.x = -Math.PI / 2; g.position.y = 3; g.receiveShadow = true;
-      this.floorGroup.add(g);
-    }
     this.setRendering(rendering);
     this.resize();
     this.resizing.observe(canvas);
@@ -400,7 +386,6 @@ export class Preview {
     // (the sun is there only for its shadow map: a light three counts costs every part's shader, even at no intensity)
     this.renderer.shadowMap.enabled = on; this.sun.castShadow = this.sun.visible = on;
     for (const m of this.active.values()) m.castShadow = m.receiveShadow = on;
-    if (this.floorGroup?.children[2]) this.floorGroup.children[2].visible = on;
     this.syncLights();
   }
   /** three's own lights only where a part uses them: the studio lighting, a part the game's could not light (its
