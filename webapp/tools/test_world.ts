@@ -166,6 +166,19 @@ try {
   await page.waitForFunction(() => document.documentElement.dataset.view === 'map');
   assert.equal(await page.$eval('#world-roofs-switch', (e: any) => e.hidden), true, 'the roofs switch is for satellite pictures only');
   assert.doesNotMatch(await hash(), /v=satellite/, 'the map view keeps the URL short');
+  // on the map, an update without pictures marks the switch, and clicking it says why instead of switching
+  await page.click('#world-prev');
+  await page.waitForFunction(() => document.documentElement.dataset.release === 'aaaaaaaaaaaaaaaa');
+  await page.waitForSelector('#world-view.unready .wmap-soon', { timeout: 5000 });
+  assert.match(await page.$eval('#world-view', (b) => b.getAttribute('title') ?? ''), /aren't ready yet/, 'its tooltip says the pictures are not ready');
+  await page.click('#world-view');
+  await page.waitForSelector('.modal.world-soon', { timeout: 3000 });
+  assert.match(await page.$eval('.modal.world-soon', (e) => e.textContent ?? ''), /take a few hours/, 'the dialog explains the wait');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('.modal.world-soon'), { timeout: 3000 });
+  assert.equal(await view(), 'map', 'and the view stays the map');
+  await page.click('#world-next');
+  await page.waitForFunction(() => !document.querySelector('#world-view.unready'), { timeout: 5000 });
   // a finger whose lift never reaches the map (it came up over a control)
   // must not turn the next one-finger drag into a pinch
   const drag = await page.evaluate(async () => {

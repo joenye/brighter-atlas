@@ -9,6 +9,7 @@ import { MapView } from './engine.js';
 import { gameVersion } from '../game-build.js';
 import { LoadCard } from '../app/pages.js';
 import type { ToolProps } from '../app/tool.js';
+import { el, openModal } from '../ui.js';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const dateOf = (r: WorldRelease) => new Date(r.date);
@@ -204,6 +205,18 @@ export function Tool({ active, ready, register }: ToolProps) {
   useEffect(() => { const v = view.current; if (v) { v.labels = labels; v.requestDraw(); } }, [labels]);
   useEffect(() => { const w = live.current.wanted; if (w && view.current) void syncSatellite(w); }, [roofs]);
   const hasPictures = !!current?.release.satellite;
+  // the shown update has no satellite pictures yet: the switch says so and, clicked, says why
+  const unready = !!current && !satelliteView && !hasPictures;
+  const explainSatellite = () => openModal({
+    title: 'Satellite pictures on the way',
+    className: 'world-soon',
+    content: [
+      el('p', { text: 'Satellite pictures are made after each game update is released, and take a few hours. '
+        + "This update's aren't ready yet, so it shows the street map for now." }),
+      el('p', { class: 'dim', text: 'Other updates have theirs: pick one with the slider.' }),
+    ],
+    closeLabel: 'OK',
+  });
   const offered = known && data.hasSatellite();
   useEffect(() => { if (view.current) { view.current.thumbShown = offered; view.current.requestDraw(); } }, [offered, satelliteView, pictures]);
 
@@ -279,10 +292,12 @@ export function Tool({ active, ready, register }: ToolProps) {
         <div ref={els.sealed} id="world-sealed" className="world-sealed"></div>
         <div className="wmap-corner">
           {/* (its place is kept from the first frame, the map's other controls never moving when it comes) */}
-          <button id="world-view" className={`wmap-view${known ? '' : ' pending'}`} type="button" hidden={known && !offered}
-            aria-pressed={satelliteView} disabled={!satelliteView && !hasPictures} onClick={() => setSatellite(!satelliteView)}
-            title={satelliteView ? 'Show the street map' : hasPictures ? 'Show satellite pictures' : 'No satellite pictures of this update yet'}>
+          <button id="world-view" className={`wmap-view${known ? '' : ' pending'}${unready ? ' unready' : ''}`} type="button" hidden={known && !offered}
+            aria-pressed={satelliteView} aria-haspopup={unready ? 'dialog' : undefined}
+            onClick={() => (unready ? explainSatellite() : setSatellite(!satelliteView))}
+            title={satelliteView ? 'Show the street map' : hasPictures ? 'Show satellite pictures' : "Satellite pictures of this update aren't ready yet: click to find out why"}>
             <canvas ref={els.thumb} id="world-view-thumb" className="wmap-thumb" aria-hidden="true"></canvas><span id="world-view-name">{satelliteView ? 'Street' : 'Satellite'}</span>
+            {unready && <i className="wmap-soon" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /><path d="M8 4.8V8l2.2 1.6" /></svg></i>}
           </button>
           <label className="wmap-labels" title="Show room labels">
             <input id="world-labels" type="checkbox" checked={labels} onChange={(e) => { setLabels(e.target.checked); live.current.labels = e.target.checked; saveState(); }} /><span>Labels</span>

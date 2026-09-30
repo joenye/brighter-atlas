@@ -64,6 +64,14 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 .wmap-view span { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 0 4px; font-size: 11px; font-weight: 650; letter-spacing: .02em;
   color: #fff; text-align: center; background: linear-gradient(transparent, rgba(0, 0, 0, .8)); text-shadow: 0 1px 2px #000; }
 @media (max-width: 600px) { .wmap-view { width: 60px; height: 60px; } }
+/* no satellite pictures of the shown update yet: the picture dimmed, a clock in its corner; a click says why */
+.wmap-view.unready { border-color: rgba(255, 255, 255, .45); }
+.wmap-view.unready canvas.wmap-thumb, .wmap-view.unready > span { opacity: .5; }
+.wmap-soon { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; display: grid; place-items: center;
+  border-radius: 50%; background: rgba(13, 15, 19, .85); border: 1px solid rgba(255, 255, 255, .6); pointer-events: none; }
+.wmap-soon svg { width: 12px; height: 12px; fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.modal.world-soon { max-width: 380px; }
+.modal.world-soon p { margin: 0 0 10px; line-height: 1.5; }
 /* zoom buttons, bottom right: plus over minus */
 .wmap-zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; z-index: 3;
   border-radius: 10px; overflow: hidden; background: rgba(13, 15, 19, .82); border: 1px solid var(--line); box-shadow: 0 2px 10px rgba(0, 0, 0, .5); }
