@@ -3,12 +3,12 @@
 // (compose.ts). The look lives in the address (look-code.ts), is remembered on this device, and has undo
 // (look-model.ts). The drawing is render.ts's (the character, a place behind it); the equipment panel is
 // wardrobe.ts's.
-import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode} from 'react';
+import {Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode} from 'react';
 import * as THREE from '../../vendor/three.module.js';
 import {at, DEV} from './data.js';
 import {compose, makeIndex, randomise, itemParts, hiddenItems, EQUIP_SLOTS} from './compose.js';
 import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
-import {Preview, FRAMES, prefetch, Thumbnailer, report, forgetCaches} from './render.js';
+import {Preview, FRAMES, prefetch, Thumbnailer, report, forgetCaches, RENDERING_DEFAULTS, configureRendering, type Rendering} from './render.js';
 import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, twoHandedItem, type Faction} from './wardrobe.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
@@ -41,6 +41,8 @@ const PART_FRAME: Record<string, {dist: number, target: number}> = {
 // what a random outfit draws from (remembered on this device; Reset puts it back)
 interface RandomSettings { faction: Faction | 'Guard' | 'all'; allowEmpty: boolean; dyes: boolean; weapons: boolean }
 const RANDOM_DEFAULTS: RandomSettings = {faction: 'all', allowEmpty: true, dyes: true, weapons: true};
+// how the plain view is drawn (Settings, Rendering), kept on this device
+const loadRendering = (): Rendering => { try { const v = JSON.parse(store.get('rendering') ?? 'null'); return v && typeof v === 'object' ? {...RENDERING_DEFAULTS, ...v} : {...RENDERING_DEFAULTS}; } catch { return {...RENDERING_DEFAULTS}; } };
 const loadRandom = (): RandomSettings => { try { const v = JSON.parse(store.get('random') ?? 'null'); return v && typeof v === 'object' ? {...RANDOM_DEFAULTS, ...v} : {...RANDOM_DEFAULTS}; } catch { return {...RANDOM_DEFAULTS}; } };
 const FLOORS = [['ring', 'Ring and shadow'], ['shadow', 'Shadow only'], ['none', 'None']] as const;
 type Floor = typeof FLOORS[number][0];
@@ -247,6 +249,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     if (!e.creatorPreview) {
       e.creatorPreview = new Preview(els.cCanvas.current!, {fov: 18, floor: true});
       e.creatorPreview.running = false; e.creatorPreview.setFloor(live.current.floor);
+      e.creatorPreview.setDesigning(true);   // (the designer's own view: never a shadow on the face)
       attachTurning(els.cCanvas.current!, e.creatorPreview);
     }
     return e.creatorPreview;
@@ -319,6 +322,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     }
     live.current.sharedView = shared; setSharedView(shared);
     live.current.designing = true; setDesigningState(true);
+    e.viewer.setDesigning(true);   // (no shadows while designing: they fall across the face; back when it closes)
     model.holdUndo = true;
     if (!shared) { const c = creator(); e.viewer.running = false; c.running = true; creatorReady.current ??= c.init(pack.skeleton, RELAXED); }
     frameCreator(true);
@@ -327,6 +331,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   function hideCreator() {
     const e = engine.current!;
     live.current.designing = false; setDesigningState(false); e.viewer.running = true; if (e.creatorPreview) e.creatorPreview.running = false;
+    e.viewer.setDesigning(false);
     if (live.current.sharedView) { e.viewer.frameTo(frameOf(live.current.currentFrame === '' ? 'full' : live.current.currentFrame as FrameKey)); live.current.sharedView = false; setSharedView(false); }
     els.canvas.current?.focus({preventScroll: true});
   }
@@ -362,6 +367,9 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   }, []);
   const addressOf = (code: string, b: Backdrop = live.current.backdrop) => `#${code}${b.room ? '.' + b.id : ''}`;
   const setFloor = (mode: Floor) => { store.set('floor', mode); setFloorState(mode); engine.current?.viewer.setFloor(mode); engine.current?.creatorPreview?.setFloor(mode); };
+  // (a picture for a short link is always drawn the game's way)
+  const [rend, setRendState] = useState<Rendering>(() => PICTURE ? {...RENDERING_DEFAULTS} : loadRendering());
+  const setRend = (next: Rendering) => { setRendState(next); store.set('rendering', JSON.stringify(next)); engine.current?.viewer.setRendering(next); engine.current?.creatorPreview?.setRendering(next); };
 
   // ---- the engine: the character's view, the designer's, the item thumbnails and the wardrobe ----
   const slots = useMemo(() => [...pack.slotOrder.filter((s: string) => (EQUIP_SLOTS as readonly string[]).includes(s)), 'cape', 'weapon'] as EquipSlot[], [pack]);
@@ -392,6 +400,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   };
   useLayoutEffect(() => {
     // (a picture, for a link's preview, is drawn at its own pixels: no supersampling, which a software renderer pays for)
+    configureRendering(rend);   // (before the view builds anything)
     const viewer = new Preview(els.canvas.current!, {fov: 24, floor: true, pixelRatio: PICTURE ? 1 : undefined});
     viewer.pitch = 0.07;
     viewer.frameTo(frameOf('full'), true);
@@ -441,6 +450,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       await viewer.init(pack.skeleton, RELAXED);
       if (gone) return;
       setFloor(floor);
+      viewer.setRendering(rend);
       try { setBackdrop(live.current.backdrop, !(live.current.backdrop.room && live.current.backdrop.id === addressLook().place)); }
       catch (e) { console.warn('backdrop', e); setBackdrop(BACKDROPS[0]); }
       model.touch();
@@ -765,6 +775,31 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         </div>
         <button type="button" className="rs-reset" onClick={() => setRs({...RANDOM_DEFAULTS})}>Reset to defaults</button>
       </details>
+      <details className="of-bgsec" data-sec="rendering">
+        <summary><Icon name="sun" />Rendering</summary>
+        {backdrop.room && <div className="rd-note">A 3D scene is drawn by the game itself, with its own light and shadows: these apply to the colour backgrounds.</div>}
+        <div className="rs-label">Lighting</div>
+        <div className="chips rd-lighting" role="group" aria-label="Lighting">
+          {([['game', 'Game', 'As the game lights characters: its sun and sky, the shine of metal and gold, glowing parts'], ['studio', 'Studio', 'Soft studio lights, as Brighter Fashion had before']] as const).map(([k, label, hint]) =>
+            <button key={k} type="button" title={hint} className={rend.lighting === k ? 'on' : undefined} aria-pressed={rend.lighting === k} onClick={() => setRend({...rend, lighting: k})}>{label}</button>)}
+        </div>
+        <div className="rs-checks">
+          {([['shadows', 'Shadows', 'The character’s own shadow from the sun, and on the ground'], ['glow', 'Glowing parts', 'Eyes, runes and trims that glow in the game']] as const).map(([k, label, hint]) => (
+            <Fragment key={k}>
+              <label className="of-check rs-check" title={hint}><input type="checkbox" checked={rend[k]} disabled={rend.lighting !== 'game'} onChange={e => setRend({...rend, [k]: e.target.checked})} /><span>{label}</span></label>
+              {/* (so a face without its shadow in the designer is not taken for a fault) */}
+              {k === 'shadows' && rend.shadows && rend.lighting === 'game' && <div className="rd-hint">Off while designing your character</div>}
+            </Fragment>
+          ))}
+        </div>
+        {([['sunTurn', 'Sun direction', -180, 180, (v: number) => v === 0 ? 'as in the game' : `${v > 0 ? '+' : ''}${v}°`], ['sunHeight', 'Sun height', 10, 85, (v: number) => v === RENDERING_DEFAULTS.sunHeight ? 'as in the game' : `${v}°`]] as const).map(([k, label, min, max, say]) => (
+          <label key={k} className="rd-range">
+            <span className="rs-label">{label} <b>{say(rend[k])}</b></span>
+            <input type="range" min={min} max={max} step={5} value={rend[k]} disabled={rend.lighting !== 'game'} aria-label={label} onChange={e => setRend({...rend, [k]: Number(e.target.value)})} />
+          </label>
+        ))}
+        <button type="button" className="rs-reset" onClick={() => setRend({...RENDERING_DEFAULTS})}>Reset to the game’s</button>
+      </details>
     </div>
   );
   // the column of round buttons on the view, from the top: what the drawer shows (the character's design, the
@@ -779,7 +814,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         title={designing ? 'Weapons are put away while you design' : !armed ? 'Nothing held yet: pick a weapon or shield' : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance'}
         onClick={() => setShowHeld(h => !h)}><Icon name="weapon" /></button>
       <div className="of-bg">
-        <button ref={els.bgBtn} className={`btn of-bgbtn${bgMode ? ' active' : ''}`} aria-haspopup="menu" aria-label="Settings" title="Settings: background, ground and the random outfit"
+        <button ref={els.bgBtn} className={`btn of-bgbtn${bgMode ? ' active' : ''}`} aria-haspopup="menu" aria-label="Settings" title="Settings: background, ground, the random outfit and rendering"
           aria-expanded={bgTouched && !isPhone ? bgOpen : undefined} aria-pressed={isPhone ? bgMode : undefined}
           onClick={e => {
             e.stopPropagation();

@@ -343,6 +343,15 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-bgpop .rs-checks { display: flex; flex-direction: column; gap: 2px; padding: 0 6px; }
 .of-bgpop .rs-check { min-height: 34px; padding: 0 4px; }
 .of-bgpop .rs-reset { margin: 6px 6px 2px; justify-content: center; border: 1px solid var(--line); }
+/* the rendering settings (a section after the random outfit): lighting, shadows, glow, the sun */
+.of-bgpop .rd-lighting { padding: 2px 10px 8px; }
+.of-bgpop .rd-range { display: block; padding: 0 0 6px; }
+.of-bgpop .rd-range .rs-label { display: flex; justify-content: space-between; gap: 8px; }
+.of-bgpop .rd-range .rs-label b { font-weight: 500; color: var(--fg0, inherit); }
+.of-bgpop .rd-range input[type=range] { display: block; width: calc(100% - 20px); margin: 2px 10px 0; accent-color: var(--accent); }
+.of-bgpop .rd-range input:disabled, .of-bgpop .rs-check input:disabled + span { opacity: .45; }
+.of-bgpop .rd-hint { margin: -6px 4px 4px 30px; color: var(--fg2); font-size: 12px; line-height: 1.35; }
+.of-bgpop .rd-note { margin: 4px 10px 6px; padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, .04); color: var(--fg1); font-size: 12px; line-height: 1.4; }
 
 
 /* ---- the designer: a dialog in Brighter Atlas's style (the character, and a panel of choices) ---- */

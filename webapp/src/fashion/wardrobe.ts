@@ -21,6 +21,7 @@ export const PATHS: Record<string, string> = {
   turnLeft: 'M14 6l-6 6 6 6',
   turnRight: 'M10 6l6 6-6 6',
   image: 'M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4',
+  sun: 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
   set: 'M4 7l8-4 8 4-8 4zM4 12l8 4 8-4M4 17l8 4 8-4',
   drop: 'M12 3s6 7 6 11a6 6 0 0 1-12 0c0-4 6-11 6-11z',
   head: 'M5 14c0-5 3-9 7-9s7 4 7 9M3 14h18M9 14v3h6v-3',

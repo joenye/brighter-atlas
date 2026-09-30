@@ -8,7 +8,9 @@
 // items (weapons, shields) last.
 
 export type Rgb = [number, number, number];
-export interface DrawPart { key: string; mesh: number; mat: number | null; t1: Rgb; t2: Rgb; material?: number | null }   // material: the ab0 material row (the game frame's programs)
+// material: the ab0 material row (the game frame's programs); spec: its specular bytes (the game's lighting of the part);
+// glow: its texture has an emissive mask
+export interface DrawPart { key: string; mesh: number; mat: number | null; t1: Rgb; t2: Rgb; material?: number | null; spec?: number[] | null; glow?: boolean }
 
 export const STYLE_CATS = ['hair', 'face', 'jaw', 'torso', 'legs', 'feet'] as const;
 export const COLOUR_CATS = ['hair', 'eyes', 'torso', 'legs', 'feet', 'skin'] as const;
@@ -72,7 +74,7 @@ export function compose(pack: any, index: ReturnType<typeof makeIndex>, state: S
   const add = (p: any, base: Rgb | null, rarity: Rgb | null, tag: string) => {
     if (p.mesh == null) return;
     const t1 = resolve(p.r1, base, rarity), t2 = resolve(p.r2, base, rarity);
-    out.push({key: `${p.mesh}/${p.mat}/${t1.join(',')}/${t2.join(',')}/${tag}`, mesh: p.mesh, mat: p.mat ?? null, t1, t2, material: p.material ?? null});
+    out.push({key: `${p.mesh}/${p.mat}/${t1.join(',')}/${t2.join(',')}/${tag}`, mesh: p.mesh, mat: p.mat ?? null, t1, t2, material: p.material ?? null, spec: p.spec ?? null, glow: !!p.glow});
   };
 
   // ---- equipment: worn items by position (0 feet .. 6 cape) ----
@@ -158,7 +160,7 @@ export function itemParts(pack: any, index: ReturnType<typeof makeIndex>, w: Wor
   const list: any[] = ap.a.worn != null ? pack.worn[ap.a.worn].parts.map((id: number) => pack.parts[id]) : pack.held[ap.a.held];
   return list.filter(p => p.mesh != null && !/^\$(skin|lips)$/.test(p.r1 ?? '')).map(p => {
     const t1 = res(p.r1), t2 = res(p.r2);
-    return {key: `${p.mesh}/${p.mat}/${t1.join(',')}/${t2.join(',')}/t`, mesh: p.mesh, mat: p.mat ?? null, t1, t2, material: p.material ?? null};
+    return {key: `${p.mesh}/${p.mat}/${t1.join(',')}/${t2.join(',')}/t`, mesh: p.mesh, mat: p.mat ?? null, t1, t2, material: p.material ?? null, spec: p.spec ?? null, glow: !!p.glow};
   });
 }
 

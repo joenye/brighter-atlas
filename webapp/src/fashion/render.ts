@@ -35,7 +35,7 @@ const getMesh = (i: number) => {
   if (!p) { p = getJson(at(`mesh/${i}`)).then(m => buildMeshGeometry(m, {boneColors: false})); meshCache.set(i, p); }
   return p;
 };
-const getTex = (kind: 'tex' | 'param', i: number) => {
+const getTex = (kind: 'tex' | 'param' | 'light' | 'glow', i: number) => {
   const key = `${kind}/${i}`;
   let p = texCache.get(key);
   if (!p) {
@@ -58,7 +58,106 @@ export function forgetCaches() {
   gameroomChunk?.forget();
 }
 // warm the caches (e.g. the next item in a list) without drawing anything
-export function prefetch(parts: DrawPart[]) { for (const p of parts) { void getMesh(p.mesh).catch(() => {}); if (p.mat != null) { void getTex('tex', p.mat); void getTex('param', p.mat); } } }
+export function prefetch(parts: DrawPart[]) {
+  const game = rendering.lighting === 'game';
+  for (const p of parts) { void getMesh(p.mesh).catch(() => {}); if (p.mat != null) { void getTex('tex', p.mat); void getTex('param', p.mat); if (game && p.spec) { void getTex('light', p.mat); if (p.glow) void getTex('glow', p.mat); } } }
+}
+
+// ---- the game's own lighting of a character part ----
+// The game draws every worn and held part with one pixel shader family (the character materials' programs; with
+// shadows and ambient occlusion off it is exactly this, and those add only their own factors): the albedo, the
+// normal plane, the specular plane's mask, and the material's specular bytes as its vertex shader passes them
+// (strength / 16, exponent, emissive / 128), lit by the scene's sky, ground and sun (the daylight preset, as
+// pow(rgb, 2.2) x intensity) from its fixed sun direction. Besides the sun's highlight it adds a second, from the
+// sky (a quarter as strong, half the exponent, around the direction halfway between the view and straight up):
+// on a strong, broad material over a gold albedo (the golden Easter bunny) that is the metal sheen. No
+// reflection map is involved. `light` holds the normal plane (R, G) and the specular mask (B), from the data;
+// `glow`, for the few textures that have one, the emissive mask (the specular plane's green), added at the
+// material's emissive strength (the scene's emissive strength is its light fade, 1 at rest).
+// World directions are the game's (x east, y south, z up), which the preview's root maps to three's (x, z, y).
+const DAYLIGHT = {sky: [0.8156862854957581, 0.8784313797950745, 0.9411764740943909, 1], ground: [0.4313725531101227, 0.2862745225429535, 0.15294118225574493, 1],
+  sun: [1, 0.8784313797950745, 0.5647059082984924, 1.5], direction: [-32000, -31999.998046875, -45254.8359375]};
+const linear = (c: number[]) => new THREE.Vector3(Math.pow(c[0], 2.2) * c[3], Math.pow(c[1], 2.2) * c[3], Math.pow(c[2], 2.2) * c[3]);
+
+/** How the plain view is drawn (the page's Rendering settings). `game`: the game's lighting (below); `studio`: three's
+ *  own lights, as before it. The sun's turn and height move the game's sun (0 and 45 degrees: where the game has it). */
+export interface Rendering { lighting: 'game' | 'studio'; shadows: boolean; glow: boolean; sunTurn: number; sunHeight: number }
+export const RENDERING_DEFAULTS: Rendering = {lighting: 'game', shadows: true, glow: true, sunTurn: 0, sunHeight: 45};
+let rendering: Rendering = {...RENDERING_DEFAULTS};
+// the uniforms every lit part shares: a setting moves them all at once
+const SHARED = {gLightDir: {value: new THREE.Vector3()}, gGlowOn: {value: 1}, gShadowOn: {value: 1}};
+/** The game's sun travels along this (three's world: the preview's root maps the game's (x, y, z) to (x, z, y)). */
+function sunDirection(r: Rendering, out = new THREE.Vector3()) {
+  const d = DAYLIGHT.direction, base = Math.atan2(d[0], d[1]);   // (the game's azimuth, in its own x, y)
+  const turn = base + r.sunTurn * Math.PI / 180, h = r.sunHeight * Math.PI / 180;
+  // travelling down and away from the sun: game (x, y, z) = (sin, cos) * cos(h), -sin(h), to three (x, z, y)
+  return out.set(Math.sin(turn) * Math.cos(h), -Math.sin(h), Math.cos(turn) * Math.cos(h)).normalize();
+}
+/** The settings the next views and parts start with (before any is built: a studio view never fetches the
+ *  game's lighting pictures). */
+export function configureRendering(r: Rendering) { rendering = {...r}; applyShared(rendering); }
+function applyShared(r: Rendering) {
+  sunDirection(r, SHARED.gLightDir.value);
+  SHARED.gGlowOn.value = r.glow ? 1 : 0;
+  SHARED.gShadowOn.value = r.shadows ? 1 : 0;
+}
+applyShared(rendering);
+
+function gameLit(mat: THREE.MeshStandardMaterial, light: THREE.Texture, spec: number[], glow: THREE.Texture | null) {
+  mat.normalMap = light;   // (so three carries the mesh's tangents and the texture's coordinates: USE_TANGENT, vNormalMapUv)
+  const uniforms = {gLight: {value: light}, gSpec: {value: new THREE.Vector3(spec[0] / 16, spec[1], spec[2] / 128)},
+    gSky: {value: linear(DAYLIGHT.sky)}, gGround: {value: linear(DAYLIGHT.ground)}, gSun: {value: linear(DAYLIGHT.sun)}, gGlow: {value: glow}, ...SHARED};
+  const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey.bind(mat);
+  mat.onBeforeCompile = (shader: any, r: any) => {
+    prev.call(mat, shader, r);
+    Object.assign(shader.uniforms, uniforms);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
+uniform sampler2D gLight; uniform vec3 gSpec; uniform vec3 gSky; uniform vec3 gGround; uniform vec3 gSun; uniform vec3 gLightDir; uniform float gGlowOn; uniform float gShadowOn;${glow ? ' uniform sampler2D gGlow;' : ''}`)
+      .replace('#include <colorspace_fragment>', `#include <colorspace_fragment>
+{
+  vec3 gS = texture2D( gLight, vNormalMapUv ).rgb;
+  vec2 gXY = gS.xy * ( 255.0 / 127.5 ) - 1.0;
+  float gZ = sqrt( max( 1.0 - dot( gXY, gXY ), 0.0 ) );
+  #ifdef USE_TANGENT
+    vec3 gN0 = normalize( vNormal ) * faceDirection;
+    vec3 gT0 = normalize( vTangent );
+    gT0 = normalize( gT0 - dot( gT0, gN0 ) * gN0 );
+    vec3 gB0 = normalize( vBitangent ) * faceDirection;
+    vec3 gN = normalize( gT0 * gXY.x + gB0 * gXY.y + gN0 * gZ );
+  #else
+    vec3 gN = normalize( tbn * vec3( gXY, gZ ) );
+  #endif
+  vec3 gV = normalize( vViewPosition );
+  vec3 gL = normalize( ( viewMatrix * vec4( gLightDir, 0.0 ) ).xyz );
+  vec3 gUp = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
+  vec3 gEast = normalize( ( viewMatrix * vec4( 1.0, 0.0, 0.0, 0.0 ) ).xyz );
+  float gs = gS.b * gSpec.x, gp = gSpec.y;
+  vec3 gAmbient = ( gGround + ( gSky - gGround ) * ( dot( gN, gUp ) * 0.5 + 0.5 ) ) * ( dot( gN, gEast ) * 0.5 + 1.0 );
+  float gSkySpec = gs * 0.25 * pow( max( dot( normalize( gV + gUp ), gN ), 0.0 ), gp * 0.5 );
+  float gSunSpec = gs * pow( max( dot( normalize( gV - gL ), gN ), 0.0 ), gp );
+  // (the game's shadowed lighting takes the sun's two terms times one filtered comparison with its shadow map; the
+  // plain view's is the character's own, from the same sun)
+  float gShadow = 1.0;
+  #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+    if ( receiveShadow && gShadowOn > 0.5 ) gShadow = getShadow( directionalShadowMap[ 0 ], directionalLightShadows[ 0 ].shadowMapSize, directionalLightShadows[ 0 ].shadowBias, directionalLightShadows[ 0 ].shadowRadius, vDirectionalShadowCoord[ 0 ] );
+  #endif
+  vec3 gLit = ( gSunSpec + max( dot( gN, -gL ), 0.0 ) ) * gShadow * gSun + gAmbient + gSkySpec * gSky${glow ? ' + texture2D( gGlow, vNormalMapUv ).r * gSpec.z * gGlowOn' : ''};
+  gl_FragColor.rgb = pow( max( gLit * diffuseColor.rgb, vec3( 0.0 ) ), vec3( 1.0 / 2.2 ) ) * ( 254.0 / 255.0 );
+}`);
+  };
+  mat.customProgramCacheKey = () => `game-lit${glow ? '-glow' : ''}:${prevKey()}`;
+  mat.needsUpdate = true;
+}
+/** A part's material: its texture, recoloured as the game does, lit as the game does where the data says how. */
+async function partMaterial(p: DrawPart) {
+  const game = rendering.lighting === 'game' && p.mat != null && !!p.spec;
+  const [map, param, light, glow] = await Promise.all([p.mat != null ? getTex('tex', p.mat) : null, p.mat != null ? getTex('param', p.mat) : null,
+    game ? getTex('light', p.mat!) : null, game && p.glow ? getTex('glow', p.mat!) : null]);
+  const mat = new THREE.MeshStandardMaterial({color: map ? 0xffffff : 0xb9c2cf, map: map ?? null, metalness: 0.02, roughness: 0.82, alphaTest: 0.35, side: THREE.DoubleSide});
+  applyPackedRecolor(mat, param, [p.t1, p.t2]);
+  if (light && p.spec) gameLit(mat, light, p.spec, glow);
+  return mat;
+}
 
 // the head (the framings' close-ups aim at it when a stance moves it)
 const HEAD_BONE = 6;
@@ -145,6 +244,33 @@ export class Preview {
     const fill = new THREE.DirectionalLight(0xc8d6ff, 0.55); fill.position.set(1400, 900, 900); this.lights.add(fill);
     const rim = new THREE.DirectionalLight(0xd6e2ff, 1.0); rim.position.set(900, 1500, -1800); this.lights.add(rim);
     if (opts.floor) { this.floorGroup = floorShadow(); this.scene.add(this.floorGroup); }
+    // the game's sun, for the character's own shadow on the plain backgrounds (three's light, at no intensity: the
+    // game's lighting is the materials' own; this only draws the shadow map). A single filtered comparison, as the
+    // game's (radius 0: every tap of three's kernel at the same place)
+    const small = Math.min(screen.width, screen.height) < 700;
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(small ? 1024 : 2048, small ? 1024 : 2048);
+    Object.assign(this.sun.shadow.camera, {left: -1700, right: 1700, top: 1700, bottom: -1700, near: 100, far: 16000});
+    this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 3; this.sun.shadow.radius = 0;
+    this.sun.target.position.set(0, 1000, 0);
+    this.scene.add(this.sun, this.sun.target);
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    if (this.floorGroup) {
+      // the character's shadow on the ground, where the disc is (the game draws no ground here: the disc and this
+      // shadow are the page's own)
+      // (fading out well inside the shadow map's reach: a long shadow never ends at an edge)
+      const shadowMat = new THREE.ShadowMaterial({opacity: 0.28, depthWrite: false});
+      shadowMat.onBeforeCompile = (sh: any) => {
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vGroundXZ;')
+          .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGroundXZ = ( modelMatrix * vec4( transformed, 1.0 ) ).xz;');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vGroundXZ;')
+          .replace('#include <tonemapping_fragment>', 'gl_FragColor.a *= 1.0 - smoothstep( 800.0, 1700.0, length( vGroundXZ ) );\n#include <tonemapping_fragment>');
+      };
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), shadowMat);
+      g.rotation.x = -Math.PI / 2; g.position.y = 3; g.receiveShadow = true;
+      this.floorGroup.add(g);
+    }
+    this.setRendering(rendering);
     this.resize();
     this.resizing.observe(canvas);
     canvas.addEventListener('webglcontextlost', () => { if (!this.dead) report('webgl context lost'); });
@@ -207,20 +333,24 @@ export class Preview {
     if (gen !== this.gen) { for (const m of built) if (m) (m.material as THREE.Material).dispose(); return; }
     for (const [key, m] of this.active) if (!wanted.has(key)) { this.root.remove(m); (m.material as THREE.Material).dispose(); this.active.delete(key); }
     missing.forEach((p, i) => { const m = built[i]; if (m) { this.root.add(m); this.active.set(p.key, m); } });
+    this.syncLights();
     parts.forEach((p, i) => { const m = this.active.get(p.key); if (m) m.renderOrder = i; });
     if (this.game) await this.game.setActors(parts, this.rig).catch(e => console.warn('game actors', e));
     this.onLoading(0);
   }
 
   private async build(p: DrawPart) {
-    const [{geo, skinned}, map, param] = await Promise.all([getMesh(p.mesh), p.mat != null ? getTex('tex', p.mat) : null, p.mat != null ? getTex('param', p.mat) : null]);
-    const mat = new THREE.MeshStandardMaterial({color: map ? 0xffffff : 0xb9c2cf, map: map ?? null, metalness: 0.02, roughness: 0.82, alphaTest: 0.35, side: THREE.DoubleSide});
-    applyPackedRecolor(mat, param, [p.t1, p.t2]);
+    const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
+    // (its shadow: cut out where the texture is, as the part is)
+    const depth = new THREE.MeshDepthMaterial({depthPacking: THREE.RGBADepthPacking, map: mat.map, alphaTest: 0.35, side: THREE.DoubleSide});
+    mat.addEventListener('dispose', () => depth.dispose());
     // skin in the rig frame, then apply the part's own world (the root's basis) once
     const mesh = skinned ? new PartSkinnedMesh(geo, mat, this.anchor) : new THREE.Mesh(geo, mat);
     if (skinned) (mesh as any).bind(this.rig!.skeleton, new THREE.Matrix4());
     mesh.frustumCulled = false;
     mesh.userData.part = p;
+    mesh.customDepthMaterial = depth;
+    mesh.castShadow = mesh.receiveShadow = this.shadowsOn();
     return mesh;
   }
 
@@ -250,6 +380,46 @@ export class Preview {
   // ---- a room behind the character (a game place as the backdrop) ----
   private roomGroup = new THREE.Group();
   private floorGroup: THREE.Object3D | null = null;
+  private sun = new THREE.DirectionalLight(0xffffff, 0);
+  /** Draw the plain view as `r` says (the page's Rendering settings): the sun moves, glow and shadows switch at once;
+   *  the lighting itself (the game's or three's) builds every part again, the old ones shown until the new are ready. */
+  setRendering(r: Rendering) {
+    const relight = r.lighting !== rendering.lighting;
+    rendering = {...r}; applyShared(rendering);
+    this.sun.position.copy(this.sun.target.position).addScaledVector(sunDirection(rendering), -8000);
+    this.syncShadows();
+    if (relight && this.rig) void this.rebuildAll();
+  }
+  /** The character designer shows this view: no shadows (hair and hoods would shade the face being designed). */
+  private designing = false;
+  setDesigning(on: boolean) { this.designing = on; this.syncShadows(); }
+  private shadowsOn() { return rendering.lighting === 'game' && rendering.shadows && !this.roomPlace && !this.designing; }
+  private syncShadows() {
+    const on = this.shadowsOn();
+    if (this.renderer.shadowMap.enabled !== on) for (const m of this.active.values()) (m.material as THREE.Material).needsUpdate = true;
+    // (the sun is there only for its shadow map: a light three counts costs every part's shader, even at no intensity)
+    this.renderer.shadowMap.enabled = on; this.sun.castShadow = this.sun.visible = on;
+    for (const m of this.active.values()) m.castShadow = m.receiveShadow = on;
+    if (this.floorGroup?.children[2]) this.floorGroup.children[2].visible = on;
+    this.syncLights();
+  }
+  /** three's own lights only where a part uses them: the studio lighting, a part the game's could not light (its
+   *  pictures failed), a place (its effects). Parts lit the game's way work them out and throw them away. */
+  private syncLights() {
+    const needed = rendering.lighting === 'studio' || !!this.roomPlace
+      || [...this.active.values()].some(m => !String((m.material as any).customProgramCacheKey?.() ?? '').startsWith('game-lit'));
+    if (this.lights.visible !== needed) { this.lights.visible = needed; for (const m of this.active.values()) (m.material as THREE.Material).needsUpdate = true; }
+  }
+  /** Every part built again (the lighting changed); the old ones stay until the new are ready. */
+  private async rebuildAll() {
+    const parts = this.parts, gen = ++this.gen;
+    const built = await Promise.all(parts.map(p => this.build(p).catch(e => { console.warn('part', p, e); return null; })));
+    if (gen !== this.gen) { for (const m of built) if (m) (m.material as THREE.Material).dispose(); return; }
+    for (const m of this.active.values()) { this.root.remove(m); (m.material as THREE.Material).dispose(); }
+    this.active.clear();
+    parts.forEach((p, i) => { const m = built[i]; if (m) { m.renderOrder = i; this.root.add(m); this.active.set(p.key, m); } });
+    this.syncLights();
+  }
   // the disc under the character: 'ring' (shadow and ring), 'shadow', or 'none'
   floorMode: 'ring' | 'shadow' | 'none' = 'ring';
   setFloor(mode: 'ring' | 'shadow' | 'none') { this.floorMode = mode; this.showFloor(); }
@@ -258,6 +428,7 @@ export class Preview {
     // (never in a place: its floor takes the figure's own shadow)
     this.floorGroup.visible = this.floorMode !== 'none' && !this.roomPlace;
     this.floorGroup.children[1].visible = this.floorMode === 'ring';
+    this.syncShadows();
   }
   roomId: number | null = null;
   private wide = 1;
@@ -561,9 +732,7 @@ export class Thumbnailer {
     const meshes: THREE.Mesh[] = [];
     const box = new THREE.Box3();
     for (const p of parts) {
-      const [{geo, skinned}, map, param] = await Promise.all([getMesh(p.mesh), p.mat != null ? getTex('tex', p.mat) : null, p.mat != null ? getTex('param', p.mat) : null]);
-      const mat = new THREE.MeshStandardMaterial({color: map ? 0xffffff : 0xb9c2cf, map: map ?? null, metalness: 0.02, roughness: 0.8, alphaTest: 0.35, side: THREE.DoubleSide});
-      applyPackedRecolor(mat, param, [p.t1, p.t2]);
+      const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
       const mesh = skinned ? new PartSkinnedMesh(geo, mat, this.anchor) : new THREE.Mesh(geo, mat);
       if (skinned) (mesh as any).bind(this.rig.skeleton, new THREE.Matrix4());
       mesh.frustumCulled = false;
