@@ -68,7 +68,7 @@ export const Landing = memo(() => (
     </main>
     <footer className="home-foot">
       <div className="home-foot-in">
-        <span className="home-foot-brand"><img src="/brand/mark.svg" alt="" width={16} height={16} /> Brighter Atlas</span>
+        <span className="home-foot-brand"><img src="/brand/mark.svg" alt="" width={16} height={16} /> <span><span className="brand-name">Brighter</span> <span className="brand-sub">Atlas</span></span></span>
         <span className="home-foot-note">A fan project. Not affiliated with or endorsed by Fen Research, the makers of Brighter Shores.</span>
         <Version />
       </div>

@@ -73,6 +73,8 @@
 .home-foot-in { display: flex; align-items: center; gap: 12px 24px; flex-wrap: wrap; padding-top: 18px; border-top: 1px solid var(--line);
   color: var(--fg2); font-size: 12.5px; line-height: 1.5; }
 .home-foot-brand { display: inline-flex; align-items: center; gap: 7px; color: var(--fg1); font-weight: 600; white-space: nowrap; }
+/* (the name as the tool switch sets it: the tool in capitals, in the blue of the mark's A) */
+.home-foot-brand .brand-sub { margin-left: 2px; color: var(--accent); }
 .home-foot-note { flex: 1; min-width: 240px; }
 .home-foot-version { font: 11.5px var(--mono); color: var(--fg2); white-space: nowrap; }
 @media (max-width: 900px) {

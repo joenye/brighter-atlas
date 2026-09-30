@@ -597,6 +597,14 @@ async function fixtureSuite(browser: any, base: string) {
   const preloads = await page.$$eval('link[rel=preload][as=font]', (ls) => ls.map((l) => l.getAttribute('href')));
   ok(['ui-symbols', 'ui-symbols2', 'ui-math'].every((n) => preloads.some((h) => h?.endsWith(`/${n}.woff2`))),
     `the page preloads the symbol font's faces (${preloads.length})`);
+  // "Brighter" in the brand's face: the word's own font loads, is preloaded, and the top bar sets it
+  const brand = await page.evaluate(async () => {
+    const faces = await document.fonts.load('600 16px "BA Brighter"', 'Brighter');
+    const el = document.querySelector('#topbar .brand-name');
+    return { faces: faces.length, family: el ? getComputedStyle(el).fontFamily : '' };
+  });
+  ok(brand.faces === 1 && /BA Brighter/.test(brand.family) && preloads.some((h) => h?.endsWith('/brighter.woff2')),
+    `"Brighter" is set in the brand's font (${brand.faces} face, ${brand.family || 'no top bar'})`);
 
   ok(errors.length === 0, `zero console errors in fixtures suite${errors.length ? `:\n    ${errors.join('\n    ')}` : ''}`);
   await page.close();

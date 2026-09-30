@@ -846,7 +846,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           {/* the one way into face and body (Male/Female and a random look are there, in Body) */}
           <div className="of-charcard"><button className="btn of-design" aria-label="Character: face, body and hair" title="Design your character: face, body and hair" onClick={() => openCreator()}><Icon name="mask" />Character</button></div>
           <div id="toast" role="status" aria-live="polite" className={toastMsg && toastMsg.n > 0 ? 'show' : undefined}>{toastMsg?.text}</div>
-          {PICTURE && <div className="of-picmark"><img src="/brand/mark.svg" alt="" /><span><b>Brighter</b> Fashion</span></div>}
+          {PICTURE && <div className="of-picmark"><img src="/brand/mark.svg" alt="" /><span><b className="brand-name">Brighter</b> Fashion</span></div>}
           {/* the view's own toolbar, along its top on the right: undo, redo, the picture, the looks */}
           <div id="of-toolbar" className="of-toolbar">
             <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>
