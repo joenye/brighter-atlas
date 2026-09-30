@@ -33,8 +33,9 @@
 .home-name .brand-name { font-weight: 600; }
 .home-name .brand-sub { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; color: var(--accent); margin-left: 2px; }
 .home-desc { color: var(--fg1); font-size: 14px; line-height: 1.5; flex: 1; }
-/* the way in: the card's one call to action, a button in the site's blue that fills as the card is pointed at */
-.home-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 8px 16px; border-radius: 999px;
+/* the way in: the card's one call to action, a button the card's width in the site's blue that fills as the card is
+   pointed at */
+.home-go { align-self: stretch; display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: 4px; padding: 11px 16px; border-radius: 10px;
   color: var(--accent); font-weight: 600; font-size: 14px;
   background: rgba(120, 183, 255, .12); border: 1px solid rgba(120, 183, 255, .4); transition: background .15s, color .15s; }
 .home-go-arrow { display: inline-block; transition: transform .15s; }
