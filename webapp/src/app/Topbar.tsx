@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { PATHS, type Tool } from './paths.js';
 import { navigate } from './router.js';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
-import { DiscordIcon, GitHubIcon, ExternalIcon, DISCORD_URL, GITHUB_URL, WIKI_URL } from './icons.js';
+import { DiscordIcon, GitHubIcon, ExternalIcon, DISCORD_URL, GAME_URL, GITHUB_URL, WIKI_URL } from './icons.js';
 
 export const NAMES: Record<Tool, string> = { home: 'atlas', fashion: 'fashion', maps: 'maps', data: 'data' };
 const TOOL_LINES: [Exclude<Tool, 'home'>, string, string][] = [
@@ -97,7 +97,10 @@ function ToolSwitch({ tool, extras, onCurrent }: { tool: Tool; extras: { label: 
           <button key={x.label} type="button" role="menuitem" className="tool-switch-home tool-switch-extra" onClick={() => { close(); x.onClick(); }}>{x.label}</button>
         ))}
         {rule('r3')}
-        {/* (the game's own wiki: another site, in a new tab) */}
+        {/* (the game's own site and its wiki: other sites, in a new tab) */}
+        <a role="menuitem" href={GAME_URL} target="_blank" rel="noopener noreferrer" className="tool-switch-home tool-switch-extra" title="Brighter Shores, the game's own site (opens in a new tab)">
+          <ExternalIcon /><span>Official Site</span>
+        </a>
         <a role="menuitem" href={WIKI_URL} target="_blank" rel="noopener noreferrer" className="tool-switch-home tool-switch-extra" title="The Brighter Shores Wiki (opens in a new tab)">
           <ExternalIcon /><span>Brighter Shores Wiki</span>
         </a>

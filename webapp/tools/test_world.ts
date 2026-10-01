@@ -328,7 +328,7 @@ try {
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
   // the top bar's tool switch: every tool (this one marked) and the landing page
   await page.click('#topbar .tool-switch-btn');
-  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/data', 'https://brightershoreswiki.org'], 'the switch leads with Home, then every tool, then the game\'s wiki');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/data', 'https://brightershores.com', 'https://brightershoreswiki.org'], 'the switch leads with Home, then every tool, then the game\'s own site and its wiki');
   assert.equal(await page.$eval('.tool-switch-menu a[href^="https://brightershoreswiki"]', (a) => a.getAttribute('target') + ' ' + a.getAttribute('rel')), '_blank noopener noreferrer', 'the wiki opens in a new tab');
   assert.equal(await page.$eval('.tool-switch-home', (a) => a.textContent), 'Home', 'the landing page is Home');
   assert.equal(await page.$eval('.tool-switch-menu a[aria-current=page]', (a) => a.getAttribute('href')), '/maps', 'this one marked');
