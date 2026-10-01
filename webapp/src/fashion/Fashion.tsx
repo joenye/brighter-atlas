@@ -193,8 +193,10 @@ export function Tool(props: ToolProps) {
 function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const index = useMemo(() => makeIndex(pack), [pack]);
   const RELAXED = pack.creator.idleClip;   // the resting clip (it hides held items; the viewer can show them in hand)
-  // the combat-ready idle most weapons share (a shield alone stands in it too)
+  // the fists-up combat-ready idle the game plays with no weapon in hand (a shield alone included), and, for a pack
+  // without it, the combat-ready idle most weapons share
   const DEFAULT_STANCE = useMemo<number | null>(() => { const n = new Map<number, number>(); for (const i of pack.items) if (i.stance != null) n.set(i.stance, (n.get(i.stance) ?? 0) + 1); return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null; }, [pack]);
+  const UNARMED: number | null = pack.unarmedClip ?? DEFAULT_STANCE;
   const encode = encodeLook, decode = (code: string | null) => decodeLook(code, i => index.items.has(i));
   const linked = useMemo(() => decode(addressLook().code), []);
   // A link opens its look as yours; the look you had is one Undo away (no prompt to keep or go back).
@@ -491,14 +493,16 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     void e.viewer.setEffects(showEffects ? effects : []);
     if (designing) { warmStyles(); if (!sharedView) void creatorReady.current?.then(() => e.creatorPreview?.apply(designParts)); }
   }, [model.version, designing, sharedView, showEffects]);
-  // the pose: weapons out (the worn weapon's combat-ready stance, a shield alone takes the common one), or away
+  // the pose: weapons out (the worn weapon's combat-ready stance; with no weapon, a shield alone too, fists up as the
+  // game does), or away. A link's picture of a look with nothing in hand stays at rest.
   const armed = !!(state.equip.weapon || state.equip.shield);
+  const fighting = showHeld && (armed || !PICTURE);
   useEffect(() => {
     const e = engine.current; if (!e) return;
     const plain = designing && sharedView;   // designing: nothing held, the resting pose
     e.viewer.showHeld = showHeld && !plain;
-    const stance = pack.items.find((i: any) => i.id === state.equip.weapon?.item)?.stance ?? DEFAULT_STANCE;
-    const clip = armed && showHeld && !plain && stance != null ? stance : RELAXED;
+    const stance = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item)?.stance ?? DEFAULT_STANCE : UNARMED;
+    const clip = fighting && !plain && stance != null ? stance : RELAXED;
     if (e.viewer.clipId !== clip) void e.viewer.setClip(clip);
     if (designing && !sharedView && e.creatorPreview) { const c = e.creatorPreview; c.showHeld = false; void creatorReady.current?.then(() => { if (c.clipId !== RELAXED) void c.setClip(RELAXED); }); }
   }, [model.version, showHeld, designing, sharedView]);
@@ -810,9 +814,14 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       <button className={`btn of-pose of-mode-btn${equipOn ? ' active' : ''}`} aria-pressed={equipOn} title="Equipment: what your character wears" aria-label="Equipment" onClick={() => modeClick(false)}><Icon name="torso" /></button>
       <button className={`btn of-pose of-fx${showEffects ? ' active' : ''}`} hidden={!fx.length} title="Show or hide the particle effect this outfit gives off" aria-label="Effect" aria-pressed={showEffects}
         onClick={() => { const on = !showEffects; setShowEffects(on); store.set('fx', on ? '1' : '0'); }}><span className="fx-glyph" aria-hidden="true">✦</span></button>
-      <button className={`btn of-pose${armed && showHeld && !designing ? ' active' : ''}`} hidden={!armed} disabled={designing} aria-label="Weapons out" aria-pressed={armed && showHeld}
-        title={designing ? 'Weapons are put away while you design' : !armed ? 'Nothing held yet: pick a weapon or shield' : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance'}
-        onClick={() => setShowHeld(h => !h)}><Icon name="weapon" /></button>
+      <button className={`btn of-pose${fighting && !designing ? ' active' : ''}`} hidden={!armed && UNARMED == null} aria-label="Weapons out" aria-pressed={fighting && !designing}
+        title={designing ? 'Weapons out: leaves the designer for your equipment, in the combat-ready stance' : !state.equip.weapon ? (showHeld ? 'Fists up, in the combat-ready stance, as the game does with no weapon. Click to stand at rest' : 'At rest. Click to put your fists up, in the combat-ready stance, as the game does with no weapon')
+          : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance'}
+        onClick={() => {
+          // (from the designer: to the equipment, weapons out, as the Equipment button goes there)
+          if (live.current.designing) { modeClick(false); live.current.showHeld = true; setShowHeld(true); }
+          else setShowHeld(h => !h);
+        }}><Icon name="weapon" /></button>
       <div className="of-bg">
         <button ref={els.bgBtn} className={`btn of-bgbtn${bgMode ? ' active' : ''}`} aria-haspopup="menu" aria-label="Settings" title="Settings: background, ground, the random outfit and rendering"
           aria-expanded={bgTouched && !isPhone ? bgOpen : undefined} aria-pressed={isPhone ? bgMode : undefined}
