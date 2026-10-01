@@ -36,7 +36,10 @@ export const Landing = memo(() => (
           // (a card is one link, moved to without a page load)
           <a key={c.tool} className="home-tool" data-tool={c.tool} href={PATHS[c.tool]}
             onClick={(e) => { if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); navigate(PATHS[c.tool]); }}>
-            <span className="home-shot"><img src={`/landing/${c.tool}.webp`} alt={c.alt} loading="lazy" width={1200} height={750}
+            {/* (the picture at the size it shows: 800 and 1200 px beside the 1600 px card link previews use; fetched at
+                once, not lazily: the cards are the first screen) */}
+            <span className="home-shot"><img src={`/landing/${c.tool}.webp`} srcSet={`/landing/${c.tool}-800.webp 800w, /landing/${c.tool}-1200.webp 1200w, /landing/${c.tool}.webp 1600w`}
+              sizes="(max-width: 900px) calc(100vw - 28px), (max-width: 1180px) calc((100vw - 76px) / 3), 368px" alt={c.alt} width={1200} height={750}
               onLoad={(e) => e.currentTarget.classList.add('in')} ref={(img) => { if (img?.complete && img.naturalWidth) img.classList.add('in'); }} /></span>
             <span className="home-text">
               <span className="home-head">

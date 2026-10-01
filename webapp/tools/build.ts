@@ -10,6 +10,7 @@
 import { build, context, type BuildOptions, type Metafile } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { writeFileSync } from 'node:fs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const watch = process.argv.includes('--watch');
@@ -55,6 +56,22 @@ if (watch) {
   for (const job of jobs) (await context(job)).watch();
 } else {
   const results = await Promise.all(jobs.map(build));
+  // js/preloads.json: what each page can ask for at once instead of finding it one import at a time: the site's
+  // own chunks (every page), and each tool's chunk with the chunks only it needs (a host may name them in the page)
+  const site = results[2].metafile!.outputs;
+  const staticOf = (file: string, into = new Set<string>()): Set<string> => {
+    for (const im of site[file]?.imports ?? []) if (im.kind === 'import-statement' && !into.has(im.path)) { into.add(im.path); staticOf(im.path, into); }
+    return into;
+  };
+  const shell = staticOf('js/app.js');
+  const TOOL_ENTRIES: Record<string, string> = { fashion: 'src/fashion/Fashion.tsx', maps: 'src/world-atlas/WorldMap.tsx', data: 'src/DataTool.tsx' };
+  const tools: Record<string, string[]> = {};
+  for (const [tool, entry] of Object.entries(TOOL_ENTRIES)) {
+    const out = Object.keys(site).find((f) => site[f].entryPoint === entry);
+    if (!out) throw new Error(`no chunk for ${entry}`);
+    tools[tool] = [out, ...[...staticOf(out)].filter((f) => !shell.has(f))].map((f) => '/' + f);
+  }
+  writeFileSync(path.join(root, 'js/preloads.json'), JSON.stringify({ shell: [...shell].map((f) => '/' + f), tools }, null, 1) + '\n');
   // per-entry size summary (production only)
   const rows: Array<[string, number]> = [];
   for (const r of results) {
