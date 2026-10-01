@@ -113,6 +113,19 @@ function gameLit(mat: THREE.MeshStandardMaterial, light: THREE.Texture, spec: nu
     Object.assign(shader.uniforms, uniforms);
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
 uniform sampler2D gLight; uniform vec3 gSpec; uniform vec3 gSky; uniform vec3 gGround; uniform vec3 gSun; uniform vec3 gLightDir; uniform float gGlowOn; uniform float gShadowOn;${glow ? ' uniform sampler2D gGlow;' : ''}`)
+      // the game's one filtered comparison: its sampler compares the 2x2 nearest texels and blends the four results
+      // by the position between them (a linear comparison filter), so an edge grades over a texel rather than
+      // stepping. three's PCF at radius 0 makes 17 taps at one spot: a single hard comparison (the squares)
+      .replace('#include <shadowmap_pars_fragment>', `#include <shadowmap_pars_fragment>
+#if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+float gShadow2x2( sampler2D map, vec2 size, float bias, vec4 c ) {
+  c.xyz /= c.w; c.z += bias;
+  if ( c.x < 0.0 || c.x > 1.0 || c.y < 0.0 || c.y > 1.0 || c.z > 1.0 ) return 1.0;
+  vec2 t = c.xy * size - 0.5, f = fract( t ), ts = 1.0 / size, b = ( floor( t ) + 0.5 ) * ts;
+  return mix( mix( texture2DCompare( map, b, c.z ), texture2DCompare( map, b + vec2( ts.x, 0.0 ), c.z ), f.x ),
+              mix( texture2DCompare( map, b + vec2( 0.0, ts.y ), c.z ), texture2DCompare( map, b + ts, c.z ), f.x ), f.y );
+}
+#endif`)
       .replace('#include <colorspace_fragment>', `#include <colorspace_fragment>
 {
   vec3 gS = texture2D( gLight, vNormalMapUv ).rgb;
@@ -139,7 +152,7 @@ uniform sampler2D gLight; uniform vec3 gSpec; uniform vec3 gSky; uniform vec3 gG
   // plain view's is the character's own, from the same sun)
   float gShadow = 1.0;
   #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
-    if ( receiveShadow && gShadowOn > 0.5 ) gShadow = getShadow( directionalShadowMap[ 0 ], directionalLightShadows[ 0 ].shadowMapSize, directionalLightShadows[ 0 ].shadowBias, directionalLightShadows[ 0 ].shadowRadius, vDirectionalShadowCoord[ 0 ] );
+    if ( receiveShadow && gShadowOn > 0.5 ) gShadow = gShadow2x2( directionalShadowMap[ 0 ], directionalLightShadows[ 0 ].shadowMapSize, directionalLightShadows[ 0 ].shadowBias, vDirectionalShadowCoord[ 0 ] );
   #endif
   vec3 gLit = ( gSunSpec + max( dot( gN, -gL ), 0.0 ) ) * gShadow * gSun + gAmbient + gSkySpec * gSky${glow ? ' + texture2D( gGlow, vNormalMapUv ).r * gSpec.z * gGlowOn' : ''};
   gl_FragColor.rgb = pow( max( gLit * diffuseColor.rgb, vec3( 0.0 ) ), vec3( 1.0 / 2.2 ) ) * ( 254.0 / 255.0 );
@@ -166,6 +179,31 @@ const HEAD_BONE = 6;
 const FOOT_LIFT = 8;
 // the lens over a place drawn by the game (degrees, vertical)
 const GAME_FOV = 16;
+
+// A box's corners, and the box cut by a frustum: every face clipped by every plane (Sutherland-Hodgman), the
+// vertices of the solid they share (the view is always outside the figure's box here, so no frustum corner falls
+// inside it; nothing in view at all leaves the fit to the whole box).
+const CORNERS = Array.from({length: 8}, () => new THREE.Vector3());
+function boxCorners(b: THREE.Box3) { for (let i = 0; i < 8; i++) CORNERS[i].set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z); return CORNERS; }
+const FACES = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
+function clipBoxToFrustum(b: THREE.Box3, f: THREE.Frustum, out: THREE.Vector3[]): THREE.Vector3[] {
+  out.length = 0;
+  const c = boxCorners(b).map(v => v.clone());
+  for (const face of FACES) {
+    let poly = face.map(i => c[i]);
+    for (const pl of f.planes) {
+      const next: THREE.Vector3[] = [];
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], z = poly[(i + 1) % poly.length], da = pl.distanceToPoint(a), dz = pl.distanceToPoint(z);
+        if (da >= 0) next.push(a);
+        if ((da >= 0) !== (dz >= 0)) next.push(a.clone().lerp(z, da / (da - dz)));
+      }
+      poly = next; if (!poly.length) break;
+    }
+    out.push(...poly);
+  }
+  return out;
+}
 
 export interface Framing { dist: number; target: number }
 export const FRAMES: Record<string, Framing> = {full: {dist: 5600, target: 760}, upper: {dist: 3000, target: 1060}, face: {dist: 1450, target: 1230}};
@@ -250,7 +288,13 @@ export class Preview {
     // game's (radius 0: every tap of three's kernel at the same place)
     const small = Math.min(screen.width, screen.height) < 700;
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(small ? 1024 : 2048, small ? 1024 : 2048);
+    // (the game's map is 4096 on D3D11 hardware; a phone takes half: 4096 would be 64 MB of its graphics memory; a
+    // browser drawing without a graphics card a quarter: measured, its frame took 37 ms at 1024, 110 ms at 4096,
+    // where an RTX 5090's took 0.50 and 0.59)
+    const gl = this.renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
+    const software = /swiftshader|llvmpipe|softpipe|software/i.test(String(info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : ''));
+    const mapSize = Math.min(software ? 1024 : small ? 2048 : 4096, this.renderer.capabilities.maxTextureSize);
+    this.sun.shadow.mapSize.set(mapSize, mapSize);
     Object.assign(this.sun.shadow.camera, {left: -1400, right: 1400, top: 1400, bottom: -1400, near: 100, far: 16000});
     this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 3; this.sun.shadow.radius = 0;
     this.sun.target.position.set(0, 1000, 0);
@@ -552,7 +596,44 @@ export class Preview {
       this.scene.fog = fog;
       r.clearDepth();
     }
+    if (this.sun.castShadow) this.fitShadow();
     r.render(this.scene, this.camera);
+  }
+
+  // The shadow map fitted as the game fits its own (docs: the frame's shadow pass): to the part of the scene the
+  // camera sees, here the character's bounds (the scene the plain view draws) cut by the view's frustum, in the
+  // sun's frame, with a texel of border; depth from the sun to the far side of the whole figure, so a part outside
+  // the view (a hat's brim above the frame) still casts. Close up, the same map covers only what shows: finer.
+  private fitBox = new THREE.Box3(); private fitFrustum = new THREE.Frustum(); private fitM = new THREE.Matrix4();
+  private fitPts: THREE.Vector3[] = []; private fitTmp = new THREE.Vector3(); private fitPart = new THREE.Box3(); private fitCount = 0;
+  private fitShadow() {
+    // (a skinned part's bounds come from its skinning, in the rig's frame (the game's axes); its own transform, the
+    // root's turn to the scene's, takes them to the scene. Worked out again every 30 frames, as a stance moves the
+    // parts)
+    const box = this.fitBox.makeEmpty(), again = (this.fitCount = (this.fitCount + 1) % 30) === 0;
+    for (const m of this.active.values()) {
+      if (!m.visible) continue;
+      const sk = m as unknown as THREE.SkinnedMesh;
+      if (sk.isSkinnedMesh) { if (!sk.boundingBox || again) sk.computeBoundingBox(); box.union(this.fitPart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
+      else { if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); box.union(this.fitPart.copy(m.geometry.boundingBox!).applyMatrix4(m.matrixWorld)); }
+    }
+    if (box.isEmpty()) return;
+    box.expandByScalar(Math.max(40, box.getSize(this.fitTmp).y * 0.06));   // (a pose moves parts past their resting bounds)
+    this.camera.updateMatrixWorld();
+    this.fitFrustum.setFromProjectionMatrix(this.fitM.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
+    const pts = clipBoxToFrustum(box, this.fitFrustum, this.fitPts);
+    const sc = this.sun.shadow.camera as THREE.OrthographicCamera;
+    this.sun.position.copy(this.sun.target.position).addScaledVector(sunDirection(rendering), -8000);
+    this.sun.updateMatrixWorld(); this.sun.target.updateMatrixWorld();
+    sc.position.copy(this.sun.position); sc.lookAt(this.sun.target.position); sc.updateMatrixWorld();
+    const toLight = this.fitM.copy(sc.matrixWorldInverse);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const p of pts.length ? pts : boxCorners(box)) { const q = this.fitTmp.copy(p).applyMatrix4(toLight); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
+    for (const p of boxCorners(box)) { const q = this.fitTmp.copy(p).applyMatrix4(toLight); z0 = Math.min(z0, -q.z); z1 = Math.max(z1, -q.z); }
+    const size = this.sun.shadow.mapSize.x, bx = (x1 - x0) / (size - 2), by = (y1 - y0) / (size - 2);
+    sc.left = x0 - bx; sc.right = x1 + bx; sc.bottom = y0 - by; sc.top = y1 + by;
+    sc.near = Math.max(1, z0 - 50); sc.far = z1 + 50;
+    sc.updateProjectionMatrix();
   }
 
   // The game's frame (the place and the character in it), then three's overlays over it: the worn
