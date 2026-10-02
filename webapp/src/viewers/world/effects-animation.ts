@@ -25,7 +25,8 @@ export class EffectBoneAnimation {
 
   sample(tick: number): readonly (readonly number[])[] {
     if (tick !== this.lastTick) {
-      this.clip.apply(this.skeleton, clipPhase(tick * 1000 / this.tickRate, this.clip.duration, this.loop));
+      // (the effects' tick to the clip's time: both the game's ticks, 600 a second, at the effects' own rate)
+      this.clip.apply(this.skeleton, clipPhase(tick * 600 / this.tickRate, this.clip.duration, this.loop));
       for (const root of this.skeleton.roots) root.updateMatrixWorld(true);
       this.pose = this.skeleton.bones.map(b => b.matrixWorld.elements.slice());
       this.lastTick = tick;

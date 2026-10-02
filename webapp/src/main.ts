@@ -1149,7 +1149,7 @@ export class App {
             class: 'r-meta', text: item.sn[0], title: item.sn.join('\n'),
           }) : null,
           ac ? badge(ac.tag, ac.cls, ac.title) : null,
-          el('span', { class: 'r-meta', text: notEx ? '∅' : `${item.frames}f · ${fmtDur(item.dur / 1000)}` }));
+          el('span', { class: 'r-meta', text: notEx ? '∅' : `${item.frames}f · ${fmtDur(item.dur / 600)}` }));
         break;
       }
       case 'rigs':

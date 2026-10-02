@@ -16,10 +16,14 @@ import { getPref, setPref } from '../prefs.js';
 import type { AppStore, IndexEntry } from '../store.js';
 
 export const SPEEDS = [0.1, 0.25, 0.5, 1, 1.5, 2, 4];
-// Default 0.5× (not 1×): the raw clip rate plays ~2× too fast vs the in-game
-// look, so 0.5× reads as in-game "1×". Only used until the user picks a speed
-// (which persists via the 'speed' pref).
-export const prefSpeed = (): number => (SPEEDS.includes(getPref('speed')) ? getPref('speed') : 0.5);
+/** The game's animation clock: 600 ticks a second. A clip's times (its duration and frame interval, keys 20 ticks
+ *  apart) are ticks, so a clip plays at the game's own pace when its time advances 0.6 ticks a millisecond. */
+export const TICKS_PER_MS = 0.6;
+/** A clip time (ticks) in milliseconds of real time at 1×. */
+export const clipMs = (ticks: number): number => ticks / TICKS_PER_MS;
+// 1× is the game's own pace. (The pref has a new name: speeds picked when 0.5× stood in for the game's pace, the clips
+// then played on milliseconds, are not carried over.)
+export const prefSpeed = (): number => (SPEEDS.includes(getPref('playSpeed')) ? getPref('playSpeed') : 1);
 
 // Share the same phase calculation with effects sampled at past birth times.
 export function clipPhase(timeMs: number, duration: number, loop: boolean): number {
@@ -159,13 +163,15 @@ export class ClipSampler {
   }
 
   // apply pose at tMs to a Rig (bones without clip data stay at rest pose)
-  apply(rig: Rig, tMs: number): void {
+  /** Pose the rig at `tMs`; `only`: just these bones (a clip layered over another, as a stance's upper body). */
+  apply(rig: Rig, tMs: number, only?: ReadonlySet<number> | null): void {
     const t = Math.max(0, Math.min(this.duration, Math.trunc(tMs)));
     const f = this.frames > 1 ? Math.min(f32(t / this.frameMs), this.frames - 1) : 0;
     const i0 = Math.floor(f);
     const i1 = Math.min(i0 + 1, this.frames - 1);
     const a = f - i0;
     for (let i = 0; i < rig.bones.length; i++) {
+      if (only && !only.has(i)) continue;
       const bone = rig.bones[i];
       const rest = rig.rest[i];
       const cb = i < this.bones.length ? this.bones[i] : null;
@@ -321,13 +327,13 @@ export class PlaybackBar {
   playing: boolean;
   private _loop = false;
   get loop(): boolean { return this._loop; }
-  set loop(value: boolean) { this._loop = value; this.elapsedMs = this._t; }
+  set loop(value: boolean) { this._loop = value; this.elapsedMs = clipMs(this._t); }
   speed: number;
-  private _t = 0;
-  // Continuous across loop boundaries, but reset by an explicit seek.
+  private _t = 0;   // (the clip time: ticks)
+  // Real milliseconds played (times the speed): continuous across loop boundaries, but reset by an explicit seek.
   elapsedMs = 0;
   get t(): number { return this._t; }
-  set t(value: number) { this._t = value; this.elapsedMs = value; }
+  set t(value: number) { this._t = value; this.elapsedMs = clipMs(value); }
   root: HTMLDivElement;
   select: HTMLSelectElement;
   sortSel: HTMLSelectElement;
@@ -415,7 +421,7 @@ export class PlaybackBar {
         const aliases = (c as any).sn as string[] | undefined;
         this.select.appendChild(el('option', {
           value: String(c.i),
-          text: `#${c.i}${nm ? ` · ${nm}` : ''} · ${(c.dur / 1000).toFixed(2)}s · ${c.frames}f${c.f ? '' : ' (not loaded)'}`,
+          text: `#${c.i}${nm ? ` · ${nm}` : ''} · ${(clipMs(c.dur) / 1000).toFixed(2)}s · ${c.frames}f${c.f ? '' : ' (not loaded)'}`,
           disabled: !c.f,
           // recovered-name aliases (multi-name clips list every candidate)
           ...(aliases?.length ? { title: aliases.join('\n') } : {}),
@@ -474,7 +480,7 @@ export class PlaybackBar {
     }
     this.speedSel.addEventListener('change', () => {
       this.speed = parseFloat(this.speedSel.value);
-      setPref('speed', this.speed);
+      setPref('playSpeed', this.speed);
     });
 
     this.autoBtn = el('button', {
@@ -565,9 +571,9 @@ export class PlaybackBar {
   tick(dt: number): void {
     if (!this.sampler || !this.playing) return;
     this.elapsedMs += dt * this.speed;
-    this._t = clipPhase(this.elapsedMs, this.sampler.duration, this.loop);
-    if (!this.loop && this.elapsedMs > this.sampler.duration) {
-      this.elapsedMs = this.sampler.duration;
+    this._t = clipPhase(this.elapsedMs * TICKS_PER_MS, this.sampler.duration, this.loop);
+    if (!this.loop && this.elapsedMs * TICKS_PER_MS > this.sampler.duration) {
+      this.elapsedMs = clipMs(this.sampler.duration);
       this.pause();
     }
     this.applyPose();
@@ -579,7 +585,7 @@ export class PlaybackBar {
     const d = this.sampler.duration;
     this.scrub.value = String(d > 0 ? Math.round((this.t / d) * 1000) : 0);
     const frame = Math.round(this.t / this.sampler.frameMs);
-    this.timeLbl.textContent = `${fmtDur(this.t / 1000)} / ${fmtDur(d / 1000)} · f${frame}`;
+    this.timeLbl.textContent = `${fmtDur(clipMs(this.t) / 1000)} / ${fmtDur(clipMs(d) / 1000)} · f${frame}`;
     this.onApplied?.();
   }
 

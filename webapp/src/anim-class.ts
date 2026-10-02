@@ -16,7 +16,7 @@ export function animClass(entry: { dur?: number; frames?: number } | null | unde
     return { tag: 'no motion', cls: 'b-ghost', title: 'Duration ≤ 1 frame: no rig keyframes. Almost certainly an sfx/particle event or a static pose, not a character animation (structural fact from the clip duration).' };
   }
   if (dur >= 18000) {
-    return { tag: 'long loop', cls: 'b-accent b-ghost', title: `${(dur / 1000).toFixed(0)}s clip: a long ambient/idle loop (structural fact; the "idle" reading is a hint, not a confirmed name).` };
+    return { tag: 'long loop', cls: 'b-accent b-ghost', title: `${(dur / 600).toFixed(0)}s clip: a long ambient/idle loop (structural fact; the "idle" reading is a hint, not a confirmed name).` };
   }
   return null;
 }

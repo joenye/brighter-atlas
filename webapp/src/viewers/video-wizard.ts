@@ -19,7 +19,7 @@
 import { el, openModal, type Modal } from '../ui.js';
 import { effectiveName } from '../names.js';
 import { encodeGif } from './gif-encoder.js';
-import { ClipSampler, SPEEDS } from './rig.js';
+import { ClipSampler, SPEEDS, TICKS_PER_MS, clipMs } from './rig.js';
 import { sceneOverrides, drawComposite, drawCaption, renderCaptureFrame, makeCropOverlay, makeCaptionControls, attachCaptionDrag, attachPreviewOrbit, settingsStore } from './capture-common.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -97,7 +97,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   for (const c of clips) {
     if (!c.f) continue;
     const nm = effectiveName(c, 'anims');
-    clipSel.appendChild(el('option', { value: String(c.i), text: `#${c.i}${nm ? ` · ${nm}` : ''} · ${(c.dur / 1000).toFixed(2)}s` }));
+    clipSel.appendChild(el('option', { value: String(c.i), text: `#${c.i}${nm ? ` · ${nm}` : ''} · ${(clipMs(c.dur) / 1000).toFixed(2)}s` }));
   }
   if (bar?.sampler) { const o = [...clipSel.options].find((x) => x.value === String(bar.sampler.index)); if (o) o.selected = true; }
   else if (clipSel.options.length) clipSel.options[0].selected = true;
@@ -109,7 +109,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
 
   // playback speed (same set as the main editor)
   const speedSel = el('select', { class: 'btn', title: 'Preview + recording speed' });
-  let previewSpeed = SPEEDS.includes(saved.speed) ? saved.speed : 0.5;   // match the viewer's 0.5× default (in-game "1×")
+  let previewSpeed = SPEEDS.includes(saved.playSpeed) ? saved.playSpeed : 1;   // 1× the game's own pace (clip times are ticks)
   for (const s of SPEEDS) speedSel.appendChild(el('option', { value: String(s), text: `${s}×`, selected: s === previewSpeed }));
   speedSel.addEventListener('change', () => { previewSpeed = parseFloat(speedSel.value); saveSettings(); });
 
@@ -236,7 +236,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   // resolve regardless of definition order. It only runs on user interaction.
   function saveSettings(): void {
     store.save({
-      fmt: fmtSel.value, loops: loopsIn.value, speed: previewSpeed, rot: rotCb.checked, rotSpeed: rotSpeed.value,
+      fmt: fmtSel.value, loops: loopsIn.value, playSpeed: previewSpeed, rot: rotCb.checked, rotSpeed: rotSpeed.value,
       rotMode: rotModeSel.value, secPerRot: secPerRotIn.value, numRot: numRotIn.value,
       scale: resSel.value, customW: parseInt(wIn.value, 10) || null, customH: parseInt(hIn.value, 10) || null,
       caption: capCb.checked, captionText: capIn.value, grid: gridCb.checked, bg: bgIn.value,
@@ -295,7 +295,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
     const loops = Math.max(1, Math.min(10, parseInt(loopsIn.value, 10) || 1));
     if (!queue.length) return [{ clip: null, ms: rotDrivesLength() ? turntableDurationMs() : durSecs() * 1000 }];
     const segLoops = rotDrivesLength() ? 1 : loops;   // rotations mode loops the clip to fill, not by count
-    const natural = queue.map((c) => ({ clip: c, ms: Math.max(300, (c.dur * segLoops) / previewSpeed) }));
+    const natural = queue.map((c) => ({ clip: c, ms: Math.max(300, (clipMs(c.dur) * segLoops) / previewSpeed) }));
     if (!rotDrivesLength()) return natural;
     const target = turntableDurationMs();
     const segs: { clip: any; ms: number }[] = [];
@@ -377,7 +377,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
   const stopPreviewTick = scene.addTick((dt: number) => {
     if (!previewPlaying || !previewSampler || !rig) return;
     const dur = Math.max(1, previewSampler.duration);
-    previewT += dt * previewSpeed;
+    previewT += dt * previewSpeed * TICKS_PER_MS;
     if (previewT > dur) previewT = previewLoop ? (dur > 0 ? previewT % dur : 0) : dur;
     previewSampler.apply(rig, previewT);
   });
@@ -560,7 +560,7 @@ export function openVideoWizard({ app, scene, bar, clips, entry, activeSize }:
           lastSampler = sampler;
           for (let k = 0; k < nF; k++) {
             if (stopIf()) break outer;
-            if (sampler) sampler.apply(rig, ((k / capFps) * 1000 * previewSpeed) % Math.max(1, sampler.duration));
+            if (sampler) sampler.apply(rig, ((k / capFps) * 1000 * TICKS_PER_MS * previewSpeed) % Math.max(1, sampler.duration));
             if (spin) setTurntable(done * rotStep);   // absolute angle for THIS frame (done = global frame index)
             renderOne();
             done++;

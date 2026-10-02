@@ -2,7 +2,7 @@
 // skel field from ab0's anim_dir).
 
 import { Scene3D, makeGridToggle, mountImmersiveControls } from './three-common.js';
-import { Rig, SkeletonViz, ClipSampler, SPEEDS, prefSpeed } from './rig.js';
+import { Rig, SkeletonViz, ClipSampler, SPEEDS, prefSpeed, clipMs, TICKS_PER_MS } from './rig.js';
 import { el, badge, fmtDur, notExported, idLabel } from '../ui.js';
 import { getPref, setPref } from '../prefs.js';
 import { addExportButton } from '../asset-export.js';
@@ -24,7 +24,7 @@ export function createAnimView(app: any, entry: IndexEntry) {
     // recovered animatic name (world extraction); user names still outrank it
     ...(sourceNames?.length ? [badge(sourceNames[0], 'b-ghost',
       `Name recovered from the game data by the World extraction${sourceNames.length > 1 ? `; aliases:\n${sourceNames.slice(1).join('\n')}` : ''}.`)] : []),
-    el('span', { class: 'dim small', text: `${entry.bones} bones · ${entry.frames} frames · ${fmtDur(entry.dur / 1000)}` }),
+    el('span', { class: 'dim small', text: `${entry.bones} bones · ${entry.frames} frames · ${fmtDur(clipMs(entry.dur) / 1000)}` }),
     el('span', { class: 'spacer' }),
     el('a', { href: `#/rig/${entry.skel}`, class: 'small', text: 'open in rig view →' }),
   );
@@ -86,7 +86,7 @@ export function createAnimView(app: any, entry: IndexEntry) {
     playBtn.addEventListener('click', () => { playing = !playing; playBtn.textContent = playing ? '❚❚' : '▶'; });
     const speedSel = el('select', { class: 'btn' });
     for (const s of SPEEDS) speedSel.appendChild(el('option', { value: String(s), text: `${s}×`, selected: s === speed }));
-    speedSel.addEventListener('change', () => { speed = parseFloat(speedSel.value); setPref('speed', speed); });
+    speedSel.addEventListener('change', () => { speed = parseFloat(speedSel.value); setPref('playSpeed', speed); });
     const autoBtn = el('button', {
       class: `btn${getPref('autoplay') ? ' active' : ''}`, text: 'auto',
       title: 'Auto-play clips when selected (persists across selections and reloads)',
@@ -104,11 +104,11 @@ export function createAnimView(app: any, entry: IndexEntry) {
       sampler.apply(rig, t);
       viz.update();
       scrub.value = String(sampler.duration > 0 ? Math.round((t / sampler.duration) * 1000) : 0);
-      timeLbl.textContent = `${fmtDur(t / 1000)} / ${fmtDur(sampler.duration / 1000)} · f${Math.round(t / sampler.frameMs)}`;
+      timeLbl.textContent = `${fmtDur(clipMs(t) / 1000)} / ${fmtDur(clipMs(sampler.duration) / 1000)} · f${Math.round(t / sampler.frameMs)}`;
     };
     scene.addTick((dt: number) => {
       if (!playing) return;
-      t = sampler.duration > 0 ? (t + dt * speed) % sampler.duration : 0;
+      t = sampler.duration > 0 ? (t + dt * speed * TICKS_PER_MS) % sampler.duration : 0;
       applyNow();
     });
     applyNow();
