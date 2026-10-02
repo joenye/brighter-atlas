@@ -70,6 +70,17 @@ export const LoadCard = ({ id, label, hidden = true }: { id: string; label: stri
 
 const Ic = ({ d, children }: { d?: string; children?: React.ReactNode }) => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">{d ? <path d={d} /> : children}</svg>;
 
+// (a phone's divider where Fashion will put it, read from what it remembers: the view's share of the height, or the
+// whole height with the drawer folded away, so the drawer does not move when the character arrives)
+const fashionView = (): React.CSSProperties | undefined => {
+  try {
+    if (!matchMedia('(max-width: 860px)').matches) return undefined;
+    if (localStorage.getItem('fashion.panel') === '1') return { flex: '1 1 auto' };
+    const s = Number(localStorage.getItem('fashion.split'));
+    return s ? { flex: `0 0 ${(Math.max(0.22, Math.min(0.72, s)) * 100).toFixed(3)}%` } : undefined;
+  } catch { return undefined; }
+};
+
 export const FashionPage = memo(() => (
   <div id="fashion" className="fashion">
     <div id="of-toolbar" className="of-toolbar" hidden>
@@ -79,7 +90,7 @@ export const FashionPage = memo(() => (
       <button id="share" className="btn-mini of-share" title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog"><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
     </div>
     {/* the layout before the code: the view and the equipment panel, replaced by the real ones on mount */}
-    <main><div className="ph ph-view" /><div className="ph ph-panel" /></main>
+    <main><div className="ph ph-view" style={fashionView()} /><div className="ph ph-panel" /></main>
     <div className="of-rotate" role="alert"><Ic><rect x="7" y="2" width="10" height="20" rx="2" /><path d="M11 18h2" /></Ic><b>Turn your phone upright</b><span>Brighter Fashion is made for holding your phone this way up.</span></div>
     <div id="toast" role="status" aria-live="polite"></div>
   </div>

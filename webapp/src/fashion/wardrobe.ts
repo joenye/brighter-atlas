@@ -71,7 +71,11 @@ const isRanged = (it: any) => it.ranged ?? it.category === 'Ranged';
 const WEAPON_GROUPS = ['One-handed melee', 'Two-handed melee', 'One-handed ranged', 'Two-handed ranged'];
 const weaponGroup = (it: any) => `${twoHandedItem(it) ? 'Two' : 'One'}-handed ${isRanged(it) ? 'ranged' : 'melee'}`;
 
-export interface Entry { key: string; slot: EquipSlot; name: string; group: string; kind: string; members: Member[]; icon?: number; search: string }
+export interface Entry { key: string; slot: EquipSlot; name: string; group: string; kind: string; members: Member[]; icon?: number; search: string;
+  /** a transmog's members are its tiers (each an item), not colours */
+  tiers?: boolean }
+/** Whether an entry's choices are colours (a transmog's colour variants) rather than tiers. */
+const colours = (e: Entry) => e.kind === 'cosmetic' && !e.tiers;
 /** The two halves of every slot's list: equipment (armour, shields, weapons and capes: what gives a character
  *  its stats) and transmogs (cosmetics: looks with no equipment behind them). */
 export const sectionOf = (e: {kind: string}) => e.kind === 'cosmetic' ? 'Transmogs' : 'Combat';
@@ -80,9 +84,23 @@ export const sectionOf = (e: {kind: string}) => e.kind === 'cosmetic' ? 'Transmo
 // cosmetics their colours.
 export function allEntries(pack: any): Entry[] {
   const out: Entry[] = [];
-  const capeGroups = new Map<string, Entry>();
+  const capeGroups = new Map<string, Entry>(), families = new Map<string, Entry>();
   for (const it of pack.items) {
     const name = clean(it.name);
+    // a transmog in tiers (the pack names its family): one row, a tier an item, like the capes
+    if (it.kind === 'cosmetic' && it.family) {
+      const key = `${it.slot}|${it.family}`;
+      let e = families.get(key);
+      if (!e) {
+        e = {key: `family:${key}`, slot: it.slot, name: it.family, group: it.group ?? it.source ?? 'Other', kind: 'cosmetic', members: [], tiers: true,
+          search: `${it.family} ${it.source ?? ''} cosmetic ${it.slot}`.toLowerCase()};
+        families.set(key, e); out.push(e);
+      }
+      e.members.push({item: it, variant: 0, label: it.tierLabel ?? name});
+      e.search += ` ${name.toLowerCase()}`;
+      if (e.icon == null) e.icon = it.variants[0]?.icon;
+      continue;
+    }
     if (it.kind === 'cape') {
       const m = name.match(TIER);
       const base = m ? name.slice(m[0].length) : name;
@@ -98,7 +116,7 @@ export function allEntries(pack: any): Entry[] {
       continue;
     }
     // combat gear groups by faction (the Guard gear last), weapons by how they are held, transmogs by their set
-    const group = it.kind === 'cosmetic' ? it.source ?? 'Other' : it.kind === 'weapon' ? weaponGroup(it) : it.faction ?? 'Guard';
+    const group = it.kind === 'cosmetic' ? it.group ?? it.source ?? 'Other' : it.kind === 'weapon' ? weaponGroup(it) : it.faction ?? 'Guard';
     out.push({key: `item:${it.id}`, slot: it.slot, name, group, kind: it.kind,
       members: it.variants.map((v: any, i: number) => ({item: it, variant: i, label: it.kind === 'cosmetic' ? clean(v.name) : v.grade})),
       icon: it.variants[0]?.icon,
@@ -167,7 +185,7 @@ export class Wardrobe {
     const it = e.members.find(m => m.item.id === w.item)?.item, v = it?.variants[w.variant] ?? it?.variants[0];
     if (!it) return '';
     const bits = [
-      e.kind === 'cosmetic' ? (e.members.length > 1 ? clean(v.name).split(' ')[0] : null)
+      colours(e) ? (e.members.length > 1 ? clean(v.name).split(' ')[0] : null)
         : e.members.length > 1 ? e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant))?.label : null,
       e.kind === 'cape' && it.variants.length > 1 ? v.grade : null,
       v?.colourable && takesDye(it) ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null,
@@ -328,7 +346,7 @@ export class Wardrobe {
       // the worn row shows the worn look (its colour or tier); the others their first
       const wornM = on ? e.members.find(m => m.item.id === cur!.item && (e.kind === 'cape' || m.variant === cur!.variant)) : undefined;
       const first = wornM ? {...wornM, variant: cur!.variant} : e.members[0];
-      const count = `${e.members.length} ${e.kind === 'cosmetic' ? 'colours' : 'tiers'}`;
+      const count = `${e.members.length} ${colours(e) ? 'colours' : 'tiers'}`;
       const row = el('button', {class: `item${on ? ' on' : ''}`, 'aria-pressed': String(on), 'aria-label': `${e.name}${on ? ', wearing: click to take off' : ''}${dyeable(e) ? ', can be dyed' : ''}${e.members.length > 1 ? ', ' + count : ''}`, 'data-key': e.key, onclick: () => this.pick(e), onmouseenter: () => this.hooks.preview(e.slot, this.wornFor(e))},
         this.picture(e.slot, first, '', ...this.colourFor(first, this.state.equip[e.slot])),
         el('span', {class: 'item-text'}, el('span', {class: 'item-name'}, e.name, dyeable(e) ? el('span', {class: 'dye-badge', title: 'Can be dyed'}) : null, e.members.some(m => this.hasEffect(m.item, m.variant)) ? el('span', {class: 'fx-badge', title: 'Has a particle effect'}, '✦') : null), el('span', {class: 'item-sub'}, q ? e.group : subtitle(e))),
@@ -412,12 +430,12 @@ export class Wardrobe {
     const it = e.members.find(m => m.item.id === w.item)!.item;
     const v = it.variants[w.variant] ?? it.variants[0];
     // a one-line summary that opens the full controls in place of the list (on phones the worn row's Customise does)
-    const bits = [e.members.length > 1 ? (e.kind === 'cosmetic' ? clean(v.name).split(' ')[0] : e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant))?.label) : null,
+    const bits = [e.members.length > 1 ? (colours(e) ? clean(v.name).split(' ')[0] : e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant))?.label) : null,
       e.kind === 'cape' && it.variants.length > 1 ? v.grade : null,
       v.colourable && takesDye(it) ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null].filter(Boolean);
     const adjusting = this.root.classList.contains('adjusting');
     // name what's inside: a weapon has tiers but no dye, a cosmetic colours
-    const can = [e.members.length > 1 ? (e.kind === 'cosmetic' ? 'Colour' : 'Tier') : '', e.kind === 'cape' && it.variants.length > 1 ? 'faction' : '', dyeable(e) ? 'dye' : ''].filter(Boolean);
+    const can = [e.members.length > 1 ? (colours(e) ? 'Colour' : 'Tier') : '', e.kind === 'cape' && it.variants.length > 1 ? 'faction' : '', dyeable(e) ? 'dye' : ''].filter(Boolean);
     const go = can.length ? `${can.join(' & ').replace(/^./, c => c.toUpperCase())} ›` : 'Details ›';
     const summary = el('button', {class: 'details-summary', 'aria-expanded': String(adjusting), onclick: () => this.setAdjusting(!this.root.classList.contains('adjusting'))},
       adjusting ? el('span', {class: 'ds-text'}, '‹ Back to the list') : el('span', {class: 'ds-text'}, el('b', {}, e.name), bits.length ? ` · ${bits.join(' · ')}` : ''),
@@ -444,7 +462,7 @@ export class Wardrobe {
       })));
     }
     if (e.members.length > 1) {
-      const isColour = e.kind === 'cosmetic';
+      const isColour = colours(e);
       // capes: a tier is an item (its factions are that item's variants, kept when changing tier)
       const same = (m: Member) => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant);
       const cur = e.members.find(same);
@@ -548,7 +566,7 @@ export const takesDye = (it: any) => !!it.dyeable || ((it.kind === 'armour' || i
 const dyeable = (e: Entry) => takesDye(e.members[0].item) && e.members.some(m => m.item.variants[m.variant]?.colourable);
 function subtitle(e: Entry) {
   const it = e.members[0].item;
-  if (e.kind === 'cosmetic') return `${it.source ?? 'Cosmetic'}${e.members.length > 1 ? ` · ${e.members.length} colours` : ''}`;
+  if (e.kind === 'cosmetic') return `${it.source ?? 'Cosmetic'}${e.members.length > 1 ? ` · ${e.members.length} ${e.tiers ? 'tiers' : 'colours'}` : ''}`;
   if (e.kind === 'cape') return `${e.group.replace(/s$/, '')}${e.members.length > 1 ? ` · ${e.members.length} tiers` : ''}`;
   // combat gear: its faction (the Guard gear is everyone's)
   return `${it.faction ?? 'Guard gear'}${e.members.length > 1 ? ` · ${e.members.length} tiers` : ''}`;

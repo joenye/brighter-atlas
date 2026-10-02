@@ -3,6 +3,10 @@
 //   u16 count, u16 0, then per level: u16 format, u16 width, u16 height, u16 0, u32 bytes; then the levels' data.
 export interface Level { fmt: number; width: number; height: number; data: Uint8Array }
 
+/** A phone's file (gf/web/): a sub-image's largest level as WebP bytes (fmt | WEB_TOP), its smaller levels to be
+ *  made from it (fmt | WEB_DERIVED, no bytes); the low bits keep the level's own format. */
+export const WEB_TOP = 0x4000, WEB_DERIVED = 0x8000, FMT_MASK = 0x3fff;
+
 /** Pixels of a signed two-channel normal map, decoded (uploaded RGBA8_SNORM). */
 export const SNORM_RG = 0x7025;
 

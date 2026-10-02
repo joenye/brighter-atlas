@@ -211,7 +211,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const [showHeld, setShowHeld] = useState(PICTURE);   // (weapons away until asked for or one is tried on; a link's picture shows them)
   const [showEffects, setShowEffects] = useState(store.get('fx') !== '0');
   const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? BACKDROPS[0]);
-  const [floor, setFloorState] = useState<Floor>(PICTURE ? 'shadow' : (FLOORS.map(f => f[0]).find(m => m === store.get('floor')) ?? 'ring'));
+  const [floor, setFloorState] = useState<Floor>(PICTURE ? 'shadow' : (FLOORS.map(f => f[0]).find(m => m === store.get('floor')) ?? 'shadow'));   // (the shadow alone by default)
   const [panelCollapsed, setPanelCollapsedState] = useState(store.get('panel') === '1');
   const [bgMode, setBgModeState] = useState(false), [bgOpen, setBgOpen] = useState(false), [bgTouched, setBgTouched] = useState(false);
   const [designing, setDesigningState] = useState(false), [sharedView, setSharedView] = useState(false);
@@ -449,15 +449,24 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     (window as any).fashion = {THREE, viewer, pack, get creatorPreview() { return engine.current?.creatorPreview; }, get state() { return model.state; }, compose: () => compose(pack, index, model.state), openCreator, closeCreator, cancelCreator, wardrobe};
     let gone = false;
     void (async () => {
+      viewer.setMasks(pack.masks);
       await viewer.init(pack.skeleton, RELAXED);
       if (gone) return;
+      if (!PICTURE) void viewer.setFlourishes(pack.flourishes, pack.flourishWait);
       setFloor(floor);
       viewer.setRendering(rend);
-      try { setBackdrop(live.current.backdrop, !(live.current.backdrop.room && live.current.backdrop.id === addressLook().place)); }
-      catch (e) { console.warn('backdrop', e); setBackdrop(BACKDROPS[0]); }
+      // (a place waits for the character: its files would otherwise share a slow connection with the character's, and
+      // a phone would show nothing for twice as long; the place fills in behind the character, its card showing)
+      const opening = live.current.backdrop, remember = !(opening.room && opening.id === addressLook().place);
+      const show = () => { try { setBackdrop(opening, remember); } catch (e) { console.warn('backdrop', e); setBackdrop(BACKDROPS[0]); } };
+      if (!opening.room) show();
+      else void new Promise<void>((done) => {
+        const until = performance.now() + 15000;
+        const wait = () => (gone || viewer.active.size || performance.now() > until ? done() : requestAnimationFrame(wait));
+        wait();
+      }).then(() => { if (!gone && live.current.backdrop === opening) show(); });
       model.touch();
-      // (the page opens on the character's design, unless it opens a shared look, which it shows as it is)
-      if (!PICTURE && !linked) openCharacter();
+      // (the page opens on the equipment, as it is first drawn: the designer is a tap away)
       // (the picture: a three-quarter turn of the whole figure, the shield side away, so a shield never hides the outfit)
       if (PICTURE) { viewer.yaw = -0.45; viewer.yawVel = 0; viewer.frameTo({dist: FRAMES.full.dist * 0.74, target: FRAMES.full.target * 0.96}, true); }
       forceRender(n => n + 1);
@@ -501,9 +510,13 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const e = engine.current; if (!e) return;
     const plain = designing && sharedView;   // designing: nothing held, the resting pose
     e.viewer.showHeld = showHeld && !plain;
-    const stance = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item)?.stance ?? DEFAULT_STANCE : UNARMED;
-    const clip = fighting && !plain && stance != null ? stance : RELAXED;
-    if (e.viewer.clipId !== clip) void e.viewer.setClip(clip);
+    // (a stance is two clips where the pack says so: the shared lower body and the weapon's own upper body, the
+    // fists' guard the same way)
+    const weapon = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item) : null;
+    const [lower, upper]: [number | null, number | null] = weapon ? [weapon.stance ?? DEFAULT_STANCE, weapon.stanceUpper ?? null]
+      : pack.unarmedLower != null && pack.masks ? [pack.unarmedLower, UNARMED] : [UNARMED, null];
+    const [clip, top] = fighting && !plain && lower != null ? [lower, upper] : [RELAXED, null];
+    if (e.viewer.clipId !== clip || e.viewer.upperId !== top) void e.viewer.setClip(clip, top);
     if (designing && !sharedView && e.creatorPreview) { const c = e.creatorPreview; c.showHeld = false; void creatorReady.current?.then(() => { if (c.clipId !== RELAXED) void c.setClip(RELAXED); }); }
   }, [model.version, showHeld, designing, sharedView]);
   useEffect(() => { if (designing) frameCreator(); }, [selected]);
@@ -596,7 +609,12 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const c = els.canvas.current!;
     const onWheel = (e: WheelEvent) => { e.preventDefault(); engine.current?.viewer.zoomBy(Math.exp(e.deltaY * 0.0012)); setCurrentFrame(''); live.current.currentFrame = ''; };
     c.addEventListener('wheel', onWheel, {passive: false});
-    return () => c.removeEventListener('wheel', onWheel);
+    // (and the designer's own view, wider screens': from the part's framing out to the full figure; picking a part
+    // again frames it again)
+    const cc = els.cCanvas.current;
+    const onCreatorWheel = (e: WheelEvent) => { e.preventDefault(); engine.current?.creatorPreview?.zoomBy(Math.exp(e.deltaY * 0.0012)); };
+    cc?.addEventListener('wheel', onCreatorWheel, {passive: false});
+    return () => { c.removeEventListener('wheel', onWheel); cc?.removeEventListener('wheel', onCreatorWheel); };
   }, []);
 
   // ---- looks ----
@@ -894,7 +912,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           <div className="creator-bar"><h2>Design your character</h2></div>
           <div ref={els.body} className="creator-body" style={{'--stage-h': stageH ?? (cSplit ? `${(cSplit * 100).toFixed(3)}%` : '')} as React.CSSProperties}>
             <div ref={els.stage} className="creator-stage" style={designing ? {background: cssOf(backdrop)} : undefined}>
-              <canvas ref={els.cCanvas} aria-label="Preview: drag to turn" /><span className="stage-hint">Drag to turn</span>
+              <canvas ref={els.cCanvas} aria-label="Preview: drag to turn, scroll to zoom" /><span className="stage-hint">Drag to turn</span>
               {controlsInStage && controls}
             </div>
             <div ref={els.cGrip} className="of-grip creator-grip" role="separator" aria-orientation="horizontal" aria-label="Drag to resize the character view" onPointerDown={onCGripDown}><span className="of-grip-bar" /></div>
@@ -908,7 +926,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
               </div>
               <div ref={els.panel} className="creator-panel">
                 {designing && <DesignerPanel state={state} selected={selected} pack={pack} paletteFor={paletteFor} edited={edited}
-                  select={id => { live.current.selected = id; setSelected(id); warmStyles(); }} randomise={() => { model.state = randomise(pack, model.state); edited(); }}
+                  select={id => { const same = live.current.selected === id; live.current.selected = id; setSelected(id); warmStyles(); if (same) frameCreator(); }} randomise={() => { model.state = randomise(pack, model.state); edited(); }}
                   startOver={() => { model.state = {...structuredClone(DEFAULT_LOOK), equip: model.state.equip}; edited(); }} />}
               </div>
             </div>

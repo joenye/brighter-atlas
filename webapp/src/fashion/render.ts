@@ -166,10 +166,36 @@ async function partMaterial(p: DrawPart) {
   const game = rendering.lighting === 'game' && p.mat != null && !!p.spec;
   const [map, param, light, glow] = await Promise.all([p.mat != null ? getTex('tex', p.mat) : null, p.mat != null ? getTex('param', p.mat) : null,
     game ? getTex('light', p.mat!) : null, game && p.glow ? getTex('glow', p.mat!) : null]);
-  const mat = new THREE.MeshStandardMaterial({color: map ? 0xffffff : 0xb9c2cf, map: map ?? null, metalness: 0.02, roughness: 0.82, alphaTest: 0.35, side: THREE.DoubleSide});
+  const mat = new THREE.MeshStandardMaterial({color: map ? 0xffffff : 0xb9c2cf, map: map ?? null, metalness: 0.02, roughness: 0.82, alphaTest: 0.35, side: THREE.FrontSide});   // (one side, as the game: its rasterizer culls the engine's back faces in every pass; drawn from both, a part's close inner and outer sheets fight for the same pixels and flicker as it moves)
   applyPackedRecolor(mat, param, [p.t1, p.t2]);
   if (light && p.spec) gameLit(mat, light, p.spec, glow);
   return mat;
+}
+
+// The game's animation clock: 600 ticks a second. Every time in the clips and the idle records is in ticks: a clip's
+// "duration_ms" and "frame_ms" too (keys 20 ticks apart, 30 a second).
+const TICKS_PER_MS = 0.6;
+// The game's crossfade between the rest loop and a flourish, both ways: 150 ticks (250 ms), a linear weight.
+const BLEND_TICKS = 150;
+
+// Worn effects follow the pose drawn (the rest loop, a flourish, the blend between them, a stance): the rig's bones
+// relative to the anchor, as the effects' own sampling rig gave them, once a frame. (The effects' clock stays theirs.)
+class DrawnBones extends EffectBoneAnimation {
+  private stamp = -1; private drawn: number[][] = []; private inv = new THREE.Matrix4(); private m = new THREE.Matrix4();
+  constructor(skel: any, clip: any, tickRate: number, elapsedMs: () => number, private live: () => {rig: Rig; anchor: THREE.Object3D; frame: number} | null) {
+    super(skel, clip, true, tickRate, elapsedMs);
+  }
+  override sample(tick: number): readonly (readonly number[])[] {
+    const l = this.live();
+    if (!l) return super.sample(tick);
+    if (l.frame !== this.stamp) {
+      l.anchor.updateMatrixWorld(true);
+      this.inv.copy(l.anchor.matrixWorld).invert();
+      this.drawn = l.rig.bones.map(b => this.m.multiplyMatrices(this.inv, b.matrixWorld).elements.slice());
+      this.stamp = l.frame;
+    }
+    return this.drawn;
+  }
 }
 
 // the head (the framings' close-ups aim at it when a stance moves it)
@@ -296,7 +322,7 @@ export class Preview {
     const mapSize = Math.min(software ? 1024 : small ? 2048 : 4096, this.renderer.capabilities.maxTextureSize);
     this.sun.shadow.mapSize.set(mapSize, mapSize);
     Object.assign(this.sun.shadow.camera, {left: -1400, right: 1400, top: 1400, bottom: -1400, near: 100, far: 16000});
-    this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 3; this.sun.shadow.radius = 0;
+    this.sun.shadow.bias = 0; this.sun.shadow.normalBias = 3; this.sun.shadow.radius = 0;
     this.sun.target.position.set(0, 1000, 0);
     this.scene.add(this.sun, this.sun.target);
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -324,14 +350,73 @@ export class Preview {
   private focusOff = new THREE.Vector3();
 
   private wantClip: number | null = null;
-  async setClip(i: number) {
-    this.wantClip = i;
+  async setClip(i: number, upper: number | null = null) {
+    this.wantClip = i; this.wantUpper = upper;
+    const [json, upperJson] = await Promise.all([getJson(at(`clip/${i}`)), upper != null ? getJson(at(`clip/${upper}`)) : null]);
+    if (this.wantClip !== i || this.wantUpper !== upper) return;
     let c = this.clips.get(i);
-    const json = await getJson(at(`clip/${i}`));
-    if (this.wantClip !== i) return;
     if (!c) { c = new ClipSampler(json); this.clips.set(i, c); }
     this.clip = c; this.clipJson = json; this.clipId = i;
+    this.upper = upper != null && this.upperBones ? (this.clips.get(upper) ?? this.clips.set(upper, new ClipSampler(upperJson)).get(upper)!) : null;
+    this.upperId = this.upper ? upper : null;
+    this.flourish = null; this.nextFlourish = 0;
     this.effectAnim?.dispose(); this.effectAnim = null;
+  }
+  // a stance in two clips: `clip` on the whole figure, `upper` over it on the upper body's bones (the game's two bone
+  // masks: hips and legs from the stance every weapon shares, everything above from the weapon's own)
+  private wantUpper: number | null = null;
+  private upper: ClipSampler | null = null;
+  upperId: number | null = null;
+  private upperBones: Set<number> | null = null;
+  setMasks(masks: number[][] | undefined) { this.upperBones = masks?.length === 2 ? new Set(masks[1]) : null; }
+  // the resting idle's flourishes: at rest, after a wait drawn evenly between the two durations of `wait` (ms), one of
+  // them, each as likely, plays once from its start, then the rest loop again from a random point of its cycle
+  // (never while designing or with weapons out, and not in a picture)
+  private idle: {clips: number[]; wait: number[]} | null = null;
+  private flourish: {c: ClipSampler; t0: number} | null = null;
+  private nextFlourish = 0;
+  private restShift = 0;
+  private fetchingFlourish = false;
+  // (each flourish's clip fetched when its turn first comes: none of them on the first visit)
+  setFlourishes(clips: number[] | undefined, wait: number[] | undefined) { this.idle = clips?.length && wait?.length === 2 ? {clips, wait} : null; }
+  // the game crossfades both ways, rest loop to flourish and back, over BLEND_TICKS (a linear weight), the side faded
+  // from still moving
+  private blendFrom: {t0: number; pose: (now: number) => void} | null = null;
+  private beginFlourish(c: ClipSampler) {
+    const now = performance.now(), rest = this.clip, shift = this.restShift, t0 = this.t0, rig = this.rig;
+    if (rest && rig) this.blendFrom = {t0: now, pose: (n) => rest.apply(rig, rest.duration ? ((((n - t0) * TICKS_PER_MS + shift) % rest.duration) + rest.duration) % rest.duration : 0)};
+    this.flourish = {c, t0: now};
+  }
+  private blendPose: {p: THREE.Vector3[]; q: THREE.Quaternion[]; s: THREE.Vector3[]} | null = null;
+  private keepPose(rig: Rig) {
+    const n = rig.bones.length;
+    if (!this.blendPose || this.blendPose.p.length !== n) this.blendPose = {p: Array.from({length: n}, () => new THREE.Vector3()), q: Array.from({length: n}, () => new THREE.Quaternion()), s: Array.from({length: n}, () => new THREE.Vector3())};
+    rig.bones.forEach((b, i) => { this.blendPose!.p[i].copy(b.position); this.blendPose!.q[i].copy(b.quaternion); this.blendPose!.s[i].copy(b.scale); });
+  }
+  // the game's mix: rotations by nlerp (the shorter way, then normalised), positions by lerp,
+  // scales by lerp only when both are above the clips' 0.002 threshold, else the near-zero one (a hidden bone snaps)
+  private mixPose(rig: Rig, w: number) {
+    const k = this.blendPose!;
+    rig.bones.forEach((b, i) => {
+      b.position.lerpVectors(k.p[i], b.position, w);
+      const a = k.s[i], tiny = (v: THREE.Vector3) => Math.min(Math.abs(v.x), Math.abs(v.y), Math.abs(v.z)) <= 0.002;
+      if (tiny(a)) b.scale.copy(a); else if (!tiny(b.scale)) b.scale.lerpVectors(a, b.scale, w);
+      const qa = k.q[i], qb = b.quaternion, sign = qa.dot(qb) < 0 ? -1 : 1;
+      qb.set(qa.x * (1 - w) + qb.x * w * sign, qa.y * (1 - w) + qb.y * w * sign, qa.z * (1 - w) + qb.z * w * sign, qa.w * (1 - w) + qb.w * w * sign).normalize();
+      // (the sampler composed each bone's matrix itself, automatic updates off: the mix is drawn only once composed)
+      b.matrix.compose(b.position, b.quaternion, b.scale); b.matrixWorldNeedsUpdate = true;
+    });
+  }
+  private startFlourish() {
+    const cs = this.idle!.clips, i = cs[Math.floor(Math.random() * cs.length)], have = this.clips.get(i);
+    if (have) { this.beginFlourish(have); return; }
+    if (this.fetchingFlourish) return;
+    this.fetchingFlourish = true;
+    void getJson(at(`clip/${i}`)).then((json) => {
+      this.clips.set(i, new ClipSampler(json));
+      // (played once it is in, if still at rest; else at the next turn)
+      if (this.nextFlourish === -1) { this.beginFlourish(this.clips.get(i)!); this.nextFlourish = 0; }
+    }).catch(() => { if (this.nextFlourish === -1) this.nextFlourish = 0; }).finally(() => { this.fetchingFlourish = false; });
   }
 
   resize() {
@@ -372,7 +457,7 @@ export class Preview {
   private async build(p: DrawPart) {
     const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
     // (its shadow: cut out where the texture is, as the part is)
-    const depth = new THREE.MeshDepthMaterial({depthPacking: THREE.RGBADepthPacking, map: mat.map, alphaTest: 0.35, side: THREE.DoubleSide});
+    const depth = new THREE.MeshDepthMaterial({depthPacking: THREE.RGBADepthPacking, map: mat.map, alphaTest: 0.35, side: THREE.FrontSide});
     mat.addEventListener('dispose', () => depth.dispose());
     // skin in the rig frame, then apply the part's own world (the root's basis) once
     const mesh = skinned ? new PartSkinnedMesh(geo, mat, this.anchor) : new THREE.Mesh(geo, mat);
@@ -380,6 +465,10 @@ export class Preview {
     mesh.frustumCulled = false;
     mesh.userData.part = p;
     mesh.customDepthMaterial = depth;
+    mesh.onAfterRender = () => { mesh.userData.drawn = true; };
+    // (the shadow map from the same faces, with no depth bias, as the game: acne is left to the receiver's offset
+    // along its normal)
+    mat.shadowSide = THREE.FrontSide;
     mesh.castShadow = mesh.receiveShadow = this.shadowsOn();
     return mesh;
   }
@@ -450,7 +539,7 @@ export class Preview {
     this.syncLights();
   }
   // the disc under the character: 'ring' (shadow and ring), 'shadow', or 'none'
-  floorMode: 'ring' | 'shadow' | 'none' = 'ring';
+  floorMode: 'ring' | 'shadow' | 'none' = 'shadow';
   setFloor(mode: 'ring' | 'shadow' | 'none') { this.floorMode = mode; this.showFloor(); }
   private showFloor() {
     if (!this.floorGroup) return;
@@ -537,12 +626,39 @@ export class Preview {
     this.camera.updateProjectionMatrix();
   }
   private baseFov = 18;
+  private frameNo = 0;
 
   frame() {
     const now = performance.now(), dt = Math.min(0.1, (now - this.last) / 1000); this.last = now;
-    const t = now - this.t0;
+    const t = (now - this.t0) * TICKS_PER_MS;   // (ticks)
+    this.frameNo++;
     if (this.rig && this.clip) {
-      this.clip.apply(this.rig, this.clip.duration ? t % this.clip.duration : 0);
+      // (a flourish, at rest: started after its wait, played once, then the rest loop again)
+      const resting = !!this.idle && this.clipId === this.restClip && !this.designing && !this.showHeld;
+      if (!resting) { this.flourish = null; this.nextFlourish = 0; }
+      else if (!this.flourish) {
+        // (the game's wait: a whole number of ticks uniform between the set's two durations, whichever order they are
+        // stored in (4800 to 12000: 8 to 20 s), counted from the hand back)
+        if (!this.nextFlourish) { const [a, b] = this.idle!.wait, lo = Math.min(a, b), hi = Math.max(a, b); this.nextFlourish = now + (lo + Math.floor(Math.random() * (hi - lo + 1))) / TICKS_PER_MS; }
+        else if (this.nextFlourish > 0 && now >= this.nextFlourish) { this.nextFlourish = -1; this.startFlourish(); if (this.flourish) this.nextFlourish = 0; }
+      }
+      // (the hand back: once a flourish has BLEND_TICKS or less to play, the rest loop starts again at a random whole
+      // tick of its cycle and fades in over the flourish's last ticks, the flourish still playing under it)
+      if (this.flourish && (now - this.flourish.t0) * TICKS_PER_MS >= this.flourish.c.duration - BLEND_TICKS) {
+        const f = this.flourish, rig = this.rig;
+        this.blendFrom = {t0: now, pose: (n) => f.c.apply(rig, (n - f.t0) * TICKS_PER_MS)};
+        this.flourish = null;
+        if (this.clip.duration) this.restShift = Math.floor(Math.random() * this.clip.duration) - t;
+      }
+      if (!resting) this.blendFrom = null;
+      const blendT = this.blendFrom ? (now - this.blendFrom.t0) * TICKS_PER_MS : Infinity;
+      const from = blendT < BLEND_TICKS ? this.blendFrom : null;
+      if (!from) this.blendFrom = null;
+      else { from.pose(now); this.keepPose(this.rig); }
+      if (this.flourish) this.flourish.c.apply(this.rig, (now - this.flourish.t0) * TICKS_PER_MS);
+      else this.clip.apply(this.rig, this.clip.duration ? (((t + (resting ? this.restShift : 0)) % this.clip.duration) + this.clip.duration) % this.clip.duration : 0);
+      if (from) this.mixPose(this.rig, blendT / BLEND_TICKS);
+      if (this.upper && !this.flourish) this.upper.apply(this.rig, this.upper.duration ? t % this.upper.duration : 0, this.upperBones);
       // a clip that hides the held bones (the resting clip scales them to 0.001) shows them at rest instead
       if (this.showHeld) this.clip.bones.forEach((b, i) => {
         if (b?.scale.mode === 'const' && (b.scale as any).value[0] < 0.01) this.rig!.resetBoneToRest(i);
@@ -605,7 +721,7 @@ export class Preview {
   // sun's frame, with a texel of border; depth from the sun to the far side of the whole figure, so a part outside
   // the view (a hat's brim above the frame) still casts. Close up, the same map covers only what shows: finer.
   private fitBox = new THREE.Box3(); private fitFrustum = new THREE.Frustum(); private fitM = new THREE.Matrix4();
-  private fitPts: THREE.Vector3[] = []; private fitTmp = new THREE.Vector3(); private fitPart = new THREE.Box3(); private fitCount = 0;
+  private fitPts: THREE.Vector3[] = []; private fitTmp = new THREE.Vector3(); private fitPart = new THREE.Box3(); private fitCount = 0; private fitted = new WeakSet<THREE.Object3D>(); private lastFit = new THREE.Box3();
   private fitShadow() {
     // (a skinned part's bounds come from its skinning, in the rig's frame (the game's axes); its own transform, the
     // root's turn to the scene's, takes them to the scene. Worked out again every 30 frames, as a stance moves the
@@ -613,11 +729,17 @@ export class Preview {
     const box = this.fitBox.makeEmpty(), again = (this.fitCount = (this.fitCount + 1) % 30) === 0;
     for (const m of this.active.values()) {
       if (!m.visible) continue;
+      // (a part just swapped in is skinned for the first time when it is first drawn: until then the previous fit's
+      // bounds stand in for it, then its own are worked out at once; its bounds from before that are in another
+      // frame and pointed the shadow map at the wrong place for half a second)
+      m.updateWorldMatrix(true, false);
       const sk = m as unknown as THREE.SkinnedMesh;
-      if (sk.isSkinnedMesh) { if (!sk.boundingBox || again) sk.computeBoundingBox(); box.union(this.fitPart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
+      if (sk.isSkinnedMesh && !m.userData.drawn) { if (!this.lastFit.isEmpty()) box.union(this.lastFit); continue; }
+      if (sk.isSkinnedMesh) { if (!this.fitted.has(sk) || again) { sk.computeBoundingBox(); this.fitted.add(sk); } box.union(this.fitPart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
       else { if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); box.union(this.fitPart.copy(m.geometry.boundingBox!).applyMatrix4(m.matrixWorld)); }
     }
     if (box.isEmpty()) return;
+    this.lastFit.copy(box);
     box.expandByScalar(Math.max(40, box.getSize(this.fitTmp).y * 0.06));   // (a pose moves parts past their resting bounds)
     this.camera.updateMatrixWorld();
     this.fitFrustum.setFromProjectionMatrix(this.fitM.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
@@ -630,9 +752,16 @@ export class Preview {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const p of pts.length ? pts : boxCorners(box)) { const q = this.fitTmp.copy(p).applyMatrix4(toLight); x0 = Math.min(x0, q.x); x1 = Math.max(x1, q.x); y0 = Math.min(y0, q.y); y1 = Math.max(y1, q.y); }
     for (const p of boxCorners(box)) { const q = this.fitTmp.copy(p).applyMatrix4(toLight); z0 = Math.min(z0, -q.z); z1 = Math.max(z1, -q.z); }
-    const size = this.sun.shadow.mapSize.x, bx = (x1 - x0) / (size - 2), by = (y1 - y0) / (size - 2);
-    sc.left = x0 - bx; sc.right = x1 + bx; sc.bottom = y0 - by; sc.top = y1 + by;
-    sc.near = Math.max(1, z0 - 50); sc.far = z1 + 50;
+    // (held still between frames: a texel's size in steps of an eighth of an octave and the map's corner on whole
+    // texels, so the bounds changing as the figure breathes, or a few pixels of turn, never slide the texel grid
+    // across the figure: a slid grid moves every shadow edge's steps, which reads as flicker)
+    const size = this.sun.shadow.mapSize.x;
+    const axis = (lo: number, hi: number) => {
+      const texel = Math.pow(2, Math.ceil(Math.log2(Math.max(hi - lo, 1) / (size - 2)) * 8) / 8), c = Math.round((lo + hi) / 2 / texel) * texel;
+      return [c - texel * size / 2, c + texel * size / 2];
+    };
+    [sc.left, sc.right] = axis(x0, x1); [sc.bottom, sc.top] = axis(y0, y1);
+    sc.near = Math.max(1, Math.floor((z0 - 50) / 64) * 64); sc.far = Math.ceil((z1 + 50) / 64) * 64;
     sc.updateProjectionMatrix();
   }
 
@@ -733,7 +862,8 @@ export class Preview {
 
   private tickEffects(dtMs: number) {
     if (!this.effects || !this.wantEffects.size) return;
-    if (!this.effectAnim && this.skelJson && this.clipJson) this.effectAnim = new EffectBoneAnimation(this.skelJson, this.clipJson, true, this.effects.clock.tickRate, () => performance.now() - this.t0);
+    if (!this.effectAnim && this.skelJson && this.clipJson) this.effectAnim = new DrawnBones(this.skelJson, this.clipJson, this.effects.clock.tickRate, () => performance.now() - this.t0,
+      () => this.rig ? {rig: this.rig, anchor: this.anchor, frame: this.frameNo} : null);
     for (const s of this.wantEffects) this.effects.setAnimation(s, this.effectAnim);
     this.effects.tick(dtMs, this.camera);
   }

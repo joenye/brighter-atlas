@@ -13,8 +13,10 @@ export class TextureLevels {
   private jobs = new Map<number, { resolve: (l: Level[]) => void; reject: (e: Error) => void }>();
   private seq = 0;
 
-  /** `url`: a texture's file; `decode`: pixels for a GPU without the block formats. */
-  constructor(private readonly url: (image: number) => string, private readonly decode: boolean) {}
+  /** `url`: a texture's file; `decode`: pixels for a GPU without the block formats, from `webUrl`'s WebP file
+   *  where there is one (a sixth of the blocks' bytes), else from the blocks. */
+  constructor(private readonly url: (image: number) => string, private readonly decode: boolean, private readonly webUrl?: (image: number) => string) {}
+  private web = true;   // (off for the visit once a WebP file fails: the blocks then, as before)
 
   readonly level = async (image: number, sub: number): Promise<TextureLevel> => {
     let f = this.files.get(image);
@@ -31,9 +33,20 @@ export class TextureLevels {
   };
 
   private async load(image: number): Promise<Level[]> {
-    const r = await fetch(this.url(image));
+    if (this.decode && this.webUrl && this.web) {
+      try { return await this.prepare(await this.fetch(this.webUrl(image), image)); }
+      catch (e) { if (!(e instanceof Error && e.message === 'let go')) { this.web = false; console.warn('web textures off:', e); } else throw e; }
+    }
+    return this.prepare(await this.fetch(this.url(image), image));
+  }
+
+  private async fetch(url: string, image: number): Promise<ArrayBuffer> {
+    const r = await fetch(url);
     if (!r.ok) throw new Error(`image ${image}: ${r.status}`);
-    const file = await r.arrayBuffer();
+    return r.arrayBuffer();
+  }
+
+  private prepare(file: ArrayBuffer): Promise<Level[]> {
     if (!this.workers.length) {
       const n = Math.max(1, Math.min(2, (navigator.hardwareConcurrency || 2) - 1));
       for (let k = 0; k < n; k++) {

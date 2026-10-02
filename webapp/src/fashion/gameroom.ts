@@ -118,7 +118,7 @@ export class GameRoom {
     // The game's textures are block compressed (S3TC, RGTC), which iPhones' WebGL does not take: there the
     // page decodes them (levels-worker.ts), the signed normal maps as signed bytes. One file per texture.
     const blocks = !/[?&]nobc\b/.test(location.search) && !!gl.getExtension('WEBGL_compressed_texture_s3tc') && !!gl.getExtension('EXT_texture_compression_rgtc');
-    this.levels = new TextureLevels((i) => gf(`images/${pad5(i)}.img`), !blocks);
+    this.levels = new TextureLevels((i) => gf(`images/${pad5(i)}.img`), !blocks, (i) => gf(`web/${pad5(i)}.img`));
     this.frame = new GameFrame(gl, gf, render, world.tileUnits, this.levels.level);
     if (!blocks) acceptSignedRG((this.frame as any).gl, gl);
     this.near = render.camera.near; this.far = render.camera.far;
@@ -145,6 +145,12 @@ export class GameRoom {
     const mc = (index.columns.placement as string[]).indexOf('mesh'), meshes = new Set<number>();
     for (const sh of [shard, ...props]) for (const rows of Object.values(sh?.placements ?? {}) as any[][]) for (const r of rows) if (r[mc] >= 0) meshes.add(r[mc]);
     for (const p of [scene.crab, ...(scene.bather?.parts ?? []), ...(scene.birds?.parts ?? [])]) if (p) meshes.add(p.mesh);
+    // (all of them in one file where the export made one: each mesh's own file is then never asked for)
+    try {
+      const r = await fetch(gf(`meshes/${id}.set`));
+      if (r.ok) for (const [m, payload] of Object.entries(await r.json())) if (!json.has(meshUrl(Number(m)))) json.set(meshUrl(Number(m)), Promise.resolve(payload));
+    } catch { /* (one file per mesh, as before) */ }
+    check();
     const list = [...meshes];
     let got = 0;
     const next = async (): Promise<void> => {
@@ -478,6 +484,9 @@ function skinInto(out: Float32Array, rig: Rig, m: THREE.Matrix4, s: THREE.Matrix
   });
 }
 
+// The game's animation clock: clip times are ticks, 600 a second (render.ts TICKS_PER_MS).
+const TICKS_PER_MS = 0.6;
+
 /** Someone in one place, playing one clip over and over. */
 class Posed implements SceneActor {
   palette: Float32Array; ready = true;
@@ -486,7 +495,7 @@ class Posed implements SceneActor {
   step(dtMs: number) {
     this.t += Math.min(100, dtMs);
     // (no clip: the model as it was made, its bind pose)
-    if (this.clip) this.clip.apply(this.rig, this.clip.duration ? this.t % this.clip.duration : 0);
+    if (this.clip) this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
     for (const r of this.rig.roots) r.updateMatrixWorld(true);
     skinInto(this.palette, this.rig, this.at, this.s);
   }
@@ -503,7 +512,7 @@ class Bird implements SceneActor {
   step(dtMs: number) {
     const dt = Math.min(100, dtMs);
     this.t += dt; this.angle += this.speed * dt / 1000 / this.radius;
-    this.clip.apply(this.rig, this.clip.duration ? this.t % this.clip.duration : 0);
+    this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
     for (const r of this.rig.roots) r.updateMatrixWorld(true);
     const a = this.angle, x = this.centre[0] + Math.cos(a) * this.radius, y = this.centre[1] + Math.sin(a) * this.radius;
     const z = this.centre[2] + Math.sin(a * 2.3) * 180;   // (rising and falling a little as it goes round)
@@ -550,7 +559,7 @@ class Crab implements SceneActor {
     if (!this.to) {
       turnTo(Math.atan2(this.y - eye.y, this.x - eye.x));   // its -x toward the camera
       this.rest -= dt;
-      if (this.playing !== this.idle && this.t >= this.playing.duration) this.play(this.idle);
+      if (this.playing !== this.idle && this.t * TICKS_PER_MS >= this.playing.duration) this.play(this.idle);
       if (this.rest <= 0) this.pick();
     } else {
       const dx = this.to.x - this.x, dy = this.to.y - this.y, d = Math.hypot(dx, dy);
@@ -566,7 +575,7 @@ class Crab implements SceneActor {
   /** Now a fidget, now a spot a little way off reached over sand. */
   private pick() {
     const {pts, walkable} = this.sand!;
-    if (this.fidgets.length && Math.random() < 0.4) { this.play(this.fidgets[Math.floor(Math.random() * this.fidgets.length)]); this.rest = this.playing.duration + 1500; return; }
+    if (this.fidgets.length && Math.random() < 0.4) { this.play(this.fidgets[Math.floor(Math.random() * this.fidgets.length)]); this.rest = this.playing.duration / TICKS_PER_MS + 1500; return; }
     for (let k = 0; k < 24; k++) {
       const p = pts[Math.floor(Math.random() * pts.length)];
       const d = Math.hypot(p.x - this.x, p.y - this.y);
@@ -583,9 +592,9 @@ class Crab implements SceneActor {
     this.rest = 1500;
   }
   private pose() {
-    const c = this.playing;
-    const looped = c.duration ? this.t % c.duration : 0;
-    c.apply(this.rig, !c.duration ? 0 : c === this.walk ? (this.back ? c.duration - looped : looped) : c === this.idle ? looped : Math.min(this.t, c.duration));
+    const c = this.playing, t = this.t * TICKS_PER_MS;
+    const looped = c.duration ? t % c.duration : 0;
+    c.apply(this.rig, !c.duration ? 0 : c === this.walk ? (this.back ? c.duration - looped : looped) : c === this.idle ? looped : Math.min(t, c.duration));
     for (const r of this.rig.roots) r.updateMatrixWorld(true);
     this.m.makeRotationZ(this.heading).setPosition(this.x, this.y, this.sand!.level);
     const out = this.palette;
