@@ -31,6 +31,8 @@ export interface OrderedBatch {
   matrices: readonly unknown[];
   /** Per instance, its emission key. */
   order?: EmissionKey[];
+  /** Lit at full in a neighbouring room: drawn apart from the room's dimmed pieces. */
+  lit?: boolean;
 }
 
 /** The placements of one draw, in the order they draw. */
@@ -52,7 +54,8 @@ export function drawGroups<B extends OrderedBatch>(batches: B[]): DrawGroup<B>[]
     batch.matrices.forEach((_, index) => {
       const key = batch.order?.[index] ?? [];
       const id = [key[0] === 1 ? 'dynamic' : 'static',
-        batch.water ? `water ${batch.water.kind} ${batch.water.style}` : `material ${batch.material}`, batch.renderTexture].join('|');
+        batch.water ? `water ${batch.water.kind} ${batch.water.style}` : `material ${batch.material}`, batch.renderTexture,
+        ...(batch.lit ? ['lit'] : [])].join('|');
       let group = groups.get(id);
       if (!group) groups.set(id, group = { batch, parts: [] });
       group.parts.push({ part: { batch, index }, key });

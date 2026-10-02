@@ -50,6 +50,9 @@ export interface GameBatchSource {
   /** Per instance: where the game's scene build emits the part (draw-order.ts). */
   order?: EmissionKey[];
   water: null | { kind: 'surface' | 'curtain'; style: number; opacity: number; window: [number, number] };
+  /** Lit at full in a neighbouring room (a building's frontage, or a piece marked for its own full light): the
+   *  game lights these with the room the viewer stands in instead of dimming them with their room. */
+  lit?: boolean;
 }
 
 /** One skinned part of an actor: its mesh in its own space, posed each frame
@@ -119,6 +122,8 @@ interface Draw {
   covers?: Float32Array;
   /** Which room it draws: 0 the room shown, n its nth neighbour. */
   scene?: number;
+  /** Never dimmed with its neighbouring room (GameBatchSource.lit). */
+  lit?: boolean;
   textures: Record<number, GameTexture>;
   depth: null | { program: GameProgram; gl: GameGLProgram; vao: WebGLVertexArrayObject; textures: Record<number, GameTexture> };
   water: GameBatchSource['water'];
@@ -375,15 +380,28 @@ export class GameFrame {
     await this.warmPrograms(scenes);
     for (let k = 0; k < scenes.length; k++) {
       const scene = scenes[k];
-      for (const group of drawGroups(scene.batches)) {
-        const draw = await this.buildDraw(group).catch((error) => {
-          console.warn('game shading: group skipped', group.batch.material, group.batch.renderTexture, error);
-          return null;
-        });
-        if (!draw) continue;
+      // (six built at once, their textures and shaders fetched side by side: one after another, a phone's slow
+      // connection paid a round trip per draw, 20 s of a Beach; each step of a build makes its GL calls in one go,
+      // and textures are shared through their promises, so builds may interleave; the draws keep their order)
+      const groups = drawGroups(scene.batches), built: (Draw | null)[] = new Array(groups.length);
+      let at = 0;
+      const worker = async () => {
+        for (let i = at++; i < groups.length; i = at++) {
+          const group = groups[i];
+          built[i] = await this.buildDraw(group).catch((error) => {
+            console.warn('game shading: group skipped', group.batch.material, group.batch.renderTexture, error);
+            return null;
+          });
+        }
+      };
+      await Promise.all(Array.from({ length: 6 }, worker));
+      groups.forEach((group, i) => {
+        const draw = built[i];
+        if (!draw) return;
         draw.scene = k;
+        draw.lit = !!group.batch.lit;
         (group.batch.water ? next.waterDraws : next.draws).push(draw);
-      }
+      });
       for (const actor of scene.actors ?? []) {
         const draw = await this.buildActorDraw(actor).catch((error) => {
           console.warn('game shading: actor part skipped', actor.mesh, actor.material, error);
@@ -958,7 +976,8 @@ export class GameFrame {
     const d0 = card?.direction ?? idx.lighting.direction;
     const dir = new THREE.Vector3(d0[0], d0[1], d0[2]).normalize();
     // A scene's lights at a scale: the room shown at the fade, a neighbour
-    // at a tenth of it (the game's neighbour lighting buffer at rest).
+    // at a tenth of it (the game's neighbour lighting buffer at rest), except
+    // the neighbour's pieces marked lit (its frontage: the shown room's lights).
     const lighting = (scale: number) => {
       const light = (c: number[] | undefined, fallback: number[]) => {
         const v = c ?? fallback;
@@ -990,7 +1009,7 @@ export class GameFrame {
         cbs[b.uniform] = b.slot === 0 ? (waterWords ? (faded(d) ? mainWords : waterVsWords) : words) : (waterWords ?? new Uint32Array(b.sizeVec4 * 4));
       }
       // water keeps the scene's own lights (the overlay pass)
-      const lights = faded(d) && !d.water ? psNeighbour : psLight;
+      const lights = faded(d) && !d.water && !d.lit ? psNeighbour : psLight;
       for (const b of d.program.translated.constantBuffers.ps) {
         const words = new Uint32Array(b.sizeVec4 * 4); putFloats(words, 0, lights); cbs[b.uniform] = words;
       }

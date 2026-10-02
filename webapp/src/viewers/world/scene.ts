@@ -1421,14 +1421,28 @@ export class WorldScene {
         return room.group.matrix.clone().multiply(matrix);
       });
       const colours = batch.entries.map((entry) => this._partColourEntry(room.shard, entry.row));
-      batches.push({
+      const whole: GameBatchSource = {
         category: batch.category,
         mesh, material: Number(batch.material), renderTexture: Number(batch.renderTexture),
         payload, matrices, tints: colours.map((c) => c?.slice(0, 4) ?? batch.recolors?.[0] ?? null),
         recolours: colours.map((c) => (c && c.length >= 12 ? [c.slice(4, 8), c.slice(8, 12)] : null)),
         order: batch.entries.map((entry) => emissionKey(room.shard.occurrences[entry.row[pc.occurrence]], entry.row, oc, pc)),
         water: waterInfo ? { kind: waterInfo.kind, style: waterInfo.style, opacity: waterInfo.opacity, window: waterInfo.window } : null,
-      });
+      };
+      // the pieces lit at full in a neighbouring room (the build marks each individual's lighting: a frontage takes
+      // the light of the room the viewer stands in) apart from the rest, which dim with their room
+      const light: number[] | undefined = room.shard.individual_light;
+      const lit = light ? batch.entries.map((entry) => {
+        const ind = room.shard.occurrences[entry.row[pc.occurrence]]?.[oc.individual];
+        return Number.isInteger(ind) && ind >= 0 && (light[ind] ?? 0) > 0;
+      }) : null;
+      if (!lit || !lit.some(Boolean)) { batches.push(whole); continue; }
+      for (const want of [false, true]) {
+        const keep = lit.map((l, i) => (l === want ? i : -1)).filter((i) => i >= 0);
+        if (!keep.length) continue;
+        batches.push({ ...whole, matrices: keep.map((i) => whole.matrices[i]), tints: keep.map((i) => whole.tints[i]),
+          recolours: keep.map((i) => whole.recolours![i]), order: keep.map((i) => whole.order![i]), lit: want });
+      }
     }
     const grid = room.shard.colour_grid ?? null;
     const [w, h] = room.shard.size ?? [room.meta?.w ?? 0, room.meta?.h ?? 0];
@@ -1677,13 +1691,15 @@ export class WorldScene {
   }
 
   /** A neighbour's light at a tenth (the game's lighting scale for rooms
-   *  beside the one you are in): its parts' colour, multiplied per instance. */
+   *  beside the one you are in): its parts' colour, multiplied per instance,
+   *  except the pieces the build marks lit (a building's frontage). */
   _shadeRoom(room: WorldSceneRoom): void {
     const scale = this.neighbourShade && this._neighbourIds.has(room.id) ? NEIGHBOUR_LIGHT : 1;
-    const colour = new THREE.Color(scale, scale, scale);
+    const colour = new THREE.Color(scale, scale, scale), full = new THREE.Color(1, 1, 1);
     for (const mesh of room.meshes as any[]) {
       if (!mesh.isInstancedMesh || (scale === 1 && !mesh.instanceColor)) continue;
-      for (let i = 0; i < mesh.count; i++) mesh.setColorAt(i, colour);
+      const lit: boolean[] | undefined = mesh.userData.lit;
+      for (let i = 0; i < mesh.count; i++) mesh.setColorAt(i, lit?.[i] ? full : colour);
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
   }
@@ -1859,6 +1875,15 @@ export class WorldScene {
           if (entry.sourceKind === 'spawn') this._spawnMatrix(shard, entry.row, matrix);
           else this._placementMatrix(shard, entry.row, matrix, batch.reflectLocalX);
           mesh.setMatrixAt(index, matrix);
+        }
+        // (per instance, lit at full as a neighbour: the build's lighting mark, a frontage or a piece at its own light)
+        if (shard.individual_light) {
+          const oc = this.occurrenceColumns, pc = this.placementColumns;
+          mesh.userData.lit = batch.entries.map((entry) => {
+            if (entry.sourceKind === 'spawn') return false;
+            const ind = shard.occurrences?.[entry.row[pc.occurrence]]?.[oc.individual];
+            return Number.isInteger(ind) && ind >= 0 && (shard.individual_light[ind] ?? 0) > 0;
+          });
         }
         mesh.instanceMatrix.needsUpdate = true;
         mesh.computeBoundingBox();

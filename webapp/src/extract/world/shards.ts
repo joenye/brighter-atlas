@@ -16,7 +16,7 @@
 // (the worldtex INDEX_JOBS kind carries kind/alpha today; spreadMax and the
 // last-plane channel ranges are the two additions the orchestrator needs).
 
-import { roomOccupancy, roomIndividualAnchors } from './room.js';
+import { roomOccupancy, roomIndividualAnchors, groupFields } from './room.js';
 import { AssetGraph, type OccurrenceHit, type PartRecord, type PoolNode, type RegistryRow } from './graph.js';
 import { SpawnGraph, type RoomRowRef } from './spawns.js';
 import {createActorHeightReader, type PlacementDecodeData} from './placement.js';
@@ -224,6 +224,7 @@ export const SEMANTICS = {
   skinned_is_not_spawn: 'AB5 skeleton metadata remains a placement flag only and is never used to identify gameplay actors',
   components: 'appearance parts on parent-linked class-351 occurrences',
   individual_anchors: 'class-447/448 room-space polygons and explicit centers, parallel to the class-189 individuals array',
+  individual_light: 'present only where a build marks lighting (from 1-Oct-2026): per individual, parallel to individuals, the op1 of the mode record its trailing field references (0 the room\'s own light, dimmed with a neighbouring room; 1 its own at full; 2 a frontage, lit with the room the viewer stands in)',
   root_dimension_anchor: 'generated visual-owner operations 4/5/6 are exact positive XYZ cell dimensions; the root cell is the lower-left corner, odd occurrence quarter-turns swap width/height, and Z remains the root layer',
   class_127_topology: 'all resolved parent/child links remain serialized as independent component provenance; their transitive XY extent validates owner dimensions but does not replace the direct owner anchor when sparse or decorative members change that extent',
   occurrence_anchor: 'all class-351 roles start at the rotated generated-owner dimension centre; when packed axis selectors are nonzero, the native six-way owner modes combine dimensions and tag-0x25 bounds into a local offset, then compose bit-0x4 reflection and the full mesh quarter-turn',
@@ -720,6 +721,15 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   if (!room || !roomRow) throw new Error(`room ${roomId} is not a decoded room`);
   const { layers, occurrences, individuals } = ctx.occupancy(roomId);
   const individualAnchors = roomIndividualAnchors(room, individuals);
+  // each individual's lighting mode: its trailing field (a sixth, from the 1-Oct-2026 build) references one record
+  // of a three-value enum whose op1 is the mode
+  const individualLight = individuals.map((row: any) => {
+    const ref = groupFields(row.node, room.table)?.[5];
+    if (!ref || ref.kind !== 'lit' || ref.tag !== 0x26 || !Number.isInteger(ref.value)) return 0;
+    // (op1 is a scalar of the record: its row's v list, [op, kind, value])
+    const v = ctx.graph.rows[ref.value as number]?.v?.find((x: any[]) => x[0] === 1)?.[2];
+    return v === 1 || v === 2 ? v : 0;
+  });
   const counts: Record<string, number> = { occurrences: occurrences.length };
   const [occurrenceRowsOut, links] = occurrenceRows(ctx, occurrences, counts);
   counts.links = links.length;
@@ -981,6 +991,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     layers,
     individuals: individuals.map((row: any) => row.uuid),
     individual_anchors: individualAnchors,
+    ...(individualLight.some((m: number) => m) ? { individual_light: individualLight } : {}),
     occurrences: occurrenceRowsOut,
     links,
     placements: placementRows,
