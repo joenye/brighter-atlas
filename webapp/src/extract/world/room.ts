@@ -252,11 +252,12 @@ export function isPlacementGroup(n: RoomNode, table: RoomNode[]): boolean {
 
 // Indexed class-189 individual row: UUID16 then four arrays (regions instead
 // own a string/polygon/vec2/array: the structural distinction matters).
-export function isIndividualGroup(n: RoomNode, table: RoomNode[]): boolean {
+export function isIndividualGroup(n: RoomNode, table: RoomNode[], trailing = false): boolean {
   const fields = groupFields(n, table);
-  return !!(fields && fields.length === 5
+  return !!(fields && fields.length === (trailing ? 6 : 5)
     && fields[0].kind === 'lit' && fields[0].tag === 0x2a
-    && fields.slice(1).every((f) => f.kind === 'array'));
+    && fields.slice(1, 5).every((f) => f.kind === 'array')
+    && (!trailing || fields[5].kind === 'lit'));
 }
 
 // (slot, placement) pairs from either cell-container grammar (variable array
@@ -496,18 +497,25 @@ export interface RoomIndividual {
 export function roomIndividuals(room: { table: RoomNode[]; top: RoomNode[] }, expectedCount: number): RoomIndividual[] {
   if (expectedCount === 0) return [];
   const { table } = room;
-  const records: RoomNode[] = [];
-  const seen = new Set<RoomNode>();
-  for (const n of room.top) {
-    visit(n, (child) => {
-      const record = deref(child, table);
-      if (isIndividualGroup(record, table) && !seen.has(record)) {
-        seen.add(record);
-        records.push(record);
-      }
-      return false;
-    });
-  }
+  // (from the 1-Oct-2026 build an individual carries a sixth, trailing value: that shape is taken only where the
+  // five-field one falls short, so every earlier build reads exactly as before)
+  const collect = (trailing: boolean) => {
+    const found: RoomNode[] = [];
+    const seen = new Set<RoomNode>();
+    for (const n of room.top) {
+      visit(n, (child) => {
+        const record = deref(child, table);
+        if (isIndividualGroup(record, table, trailing) && !seen.has(record)) {
+          seen.add(record);
+          found.push(record);
+        }
+        return false;
+      });
+    }
+    return found;
+  };
+  let records = collect(false);
+  if (records.length < expectedCount) records = collect(true);
   if (records.length < expectedCount) {
     throw new Error(`found ${records.length} individual records for ${expectedCount} indices`);
   }
