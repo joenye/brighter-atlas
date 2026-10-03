@@ -294,9 +294,10 @@ export interface Crop { x: number; y: number; w: number; h: number }
  *  ahead), its particle systems, or what is thrown (`thrown`: its release and flight in ticks, how far it goes). */
 export interface AnimActor { skel: number; parts: DrawPart[]; clips: (number | null)[]; at?: number[] | null; fx?: number[];
   /** What flies: hidden till `release` (ticks), then carried `distance` ahead over `flight` ticks. With `bone`, as the game
-   *  launches a weapon's shot: the piece as it is modelled (pointing ahead), set where that bone is at the release; else
+   *  launches a weapon's shot: the piece as it is modelled (pointing ahead), set where that bone is at the release, and
+   *  (`aim`, degrees above the level) sent up or down as its move aims; else
    *  the throw's own pose at the release. */
-  thrown?: {release: number; flight: number; distance: number; bone?: number} }
+  thrown?: {release: number; flight: number; distance: number; bone?: number; aim?: number} }
 export const FRAMES: Record<string, Framing> = {full: {dist: 5600, target: 760}, upper: {dist: 3000, target: 1060}, face: {dist: 1450, target: 1230}};
 
 export class Preview {
@@ -727,8 +728,8 @@ export class Preview {
   // the rift a deposit opens one tile ahead), each part's clip with the character's, and what is thrown (a snowball,
   // the throw's own pose kept from its release and carried ahead). Their particle effects play where they stand. ----
   private actors: {frame: THREE.Group, rig: Rig, meshes: THREE.Mesh[], clips: (ClipSampler | null)[], partClips: number[], at: number[],
-    thrown: AnimActor['thrown'] | null, effects: EffectsPlayer | null, fx: number[], t0: number, shotFrom?: THREE.Vector3}[] = [];
-  private ahead = new THREE.Vector3();
+    thrown: AnimActor['thrown'] | null, effects: EffectsPlayer | null, fx: number[], t0: number, shotFrom?: THREE.Vector3, shotPivot?: THREE.Vector3}[] = [];
+  private ahead = new THREE.Vector3(); private xAxis = new THREE.Vector3(1, 0, 0);
   private actorsGen = 0;
   async setAnimActors(list: AnimActor[] | null, partClips: number[]) {
     const gen = ++this.actorsGen;
@@ -775,12 +776,20 @@ export class Preview {
         if (bone && c) {
           // (where the bone is at the release, against where it rests: the piece, at rest, moved by the difference)
           if (!a.shotFrom) {
-            c.apply(a.rig, Math.min(a.thrown.release, c.duration)); a.frame.position.set(0, 0, 0); a.frame.updateMatrixWorld(true);
+            c.apply(a.rig, Math.min(a.thrown.release, c.duration)); a.frame.position.set(0, 0, 0); a.frame.quaternion.identity(); a.frame.updateMatrixWorld(true);
             const at = bone.getWorldPosition(new THREE.Vector3());
             a.rig.bones.forEach((_, j) => a.rig.resetBoneToRest(j)); a.frame.updateMatrixWorld(true);
-            a.shotFrom = at.sub(bone.getWorldPosition(new THREE.Vector3())).applyMatrix4(a.frame.matrixWorld.clone().invert().setPosition(0, 0, 0));
+            const rest = bone.getWorldPosition(new THREE.Vector3());
+            a.shotFrom = at.sub(rest).applyMatrix4(a.frame.matrixWorld.clone().invert().setPosition(0, 0, 0));
+            a.shotPivot = a.frame.worldToLocal(rest);
           }
-          a.frame.position.copy(a.shotFrom).add(this.ahead.set(0, on ? a.thrown.distance * k : 0, 0));
+          // (aimed as the move aims, up or down (degrees above the level): the piece turned to point that way about where
+          // it leaves the hand, and carried along it)
+          const aim = (a.thrown.aim ?? 0) * Math.PI / 180, d = on ? a.thrown.distance * k : 0;
+          a.frame.quaternion.setFromAxisAngle(this.xAxis, aim);
+          const pivot = a.shotPivot!;
+          a.frame.position.copy(a.shotFrom).add(pivot).sub(this.ahead.copy(pivot).applyQuaternion(a.frame.quaternion))
+            .add(this.ahead.set(0, Math.cos(aim) * d, Math.sin(aim) * d));
         } else {
           // (its pose the last tick the hand still shows it: the clip puts it away over the ticks of the release)
           if (on && c) c.apply(a.rig, Math.min(Math.max(0, a.thrown.release - 10), c.duration));
@@ -1229,6 +1238,15 @@ export class Preview {
   /** `floor`: 'link' the link picture's (the shadow, no ring), 'page' as the page has it, 'none' nothing under the
    *  character (a transparent picture). */
   picture(w: number, h: number, framing: Framing, yaw: number, floor: 'link' | 'page' | 'none' = 'link', crop: Crop | null = null): string {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    this.pictureInto(c.getContext('2d')!, w, h, framing, yaw, floor, crop);
+    return c.toDataURL('image/png');
+  }
+  /** The picture drawn straight into `g` (w x h; what is already there shows where nothing is drawn): in tiles of at
+   *  most `tile` pixels a side, the camera drawing each part exactly, so a large picture never needs a canvas that
+   *  size for the 3D view (a phone has the memory for one picture, not several). In a place (the game's own frame
+   *  draws the whole view) the view is drawn whole, at most `tile` x 4 a side, and the part cut out of it. */
+  pictureInto(g: CanvasRenderingContext2D, w: number, h: number, framing: Framing, yaw: number, floor: 'link' | 'page' | 'none' = 'link', crop: Crop | null = null, tile = 2048) {
     if (this.recording) throw new Error('recording');
     const fg = this.floorGroup, r = this.renderer;
     const was = {yaw: this.yaw, yawVel: this.yawVel, yawGoal: this.yawGoal, dist: this.dist, target: this.target, want: this.want, focusOff: this.focusOff.clone(),
@@ -1239,10 +1257,29 @@ export class Preview {
       this.flourish = null; this.blendFrom = null; this.ghost = false; this.paused = true;   // (the pose of this moment)
       if (this.roomPlace && !crop) { this.roomPlace = null; this.roomGroup.visible = false; this.scene.fog = null; this.setWide(false); }
       if (fg && floor !== 'page') { fg.visible = floor === 'link'; fg.children[1].visible = false; }
-      const sub = this.aim(w, h, crop);
+      r.setPixelRatio(1);
       // (a few frames, so the close framing's follow of the head settles where the picture page's has)
-      for (let i = 0; i < 12; i++) { this.last = performance.now() - 100; this.frame(); }
-      return this.cut(sub, w, h).toDataURL('image/png');
+      const settle = () => { for (let i = 0; i < 12; i++) { this.last = performance.now() - 100; this.frame(); } };
+      const cw = this.canvas.clientWidth || 1, chh = this.canvas.clientHeight || 1;
+      if (crop && this.roomPlace) {
+        const fw = w / crop.w, fh = h / crop.h, s = Math.min(1, tile * 4 / fw, tile * 4 / fh, 8192 / fw, 8192 / fh);
+        r.setSize(Math.round(fw * s), Math.round(fh * s), false);
+        this.camera.clearViewOffset(); this.camera.aspect = cw / chh; this.camera.updateProjectionMatrix();
+        settle();
+        g.drawImage(this.canvas, crop.x * fw * s, crop.y * fh * s, w * s, h * s, 0, 0, w, h);
+        return;
+      }
+      // (the whole picture as a view `fw` x `fh` wide, of which the picture is the part from `x0`, `y0`; drawn a tile
+      // at a time)
+      const [fw, fh, x0, y0] = crop ? [w / crop.w, h / crop.h, crop.x * w / crop.w, crop.y * h / crop.h] : [w, h, 0, 0];
+      this.camera.aspect = crop ? cw / chh : w / h;
+      for (let ty = 0, first = true; ty < h; ty += tile) for (let tx = 0; tx < w; tx += tile) {
+        const tw = Math.min(tile, w - tx), th = Math.min(tile, h - ty);
+        r.setSize(tw, th, false);
+        this.camera.setViewOffset(fw, fh, x0 + tx, y0 + ty, tw, th); this.camera.updateProjectionMatrix();
+        if (first) { settle(); first = false; } else { this.last = performance.now(); this.frame(); }
+        g.drawImage(this.canvas, 0, 0, tw, th, tx, ty, tw, th);
+      }
     } finally {
       Object.assign(this, {yaw: was.yaw, yawVel: was.yawVel, yawGoal: was.yawGoal, dist: was.dist, target: was.target, want: was.want, flourish: was.flourish, blendFrom: was.blendFrom, ghost: was.ghost, paused: was.paused});
       this.focusOff.copy(was.focusOff);

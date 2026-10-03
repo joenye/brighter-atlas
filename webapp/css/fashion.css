@@ -193,10 +193,8 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
 
 /* ---- phones ---- */
 @media (max-width: 860px) {
-  :root { --topbar-h: 44px; }
   .of-controls { right: 8px; bottom: 8px; }
   .of-charcard { top: 8px; left: 8px; }
-  #topbar { gap: 6px; padding: 0 8px 0 14px; padding-top: env(safe-area-inset-top, 0px);   /* (the left as every page: the brand's pill in the same place) */ height: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); }
   .of-hide-sm, .of-exp { display: none; }
   .of-title { margin-left: 2px; padding-left: 8px; }
   .of-icon-sm span, .of-share span { display: none; }
@@ -701,10 +699,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-sharedraw .sd-clear { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--fg0); flex-wrap: wrap; }
 .of-sharedraw .sd-clear input:disabled + * { opacity: .6; }
 .of-sharedraw .sd-bg { color: var(--fg2); font-style: normal; font-size: 12.5px; }
-.of-sharedraw .sd-more { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border: 0; background: none; color: var(--accent);
-  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
-.of-sharedraw .sd-more em { font-style: normal; font-weight: 400; color: var(--fg2); }
-.of-sharedraw .sd-more svg.ic { width: 14px; height: 14px; flex: none; }
+.of-sharedraw .sd-more { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line-soft);
+  background: transparent; color: var(--fg1); font: inherit; font-size: 13.5px; font-weight: 600; text-align: left; cursor: pointer; }
+.of-sharedraw .sd-more:hover { background: var(--bg2); color: var(--fg0); }
+.of-sharedraw .sd-more span { flex: 1; }
+.of-sharedraw .sd-more svg.ic { width: 15px; height: 15px; flex: none; }
 .of-sharedraw .sd-advanced { padding: 10px 0 2px; border-top: 1px dashed var(--line-soft); }
 .of-sharedraw .sd-sum { margin: 0; color: var(--fg1); font-size: 13px; font-variant-numeric: tabular-nums; }
 .of-sharedraw .sd-warn { margin: 0; color: #f0c27a; font-size: 13px; }

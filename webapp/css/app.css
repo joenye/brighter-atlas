@@ -29,7 +29,7 @@
   --mono: "SF Mono", ui-monospace, Menlo, Consolas, "BA UI Symbols", monospace;
   --sans: -apple-system, "Segoe UI", system-ui, Roboto, "BA UI Symbols", sans-serif;
   --radius: 8px;
-  --topbar-h: 40px;      /* every page's top bar (phones: Fashion's is taller, for its buttons) */
+  --topbar-h: 40px;      /* every page's top bar (phones: 44, the same on every page, below) */
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -98,18 +98,24 @@ button { font: inherit; color: inherit; }
      header is there; the bar is at the top of a page that does not scroll, so its place is unchanged) */
   position: sticky; top: 0;
 }
+/* phones: every page's bar the same (taller, for Fashion's buttons; under the iPhone's own bar in a home-screen app),
+   whichever tools have been opened: a tool's stylesheet stays once loaded, so the bar is set here, never in one */
+@media (max-width: 860px) {
+  :root { --topbar-h: 44px; }
+  #topbar { gap: 6px; padding: env(safe-area-inset-top, 0px) 8px 0 14px; height: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); }
+}
 .brand { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .brand-link { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; }
 .brand-link:hover .brand-name { color: var(--accent); }
 .brand-mark { width: 18px; height: 18px; flex: none; align-self: center; }
 /* brand/mark.svg: the Obelisk and its A */
 .brand-name { font-family: "BA Brighter", var(--sans); font-weight: 600; letter-spacing: .2px; }
-.brand-sub { color: var(--fg2); font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; }
+.brand-sub { color: var(--accent);   /* (the tool, blue as in the switcher) */ font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; }
 /* the tool switch (src/tool-switch.ts): the brand itself, mark to chevron, in one faint pill that opens the tools */
 .tool-switch { position: relative; align-self: center; display: inline-flex; }
 .tool-switch-btn { display: inline-flex; align-items: center; gap: 6px; margin-left: -8px; padding: 2px 7px 2px 8px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: rgba(255, 255, 255, .025); color: inherit; font: inherit; cursor: pointer; }
-.tool-switch-btn .brand-link { align-items: center; }
+.tool-switch-btn .brand-link { align-items: baseline; }   /* (Brighter and the tool on one line of text, as in the switcher; the mark centred) */
 .tool-switch-btn:hover, .tool-switch-btn[aria-expanded="true"] { background: var(--bg3); border-color: var(--line); }
 .tool-switch-btn:hover .brand-name { color: var(--fg0); }
 .tool-switch-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

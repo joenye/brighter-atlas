@@ -645,7 +645,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const look = compose(pack, index, state);
     return {actors: shots.filter((x: any) => pieces[x.el] != null).map((x: any) => ({skel: pack.skeleton, clips: [m.clip],
       parts: look.filter(p => p.key.endsWith(`/h${pieces[x.el]}`)).map(p => ({...p, key: `${p.key}/shot`})),
-      thrown: {release: x.release, flight: Math.round(SHOT_TILES * 37.5), distance: SHOT_TILES * 1024, ...(x.bone != null ? {bone: x.bone} : {})}}))};
+      thrown: {release: x.release, flight: Math.round(SHOT_TILES * 37.5), distance: SHOT_TILES * 1024, aim: m.aim, ...(x.bone != null ? {bone: x.bone} : {})}}))};
   };
   const combatMoves: AnimItem[] = fighting && !designing ? ((heldWeapon ? heldWeapon.moves : pack.unarmedMoves) ?? []).map((m: any) => ({...m, group: 'Combat', ...(heldWeapon ? shotsOf(m) : {})})) : [];
   // a one-shot animation plays once (the game's 600 ticks a second), then the pose it interrupted comes back; Repeat
@@ -1007,17 +1007,22 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       const stopped = () => { if (tok.stop) throw new Error('stopped'); };
       const v = e.viewer, look = saveLook(o), c0 = els.canvas.current!, [w, h] = outSize(o, cropNow, c0.clientWidth || 1, c0.clientHeight || 1);
       const framing = {...v.want}, yaw = v.yaw, k = Math.min(w, h) / 630;
-      // (what goes behind and over every frame, drawn once)
       const layer = () => { const c = document.createElement('canvas'); c.width = w; c.height = h; made.push(c); return c; };
+      // a picture: the background, the view (drawn in tiles, no canvas its size but this one) and the mark, all into one
+      if (o.fmt === 'picture') {
+        const c = layer(), g = c.getContext('2d')!;
+        if (look.paint) paintBackdrop(g, look.paint, w, h);
+        v.pictureInto(g, w, h, framing, yaw, look.floor, cropNow, touch ? 1024 : 2048);
+        stopped();
+        if (!look.transparent) await pictureMark(g, w, h, k);
+        progress(1);
+        return await new Promise<Blob>((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('no picture')), 'image/png'));
+      }
+      // (what goes behind and over every frame, drawn once)
       const back = look.paint ? layer() : null; if (back) paintBackdrop(back.getContext('2d')!, look.paint!, w, h);
       const mark = look.transparent ? null : layer(); if (mark) await pictureMark(mark.getContext('2d')!, w, h, k);
       const c = layer(), g = c.getContext('2d')!;
       const compose = (src: CanvasImageSource) => { g.clearRect(0, 0, w, h); if (back) g.drawImage(back, 0, 0); g.drawImage(src, 0, 0); if (mark) g.drawImage(mark, 0, 0); };
-      if (o.fmt === 'picture') {
-        const shot = new Image(); shot.src = v.picture(w, h, framing, yaw, look.floor, cropNow); await shot.decode().catch(() => {});
-        stopped(); compose(shot); progress(1);
-        return await new Promise<Blob>((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('no picture')), 'image/png'));
-      }
       const a = sharedAnim(), plan = recordPlan(o), fx = a ? (a.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender) : null, fps = fpsOf(o);
       const shoot = (each: (c: HTMLCanvasElement) => void | Promise<void>) => v.record({w, h, framing, yaw, floor: look.floor, stepMs: 1000 / fps, crop: cropNow, plan, fx,
         turn: o.turns, turnMs: SPIN_MS}, src => { stopped(); compose(src); return each(c); }, x => progress(x * 0.95));
@@ -1414,7 +1419,7 @@ interface AnimItem { clip: number; name: string; group: string; loop?: boolean; 
   /** What it holds while it plays (a tool, a book, a snowball): parts on the player's rig, in the weapons' place. */
   props?: any[];
   /** Its other figures (a rod, a rift, a snowball in flight): parts on a rig of their own (render.ts AnimActor). */
-  actors?: {skel: number; parts: any[]; clips: (number | null)[]; at?: number[] | null; fx?: number[]; thrown?: {release: number; flight: number; distance: number; bone?: number}}[] }
+  actors?: {skel: number; parts: any[]; clips: (number | null)[]; at?: number[] | null; fx?: number[]; thrown?: {release: number; flight: number; distance: number; bone?: number; aim?: number}}[] }
 type AnimTab = 'emotes' | 'combat' | 'more';
 // a tile's picture where the game has none: the kind's own icon (the defeat its own)
 const KIND_ICON: Record<string, string> = {Everyday: 'person', Professions: 'hammer', Magic: 'sparkles', Combat: 'swords'};
@@ -1509,9 +1514,6 @@ function ShareDrawer({shareField, rec, setRec, dlOpen, toggleDl, anim, timeline,
     </div></div>
   );
   const chips = <T,>(list: readonly (readonly [T, string, string?])[], now: T | null, pick: (v: T) => void): Chip[] => list.map(([v, t, title]) => [t, now === v, () => pick(v), title]);
-  // (what More options has away from its usual, named while it is shut)
-  const on = [rec.quality === 'high' && 'High quality', moving && rec.fps && fps !== FPS_DEFAULT[rec.fmt] && `${fps} frames per second`,
-    moving && anim && rec.plays > 1 && (rec.plays === 2 ? 'plays twice' : `plays ${rec.plays} times`), moving && rec.turns > 0 && (rec.turns === 1 ? '1 rotation' : `${rec.turns} rotations`)].filter(Boolean) as string[];
   const clearNote = rec.fmt === 'video' ? 'A video can’t be transparent' : look.pageClear ? 'Your background is transparent' : undefined;
   return (
     <Drawer className="of-sharedraw" label="Share">
@@ -1535,9 +1537,9 @@ function ShareDrawer({shareField, rec, setRec, dlOpen, toggleDl, anim, timeline,
                 <input type="checkbox" checked={look.transparent} disabled={busy || !!clearNote} onChange={e => setRec({clear: e.target.checked})} />Transparent
                 {!look.transparent && <em className="sd-bg">otherwise: {look.name}</em>}</label></div>
               {row('Shape', [...chips([['wide', 'Wide', '16:9'], ['square', 'Square', '1:1'], ['tall', 'Tall', '9:16, for phone stories']] as const, rec.shape, v => setRec({shape: v, crop: null})),
-                ...(rec.shape === 'free' ? [['Your crop', true, () => {}, 'Drag the crop’s edges on the view'] as Chip] : [])])}
+                ...(rec.shape === 'free' ? [['Custom', true, () => {}, 'Drag the crop’s edges on the view'] as Chip] : [])])}
             </div>
-            <button type="button" className="sd-more" aria-expanded={more} onClick={toggleMore}>More options{!more && on.length ? <em>: {on.join(', ')}</em> : null}<Icon name="chevron" /></button>
+            <button type="button" className="sd-more" aria-expanded={more} onClick={toggleMore}><span>More options</span><Icon name="chevron" /></button>
             {more && <div className="sd-rows sd-advanced">
               {row('Quality', chips([['standard', 'Standard'], ['high', 'High', 'Sharper and bigger: 4K pictures, larger GIFs, 1440p video']] as const, rec.quality, v => setRec({quality: v})))}
               {moving && row('Frames per second', FPS_CHOICES[rec.fmt].map(n => [`${n}`, fps === n, () => setRec({fps: n})] as Chip))}
