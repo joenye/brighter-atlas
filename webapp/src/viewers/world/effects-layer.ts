@@ -940,7 +940,7 @@ export class WorldEffectsLayer {
         // after activating. Only install it if it is still wanted: otherwise
         // this async resolution would silently resurrect an evicted entry
         // and defeat the eviction cap.
-        if (!((this._textureRefCount.get(texId) || 0) > 0)) { loaded.dispose(); return; }
+        if (!((this._textureRefCount.get(texId) || 0) > 0)) { loaded.dispose(); this._textureCache.delete(texId); return; }   // (asked for again: loaded again)
         loaded.colorSpace = spriteColorSpace(draw);
         configureSpriteSampling(loaded);
         const previous = this._textureCache.get(texId);
@@ -951,8 +951,9 @@ export class WorldEffectsLayer {
           }
         }
         previous?.dispose();
+        this._textureReady.add(texId);
       })
-      .catch(() => { /* missing sprite image: the fallback keeps drawing */ });
+      .catch(() => { /* missing sprite image: the fallback keeps drawing */ this._textureReady.add(texId); });
     return texture;
   }
 
@@ -982,9 +983,15 @@ export class WorldEffectsLayer {
       const evictId = this._coldTextures.shift()!;
       const texture = this._textureCache.get(evictId);
       this._textureCache.delete(evictId);
+      this._textureReady.delete(evictId);
       texture?.dispose();
     }
   }
+
+  // A sprite's picture in (or found missing), by texId: particles of a sprite whose picture is on its way are not
+  // drawn (the stand-in dot is white in every channel: a mask sprite drawn with it is a white square), as the
+  // model preview's player.
+  private _textureReady = new Set<number>();
 
   // Procedural radial soft dot (no DOM): used until sprites load and for
   // emitters that carry no image.
@@ -1035,6 +1042,8 @@ export class WorldEffectsLayer {
       const { posSize, color, rot, facing, facingMode } = batch;
       const cap = batch.capacity;
       let idx = 0;
+      // (a sprite whose picture is on its way: not drawn yet, see _textureReady)
+      if (batch.texId >= 0 && !this._textureReady.has(batch.texId)) { batch.count = 0; batch.geometry.instanceCount = 0; continue; }
       const sortable = batch.blend === 'mix' && rootMatrix != null;
       for (const member of batch.members) {
         const { sim, anchor, edit, modulation } = member;

@@ -109,6 +109,11 @@ export class EffectsPlayer {
   private _instances = new Map<number, Instance>();
   private _batches = new Map<string, Batch>();
   private _textureCache = new Map<number, THREE.Texture>();
+  // A sprite's picture: settled (loaded, or found missing) by texId. Particles of a sprite whose picture is still on
+  // its way are not drawn: the stand-in dot is white in every channel, so a mask sprite drawn with it covers its
+  // whole quad in white (a blue tear drawn as a white square) until the picture lands.
+  private _textureSettled = new Map<number, Promise<void>>();
+  private _textureReady = new Set<number>();
   private _fallbackTexture: THREE.Texture | null = null;
   private _loader = new THREE.TextureLoader();
   private _camPos = new THREE.Vector3();
@@ -223,6 +228,16 @@ export class EffectsPlayer {
     this._instances.delete(key);
     for (const batch of this._batches.values()) batch.members = batch.members.filter((m) => m.instance !== inst);
     this._rebalance();
+  }
+
+  /** Settled once the pictures of `slot`'s sprites are in (or found missing): a caller about to play it waits for
+   *  this, so its particles show from their first frame. */
+  ready(slot: number): Promise<void> {
+    const inst = this._instances.get(slot);
+    if (!inst) return Promise.resolve();
+    const texIds = new Set<number>();
+    for (const batch of this._batches.values()) if (batch.members.some((m) => m.instance === inst)) { this._textureFor(batch.texId); if (batch.texId >= 0) texIds.add(batch.texId); }
+    return Promise.all([...texIds].map((t) => this._textureSettled.get(t) ?? Promise.resolve())).then(() => {});
   }
 
   /** Release a system as the game does when what drives it ends: from its current tick nothing new is born, and the
@@ -430,6 +445,8 @@ export class EffectsPlayer {
     texture = this._fallback().clone();
     texture.needsUpdate = true;
     this._textureCache.set(texId, texture);
+    let settle!: () => void;
+    this._textureSettled.set(texId, new Promise<void>((r) => { settle = r; }));
     this._loader.loadAsync(this._url(`images/${pad5(texId)}_e${sub}.png`))
       .then((loaded) => {
         if (this._disposed) { loaded.dispose(); return; }
@@ -442,7 +459,8 @@ export class EffectsPlayer {
         }
         previous?.dispose();
       })
-      .catch(() => { /* missing sprite image: the fallback keeps drawing */ });
+      .catch(() => { /* missing sprite image: the fallback keeps drawing */ })
+      .finally(() => { this._textureReady.add(texId); settle(); });
     return texture;
   }
 
@@ -484,6 +502,8 @@ export class EffectsPlayer {
       const { posSize, color, rot, facing, facingMode } = batch;
       const cap = batch.capacity;
       let idx = 0;
+      // (a sprite whose picture is on its way: not drawn yet, see _textureReady)
+      if (batch.texId >= 0 && !this._textureReady.has(batch.texId)) { batch.count = 0; batch.geometry.instanceCount = 0; continue; }
       const sortable = batch.blend === 'mix' && rootMatrix != null;
       for (const member of batch.members) {
         const { sim, instance, choice } = member;
