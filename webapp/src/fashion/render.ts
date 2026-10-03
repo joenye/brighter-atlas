@@ -287,11 +287,16 @@ function fixedPixelRatio(): number | null {
   try { const v = Number(localStorage.getItem('fashion.pixelRatio')); return v > 0 && v <= 4 ? v : null; } catch { return null; }
 }
 export interface Framing { dist: number; target: number }
+/** A part of the view (fractions of its width and height, from its top left): what a save holds. */
+export interface Crop { x: number; y: number; w: number; h: number }
 /** A figure an animation plays beside the character (Preview.setAnimActors): a rig of its own (`skel`), its parts,
  *  each of the animation's parts' clips for it, where it stands in the character's space (`at`, game units, +y
  *  ahead), its particle systems, or what is thrown (`thrown`: its release and flight in ticks, how far it goes). */
 export interface AnimActor { skel: number; parts: DrawPart[]; clips: (number | null)[]; at?: number[] | null; fx?: number[];
-  thrown?: {release: number; flight: number; distance: number} }
+  /** What flies: hidden till `release` (ticks), then carried `distance` ahead over `flight` ticks. With `bone`, as the game
+   *  launches a weapon's shot: the piece as it is modelled (pointing ahead), set where that bone is at the release; else
+   *  the throw's own pose at the release. */
+  thrown?: {release: number; flight: number; distance: number; bone?: number} }
 export const FRAMES: Record<string, Framing> = {full: {dist: 5600, target: 760}, upper: {dist: 3000, target: 1060}, face: {dist: 1450, target: 1230}};
 
 export class Preview {
@@ -390,7 +395,7 @@ export class Preview {
     this.resize();
     this.resizing.observe(canvas);
     canvas.addEventListener('webglcontextlost', () => { if (!this.dead) report('webgl context lost'); });
-    const loop = () => { if (this.dead) return; if (this.running) this.frame(); requestAnimationFrame(loop); };
+    const loop = () => { if (this.dead) return; if (this.running && !this.recording) this.frame(); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
   }
 
@@ -413,6 +418,8 @@ export class Preview {
     return this.held = rest.bones.flatMap((b, i) => b?.scale.mode === 'const' && (b.scale as any).value[0] < 0.01 ? [i] : []);
   }
   private headRest: THREE.Vector3 | null = null;   // the aim point in the head's frame at rest
+  /** The head's resting place is known (taken from a frame of the resting pose): close framings follow it from there. */
+  get restKnown() { return !!this.headRest; }
   private headAt = new THREE.Vector3();
   private focus = new THREE.Vector3();
   private focusOff = new THREE.Vector3();
@@ -452,6 +459,15 @@ export class Preview {
   paused = false;
   /** How long the clip picked last has played (ms of the animations' clock). */
   clipElapsed() { return this.clock - this.clipT0; }
+  /** The clip playing's length (ticks; 0 none). */
+  clipDuration() { return this.clip?.duration ?? 0; }
+  // a moment to stop at (`freezeAt`): the clock stands still there exactly, whatever the frames' pace
+  private stopAt: {at: number, done: () => void} | null = null;
+  /** Stop the animations' clock `ms` into the clip playing, exactly (the picture of a shared moment), then `done`. */
+  freezeAt(ms: number, done: () => void) {
+    this.paused = false; this.stopAt = {at: this.clipT0 + ms, done};
+    if (this.clock >= this.stopAt.at) this.frame();
+  }
   /** Fetch clips ahead (the stances of what is worn), so a later setClip need not wait. */
   prefetchClips(ids: (number | null | undefined)[]) { for (const i of ids) if (i != null) void getJson(at(`clip/${i}`)).catch(() => {}); }
   private upper: ClipSampler | null = null;
@@ -549,6 +565,7 @@ export class Preview {
     this.holdingProps = parts.some(p => /\/prop\d+(-cover)?$/.test(p.key));
     for (const [key, m] of this.active) if (!wanted.has(key)) { this.root.remove(m); (m.material as THREE.Material).dispose(); this.active.delete(key); }
     missing.forEach((p, i) => { const m = built[i]; if (m) { this.root.add(m); this.active.set(p.key, m); } });
+    this.pieceState = -1;   // (new pieces: shown as the weapon's state is, next frame)
     this.syncLights();
     parts.forEach((p, i) => { const m = this.active.get(p.key); if (m) m.renderOrder = i; });
     if (this.game) await this.game.setActors(this.gameParts(this.propsShown), this.rig).catch(e => console.warn('game actors', e));
@@ -562,7 +579,21 @@ export class Preview {
   private propsShown = false;
   // (the game's frame draws the parts it is given: the props or the weapons, as the plain view shows them)
   private gameParts(propsOn: boolean) {
-    return this.parts.filter(p => /\/prop\d+(-cover)?$/.test(p.key) ? propsOn : !(propsOn && /\/h\d+$/.test(p.key)));
+    const shown = this.piecesShown();
+    return this.parts.filter(p => /\/prop\d+(-cover)?$/.test(p.key) ? propsOn : !(propsOn && /\/h\d+$/.test(p.key)) && this.pieceOn(p.key, shown));
+  }
+  // ---- a ranged weapon's pieces in hand: what its attack draws in each state (a bow and its arrow, then the bow alone
+  // once the arrow is loosed; a javelin, then nothing), the state counting the shots loosed so far ----
+  private inHand: {piece: Map<number, number>, states: number[][], shots: number[], attackClips: Set<number>} | null = null;
+  private pieceState = 0;
+  /** The worn weapon's pieces (held record -> piece), the pieces each state draws, when each shot is loosed (ticks into
+   *  an attack) and its attack clips; none for a weapon whose pieces never change. */
+  setInHand(h: typeof this.inHand) { this.inHand = h; this.pieceState = -1; }
+  private piecesShown() { const h = this.inHand; return h ? h.states[Math.max(0, this.pieceState)] ?? h.states[0] ?? null : null; }
+  private pieceOn(key: string, shown: number[] | null) {
+    if (!shown) return true;
+    const id = /\/h(\d+)$/.exec(key)?.[1], piece = id != null ? this.inHand!.piece.get(Number(id)) : undefined;
+    return piece == null || shown.includes(piece);
   }
   /** Parts of the look asked for last still to be drawn (0: the look is all in). */
   loadingParts = 0;
@@ -674,6 +705,18 @@ export class Preview {
     for (const s of slots) e.syncClock(s.slot, (t + s.offset) * e.clock.tickRate / 600);
     this.effectsOn();
   }
+  /** An animation's particle systems added and their sprites' pictures in, before it starts: its particles show
+   *  from its first frame (until setAnimEffects runs them, they stay inert). */
+  async effectsReady(systems: number[]) {
+    if (!systems.length) return;
+    const e = await this.effectsPlayer(); if (!e) return;
+    for (const slot of systems) if (!this.effectSlots.has(slot)) {
+      const sys = e.doc.systems.find((x: any) => x.slot === slot); if (!sys) continue;
+      sys.triggered = true; sys.loop = false;   // (as setAnimEffects: driven by the animation)
+      if (e.addSystem(slot)) this.effectSlots.add(slot);
+    }
+    await Promise.all(systems.map(slot => e.ready(slot)));
+  }
   private animTick(a: NonNullable<typeof this.animFx>) {
     const t = (this.clock - a.t0) * TICKS_PER_MS;
     return a.loop ? t % a.loop : t;
@@ -684,7 +727,8 @@ export class Preview {
   // the rift a deposit opens one tile ahead), each part's clip with the character's, and what is thrown (a snowball,
   // the throw's own pose kept from its release and carried ahead). Their particle effects play where they stand. ----
   private actors: {frame: THREE.Group, rig: Rig, meshes: THREE.Mesh[], clips: (ClipSampler | null)[], partClips: number[], at: number[],
-    thrown: AnimActor['thrown'] | null, effects: EffectsPlayer | null, fx: number[], t0: number}[] = [];
+    thrown: AnimActor['thrown'] | null, effects: EffectsPlayer | null, fx: number[], t0: number, shotFrom?: THREE.Vector3}[] = [];
+  private ahead = new THREE.Vector3();
   private actorsGen = 0;
   async setAnimActors(list: AnimActor[] | null, partClips: number[]) {
     const gen = ++this.actorsGen;
@@ -727,9 +771,21 @@ export class Preview {
         // line over its flight, as the game moves a projectile)
         const k = (t - a.thrown.release) / a.thrown.flight, on = i >= 0 && k >= 0 && k <= 1;
         for (const m of a.meshes) m.visible = on;
-        // (its pose the last tick the hand still shows it: the clip puts it away over the ticks of the release)
-        if (on && c) c.apply(a.rig, Math.min(Math.max(0, a.thrown.release - 10), c.duration));
-        a.frame.position.set(0, on ? a.thrown.distance * k : 0, 0);
+        const bone = a.thrown.bone != null ? a.rig.bones[a.thrown.bone] : null;
+        if (bone && c) {
+          // (where the bone is at the release, against where it rests: the piece, at rest, moved by the difference)
+          if (!a.shotFrom) {
+            c.apply(a.rig, Math.min(a.thrown.release, c.duration)); a.frame.position.set(0, 0, 0); a.frame.updateMatrixWorld(true);
+            const at = bone.getWorldPosition(new THREE.Vector3());
+            a.rig.bones.forEach((_, j) => a.rig.resetBoneToRest(j)); a.frame.updateMatrixWorld(true);
+            a.shotFrom = at.sub(bone.getWorldPosition(new THREE.Vector3())).applyMatrix4(a.frame.matrixWorld.clone().invert().setPosition(0, 0, 0));
+          }
+          a.frame.position.copy(a.shotFrom).add(this.ahead.set(0, on ? a.thrown.distance * k : 0, 0));
+        } else {
+          // (its pose the last tick the hand still shows it: the clip puts it away over the ticks of the release)
+          if (on && c) c.apply(a.rig, Math.min(Math.max(0, a.thrown.release - 10), c.duration));
+          a.frame.position.set(0, on ? a.thrown.distance * k : 0, 0);
+        }
       } else {
         a.frame.position.fromArray(a.at);
         for (const m of a.meshes) m.visible = i >= 0;
@@ -784,6 +840,7 @@ export class Preview {
     for (const m of this.active.values()) { this.root.remove(m); (m.material as THREE.Material).dispose(); }
     this.active.clear();
     parts.forEach((p, i) => { const m = built[i]; if (m) { m.renderOrder = i; this.root.add(m); this.active.set(p.key, m); } });
+    this.pieceState = -1;
     this.syncLights();
   }
   // the disc under the character: 'ring' (shadow and ring), 'shadow', or 'none'
@@ -877,8 +934,10 @@ export class Preview {
   private frameNo = 0;
 
   frame() {
-    const real = performance.now(), dt = Math.min(0.1, (real - this.last) / 1000);
-    if (!this.paused) this.clock += real - this.last;
+    const real = performance.now(), dt = this.step != null ? this.step / 1000 : Math.min(0.1, (real - this.last) / 1000);
+    if (!this.paused) this.clock += this.step ?? real - this.last;
+    const stop = this.stopAt;
+    if (stop && this.clock >= stop.at) { this.clock = stop.at; this.paused = true; this.stopAt = null; queueMicrotask(stop.done); }
     this.last = real;
     const now = this.clock;
     const t = (now - this.clipT0) * TICKS_PER_MS;   // (ticks)
@@ -890,11 +949,21 @@ export class Preview {
       if (propsOn !== this.propsShown && this.game && this.rig) void this.game.setActors(this.gameParts(propsOn), this.rig).catch(e => console.warn('game actors', e));
       this.propsShown = propsOn;
     }
+    // (the weapon's pieces: as its state is at this tick of an attack, else the first state's)
+    if (this.inHand) {
+      const h = this.inHand, st = h.attackClips.has(this.clipId ?? -1) ? h.shots.filter(r => t >= r).length : 0;
+      if (st !== this.pieceState) {
+        this.pieceState = st;
+        const shown = this.piecesShown();
+        for (const [key, m] of this.active) if (/\/h\d+$/.test(key) && !propsOn) m.visible = this.pieceOn(key, shown);
+        if (this.game && this.rig) void this.game.setActors(this.gameParts(propsOn), this.rig).catch(e => console.warn('game actors', e));
+      }
+    }
     if (this.rig && this.clip) {
       // (a flourish, at rest: started after its wait, played once, then the rest loop again)
       const resting = !!this.idle && this.clipId === this.restClip && !this.designing && !this.showHeld;
       if (!resting) { this.flourish = null; this.nextFlourish = 0; }
-      else if (!this.flourish) {
+      else if (!this.flourish && this.step == null) {
         // (the game's wait: a whole number of ticks uniform between the set's two durations, whichever order they are
         // stored in (4800 to 12000: 8 to 20 s), counted from the hand back)
         if (!this.nextFlourish) { const [a, b] = this.idle!.wait, lo = Math.min(a, b), hi = Math.max(a, b); this.nextFlourish = now + (lo + Math.floor(Math.random() * (hi - lo + 1))) / TICKS_PER_MS; }
@@ -1157,7 +1226,10 @@ export class Preview {
   /** The look as its link's preview picture draws it (the ?picture page): `w` x `h`, the camera at `yaw` and
    *  `framing`, the floor's shadow alone, no place behind and no flourish; the live view is left as it was. A PNG
    *  data URL (transparent where nothing is drawn). */
-  picture(w: number, h: number, framing: Framing, yaw: number): string {
+  /** `floor`: 'link' the link picture's (the shadow, no ring), 'page' as the page has it, 'none' nothing under the
+   *  character (a transparent picture). */
+  picture(w: number, h: number, framing: Framing, yaw: number, floor: 'link' | 'page' | 'none' = 'link', crop: Crop | null = null): string {
+    if (this.recording) throw new Error('recording');
     const fg = this.floorGroup, r = this.renderer;
     const was = {yaw: this.yaw, yawVel: this.yawVel, yawGoal: this.yawGoal, dist: this.dist, target: this.target, want: this.want, focusOff: this.focusOff.clone(),
       flourish: this.flourish, blendFrom: this.blendFrom, room: this.roomPlace, roomVis: this.roomGroup.visible, fog: this.scene.fog, floor: fg?.visible, ring: fg?.children[1].visible,
@@ -1165,19 +1237,166 @@ export class Preview {
     try {
       this.yaw = yaw; this.yawVel = 0; this.yawGoal = null; this.want = {...framing}; this.dist = framing.dist; this.target = framing.target;
       this.flourish = null; this.blendFrom = null; this.ghost = false; this.paused = true;   // (the pose of this moment)
-      if (this.roomPlace) { this.roomPlace = null; this.roomGroup.visible = false; this.scene.fog = null; this.setWide(false); }
-      if (fg) { fg.visible = true; fg.children[1].visible = false; }
-      r.setPixelRatio(1); r.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+      if (this.roomPlace && !crop) { this.roomPlace = null; this.roomGroup.visible = false; this.scene.fog = null; this.setWide(false); }
+      if (fg && floor !== 'page') { fg.visible = floor === 'link'; fg.children[1].visible = false; }
+      const sub = this.aim(w, h, crop);
       // (a few frames, so the close framing's follow of the head settles where the picture page's has)
       for (let i = 0; i < 12; i++) { this.last = performance.now() - 100; this.frame(); }
-      return this.canvas.toDataURL('image/png');
+      return this.cut(sub, w, h).toDataURL('image/png');
     } finally {
       Object.assign(this, {yaw: was.yaw, yawVel: was.yawVel, yawGoal: was.yawGoal, dist: was.dist, target: was.target, want: was.want, flourish: was.flourish, blendFrom: was.blendFrom, ghost: was.ghost, paused: was.paused});
       this.focusOff.copy(was.focusOff);
       if (was.room) { this.roomPlace = was.room; this.roomGroup.visible = was.roomVis; this.scene.fog = was.fog; this.wide = was.wide; Object.assign(this.camera, {fov: was.fov, near: was.near, far: was.far}); }
       if (fg) { fg.visible = !!was.floor; fg.children[1].visible = !!was.ring; }
+      this.camera.clearViewOffset();
       r.setPixelRatio(was.pr); this.resize(); this.last = performance.now();
     }
+  }
+  /** Draw at w x h: the whole view at that shape, or (`crop`) just that part of the view as it stands on screen, the
+   *  place behind it included. The part: the camera drawing only it; in a place (the game's own frame draws the whole
+   *  view), the whole view drawn large enough for the part to come out at w x h, then cut out: the part's rectangle on
+   *  the canvas is returned (null: the canvas is the picture). */
+  private aim(w: number, h: number, crop: Crop | null): [number, number, number, number] | null {
+    const r = this.renderer, cw = this.canvas.clientWidth || 1, chh = this.canvas.clientHeight || 1;
+    r.setPixelRatio(1);
+    if (crop && this.roomPlace) {
+      const fw = w / crop.w, fh = h / crop.h, s = Math.min(1, 8192 / fw, 8192 / fh);   // (within what a canvas can be)
+      r.setSize(Math.round(fw * s), Math.round(fh * s), false);
+      this.camera.clearViewOffset(); this.camera.aspect = cw / chh; this.camera.updateProjectionMatrix();
+      return [crop.x * fw * s, crop.y * fh * s, w * s, h * s];
+    }
+    r.setSize(w, h, false);
+    if (crop) {
+      const fw = w / crop.w, fh = h / crop.h;
+      this.camera.aspect = cw / chh;
+      this.camera.setViewOffset(fw, fh, crop.x * fw, crop.y * fh, w, h);
+    } else { this.camera.clearViewOffset(); this.camera.aspect = w / h; }
+    this.camera.updateProjectionMatrix();
+    return null;
+  }
+  /** The canvas, or the part of it `sub` names, as a canvas of its own at w x h. */
+  private cut(sub: [number, number, number, number] | null, w: number, h: number): HTMLCanvasElement {
+    if (!sub) return this.canvas;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d')!.drawImage(this.canvas, sub[0], sub[1], sub[2], sub[3], 0, 0, w, h);
+    return c;
+  }
+  // ---- a place hidden for a while (a save on a background of its own): kept loaded, back as it was after ----
+  private roomAway: {room: any, vis: boolean, fog: any, wide: number, fov: number, near: number, far: number} | null = null;
+  setRoomHidden(hidden: boolean) {
+    if (hidden && this.roomPlace && !this.roomAway) {
+      this.roomAway = {room: this.roomPlace, vis: this.roomGroup.visible, fog: this.scene.fog, wide: this.wide, fov: this.camera.fov, near: this.camera.near, far: this.camera.far};
+      this.roomPlace = null; this.roomGroup.visible = false; this.scene.fog = null; this.setWide(false);
+    } else if (!hidden && this.roomAway) {
+      const a = this.roomAway; this.roomAway = null;
+      this.roomPlace = a.room; this.roomGroup.visible = a.vis; this.scene.fog = a.fog; this.wide = a.wide; Object.assign(this.camera, {fov: a.fov, near: a.near, far: a.far});
+      this.camera.updateProjectionMatrix();
+    }
+    this.showFloor();
+  }
+  // ---- a recording (a GIF, a video): frames drawn one by one, a fixed step apart on the animations' clock ----
+  private recording = false;
+  private step: number | null = null;
+  /** Draw a recording's frames, `stepMs` apart on the animations' clock whatever each takes to draw, at w x h from the
+   *  view given (`floor` as for `picture`). `plan`: the clips played in turn, each `ms` long, from its first frame (no
+   *  crossfade, so a recording loops cleanly) or from `from` ms into it; `restart` starts the animation's effects (`fx`)
+   *  afresh there, `fxFrom` ms into them. No plan: the pose as it is, for `turnMs`. `turn`: the view goes once round
+   *  over the whole. `each` gets every frame's canvas and must copy it before it awaits anything (the canvas is drawn
+   *  over next); `progress` how far it has got (0 to 1). Everything is put back as it was after: the pose, its clock,
+   *  the effects at that moment, the view. */
+  async record(o: {w: number, h: number, framing: Framing, yaw: number, floor: 'page' | 'none' | 'shadow', stepMs: number, crop?: Crop | null,
+    plan: {clip: number, ms: number, from?: number, fxFrom?: number, restart?: boolean}[] | null, fx: {system: number, offset?: number}[] | null,
+    turn: number, turnMs: number}, each: (c: HTMLCanvasElement) => void | Promise<void>, progress: (k: number) => void = () => {}) {
+    const fg = this.floorGroup, r = this.renderer, fx0 = this.animFx;
+    const was = {yaw: this.yaw, yawVel: this.yawVel, yawGoal: this.yawGoal, dist: this.dist, target: this.target, want: this.want, focusOff: this.focusOff.clone(),
+      flourish: this.flourish, blendFrom: this.blendFrom, room: this.roomPlace, roomVis: this.roomGroup.visible, fog: this.scene.fog, floor: fg?.visible, ring: fg?.children[1].visible,
+      wide: this.wide, fov: this.camera.fov, near: this.camera.near, far: this.camera.far, pr: r.getPixelRatio(), ghost: this.ghost, paused: this.paused,
+      clip: this.clipId, upper: this.upperId, held: this.showHeld, clipT0: this.clipT0, clock: this.clock,
+      fx: fx0 ? fx0.slots.map(s => ({system: s.slot, offset: s.offset})) : null, fxT0: fx0?.t0, fxLoop: !!fx0?.loop};
+    // (a turn of the pose as it stands: as long as a whole number of its idle loops, about `turnMs`, so it loops cleanly)
+    const idleMs = !o.plan?.length && this.clip?.duration ? this.clip.duration / TICKS_PER_MS : 0;
+    const turnMs = idleMs ? Math.max(1, Math.round(o.turnMs / idleMs)) * idleMs : o.turnMs;
+    const counts = o.plan?.length ? o.plan.map(p => Math.max(1, Math.round((p.ms - (p.from ?? 0)) / o.stepMs))) : [Math.max(1, Math.round(turnMs / o.stepMs))];
+    const total = counts.reduce((t, n) => t + n, 0);
+    let k = 0, sub: [number, number, number, number] | null = null;
+    // (`turn`: turns over the whole, negative the other way round; a pause now and then, so the page shows its progress
+    // and a newer ask can stop this one)
+    const shoot = async () => {
+      this.yaw = o.yaw + Math.PI * 2 * o.turn * k / total; this.frame(); await each(this.cut(sub, o.w, o.h)); progress(++k / total);
+      if (k % 6 === 0) await new Promise(res => setTimeout(res, 0));
+    };
+    // (the page keeps showing the view as it was: a still of it laid over the canvas while the frames are drawn)
+    this.frame();
+    const cover = document.createElement('img'), cr = this.canvas.getBoundingClientRect(), pr = this.canvas.parentElement?.getBoundingClientRect();
+    cover.src = this.canvas.toDataURL(); cover.alt = '';
+    Object.assign(cover.style, {position: 'absolute', left: `${cr.left - (pr?.left ?? 0)}px`, top: `${cr.top - (pr?.top ?? 0)}px`, width: `${cr.width}px`, height: `${cr.height}px`, pointerEvents: 'none', zIndex: '1'});
+    this.canvas.parentElement?.append(cover);
+    // (the canvas itself hidden meanwhile: the still is see-through where the background is, and the frames being
+    // drawn are another size; they are read from the canvas all the same)
+    this.canvas.style.visibility = 'hidden';
+    this.recording = true;
+    try {
+      this.yawVel = 0; this.yawGoal = null; this.want = {...o.framing}; this.dist = o.framing.dist; this.target = o.framing.target;
+      // (it plays: an animation, or the pose's own idle, breathing, as it turns)
+      this.flourish = null; this.blendFrom = null; this.ghost = false; this.paused = false;
+      if (this.roomPlace && !o.crop) { this.roomPlace = null; this.roomGroup.visible = false; this.scene.fog = null; this.setWide(false); }
+      if (fg && o.floor !== 'page') { fg.visible = o.floor === 'shadow'; fg.children[1].visible = false; }
+      sub = this.aim(o.w, o.h, o.crop ?? null);
+      // (the head's follow settled on the first frame, as a picture's: frames that ease the view, the clock still)
+      const settle = () => {
+        const paused = this.paused; this.paused = true; this.step = 100; this.yaw = o.yaw;
+        for (let i = 0; i < 12; i++) this.frame();
+        this.paused = paused; this.step = o.stepMs;
+      };
+      if (o.plan?.length) {
+        for (const [i, p] of o.plan.entries()) {
+          await this.setClip(p.clip, null, was.held, true, false);
+          if (p.restart) await this.restartAnimEffects(o.fx);
+          // (each frame is drawn after its step: frames at from, from + a step, ... short of the clip's end, never past it)
+          this.clipT0 = this.clock + o.stepMs - (p.from ?? 0);
+          if (p.restart && this.animFx) this.animFx.t0 = this.clock + o.stepMs - (p.fxFrom ?? p.from ?? 0);
+          if (i === 0) settle();
+          for (let n = 0; n < counts[i]; n++) await shoot();
+        }
+      } else {
+        settle();
+        for (let n = 0; n < counts[0]; n++) await shoot();
+      }
+    } finally {
+      this.step = null;
+      // (the pose and its moment back: its clip, its clock, its effects as they were then)
+      if (o.plan?.length && was.clip != null) await this.setClip(was.clip, was.upper, was.held, false, false).catch(() => {});
+      this.clipT0 = was.clipT0; this.clock = was.clock;
+      if (o.plan?.length) { await this.restartAnimEffects(was.fx, was.fxLoop); if (this.animFx && was.fxT0 != null) this.animFx.t0 = was.fxT0; }
+      Object.assign(this, {yaw: was.yaw, yawVel: was.yawVel, yawGoal: was.yawGoal, dist: was.dist, target: was.target, want: was.want, flourish: was.flourish, blendFrom: was.blendFrom, ghost: was.ghost, paused: was.paused});
+      this.focusOff.copy(was.focusOff);
+      if (was.room) { this.roomPlace = was.room; this.roomGroup.visible = was.roomVis; this.scene.fog = was.fog; this.wide = was.wide; Object.assign(this.camera, {fov: was.fov, near: was.near, far: was.far}); }
+      if (fg) { fg.visible = !!was.floor; fg.children[1].visible = !!was.ring; }
+      this.camera.clearViewOffset();
+      r.setPixelRatio(was.pr); this.resize(); this.last = performance.now();
+      this.recording = false;
+      this.frame();
+      this.canvas.style.visibility = '';
+      cover.remove();
+    }
+  }
+  /** Jump the clip playing to `localMs` into it, its animation's effects (`fx`, started with its first part) to `fxMs`
+   *  into the whole: what the drawer's timeline does. */
+  async seek(localMs: number, fx: {system: number, offset?: number}[] | null, fxMs: number, loop = false) {
+    this.clipT0 = this.clock - localMs; this.blendFrom = null;
+    if (fx?.length) { await this.restartAnimEffects(fx, loop); if (this.animFx) this.animFx.t0 = this.clock - fxMs; }
+    if (this.paused) this.frame();
+  }
+  /** The animation's effects started afresh: every particle still out, and every copy, gone first. */
+  private async restartAnimEffects(fx: {system: number, offset?: number}[] | null, loop = false) {
+    const e = this.effects;
+    if (e) {
+      for (const f of this.fading) if (!this.wantEffects.has(f.slot)) { e.removeSystem(f.slot); this.effectSlots.delete(f.slot); }
+      this.fading = [];
+      for (const sl of this.animFx?.slots ?? []) if (!this.wantEffects.has(sl.slot)) this.dropSystem(sl.slot);
+    }
+    this.animFx = null;
+    await this.setAnimEffects(fx, loop);
   }
   snapshot(minHeight = 0): string {
     const pr = this.renderer.getPixelRatio(), h = this.canvas.clientHeight || 1;

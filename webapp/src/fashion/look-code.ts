@@ -39,6 +39,25 @@ export function lookPose(code: string | null | undefined): boolean | null {
   try { const p = parse(code).p; return p === 1 ? true : p === 0 ? false : null; } catch { return null; }
 }
 
+/** A moment of the look, as Share took it: `a` an animation stopped part way, [its name, the part playing (of a
+ *  three-part one), the tick into that part]; `v` the view, [the turn in thousandths of a radian, the distance, the
+ *  height looked at]. A shared code carries it, so its link's picture shows what Share showed. */
+export interface Shot { a?: [string, number, number] | null; v?: [number, number, number] | null }
+const ints = (x: any, n: number) => Array.isArray(x) && x.length === n && x.every((v: any) => Number.isInteger(v)) ? x as number[] : null;
+const anim = (x: any) => Array.isArray(x) && x.length === 3 && typeof x[0] === 'string' && x[0] && Number.isInteger(x[1]) && Number.isInteger(x[2]) ? x as [string, number, number] : null;
+/** The code with a moment (none: the code without one). */
+export function withShot(code: string, shot: Shot | null): string {
+  try {
+    const e = parse(code); delete e.a; delete e.v;
+    return pack({...e, ...(shot?.a ? {a: shot.a} : {}), ...(shot?.v ? {v: shot.v} : {})});
+  } catch { return code; }
+}
+/** The moment a code names, or null. */
+export function lookShot(code: string | null | undefined): Shot | null {
+  if (!code) return null;
+  try { const e = parse(code), a = anim(e.a), v = ints(e.v, 3) as Shot['v']; return a || v ? {a, v} : null; } catch { return null; }
+}
+
 // (links, saved looks and choices from before the rename name the beach by its room: East Beach)
 export const placeId = (p: string | null | undefined) => p === 'east-beach' ? 'beach' : p ?? null;
 /** The address's look code and place. */

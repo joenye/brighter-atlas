@@ -88,7 +88,8 @@ export function compose(pack: any, index: ReturnType<typeof makeIndex>, state: S
     const ap = itemAppearance(pack, index, state.equip[slot], state.gender);
     if (!ap) continue;
     if (ap.a.worn != null) { const w = pack.worn[ap.a.worn]; wornAt[w.pos] = {w, colour: ap.colour, id: ap.a.worn}; }
-    else if (ap.a.held != null) heldList.push({parts: pack.held[ap.a.held], colour: ap.colour, id: ap.a.held});
+    // (a weapon's other pieces with it: a bow's arrow, a crossbow's bolt, the second of a pair of throwing knives)
+    else if (ap.a.held != null) for (const id of [ap.a.held, ...(ap.a.also ?? [])]) heldList.push({parts: pack.held[id], colour: ap.colour, id});
   }
   const [feet, legs, torso, hands, head, back, cape] = [0, 1, 2, 3, 4, 5, 6].map(i => wornAt[i]);
   // (a torso piece marked `early`, the Shark Hoodies since the 29-Sep-2026 update, goes on with the hands before

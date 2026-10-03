@@ -6,11 +6,13 @@
 import {Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode} from 'react';
 import * as THREE from '../../vendor/three.module.js';
 import {at, DEV} from './data.js';
-import {compose, makeIndex, randomise, itemParts, hiddenItems, propParts, EQUIP_SLOTS} from './compose.js';
+import {compose, makeIndex, randomise, itemParts, hiddenItems, propParts, itemAppearance, EQUIP_SLOTS} from './compose.js';
 import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
-import {Preview, FRAMES, prefetch, Thumbnailer, report, forgetCaches, RENDERING_DEFAULTS, configureRendering, type Rendering} from './render.js';
+import {Preview, FRAMES, prefetch, Thumbnailer, report, forgetCaches, RENDERING_DEFAULTS, configureRendering, type Rendering, type Crop} from './render.js';
 import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, dyesFor, twoHandedItem, type Faction} from './wardrobe.js';
-import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose} from './look-code.js';
+import {Mp4Writer, avcCodec} from './mp4-mux.js';
+import {gifHead, gifJoin} from '../viewers/gif-encoder.js';
+import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose, withShot, lookShot, type Shot} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
 import {attachTurning} from './turning.js';
@@ -41,7 +43,7 @@ const PART_FRAME: Record<string, {dist: number, target: number}> = {
 // what a random outfit draws from (remembered on this device; Reset puts it back)
 interface RandomSettings { faction: Faction | 'Guard' | 'all'; allowEmpty: boolean; dyes: boolean; weapons: boolean }
 const RANDOM_DEFAULTS: RandomSettings = {faction: 'all', allowEmpty: true, dyes: true, weapons: true};
-// how the plain view is drawn (Settings, Rendering), kept on this device
+// how the plain view is drawn (Settings, Lighting), kept on this device
 const loadRendering = (): Rendering => { try { const v = JSON.parse(store.get('rendering') ?? 'null'); return v && typeof v === 'object' ? {...RENDERING_DEFAULTS, ...v} : {...RENDERING_DEFAULTS}; } catch { return {...RENDERING_DEFAULTS}; } };
 const loadRandom = (): RandomSettings => { try { const v = JSON.parse(store.get('random') ?? 'null'); return v && typeof v === 'object' ? {...RANDOM_DEFAULTS, ...v} : {...RANDOM_DEFAULTS}; } catch { return {...RANDOM_DEFAULTS}; } };
 const FLOORS = [['ring', 'Ring and shadow'], ['shadow', 'Shadow only'], ['none', 'None']] as const;
@@ -133,6 +135,59 @@ markImage.src = '/brand/mark.svg';
 // the link preview's picture (?picture): 1200 x 630, a three-quarter turn of the whole figure, the shield side away
 // (so a shield never hides the outfit), on the first backdrop, the site's mark in its corner
 const PICTURE_SIZE = [1200, 630] as const, PICTURE_YAW = -0.45;
+// ---- downloads: a picture, a GIF or a video of the look, made from the record view (the crop over the character),
+// on the page's background or transparent (nothing behind the character, no shadow, no mark); any other: the mark in
+// the lower right ----
+type SaveFmt = 'picture' | 'gif' | 'video';
+type Shape = 'wide' | 'square' | 'tall' | 'free';
+interface RecOpts {
+  fmt: SaveFmt; clear: boolean; shape: Shape; crop: Crop | null;
+  // (More options)
+  quality: 'standard' | 'high'; fps: number; plays: number; spin: boolean;
+}
+const REC_DEFAULTS: RecOpts = {fmt: 'picture', clear: false, shape: 'wide', crop: null, quality: 'standard', fps: 0, plays: 1, spin: false};
+const SHAPE_RATIO: Record<Exclude<Shape, 'free'>, number> = {wide: 16 / 9, square: 1, tall: 9 / 16};
+// (the file's long edge; High for those who want it sharp: 4K pictures, big GIFs, 1440p video)
+const LONG_EDGE: Record<SaveFmt, Record<RecOpts['quality'], number>> = {picture: {standard: 1920, high: 3840}, gif: {standard: 640, high: 1080}, video: {standard: 1920, high: 2560}};
+// (a GIF's frames last whole hundredths of a second: only rates that divide 100 play at their true pace)
+const FPS_CHOICES: Record<SaveFmt, number[]> = {picture: [], gif: [10, 20, 25, 50], video: [24, 30, 60]};
+const FPS_DEFAULT: Record<SaveFmt, number> = {picture: 0, gif: 25, video: 30};
+const fpsOf = (o: RecOpts) => FPS_CHOICES[o.fmt].includes(o.fps) ? o.fps : FPS_DEFAULT[o.fmt];
+// (what a file of each kind weighs a pixel, measured on this page's looks: for the size it is said to be)
+const BYTES_PER_PX: Record<SaveFmt, number> = {picture: 0.65, gif: 0.1, video: 0};
+const SPIN_MS = 4000;       // (one turn, when no animation plays)
+const even = (x: number) => Math.max(2, Math.round(x / 2) * 2);
+const megabytes = (bytes: number) => bytes < 1e6 ? 'under 1 MB' : `about ${bytes < 10e6 ? (bytes / 1e6).toFixed(0) : Math.round(bytes / 5e6) * 5} MB`;
+const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const loadRec = (): RecOpts => {
+  try { const o = JSON.parse(localStorage.getItem('fashion.rec') ?? 'null'); return o && typeof o === 'object' ? {...REC_DEFAULTS, ...Object.fromEntries(Object.entries(o).filter(([k]) => k in REC_DEFAULTS))} : {...REC_DEFAULTS}; }
+  catch { return {...REC_DEFAULTS}; }
+};
+const keepRec = (o: RecOpts) => { try { localStorage.setItem('fashion.rec', JSON.stringify(o)); } catch {} };
+/** The crop a shape gives a view `vw` x `vh` pixels: as large as fits inside a margin, centred. */
+function cropFor(shape: Exclude<Shape, 'free'>, vw: number, vh: number): Crop {
+  const r = SHAPE_RATIO[shape], mw = vw * 0.86, mh = vh * 0.8;
+  const [w, h] = mw / mh > r ? [mh * r, mh] : [mw, mw / r];
+  return {x: (vw - w) / 2 / vw, y: (vh - h) / 2 / vh, w: w / vw, h: h / vh};
+}
+/** The file's size: the crop's own shape, at the long edge the format and quality ask. */
+function outSize(o: RecOpts, crop: Crop, vw: number, vh: number): [number, number] {
+  const r = (crop.w * vw) / Math.max(1, crop.h * vh), long = LONG_EDGE[o.fmt][o.quality];
+  return r >= 1 ? [even(long), even(long / r)] : [even(long * r), even(long)];
+}
+/** Hand a file over: a download (on a phone still in the tap that asked, its own share sheet: Save Image, Save Video). */
+async function deliver(blob: Blob, name: string) {
+  const file = new File([blob], name, {type: blob.type});
+  if (touch && (navigator as any).userActivation?.isActive && navigator.canShare?.({files: [file]})) {
+    try { await navigator.share({files: [file]}); return; } catch (e: any) { if (e?.name === 'AbortError') return; }
+  }
+  const url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+// how far a shot flies with no foe to aim at (tiles of 1024 units)
+const SHOT_TILES = 4;
 const PICTURE_FRAMING = {dist: FRAMES.full.dist * 0.74, target: FRAMES.full.target * 0.96};
 /** The preview picture's corner mark (the page's .of-picmark: the site's mark, "Brighter Fashion"), `k` times its size. */
 async function pictureMark(g: CanvasRenderingContext2D, w: number, h: number, k: number) {
@@ -173,6 +228,8 @@ export function Tool(props: ToolProps) {
 
 function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const index = useMemo(() => makeIndex(pack), [pack]);
+  /** The worn weapon's pieces (held records): [0] the weapon, then what goes with it (a bow's arrow). */
+  const weaponPieces = (st: State): number[] => { const ap = itemAppearance(pack, index, st.equip.weapon, st.gender); return ap?.a.held != null ? [ap.a.held, ...(ap.a.also ?? [])] : []; };
   const RELAXED = pack.creator.idleClip;   // the resting clip (it hides held items; the viewer can show them in hand)
   // the fists-up combat-ready idle the game plays with no weapon in hand (a shield alone included), and, for a pack
   // without it, the combat-ready idle most weapons share
@@ -193,6 +250,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // picture shows it. A link from before poses were shared: its picture shows the weapons, if any)
   const [showHeld, setShowHeld] = useState(() => lookPose(addressLook().code) ?? PICTURE);
   const picturePose = useMemo(() => PICTURE ? lookPose(addressLook().code) : null, []);
+  // (the picture of a shared moment: the view Share had, and the animation stopped where it was)
+  const pictureShot = useMemo(() => PICTURE ? lookShot(addressLook().code) : null, []);
   const [showEffects, setShowEffects] = useState(store.get('fx') !== '0');
   const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? BACKDROPS[0]);
   const [floor, setFloorState] = useState<Floor>(PICTURE ? 'shadow' : (FLOORS.map(f => f[0]).find(m => m === store.get('floor')) ?? 'shadow'));   // (the shadow alone by default)
@@ -221,8 +280,10 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const [placeLoad, setPlaceLoad] = useState<{name: string, progress: number | null} | null>(null);
   const [toastMsg, setToastMsg] = useState<{text: string, n: number} | null>(null);
   const [looks, setLooks] = useState<SavedLook[]>(loadLooks);
-  const [looksOpen, setLooksOpen] = useState(false), [looksTouched, setLooksTouched] = useState(false), [looksTop, setLooksTop] = useState(0);
-  const [picture, setPicture] = useState<{blob: Blob | null, url: string} | null>(null), [shareOpen, setShareOpen] = useState(false);
+  // (the looks: a drawer of the side panel, as the animations are, in the equipment's place)
+  const [looksOpen, setLooksOpen] = useState(false);
+  // (Share or download: the record view, with its drawer)
+  const [shareOpen, setShareOpen] = useState(false);
   const [split, setSplit] = useState(Number(store.get('split')) || 0), [cSplit, setCSplit] = useState(Number(store.get('csplit')) || 0);
   const [stageH, setStageH] = useState<string | null>(null);
   const [columnBottom, setColumnBottom] = useState('');
@@ -282,14 +343,17 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     if (on && live.current.animMode) setAnimMode(false);
     live.current.panelCollapsed = on; setPanelCollapsedState(on); store.set('panel', on ? '1' : '0');
   };
-  function setBgMode(on: boolean) { if (live.current.bgMode === on) return; if (on) setAnimMode(false); live.current.bgMode = on; setBgModeState(on); setBgOpen(on); }
+  function setBgMode(on: boolean) { if (live.current.bgMode === on) return; if (on) { setAnimMode(false); closeLooks(); } live.current.bgMode = on; setBgModeState(on); setBgOpen(on); }
   function setAnimMode(on: boolean) {
-    if (live.current.animMode === on) return; if (on) setBgMode(false); live.current.animMode = on; setAnimModeState(on);
+    if (live.current.animMode === on) return; if (on) { setBgMode(false); closeLooks(); } live.current.animMode = on; setAnimModeState(on);
     if (on) void loadAnimations()?.then(() => setAnimListVersion(v => v + 1));
   }
   // (the equipment or the designer opened mid-animation stops it; the drawer folded away by its own button, or
   // Escape, leaves it playing)
-  const stopAnimation = () => { setAnim(null); setAnimPause(false); };
+  const stopAnimation = () => { setAnim(null); setLastAnim(null); setAnimPause(false); };
+  // the animation played last: after a one-off ends it can still be saved, and its timeline stays (resting at its end)
+  // till another is played or it is stopped
+  const [lastAnim, setLastAnim] = useState<typeof anim>(null);
   const toggleAnimMode = () => {
     if (live.current.animMode) { setAnimMode(false); return; }
     if (live.current.designing) leaveDesigner();
@@ -359,13 +423,17 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     closeCreator();
   }
   // the drawer in Character mode (the page opens in it)
-  const openCharacter = () => { setBgMode(false); setAnimMode(false); stopAnimation(); if (live.current.panelCollapsed) setPanelCollapsed(false); openCreator(); };
+  const openCharacter = () => { setBgMode(false); setAnimMode(false); closeLooks(); stopAnimation(); if (live.current.panelCollapsed) setPanelCollapsed(false); openCreator(); };
   const modeClick = (designingBtn: boolean) => {
+    // (Equipment or Character pressed: what plays stops and a pause lets go, the Animations drawer open or folded)
+    const looksWere = live.current.looksOpen;
+    stopAnimation(); closeLooks();
     // (Character with no drawer brings the page's back first: the view and its column sit above the designer's)
     if (designingBtn) { if (!live.current.designing) openCharacter(); else { closeCreator(); setPanelCollapsed(true); } }
     else if (live.current.designing) { leaveDesigner(); setPanelCollapsed(false); }
     else if (live.current.bgMode) setBgMode(false);
-    else if (live.current.animMode) { setAnimMode(false); stopAnimation(); }
+    else if (live.current.animMode) setAnimMode(false);
+    else if (looksWere) { /* (the looks drawer gave way to the equipment) */ }
     else setPanelCollapsed(!live.current.panelCollapsed);
   };
 
@@ -480,7 +548,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       }).then(() => { if (!gone && live.current.backdrop === opening) show(); });
       model.touch();
       // (the page opens on the equipment, as it is first drawn: the designer is a tap away)
-      if (PICTURE) { viewer.yaw = PICTURE_YAW; viewer.yawVel = 0; viewer.frameTo(PICTURE_FRAMING, true); }
+      if (PICTURE) { const sv = pictureShot?.v; viewer.yaw = sv ? sv[0] / 1000 : PICTURE_YAW; viewer.yawVel = 0; viewer.frameTo(sv ? {dist: sv[1], target: sv[2]} : PICTURE_FRAMING, true); }
       forceRender(n => n + 1);
     })();
     return () => {
@@ -501,6 +569,10 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     // (the weapons stay in the look: the viewer swaps them for the props on the animation's first frame, not before)
     const partsNow = holding.length ? [...look, ...holding] : look;
     e.viewer.propClips = holding.length && anim ? new Set(anim.parts?.map(p => p.clip) ?? [anim.clip]) : null;
+    // (a ranged weapon's pieces, drawn by the state of its attack: the arrow loosed leaves the bow)
+    const w = st.equip.weapon ? pack.items.find((i: any) => i.id === st.equip.weapon?.item) : null, pieces = weaponPieces(st);
+    e.viewer.setInHand(w?.inHand && pieces.length ? {piece: new Map(pieces.map((id, i) => [id, i])), states: w.inHand.states, shots: w.inHand.shots.map((x: any) => x.release),
+      attackClips: new Set((w.moves ?? []).filter((m: any) => m.aim != null).map((m: any) => m.clip))} : null);
     // (an item another covers stays marked in its row: no toast. The rows, and their pictures, are drawn only where
     // they show: never for a picture, and not under the designer, which hides the wardrobe; they draw as it closes)
     e.wardrobe.hidden = hiddenItems(pack, index, st);
@@ -524,7 +596,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const animActors = anim && !designing && anim.actors?.length ? anim.actors : null;
   useEffect(() => {
     const v = engine.current?.viewer; if (!v) return;
-    actorsReady.current = v.setAnimActors(animActors ? animActors.map(a => ({...a, parts: propParts(a.parts)})) : null, anim ? anim.parts?.map(p => p.clip) ?? [anim.clip] : []);
+    actorsReady.current = v.setAnimActors(animActors ? animActors.map(a => ({...a, parts: a.parts.some((p: any) => p?.key) ? a.parts : propParts(a.parts)})) : null, anim ? anim.parts?.map(p => p.clip) ?? [anim.clip] : []);
   }, [animActors]);
   // the pose: weapons out (the worn weapon's combat-ready stance; with no weapon, a shield alone too, fists up as the
   // game does), or away. A link's picture of a look with nothing in hand stays at rest.
@@ -549,9 +621,12 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       animStarted.current = playing;
       // (an animation holding something, or with figures of its own: its first clip starts once they are built, so
       // they never show on the pose before it)
-      const first = !!playing && playing.part === 0 && !!(playing.props?.length || playing.actors?.length);
+      // (an animation's first clip starts once what it holds, its figures and its particles' pictures are in: none
+      // of them shows on the pose before it, nor late, nor as a stand-in)
+      const fxSystems = playing ? (playing.fx ?? []).filter(f => !f.gender || f.gender === state.gender).map(f => f.system) : [];
+      const first = !!playing && playing.part === 0 && !!(playing.props?.length || playing.actors?.length || fxSystems.length);
       const start = () => e.viewer.setClip(clip, top, held, !!playing, !(playing && playing.part > 0));
-      poseReady.current = first ? Promise.all([partsReady.current, actorsReady.current]).then(() => animStarted.current === playing ? start() : undefined) : start();
+      poseReady.current = first ? Promise.all([partsReady.current, actorsReady.current, e.viewer.effectsReady(fxSystems).catch(() => {})]).then(() => animStarted.current === playing ? start() : undefined) : start();
       // (in: its tile's progress starts; a clip that could not be fetched: the tile stops loading and says so)
       if (playing) poseReady.current.then(() => { if (animStarted.current === playing && e.viewer.clipId === clip) setAnimRun({anim: playing, t0: performance.now()}); },
         () => { if (animStarted.current === playing) { setAnim(a => a === playing ? null : a); toast(`Couldn’t load ${playing.name}. Please try again`); } });
@@ -562,7 +637,17 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const animStarted = useRef<typeof anim>(null), poseReady = useRef<Promise<unknown>>(Promise.resolve());
   // the fighting moves the drawer offers: in the combat-ready pose only, the weapon's own (with none, the fists')
   const heldWeapon = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item) : null;
-  const combatMoves: AnimItem[] = fighting && !designing ? ((heldWeapon ? heldWeapon.moves : pack.unarmedMoves) ?? []).map((m: any) => ({...m, group: 'Combat'})) : [];
+  // (a ranged attack sends its pieces off as the game launches them: each shot's piece as the hand last held it, from
+  // its release straight ahead at the game's 37.5 ticks a tile; with no foe to aim at, SHOT_TILES tiles)
+  const shotsOf = (m: any): Pick<AnimItem, 'actors'> => {
+    const shots = heldWeapon?.inHand?.shots ?? [], pieces = weaponPieces(state);
+    if (m.aim == null || !shots.length || !pieces.length) return {};
+    const look = compose(pack, index, state);
+    return {actors: shots.filter((x: any) => pieces[x.el] != null).map((x: any) => ({skel: pack.skeleton, clips: [m.clip],
+      parts: look.filter(p => p.key.endsWith(`/h${pieces[x.el]}`)).map(p => ({...p, key: `${p.key}/shot`})),
+      thrown: {release: x.release, flight: Math.round(SHOT_TILES * 37.5), distance: SHOT_TILES * 1024, ...(x.bone != null ? {bone: x.bone} : {})}}))};
+  };
+  const combatMoves: AnimItem[] = fighting && !designing ? ((heldWeapon ? heldWeapon.moves : pack.unarmedMoves) ?? []).map((m: any) => ({...m, group: 'Combat', ...(heldWeapon ? shotsOf(m) : {})})) : [];
   // a one-shot animation plays once (the game's 600 ticks a second), then the pose it interrupted comes back; Repeat
   // plays it again and again; Pause at end keeps its last frame until stopped
   // (counted on the animations' own clock from when it began to play: a clip still on its way plays whole, and a
@@ -571,6 +656,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   useEffect(() => {
     const v = engine.current?.viewer;
     if (!v || !anim || anim.loop || animPause || !anim.ticks || animRun?.anim !== anim || (animRepeat && !anim.parts)) return;
+    if (shotFreeze.current && anim.part === shotFreeze.current.part) return;   // (a shared moment's picture stops in it)
     const last = !anim.parts || anim.part >= anim.parts.length - 1;
     const ticks = anim.parts ? anim.parts[anim.part].ticks ?? 0 : anim.ticks;
     const t = setTimeout(() => setAnim(a => a !== anim ? a : !last ? {...a, part: a.part + 1} : animRepeat ? {...a, part: 0, key: ++animKeys.current} : null),
@@ -597,6 +683,71 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // Pause: everything stands still where it is (the resting idle too: a way to freeze the character), until it is
   // let go, an animation is picked, or the equipment or the designer opens (folding the drawer keeps it)
   useEffect(() => { const v = engine.current?.viewer; if (v) v.paused = animPause; }, [animPause]);
+  // ---- the animation's timeline (the drawer's slider): its parts' lengths, where it is, a jump to any moment ----
+  const partsMs = (a: NonNullable<typeof anim>) => {
+    const v = engine.current?.viewer;
+    return (a.parts ?? [{clip: a.clip, ticks: a.ticks}]).map((p, i) => ({clip: p.clip, ms: (p.ticks || (i === a.part && v ? v.clipDuration() : 0)) / 0.6}));
+  };
+  const seekWant = useRef<{part: number, local: number, total: number} | null>(null);
+  const seekTo = (a: NonNullable<typeof anim>, ms: number) => {
+    const v = engine.current?.viewer; if (!v) return;
+    setAnimPause(true); v.paused = true;
+    const ps = partsMs(a); let part = 0, before = 0;
+    while (part < ps.length - 1 && ms >= before + ps[part].ms) { before += ps[part].ms; part++; }
+    const local = Math.max(0, Math.min(ms - before, ps[part].ms - 1)), fx = (a.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender);
+    // (another part, or the animation over: it starts there again, then is moved to the moment)
+    if (a !== anim) { const again = {...a, part, key: ++animKeys.current}; seekWant.current = {part, local, total: ms}; setAnim(again); setLastAnim(again); return; }
+    if (part !== a.part) { seekWant.current = {part, local, total: ms}; setAnim(x => x === a ? {...a, part} : x); return; }
+    void v.seek(local, fx, ms, !a.parts && (animRepeat || a.loop));
+  };
+  const ended = !anim && lastAnim ? lastAnim : null;
+  const timeline: Timeline | null = ended ? {
+    id: `${ended.key}-end`, name: ended.name, total: partsMs(ended).reduce((t, p) => t + p.ms, 0),
+    at: () => partsMs(ended).reduce((t, p) => t + p.ms, 0), seek: ms => seekTo(ended, ms),
+  } : anim && animRun?.anim === anim ? {
+    id: `${anim.key}`, name: anim.name, total: partsMs(anim).reduce((t, p) => t + p.ms, 0),
+    at: () => {
+      const v = engine.current?.viewer; if (!v || !anim) return 0;
+      const ps = partsMs(anim), before = ps.slice(0, anim.part).reduce((t, p) => t + p.ms, 0), len = ps[anim.part]?.ms || 1, el = v.clipElapsed();
+      return before + (!anim.parts && (anim.loop || animRepeat) ? el % len : Math.min(el, len));
+    },
+    seek: ms => seekTo(anim, ms),
+  } : null;
+  useEffect(() => {
+    const w = seekWant.current, v = engine.current?.viewer;
+    if (!w || !v || !anim || animRun?.anim !== anim || anim.part !== w.part) return;
+    seekWant.current = null;
+    void v.seek(w.local, (anim.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender), w.total);
+  }, [animRun]);
+  const playOf = (a: AnimItem) => ({clip: a.clip, loop: !!a.loop, ticks: a.ticks ?? 0, name: a.name, group: a.group, fx: a.fx, parts: a.parts, props: a.props, actors: a.actors, part: 0, key: ++animKeys.current});
+  // The picture page of a shared moment plays its animation from the start and stops it on the moment's tick (the
+  // clock stands there exactly, whatever the frames' pace), and only then says it is drawn.
+  const shotFreeze = useRef<{part: number, ms: number, armed: boolean} | null>(null), shotPending = useRef(!!pictureShot?.a);
+  const pictureReady = () => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+    if (!live.current.parts.loading && !shotPending.current) document.documentElement.dataset.picture = 'ready';
+  }, 120)));
+  const shotDone = () => { shotFreeze.current = null; if (shotPending.current) { shotPending.current = false; pictureReady(); } };
+  useEffect(() => {
+    const a = pictureShot?.a; if (!a || !opened) return;
+    const giveUp = setTimeout(shotDone, 12000);   // (a moment that cannot be shown: the look without it)
+    // (once a frame of the resting pose is drawn: a close framing follows the head from where it rests, as the page
+    // that shared it did)
+    const rested = new Promise<void>(done => { const until = performance.now() + 3000, wait = () => engine.current?.viewer.restKnown || performance.now() > until ? done() : requestAnimationFrame(wait); wait(); });
+    void Promise.all([loadAnimations(), rested]).then(() => {
+      const [name, part, tick] = a, g = live.current.state.gender;
+      const item = [...combatMoves, ...(ANIMATIONS as AnimItem[]).filter(x => !x.gender || x.gender === g)].find(x => x.name === name);
+      if (!item) { shotDone(); return; }
+      shotFreeze.current = {part: Math.max(0, Math.min(part, (item.parts?.length ?? 1) - 1)), ms: tick / 0.6, armed: false};
+      setAnimPause(false); setAnim(playOf(item));
+    });
+    return () => clearTimeout(giveUp);
+  }, [opened]);
+  useEffect(() => {
+    const f = shotFreeze.current, v = engine.current?.viewer;
+    if (!f || f.armed || !v || !anim || animRun?.anim !== anim || anim.part !== f.part) return;
+    f.armed = true;
+    v.freezeAt(f.ms, () => { setAnimPause(true); shotDone(); });
+  }, [animRun]);
   // (folding the drawer keeps a pause: the character stays frozen where it was; stopping the animation lets go)
   useEffect(() => { if (designing) frameCreator(); }, [selected]);
 
@@ -623,7 +774,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // while one loads, else an outfit whose parts take more than a moment (a quick change never flashes it) ----
   useEffect(() => {
     if (!opened && !parts.first && !roomLoading) { setOpened(true); live.current.opened = true; ready(); }
-    if (PICTURE && !parts.loading && !parts.first) requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => { if (!live.current.parts.loading) document.documentElement.dataset.picture = 'ready'; }, 120)));
+    if (PICTURE && !parts.loading && !parts.first) pictureReady();
     if (roomLoading) return;
     if (!parts.loading) { setPlaceLoad(null); return; }
     const t = setTimeout(() => { if (live.current.parts.loading && !live.current.roomLoading) setPlaceLoad({name: 'outfit', progress: null}); }, 450);
@@ -678,7 +829,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const soon = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; placeColumn(); }); };
     const watch = new ResizeObserver(soon);
     for (const n of [els.viewer.current, els.right.current, els.stage.current]) if (n) watch.observe(n);
-    const onResize = () => { soon(); setViewportTick(t => t + 1); if (live.current.looksOpen) placeLooks(); };
+    const onResize = () => { soon(); setViewportTick(t => t + 1); };
     addEventListener('resize', onResize); visualViewport?.addEventListener('resize', soon);
     return () => { watch.disconnect(); cancelAnimationFrame(frame); removeEventListener('resize', onResize); visualViewport?.removeEventListener('resize', soon); };
   }, []);
@@ -727,8 +878,14 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     img.src = engine.current!.viewer.snapshot();
   });
   // it hangs from its button, whatever the bar's height (phones' is taller)
-  const placeLooks = () => { const b = els.share.current; if (b) setLooksTop(b.getBoundingClientRect().bottom + 6); };
-  const closeLooks = () => setLooksOpen(false);
+  const closeLooks = () => { live.current.looksOpen = false; setLooksOpen(false); };
+  // (the Looks button: the looks in the drawer, in place of the equipment, the animations or the background; again: away)
+  const toggleLooks = () => {
+    if (live.current.looksOpen) { closeLooks(); return; }
+    if (live.current.designing) leaveDesigner();
+    setAnimMode(false); setBgMode(false); setPanelCollapsed(false);
+    live.current.looksOpen = true; setLooksOpen(true);
+  };
   const wearLook = (l: SavedLook) => {
     const st = decode(l.code); if (!st) return;
     model.set(st);
@@ -740,32 +897,215 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // (Share takes the character as it stands: whatever plays is frozen where it is, the view as it is, until the sheet
   // closes; posed with the Pause, then shared)
   const pausedBefore = useRef(false);
-  const openShare = () => { pausedBefore.current = animPause; setAnimPause(true); setShareOpen(true); };
-  const closePicture = () => { setShareOpen(false); setAnimPause(pausedBefore.current); setPicture(p => { if (p?.url) URL.revokeObjectURL(p.url); return null; }); };
+  // ---- Share: the drawer with the link to the look and, opened below it, its download. While the download is open
+  // the view is the record view: the crop over it is what a download holds (the background and shadow as they will
+  // be, the mark where it goes), and only turning, zooming and the crop work on it ----
+  const shareShot = useRef<Shot | null>(null);
+  const sheetOpen = useRef(false);
+  const [rec, setRecState] = useState<RecOpts>(loadRec);
+  const setRec = (patch: Partial<RecOpts>) => setRecState(x => { const n = {...x, ...patch}; keepRec(n); return n; });
+  const [dlOpen, setDlOpen] = useState(() => store.get('dlOpen') === '1');
+  const toggleDl = () => setDlOpen(o => { store.set('dlOpen', o ? '0' : '1'); return !o; });
+  const recView = shareOpen && dlOpen;
+  /** The moment as it stands: an animation paused part way (none while one plays), and the view. */
+  const momentNow = (): Shot | null => {
+    const v = engine.current?.viewer; if (!v) return null;
+    const turn = Math.PI * 2, playing = anim && animRun?.anim === anim ? anim : null;
+    // (a looping one: within its one turn, so a picture of it never waits long)
+    const tick = Math.round(v.clipElapsed() * 0.6);
+    const at = playing && v.paused ? Math.max(0, (playing.loop || (animRepeat && !playing.parts)) && v.clipDuration() ? tick % v.clipDuration() : tick) : null;
+    return {a: playing && at != null ? [playing.name, playing.part, at] : null, v: [Math.round((((v.yaw % turn) + turn) % turn) * 1000), Math.round(v.want.dist), Math.round(v.want.target)]};
+  };
+  const momentRef = useRef(momentNow); momentRef.current = momentNow;
+  // (the link follows the moment: once the view has kept still a moment, so turning it asks for no links)
+  const [linkShot, setLinkShot] = useState<Shot | null>(null);
   useEffect(() => {
     if (!shareOpen) return;
-    let gone = false;
-    setPicture(p => { if (p?.url) URL.revokeObjectURL(p.url); return null; });
-    void (async () => {
-      // (once the look's parts and its pose are in: a look just put on, a saved one shared from the list, waits for
-      // its parts; whatever was asked for last, should a newer ask overtake one)
-      for (const ready of [partsReady, poseReady]) for (let p = ready.current; ; p = ready.current) { await p.catch(() => {}); if (gone || p === ready.current) break; }
-      while (!gone && engine.current?.viewer.loadingParts) await new Promise(r => setTimeout(r, 100));
-      const e = engine.current; if (gone || !e) return;
-      const k = 2, [w, h] = [PICTURE_SIZE[0] * k, PICTURE_SIZE[1] * k];
-      const v = e.viewer, shot = new Image(); shot.src = v.picture(w, h, {...v.want}, v.yaw); await shot.decode().catch(() => {});
-      const c = document.createElement('canvas'); c.width = w; c.height = h;
-      const g = c.getContext('2d')!; paintBackdrop(g, BACKDROPS[0], w, h); g.drawImage(shot, 0, 0); await pictureMark(g, w, h, k);
-      const blob = await new Promise<Blob | null>(res => c.toBlob(res, 'image/png'));
-      if (!gone) setPicture({blob, url: blob ? URL.createObjectURL(blob) : ''});
-    })();
-    return () => { gone = true; };
-  }, [shareOpen, model.version]);
+    let seen = '', last = JSON.stringify(shareShot.current);
+    const t = setInterval(() => {
+      const s = momentRef.current(), k = JSON.stringify(s);
+      if (k === seen && k !== last) { last = k; shareShot.current = s; setLinkShot(s); }
+      seen = k;
+    }, 700);
+    return () => clearInterval(t);
+  }, [shareOpen]);
+  const openShare = () => {
+    sheetOpen.current = true;
+    pausedBefore.current = animPause;
+    // (an animation playing stops where it is: the moment the link names is the one shown. With none, the character
+    // goes on breathing)
+    const v = engine.current?.viewer, playing = !!anim && animRun?.anim === anim;
+    if (v && playing) v.paused = true;
+    shareShot.current = momentNow(); setLinkShot(shareShot.current);
+    if (playing) setAnimPause(true);
+    setShareOpen(true); setSaveState(null);
+    if (live.current.panelCollapsed) setPanelCollapsed(false);
+  };
+  /** What a download shows behind the look and under it: transparent (nothing, no shadow, no mark) where asked or the
+   *  page's background is, and the file can be (a video cannot: the Atlas background), else the page's background (a
+   *  3D place: the place itself). */
+  const saveLook = (o: RecOpts) => {
+    const b = live.current.backdrop, pageClear = !b.room && !b.stops.length;
+    const transparent = (o.clear || pageClear) && o.fmt !== 'video', room = !transparent && !!b.room;
+    const paint = transparent || room ? null : pageClear ? BACKDROPS[0] : b;
+    return {transparent, room, pageClear, paint, floor: (transparent ? 'none' : 'page') as 'none' | 'page', name: transparent ? 'Transparent' : room ? b.name : paint!.name};
+  };
+  const recLook = saveLook(rec);
+  // (the view in the record view: transparent shown as such, the place hidden meanwhile, no shadow; all back after)
+  useEffect(() => {
+    const v = engine.current?.viewer; if (!v) return;
+    v.setRoomHidden(recView && recLook.transparent);
+    v.setFloor(recView && recLook.transparent ? 'none' : floor);
+  }, [recView, recLook.transparent, floor, backdrop]);
+  const viewBg = recView && recLook.transparent ? cssOf(BACKDROPS.find(b => !b.room && !b.stops.length) ?? BACKDROPS[0])
+    : recView && recLook.paint && recLook.paint !== backdrop ? cssOf(recLook.paint) : cssOf(backdrop);
+  // the crop: a shape's, fitted to the view, or one drawn with the bars (kept as fractions of the view)
+  const [viewSize, setViewSize] = useState<[number, number]>([1, 1]);
+  useEffect(() => {
+    const c = els.canvas.current; if (!c) return;
+    const ro = new ResizeObserver(() => setViewSize([c.clientWidth || 1, c.clientHeight || 1])); ro.observe(c);
+    return () => ro.disconnect();
+  }, []);
+  const crop: Crop = rec.shape === 'free' && rec.crop ? rec.crop : cropFor(rec.shape === 'free' ? 'wide' : rec.shape, viewSize[0], viewSize[1]);
+  const [outW, outH] = outSize(rec, crop, viewSize[0], viewSize[1]);
+  // the animation a download plays: the one playing, else the one played last (a one-off over can still be saved)
+  const sharedAnim = () => anim ? (animRun?.anim === anim ? anim : null) : lastAnim;
+  const recordPlan = (o: RecOpts) => {
+    const a = sharedAnim(); if (!a) return null;
+    const ps = partsMs(a), plan: {clip: number, ms: number, restart?: boolean}[] = [];
+    for (let i = 0; i < o.plays; i++) ps.forEach((p, j) => plan.push({clip: p.clip, ms: p.ms, restart: j === 0}));
+    return plan;
+  };
+  // (a turn with no animation: a whole number of the pose's idle loops, about SPIN_MS, as record() draws it)
+  const recordMs = (o: RecOpts) => {
+    const plan = recordPlan(o); if (plan) return plan.reduce((t, p) => t + p.ms, 0);
+    const idle = (engine.current?.viewer.clipDuration() ?? 0) / 0.6;
+    return idle ? Math.max(1, Math.round(SPIN_MS / idle)) * idle : SPIN_MS;
+  };
+  // one recording at a time (the view draws one): a newer ask stops the one running, which puts the view back first
+  const job = useRef<Promise<unknown>>(Promise.resolve()), jobStop = useRef<{stop: boolean} | null>(null);
+  const runJob = <T,>(fn: (tok: {stop: boolean}) => Promise<T>): Promise<T> => {
+    if (jobStop.current) jobStop.current.stop = true;
+    const tok = {stop: false}; jobStop.current = tok;
+    const p = job.current.catch(() => {}).then(() => tok.stop ? Promise.reject(new Error('stopped')) : fn(tok));
+    job.current = p.catch(() => {});
+    return p;
+  };
+  /** Make the download `o` asks, from the crop: the picture of this moment, or the animation from its start (`plays`
+   *  times, turning once if asked; no animation: one turn of the pose as it stands). Fast: the frames go from the view
+   *  to the encoder without the page waiting on their pixels (a video: the browser's own encoder, fed the canvas; a
+   *  GIF: a worker reads and encodes each as it comes). */
+  const recordLook = (o: RecOpts, cropNow: Crop, progress: (k: number) => void) => runJob(async tok => {
+    // (once the look's parts and pose are in: a saved look just put on waits for its parts)
+    for (const ready of [partsReady, poseReady]) for (let p = ready.current; ; p = ready.current) { await p.catch(() => {}); if (p === ready.current) break; }
+    while (engine.current?.viewer.loadingParts) await new Promise(r => setTimeout(r, 100));
+    const e = engine.current; if (!e) throw new Error('not ready');
+    const stopped = () => { if (tok.stop) throw new Error('stopped'); };
+    const v = e.viewer, look = saveLook(o), c0 = els.canvas.current!, [w, h] = outSize(o, cropNow, c0.clientWidth || 1, c0.clientHeight || 1);
+    const framing = {...v.want}, yaw = v.yaw, k = Math.min(w, h) / 630;
+    // (what goes behind and over every frame, drawn once)
+    const layer = () => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+    const back = look.paint ? layer() : null; if (back) paintBackdrop(back.getContext('2d')!, look.paint!, w, h);
+    const mark = look.transparent ? null : layer(); if (mark) await pictureMark(mark.getContext('2d')!, w, h, k);
+    const c = layer(), g = c.getContext('2d')!;
+    const compose = (src: CanvasImageSource) => { g.clearRect(0, 0, w, h); if (back) g.drawImage(back, 0, 0); g.drawImage(src, 0, 0); if (mark) g.drawImage(mark, 0, 0); };
+    if (o.fmt === 'picture') {
+      const shot = new Image(); shot.src = v.picture(w, h, framing, yaw, look.floor, cropNow); await shot.decode().catch(() => {});
+      stopped(); compose(shot); progress(1);
+      return await new Promise<Blob>((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('no picture')), 'image/png'));
+    }
+    const a = sharedAnim(), plan = recordPlan(o), fx = a ? (a.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender) : null, fps = fpsOf(o);
+    const shoot = (each: (c: HTMLCanvasElement) => void | Promise<void>) => v.record({w, h, framing, yaw, floor: look.floor, stepMs: 1000 / fps, crop: cropNow, plan, fx,
+      turn: !plan || o.spin ? 1 : 0, turnMs: SPIN_MS}, src => { stopped(); compose(src); return each(c); }, x => progress(x * 0.95));
+    if (o.fmt === 'gif') {
+      // (the frames shared among a few workers, each encoding as they come; put back in order at the end)
+      const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+      const workers = Array.from({length: n}, () => new Worker(new URL('/js/fashion/save-worker.js', location.href), {type: 'module'}));
+      const blocks: Uint8Array[] = [];
+      let got = 0, sent = 0, wake: (() => void) | null = null, failed: unknown = null, watch = 0;
+      const nudge = () => { const f = wake; wake = null; f?.(); };
+      // (wait for the workers: as they answer, or stop)
+      const until = (ok: () => boolean) => new Promise<void>((res, rej) => { const t = () => { if (failed) rej(new Error(String(failed))); else if (ok() || tok.stop) res(); else wake = t; }; t(); });
+      try {
+        for (const wk of workers) {
+          wk.onmessage = (m: MessageEvent) => { blocks[m.data.i] = m.data.bytes; got++; nudge(); };
+          wk.onerror = err => { failed = err.message || 'the GIF maker failed'; nudge(); };
+          wk.postMessage({start: {w, h, delayMs: 1000 / fps, transparent: look.transparent}});
+        }
+        watch = window.setInterval(() => { if (tok.stop) nudge(); }, 100);   // (a stop: no waiting on the workers)
+        await shoot(async cv => {
+          const bmp = await createImageBitmap(cv), i = sent++;
+          workers[i % n].postMessage({frame: bmp, i}, [bmp]);
+          await until(() => sent - got <= 3 * n);   // (a few frames ahead of the workers, no more: memory stays small)
+        });
+        await until(() => got >= sent); stopped();
+        return gifJoin(gifHead(w, h), blocks, 1000 / fps);
+      } finally { clearInterval(watch); for (const wk of workers) wk.terminate(); }
+    }
+    // a video: the browser's own encoder where it has one (most do), fed the canvas itself; else one in the page
+    const codec = avcCodec(w, h, fps), bitrate = o.quality === 'high' ? 20e6 : 8e6;
+    const native = typeof VideoEncoder !== 'undefined' && await VideoEncoder.isConfigSupported({codec, width: w, height: h, bitrate, framerate: fps}).then(r => !!r.supported, () => false);
+    if (native) {
+      const mp4 = new Mp4Writer(w, h, fps);
+      let failed: unknown = null;
+      const enc = new VideoEncoder({output: (chunk, meta) => mp4.add(chunk, meta), error: err => { failed = err; }});
+      enc.configure({codec, width: w, height: h, bitrate, framerate: fps, avc: {format: 'avc'}});
+      try {
+        let i = 0;
+        await shoot(async cv => {
+          if (failed) throw failed;
+          const frame = new VideoFrame(cv, {timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps)});
+          enc.encode(frame, {keyFrame: i % (fps * 2) === 0}); frame.close(); i++;
+          if (enc.encodeQueueSize > 4) await new Promise<void>(r => enc.addEventListener('dequeue', () => r(), {once: true}));
+        });
+        stopped();
+        await enc.flush(); if (failed) throw failed;
+        return mp4.finish();
+      } finally { if (enc.state !== 'closed') enc.close(); }
+    }
+    const {default: HME} = await import('../../vendor/h264-mp4-encoder.module.js' as any);
+    const enc = await HME.createH264MP4Encoder(); enc.width = w; enc.height = h; enc.frameRate = fps; enc.kbps = bitrate / 1000; enc.initialize();
+    try {
+      const rg = document.createElement('canvas').getContext('2d', {willReadFrequently: true})!; rg.canvas.width = w; rg.canvas.height = h;
+      await shoot(cv => { rg.drawImage(cv, 0, 0); enc.addFrameRgba(rg.getImageData(0, 0, w, h).data); });
+      stopped(); enc.finalize();
+      const data = enc.FS.readFile(enc.outputFilename);
+      try { enc.FS.unlink(enc.outputFilename); } catch {}
+      return new Blob([data], {type: 'video/mp4'});
+    } finally { enc.delete(); }
+  });
+  const saveName = (o: RecOpts) => {
+    const a = o.fmt === 'picture' ? (anim ? sharedAnim() : null) : sharedAnim(), t = new Date(), hms = [t.getHours(), t.getMinutes(), t.getSeconds()].map(x => String(x).padStart(2, '0')).join('');
+    return `brighter-fashion${a ? `-${slug(a.name)}` : ''}-${hms}.${({picture: 'png', gif: 'gif', video: 'mp4'} as const)[o.fmt]}`;
+  };
+  // the download: being made, saved, or failed; it downloads by itself once made
+  const [saveState, setSaveState] = useState<{k: number} | {saved: string} | {error: string} | null>(null);
+  useEffect(() => { setSaveState(st => st && 'k' in st ? st : null); }, [rec.fmt, rec.clear, rec.shape, rec.quality, rec.fps, rec.plays, rec.spin, rec.crop]);
+  const download = async () => {
+    const o = rec, t0 = performance.now();
+    setSaveState({k: 0});
+    try {
+      const blob = await recordLook(o, crop, k => setSaveState({k})), name = saveName(o);
+      await deliver(blob, name);
+      setSaveState({saved: `Saved ${name} (${megabytes(blob.size).replace('about ', '')}, ${((performance.now() - t0) / 1000).toFixed(1)} s).`});
+    } catch (e: any) {
+      if (e?.message !== 'stopped') console.warn('save', e);
+      setSaveState(e?.message === 'stopped' ? null : {error: 'Couldn’t make it. Try Standard quality, or try again.'});
+    }
+  };
+  const cancelSave = () => { if (jobStop.current) jobStop.current.stop = true; setSaveState(null); };
+  const closeShare = () => {
+    cancelSave();
+    setShareOpen(false); sheetOpen.current = false; shareShot.current = null; setLinkShot(null);
+    // (a recording still running puts the view back as it was, paused, when it stops: the pause let go after)
+    const was = pausedBefore.current;
+    void job.current.then(() => { setAnimPause(was); const v = engine.current?.viewer; if (v) v.paused = was; });
+  };
 
   // ---- keys and the address ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!live.current.active) return;
+      if (!live.current.active || sheetOpen.current) return;
       const typing = (e.target as HTMLElement)?.matches?.('input, textarea');
       if (live.current.designing) {
         if (e.key === 'Escape') { cancelCreator(); return; }
@@ -798,7 +1138,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     };
     // a link pasted into this tab: like opening it fresh
     const onHash = () => {
-      if (!live.current.active) return;
+      if (!live.current.active || sheetOpen.current) return;
       const {code, place} = addressLook(), s = decode(code);
       const pl = BACKDROPS.find(b => b.room && b.id === place); if (pl && pl !== live.current.backdrop) setBackdrop(pl, false);
       if (s && encode(s) !== encode(model.state)) model.set(s);
@@ -807,7 +1147,6 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const onDocClick = (e: MouseEvent) => {
       const t = e.target as Node;
       if (live.current.bgOpen && !live.current.bgMode && !els.bgPop.current?.contains(t) && !els.bgBtn.current?.contains(t)) setBgOpen(false);
-      if (live.current.looksOpen && !els.looks.current?.contains(t)) closeLooks();
     };
     window.addEventListener('keydown', onKey); window.addEventListener('hashchange', onHash); document.addEventListener('click', onDocClick);
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('hashchange', onHash); document.removeEventListener('click', onDocClick); };
@@ -884,10 +1223,10 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         <button type="button" className="rs-reset" onClick={() => setRs({...RANDOM_DEFAULTS})}>Reset to defaults</button>
       </details>
       <details className="of-bgsec" data-sec="rendering">
-        <summary><Icon name="sun" />Rendering</summary>
+        <summary><Icon name="sun" />Lighting</summary>
         {backdrop.room && <div className="rd-note">A 3D scene is drawn by the game itself, with its own light and shadows: these apply to the colour backgrounds.</div>}
-        <div className="rs-label">Lighting</div>
-        <div className="chips rd-lighting" role="group" aria-label="Lighting">
+        <div className="rs-label">Style</div>
+        <div className="chips rd-lighting" role="group" aria-label="Lighting style">
           {([['game', 'Game', 'As the game lights characters: its sun and sky, the shine of metal and gold, glowing parts'], ['studio', 'Studio', 'Soft studio lights, as Brighter Fashion had before']] as const).map(([k, label, hint]) =>
             <button key={k} type="button" title={hint} className={rend.lighting === k ? 'on' : undefined} aria-pressed={rend.lighting === k} onClick={() => setRend({...rend, lighting: k})}>{label}</button>)}
         </div>
@@ -940,17 +1279,17 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     </div>
   );
   useEffect(() => { if (bgOpen && !bgMode) (els.bgPop.current?.querySelector('button.on') as HTMLElement ?? els.bgPop.current?.querySelector('button'))?.focus(); }, [bgOpen]);
-  useEffect(() => { if (looksOpen) placeLooks(); }, [looksOpen]);
   useEffect(() => { if (designing) (els.creator.current?.querySelector('.creator-actions .btn-cta') as HTMLElement)?.focus({preventScroll: true}); }, [designing]);
   const now = wearing(), nowSettled = wearing(true), current = looks.find(l => l.code === encode(state));
 
   return (
-    <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${animMode ? ' anim-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ' designing' : ''}${designingShared ? ' designing-shared' : ''}`}>
+    <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${animMode ? ' anim-mode' : ''}${looksOpen ? ' looks-mode' : ''}${recView ? ' record-mode' : ''}${shareOpen ? ' share-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ' designing' : ''}${designingShared ? ' designing-shared' : ''}`}>
       <main ref={els.main} onScroll={e => { const m = e.currentTarget; if (m.scrollTop) m.scrollTop = 0; }}>
-        <section ref={els.viewer} className="of-viewer" style={{background: cssOf(backdrop), height: viewerHeight}} data-loading={parts.loading ? '1' : ''}>
+        <section ref={els.viewer} className={`of-viewer${recView ? ' rec' : ''}`} style={{background: viewBg, height: viewerHeight}} data-loading={parts.loading ? '1' : ''}>
           <canvas ref={els.canvas} className={opened ? undefined : 'wait'} tabIndex={0} aria-label="Your character. Drag to turn, scroll or pinch to zoom, arrow keys turn."
             onDoubleClick={() => { const v = engine.current!.viewer; v.yaw = 0; v.yawVel = 0; v.frameTo(frameOf('full')); setCurrentFrame('full'); }}
             onKeyDown={e => { const v = engine.current!.viewer; if (e.key === 'ArrowLeft') v.yawVel += 1.6; else if (e.key === 'ArrowRight') v.yawVel -= 1.6; }} />
+          {recView && <RecordOverlay crop={crop} size={[outW, outH]} mark={!recLook.transparent} view={viewSize} setCrop={c => setRec({shape: 'free', crop: c})} />}
           {/* a place loading: a ring that fills (spins while the load cannot say how far it is); it never takes a tap */}
           <div className={`of-placeload load-card${placeShown && placeLoad!.progress == null ? ' spin' : ''}`} hidden={!placeShown} role="status"
             aria-label={placeShown ? `Loading ${placeLoad!.name}${placeLoad!.progress != null ? `, ${Math.round(placeLoad!.progress * 100)}%` : ''}` : undefined}
@@ -966,11 +1305,14 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
             <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>
             <button id="redo" className="btn-mini of-icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={designing || !model.future.length} onClick={() => model.redo()}><Ic d="M15 7h5V2M20 7a9 9 0 1 0 1.5 9" /></button>
             {settingsButton}
-            <button ref={els.share} id="share" className={`btn-mini of-share${looksOpen ? ' active' : ''}`} aria-pressed={looksOpen} title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog" aria-expanded={looksTouched ? looksOpen : undefined}
-              onClick={e => { e.stopPropagation(); setLooksTouched(true); setLooksOpen(o => !o); }}><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
+            <button ref={els.share} id="share" className={`btn-mini of-share${looksOpen ? ' active' : ''}`} aria-pressed={looksOpen} title="Your looks: save this one, wear a saved one, share a link"
+              onClick={e => { e.stopPropagation(); toggleLooks(); }}><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
             {/* (the one primary button, at the far right: sharing a look is what the page leads to) */}
-            <button id="share-now" className={`btn-mini of-icon-sm of-primary${shareOpen ? ' active' : ''}`} title="Share this look: its picture, and a link to it that shows the picture where it is posted" aria-label="Share"
-              aria-haspopup="dialog" aria-pressed={shareOpen} onClick={e => { e.stopPropagation(); closeLooks(); openShare(); }}><Icon name="share" /><span>Share</span></button>
+            {/* (a toggle: open, it shows pressed in, and puts Share away again) */}
+            <button id="share-now" className={`btn-mini of-icon-sm of-primary${shareOpen ? ' active of-share-open' : ''}`}
+              title={shareOpen ? 'Close Share and go back to dressing up' : 'Share this look: a link to it, or a picture, GIF or video of it'} aria-label="Share"
+              aria-pressed={shareOpen} onClick={e => { e.stopPropagation(); if (shareOpen) closeShare(); else { closeLooks(); openShare(); } }}>
+              <Icon name="share" /><span>Share</span></button>
           </div>
           {/* (last: over the toast and the toolbar, where the designer's coming and going has always left it) */}
           {!controlsInStage && controls}
@@ -990,10 +1332,20 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           </div>
           {/* (the wardrobe's own section follows, wardrobe.ts; phones in Settings mode: the settings menu after it) */}
           {bgMode && <BgSlot>{bgPop}</BgSlot>}
+          {looksOpen && <Drawer className="of-looks" label="Your looks"><div className="of-drawer-list lk-body"><Looks now={now} nowSettled={nowSettled} current={current} looks={looks} name={nameDraft ?? current?.name ?? lookName(state)} setName={setNameDraft} shareField={shareField}
+            share={l => { wearLook(l); closeLooks(); openShare(); }} wear={wearLook} remove={l => saveLooks(looks.filter(x => x !== l))}
+            save={async (label, place) => {
+              const thumb = await lookThumb(), name = label.trim() || lookName(model.state), code = encode(model.state);
+              const cur = live.current.looks.find(l => l.code === code);
+              saveLooks(cur ? live.current.looks.map(l => l === cur ? {...l, name, thumb, place, at: Date.now()} : l) : [{id: Math.random().toString(36).slice(2, 10), name, code, place, thumb, at: Date.now()}, ...live.current.looks]);
+            }} /></div></Drawer>}
+          {shareOpen && <ShareDrawer shareField={shareField({...nowSettled, code: withShot(nowSettled.code, linkShot)})} rec={rec} setRec={setRec} dlOpen={dlOpen} toggleDl={toggleDl}
+            anim={sharedAnim()?.name ?? null} timeline={timeline} paused={animPause} setPaused={p => { if (!anim && lastAnim && !p) { setAnim({...lastAnim, part: 0, key: ++animKeys.current}); } setAnimPause(p); }}
+            size={[outW, outH]} ms={recordMs(rec)} look={recLook} state={saveState} download={() => void download()} cancel={cancelSave} close={closeShare} />}
           {animMode && <AnimationsPanel gender={state.gender} tab={animTab} setTab={setAnimTab} playing={anim} started={!!anim && animRun?.anim.key === anim.key}
             moves={combatMoves} fighting={fighting && !designing} weapon={heldWeapon?.name ?? null} armed={!!state.equip.weapon} takeOut={() => { live.current.showHeld = true; setShowHeld(true); }}
             repeat={animRepeat} setRepeat={setAnimRepeat} pause={animPause} setPause={setAnimPause}
-            play={(a: AnimItem) => { setAnimPause(false); setAnim(anim && anim.clip === a.clip ? null : {clip: a.clip, loop: !!a.loop, ticks: a.ticks ?? 0, name: a.name, group: a.group, fx: a.fx, parts: a.parts, props: a.props, actors: a.actors, part: 0, key: ++animKeys.current}); }} />}
+            play={(a: AnimItem) => { const next = anim && anim.clip === a.clip ? null : playOf(a); setAnimPause(false); setAnim(next); setLastAnim(next); }} timeline={timeline} />}
         </aside>
       </main>
       <div className="of-rotate" role="alert"><Ic><rect x="7" y="2" width="10" height="20" rx="2" /><path d="M11 18h2" /></Ic><b>Turn your phone upright</b><span>Brighter Fashion is made for holding your phone this way up.</span></div>
@@ -1024,21 +1376,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           </div>
         </div>
       </div>
-      <div ref={els.looks} className="of-looks" role="dialog" aria-label="Your looks" hidden={!looksOpen} style={looksOpen ? {top: `${looksTop}px`, maxHeight: `calc(100dvh - ${looksTop + 10}px)`} : undefined}
-        onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); closeLooks(); els.share.current?.focus(); } }}>
-        {/* (what the panel is, and the way out: the Looks button, pressed while it is open, closes it too) */}
-        <div className="lk-top"><b>Your looks</b>
-          <button type="button" className="btn-mini of-icon lk-close" aria-label="Close your looks" title="Close" onClick={() => { closeLooks(); els.share.current?.focus(); }}><Icon name="x" /></button></div>
-        {looksOpen && <Looks now={now} nowSettled={nowSettled} current={current} looks={looks} name={nameDraft ?? current?.name ?? lookName(state)} setName={setNameDraft} shareField={shareField}
-          share={l => { wearLook(l); closeLooks(); openShare(); }} wear={wearLook} remove={l => saveLooks(looks.filter(x => x !== l))}
-          save={async (label, place) => {
-            const thumb = await lookThumb(), name = label.trim() || lookName(model.state), code = encode(model.state);
-            const cur = live.current.looks.find(l => l.code === code);
-            saveLooks(cur ? live.current.looks.map(l => l === cur ? {...l, name, thumb, place, at: Date.now()} : l) : [{id: Math.random().toString(36).slice(2, 10), name, code, place, thumb, at: Date.now()}, ...live.current.looks]);
-          }} />}
-      </div>
       {bubbleAt && <CopiedBubble key={bubbleAt.n} at={bubbleAt} gone={() => setBubbleAt(null)} />}
-      {shareOpen && <PictureSheet picture={picture} close={closePicture} shareField={shareField(nowSettled)} />}
     </div>
   );
 }
@@ -1057,13 +1395,14 @@ interface AnimItem { clip: number; name: string; group: string; loop?: boolean; 
   /** What it holds while it plays (a tool, a book, a snowball): parts on the player's rig, in the weapons' place. */
   props?: any[];
   /** Its other figures (a rod, a rift, a snowball in flight): parts on a rig of their own (render.ts AnimActor). */
-  actors?: {skel: number; parts: any[]; clips: (number | null)[]; at?: number[] | null; fx?: number[]; thrown?: {release: number; flight: number; distance: number}}[] }
+  actors?: {skel: number; parts: any[]; clips: (number | null)[]; at?: number[] | null; fx?: number[]; thrown?: {release: number; flight: number; distance: number; bone?: number}}[] }
 type AnimTab = 'emotes' | 'combat' | 'more';
 // a tile's picture where the game has none: the kind's own icon (the defeat its own)
 const KIND_ICON: Record<string, string> = {Everyday: 'person', Professions: 'hammer', Magic: 'sparkles', Combat: 'swords'};
 /** The Animations drawer: three tabs (the game's emotes, the moves of the pose and weapon, the rest by kind), every
  *  animation a tile; a tap plays it, a tap on the one playing stops it; Repeat and Pause beside the title. */
-function AnimationsPanel({gender, tab, setTab, playing, started, moves, fighting, weapon, armed, takeOut, repeat, setRepeat, pause, setPause, play}: {gender: string | number, tab: AnimTab, setTab: (t: AnimTab) => void,
+function AnimationsPanel({gender, tab, setTab, playing, started, moves, fighting, weapon, armed, takeOut, repeat, setRepeat, pause, setPause, play, timeline}: {gender: string | number, tab: AnimTab, setTab: (t: AnimTab) => void,
+    timeline: Timeline | null,
     playing: {clip: number, name: string, loop: boolean} | null, started: boolean, moves: AnimItem[], fighting: boolean, weapon: string | null, armed: boolean, takeOut: () => void,
     repeat: boolean, setRepeat: (on: boolean) => void, pause: boolean, setPause: (on: boolean) => void, play: (a: AnimItem) => void}) {
   const g = gender === 1 || gender === 'female' ? 'female' : 'male';
@@ -1106,6 +1445,7 @@ function AnimationsPanel({gender, tab, setTab, playing, started, moves, fighting
         {toggle(repeat, setRepeat, 'repeat', 'Repeat', 'Repeat: play it again and again')}
         {toggle(pause, setPause, 'hold', 'Pause', pause ? 'Paused: tap to go on' : 'Pause: freeze your character where it is')}
       </div>
+      {timeline && <AnimTimeline key={timeline.id} {...timeline} />}
       <div className="of-anims-list of-drawer-list" id="anim-panel" role="tabpanel" aria-labelledby={`anim-tab-${tab}`}>
         {!ANIMATIONS.length ? <div className="empty">Loading animations…</div>
           : tab === 'emotes' ? <div className="of-tiles">{emotes.map(tile)}</div>
@@ -1120,6 +1460,160 @@ function AnimationsPanel({gender, tab, setTab, playing, started, moves, fighting
           : [...groups].map(([k, items]) => <Fragment key={k}><div className="group">{k}</div><div className="of-tiles">{items.map(tile)}</div></Fragment>)}
       </div>
     </Drawer>
+  );
+}
+
+/** Share, the drawer: the link to the look as it is now, first; below it the download, opened when wanted (a picture of
+ *  this moment, or a GIF or video of the animation from its start), its few choices and, under More options, the rest.
+ *  While the download is open the view above is its preview: the crop is what is saved. */
+function ShareDrawer({shareField, rec, setRec, dlOpen, toggleDl, anim, timeline, paused, setPaused, size, ms, look, state, download, cancel, close}: {
+  shareField: ReactNode, rec: RecOpts, setRec: (p: Partial<RecOpts>) => void, dlOpen: boolean, toggleDl: () => void, anim: string | null, timeline: Timeline | null,
+  paused: boolean, setPaused: (p: boolean) => void, size: [number, number], ms: number, look: {transparent: boolean, pageClear: boolean, name: string},
+  state: {k: number} | {saved: string} | {error: string} | null, download: () => void, cancel: () => void, close: () => void}) {
+  // (Escape puts it away, as a click on Share does; while a download is being made, it stops that first)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key !== 'Escape' || (e.target as HTMLElement)?.matches?.('input[type=text], textarea')) return; e.preventDefault(); if (state && 'k' in state) cancel(); else close(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [close, cancel, state]);
+  const [more, setMore] = useState(() => { try { return localStorage.getItem('fashion.recMore') === '1'; } catch { return false; } });
+  const toggleMore = () => setMore(m => { try { localStorage.setItem('fashion.recMore', m ? '0' : '1'); } catch {} return !m; });
+  const busy = !!state && 'k' in state, moving = rec.fmt !== 'picture', [w, h] = size, fps = fpsOf(rec);
+  const frames = Math.round(ms * fps / 1000);
+  // (a video by its bitrate, which the encoder comes in under on a look like this one)
+  const bytes = rec.fmt === 'video' ? (rec.quality === 'high' ? 20e6 : 8e6) / 8 * ms / 1000 * 0.6 : w * h * (moving ? frames : 1) * BYTES_PER_PX[rec.fmt] * (look.transparent ? 0.3 : 1);
+  const noun = ({picture: 'picture', gif: 'GIF', video: 'video'} as const)[rec.fmt];
+  type Chip = [string, boolean, () => void, string?];
+  const row = (label: string, items: Chip[]) => (
+    <div className="sd-row"><span>{label}</span><div className="chips" role="group" aria-label={label}>
+      {items.map(([t, on, pick, title]) => <button key={t} type="button" className={on ? 'on' : undefined} aria-pressed={on} title={title} disabled={busy} onClick={pick}>{t}</button>)}
+    </div></div>
+  );
+  const chips = <T,>(list: readonly (readonly [T, string, string?])[], now: T | null, pick: (v: T) => void): Chip[] => list.map(([v, t, title]) => [t, now === v, () => pick(v), title]);
+  // (what More options has away from its usual, named while it is shut)
+  const on = [rec.quality === 'high' && 'High quality', moving && rec.fps && fps !== FPS_DEFAULT[rec.fmt] && `${fps} frames a second`,
+    moving && anim && rec.plays > 1 && (rec.plays === 2 ? 'plays twice' : `plays ${rec.plays} times`), moving && anim && rec.spin && 'one turn'].filter(Boolean) as string[];
+  const clearNote = rec.fmt === 'video' ? 'A video can’t be transparent' : look.pageClear ? 'Your background is transparent' : undefined;
+  return (
+    <Drawer className="of-sharedraw" label="Share">
+      <div className="of-drawer-list sd-body">
+        <section className="sd-sec sd-link" aria-label="Share a link">
+          <h3>Share a link</h3>
+          {shareField}
+          <p className="sd-note">The link shows your look as it is now, wherever you post it.</p>
+        </section>
+        <section className={`sd-sec sd-dl${dlOpen ? ' open' : ''}`} aria-label="Download">
+          <button type="button" className="sd-dl-toggle" aria-expanded={dlOpen} onClick={toggleDl}><Icon name="download" /><span>Download a picture, GIF or video</span><Icon name="chevron" /></button>
+          {dlOpen && <>
+            {timeline && <div className="sd-transport">
+              <button type="button" className="btn-mini of-icon" aria-label={paused ? 'Play' : 'Pause'} title={paused ? 'Play' : 'Pause'} onClick={() => setPaused(!paused)} disabled={busy}>
+                <Icon name={paused ? 'play' : 'hold'} /></button>
+              <AnimTimeline {...timeline} hint={false} />
+            </div>}
+            <div className="sd-rows">
+              {row('Save as', chips([['picture', 'Picture'], ['gif', 'GIF'], ['video', 'Video']] as const, rec.fmt, f => setRec({fmt: f})))}
+              <div className="sd-row"><span>Background</span><label className="of-check sd-clear" title={clearNote}>
+                <input type="checkbox" checked={look.transparent} disabled={busy || !!clearNote} onChange={e => setRec({clear: e.target.checked})} />Transparent
+                {!look.transparent && <em className="sd-bg">otherwise: {look.name}</em>}</label></div>
+              {row('Shape', [...chips([['wide', 'Wide', '16:9'], ['square', 'Square', '1:1'], ['tall', 'Tall', '9:16, for phone stories']] as const, rec.shape, v => setRec({shape: v, crop: null})),
+                ...(rec.shape === 'free' ? [['Your crop', true, () => {}, 'Drag the crop’s edges on the view'] as Chip] : [])])}
+            </div>
+            <button type="button" className="sd-more" aria-expanded={more} onClick={toggleMore}>More options{!more && on.length ? <em>: {on.join(', ')}</em> : null}<Icon name="chevron" /></button>
+            {more && <div className="sd-rows sd-advanced">
+              {row('Quality', chips([['standard', 'Standard'], ['high', 'High', 'Sharper and bigger: 4K pictures, larger GIFs, 1440p video']] as const, rec.quality, v => setRec({quality: v})))}
+              {moving && row('Frame rate', FPS_CHOICES[rec.fmt].map(n => [`${n} a second`, fps === n, () => setRec({fps: n})] as Chip))}
+              {moving && anim && row('Play', chips([[1, 'Once'], [2, 'Twice'], [3, '3 times']] as const, rec.plays, n => setRec({plays: n})))}
+              {moving && anim && row('Spin', chips([[false, 'Off'], [true, 'One turn']] as const, rec.spin, v => setRec({spin: v})))}
+            </div>}
+            <p className="sd-sum">{moving ? `${anim ?? 'One turn'}, ${(ms / 1000).toFixed(1)} seconds · ` : ''}{w} × {h}{moving ? ` · ${fps} a second` : ''} · {megabytes(bytes)}</p>
+            {moving && !anim && <p className="sd-note">No animation is playing, so your character turns once.</p>}
+            {state && 'error' in state && <p className="sd-warn" role="alert">{state.error}</p>}
+            {state && 'saved' in state && <p className="sd-ok" role="status">{state.saved}</p>}
+            <div className="sd-actions">
+              <button className="btn of-primary sd-go" disabled={busy} onClick={download}>
+                {busy ? <><span className="sd-bar" style={{width: `${Math.round((state as {k: number}).k * 100)}%`}} /><span>Making the {noun}… {Math.round((state as {k: number}).k * 100)}%</span></>
+                  : <><Icon name="download" />Download {noun}</>}</button>
+              {busy && <button className="btn" onClick={cancel}>Cancel</button>}
+            </div>
+          </>}
+        </section>
+      </div>
+    </Drawer>
+  );
+}
+
+/** The record view over the character: the crop (what a download holds; outside it dimmed), its edges to drag, its
+ *  size and the mark where a download carries it. Turning and zooming pass through to the character. */
+function RecordOverlay({crop, size, mark, view, setCrop}: {crop: Crop, size: [number, number], mark: boolean, view: [number, number], setCrop: (c: Crop) => void}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [vw, vh] = view, pw = crop.w * vw, ph = crop.h * vh, k = Math.min(pw, ph) / 630;
+  const drag = (edge: 'top' | 'bottom' | 'left' | 'right') => (e: React.PointerEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const el = e.currentTarget as HTMLElement, r = box.current!.getBoundingClientRect(), MIN = 0.12;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const x = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)), y = Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height));
+      let {x: cx, y: cy, w: cw, h: ch} = crop;
+      if (edge === 'left') { const right = cx + cw; cx = Math.min(x, right - MIN); cw = right - cx; }
+      else if (edge === 'right') cw = Math.max(MIN, x - cx);
+      else if (edge === 'top') { const bottom = cy + ch; cy = Math.min(y, bottom - MIN); ch = bottom - cy; }
+      else ch = Math.max(MIN, y - cy);
+      crop = {x: cx, y: cy, w: cw, h: ch};
+      setCrop(crop);
+    };
+    const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up); };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  };
+  return (
+    <div ref={box} className="of-rec">
+      <div className="of-crop" style={{left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.w * 100}%`, height: `${crop.h * 100}%`}}>
+        <span className="of-crop-size">{size[0]} × {size[1]}</span>
+        {mark && <span className="of-crop-mark" style={{right: 22 * k, bottom: 18 * k, gap: 9 * k, fontSize: 20 * k}}>
+          <img src="/brand/mark.svg" alt="" style={{width: 30 * k, height: 30 * k}} /><span><b className="brand-name">Brighter</b> Fashion</span></span>}
+        {(['top', 'bottom', 'left', 'right'] as const).map(edge => <span key={edge} className={`of-crop-bar ${edge}`} role="slider" aria-label={`Crop: ${edge} edge`}
+          aria-valuenow={Math.round((edge === 'top' ? crop.y : edge === 'bottom' ? crop.y + crop.h : edge === 'left' ? crop.x : crop.x + crop.w) * 100)} aria-valuemin={0} aria-valuemax={100}
+          tabIndex={0} onPointerDown={drag(edge)} />)}
+      </div>
+    </div>
+  );
+}
+
+/** Where the animation playing is: its whole length (ms, every part), how far it has got, and a jump to any moment. */
+interface Timeline { id: string; name: string; total: number; at: () => number; seek: (ms: number) => void; hint?: boolean }
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+/** The animation's timeline: it follows the animation as it plays; dragging it pauses there, at the moment dragged
+ *  to (what Share then takes). */
+function AnimTimeline({name, total, at, seek, hint: hinted = true}: Timeline) {
+  const range = useRef<HTMLInputElement>(null), label = useRef<HTMLSpanElement>(null), held = useRef(false);
+  // (the latest `at`: Repeat switched on changes where a moment falls)
+  const now = useRef(at); now.current = at;
+  // (a hint till the timeline is first used)
+  const [hint, setHint] = useState(() => { try { return localStorage.getItem('fashion.timelineUsed') !== '1'; } catch { return true; } });
+  useEffect(() => {
+    let f = 0;
+    const tick = () => {
+      if (!held.current && range.current && label.current) { const t = now.current(); range.current.value = String(Math.round(t)); label.current.textContent = `${secs(t)} / ${secs(total)}`; }
+      f = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(f);
+  }, [total]);
+  const go = (ms: number) => {
+    if (label.current) label.current.textContent = `${secs(ms)} / ${secs(total)}`;
+    if (hint) { setHint(false); try { localStorage.setItem('fashion.timelineUsed', '1'); } catch {} }
+    seek(ms);
+  };
+  return (
+    <div className="of-anim-time" title="Drag to stop at any moment: Share saves from there">
+      <div className="of-anim-time-row">
+        <span className="of-anim-time-name">{name}</span>
+        <input ref={range} type="range" min={0} max={Math.max(1, Math.round(total))} step={1} defaultValue={0} aria-label={`${name}: drag to stop at a moment`}
+          onPointerDown={() => { held.current = true; }} onPointerUp={() => { held.current = false; }} onBlur={() => { held.current = false; }}
+          onInput={e => go(Number((e.target as HTMLInputElement).value))} />
+        <span ref={label} className="of-anim-time-at" aria-hidden="true">0.0 s / {secs(total)}</span>
+      </div>
+      {hint && hinted && <p className="of-anim-time-hint">Drag to stop at any moment. Share saves from there.</p>}
+    </div>
   );
 }
 
@@ -1253,35 +1747,4 @@ function DesignerPanel({state, selected, pack, paletteFor, edited, select, rando
 
 // The picture, on a page of its own, with the site's mark: Share link (the look's link, as Looks shares it) is
 // the way to share it; phones save it by pressing and holding the picture, desktops with Download.
-function PictureSheet({picture, close, shareField}: {picture: {blob: Blob | null, url: string} | null, close: () => void, shareField: ReactNode}) {
-  const closeBtn = useRef<HTMLButtonElement>(null);
-  // (Escape closes it wherever focus is, and focus goes back to what opened it)
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
-    document.addEventListener('keydown', onKey, true);
-    closeBtn.current?.focus();
-    return () => { document.removeEventListener('keydown', onKey, true); opener?.focus?.(); };
-  }, []);
-  return (
-    <div className="of-picture" role="dialog" aria-modal="true" aria-labelledby="pic-title" onClick={e => { if (e.target === e.currentTarget) close(); }}>
-      <div className="pic-box">
-        <div className="pic-top"><h2 id="pic-title">Share your look</h2>
-          <button type="button" className="btn-mini of-icon pic-x" aria-label="Close" title="Close" onClick={close}><Icon name="x" /></button></div>
-        {/* the character as it stands, frozen where it was when Share was pressed, seen as the view sees it */}
-        <div className="pic-frame">
-          {picture?.url ? <img src={picture.url} alt="Your look, as it stands" /> : <div className="pic-wait" aria-label="Drawing the picture"><span className="share-wheel" /></div>}
-        </div>
-        <p>{touch ? 'Press and hold the picture to save it. The link shows it wherever you post it.' : 'The link shows this picture wherever you post it.'}</p>
-        <div className="pic-share">{shareField}</div>
-        <div className="pic-actions">
-          <button ref={closeBtn} className="btn" onClick={close}>Close</button>
-          {!touch && <button className="btn" disabled={!picture?.blob} onClick={() => {
-            if (!picture) return;
-            const a = document.createElement('a'); a.href = picture.url; a.download = 'brighter-atlas-fashion.png'; document.body.append(a); a.click(); a.remove();
-          }}><Icon name="download" />Download picture</button>}
-        </div>
-      </div>
-    </div>
-  );
-}
+

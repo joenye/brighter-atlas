@@ -41,6 +41,11 @@ export const PATHS: Record<string, string> = {
   swords: 'M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M9.5 6.5 14 2h3v3l-4.5 4.5M5 14l4 4M7 17l-3 3M3 19l2 2',
   download: 'M21 15v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4M12 3v12M7 10l5 5 5-5',
   repeat: 'M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3',
+  // (Share's Download: its menu, a moving picture, back from the save view)
+  chevron: 'M6 9l6 6 6-6',
+  film: 'M4 5h16v14H4zM8 5v14M16 5v14M4 9.5h4M4 14.5h4M16 9.5h4M16 14.5h4',
+  back: 'M15 18l-6-6 6-6',
+  play: 'M7 4.5v15l12-7.5z',
   hold: 'M9 5v14M15 5v14',
   bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
   hammer: 'M14.5 4.5l5 5M12 7l5 5M9.5 4.5l7 7 2-2-5-5c-1.2-1.2-2.8-1.6-4-1zM13.2 10.8 4.5 19.5',

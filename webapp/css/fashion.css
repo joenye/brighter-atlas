@@ -430,22 +430,6 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 }
 
 /* touch screens: the always-visible scrollbar (scrollbar.ts) in a gutter of its own; the browser's is hidden */
-
-/* Share: the look's picture in a dialog, its link and (desktops) the picture to download; phones press and hold the
-   picture to keep it (iOS over http has no download) */
-.of-picture { position: fixed; inset: 0; z-index: 80; background: rgba(6, 8, 11, .82); display: grid; place-items: center; padding: 16px; }
-.of-picture .pic-box { width: min(520px, 100%); max-height: calc(100dvh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px;
-  background: var(--bg1); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
-.of-picture .pic-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.of-picture .pic-top h2 { margin: 0; font-size: 17px; }
-.of-picture img { display: block; width: 100%; max-height: 56dvh; object-fit: contain; border-radius: 10px; border: 1px solid var(--line); background: var(--bg0); -webkit-touch-callout: default; user-select: auto; }
-.of-picture p { margin: 0; color: var(--fg1); font-size: 13.5px; }
-.of-picture .pic-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.of-picture .pic-actions .btn svg.ic { width: 16px; height: 16px; margin-right: 6px; vertical-align: -3px; }
-.of-picture .pic-wait { aspect-ratio: 1200 / 630; display: grid; place-items: center; border-radius: 10px; border: 1px solid var(--line); background: var(--bg0); }
-/* the picture's frame: the Weapons out button in its lower right, above the corner mark (the mark's right edge, and
-   its top, 18 + 30 of the picture's 630, with a gap) */
-.of-picture .pic-frame { position: relative; }
 .cp-row { flex-wrap: wrap; }
 /* the Ground choices' markers: a ring, a soft shadow, nothing */
 .of-bgdot.floor-ring { background: radial-gradient(circle, rgba(0,0,0,.6) 30%, transparent 62%); box-shadow: inset 0 0 0 1.5px rgba(200, 178, 122, .7); }
@@ -524,14 +508,10 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 }
 @media (min-width: 861px) { .creator-title { visibility: hidden; } }   /* (the dialog's own title says it) */
 
-/* ---- looks: save this one, wear or share a saved one (under the Looks button; a sheet on phones) ---- */
-.of-looks { position: fixed; top: 52px; right: 12px; z-index: 65; width: 340px; max-height: calc(100dvh - 72px); overflow: auto; display: flex; flex-direction: column; gap: 10px;
-  padding: 12px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0,0,0,.55); }
-.of-looks[hidden] { display: none; }
-/* its title and close button; the Looks button shows pressed while it is open */
-.lk-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -2px 0 2px; }
-.lk-top b { font-size: 15px; font-weight: 650; color: var(--fg0); }
-.lk-top .lk-close { width: 32px; height: 32px; padding: 0; justify-content: center; }
+/* ---- looks: save this one, wear or share a saved one: a drawer of the side panel (.of-drawer), in the equipment's
+   place while the Looks button shows pressed ---- */
+#fashion.looks-mode .of-right .wardrobe { display: none; }
+.of-looks .lk-body { display: flex; flex-direction: column; gap: 10px; }
 .of-toolbar .btn-mini.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: var(--fg0); }
 .lk-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg2); }
 .lk-head b { font-weight: 600; }
@@ -550,14 +530,9 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .lk-sub { font-size: 11.5px; color: var(--fg2); }
 .lk-empty { margin: 0; color: var(--fg2); font-size: 12.5px; }
 @media (max-width: 860px) {
-  /* phones: it drops from its button in the bar, full width, as on desktop (never up from the drawer) */
-  .of-looks { left: 10px; right: 10px; width: auto; }
   .of-looks .btn-mini { min-height: 36px; min-width: 36px; }
 }
 
-.pic-actions { display: flex; align-items: stretch; justify-content: flex-end; gap: 8px; width: min(760px, 100%); }
-.pic-actions > .btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 16px; }
-@media (max-width: 860px) { .pic-actions > .btn { flex: 1; padding: 0 8px; } }
 
 /* phones held sideways: too short for the viewer and the wardrobe together, so ask for portrait */
 .of-rotate { display: none; }
@@ -673,3 +648,80 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-tile-load .load-card { position: static; transform: none; }
 .of-tile-load .load-card svg { width: 34px; height: 34px; filter: none; }
 @media (prefers-reduced-motion: reduce) { .of-anim-bar { animation: none; transform: none; background: rgba(120, 183, 255, .14); } }
+
+/* the Animations drawer's timeline: the animation playing, and a jump to any moment of it */
+.of-anim-time { display: flex; flex-direction: column; gap: 2px; padding: 0 2px; }
+.of-anim-time-row { display: flex; align-items: center; gap: 10px; }
+.of-anim-time-name { flex: none; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg1); font-size: 12.5px; }
+.of-anim-time input { flex: 1; min-width: 0; accent-color: var(--accent); height: 24px; margin: 0; cursor: pointer; }
+.of-anim-time-at { flex: none; color: var(--fg2); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 82px; text-align: right; }
+.of-anim-time-hint { margin: 0; color: var(--fg2); font-size: 12px; }
+
+/* Share's drawer replaces the others while it is open */
+#fashion.share-mode .of-right > :not(.of-sharedraw):not(.of-grip) { display: none !important; }
+/* the record view (the download open): only turning, zooming and the crop at hand */
+#fashion.record-mode .of-charcard, #fashion.record-mode #undo, #fashion.record-mode #redo, #fashion.record-mode .of-bg-top, #fashion.record-mode #share,
+#fashion.record-mode .of-controls .of-mode-btn, #fashion.record-mode .of-controls .of-anim-btn { display: none !important; }
+#fashion.record-mode .of-controls { z-index: 2; }
+.of-rec { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.of-crop { position: absolute; outline: 1px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 100vmax rgba(4, 6, 9, .5); }
+.of-crop-size { position: absolute; left: 6px; top: 6px; padding: 2px 7px; border-radius: 6px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; }
+.of-crop-mark { position: absolute; display: inline-flex; align-items: center; color: rgba(232, 236, 242, .82); white-space: nowrap; text-shadow: 0 1px 3px rgba(0, 0, 0, .5); line-height: 1; }
+.of-crop-mark b { font-weight: 600; }
+.of-crop-bar { position: absolute; pointer-events: auto; touch-action: none; background: #fff; border-radius: 4px; box-shadow: 0 1px 5px rgba(0, 0, 0, .55); }
+.of-crop-bar::before { content: ''; position: absolute; inset: -14px; }   /* (a bigger target than it looks) */
+.of-crop-bar.top, .of-crop-bar.bottom { left: 50%; width: 40px; height: 5px; margin-left: -20px; cursor: ns-resize; }
+.of-crop-bar.top { top: -3px; } .of-crop-bar.bottom { bottom: -3px; }
+.of-crop-bar.left, .of-crop-bar.right { top: 50%; width: 5px; height: 40px; margin-top: -20px; cursor: ew-resize; }
+.of-crop-bar.left { left: -3px; } .of-crop-bar.right { right: -3px; }
+.of-crop-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* Share's drawer: the link first, the download below it */
+.of-sharedraw .sd-body { display: flex; flex-direction: column; gap: 14px; }
+.of-sharedraw .sd-sec { display: flex; flex-direction: column; gap: 9px; }
+.of-sharedraw .sd-sec h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg1); letter-spacing: .02em; text-transform: uppercase; }
+.of-sharedraw .sd-link .share-field .share-url { min-height: 40px; font-size: 14px; }
+.of-sharedraw .sd-link .share-field .share-copy { min-height: 40px; padding: 0 18px; }
+.of-sharedraw .sd-note { margin: 0; color: var(--fg2); font-size: 12.5px; }
+.of-sharedraw .sd-dl { padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.of-sharedraw .sd-dl-toggle { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg2);
+  color: var(--fg0); font: inherit; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }
+.of-sharedraw .sd-dl-toggle:hover { background: var(--bg3); }
+.of-sharedraw .sd-dl-toggle span { flex: 1; }
+.of-sharedraw .sd-dl-toggle svg.ic { width: 16px; height: 16px; }
+.of-sharedraw .sd-dl-toggle svg.ic:last-child, .of-sharedraw .sd-more svg.ic { transition: transform .15s; }
+.of-sharedraw .sd-dl-toggle[aria-expanded="true"] svg.ic:last-child, .of-sharedraw .sd-more[aria-expanded="true"] svg.ic { transform: rotate(180deg); }
+.of-sharedraw .sd-transport { display: flex; align-items: center; gap: 8px; }
+.of-sharedraw .sd-transport .of-anim-time { flex: 1; min-width: 0; }
+.of-sharedraw .sd-rows { display: flex; flex-direction: column; gap: 8px; }
+.of-sharedraw .sd-row { display: flex; align-items: center; gap: 10px; }
+.of-sharedraw .sd-row > span { flex: none; width: 84px; color: var(--fg2); font-size: 13px; }
+.of-sharedraw .sd-row .chips button { padding: 5px 11px; font-size: 13px; }
+.of-sharedraw .sd-row .chips button:disabled { opacity: .5; cursor: default; }
+.of-sharedraw .sd-clear { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--fg0); flex-wrap: wrap; }
+.of-sharedraw .sd-clear input:disabled + * { opacity: .6; }
+.of-sharedraw .sd-bg { color: var(--fg2); font-style: normal; font-size: 12.5px; }
+.of-sharedraw .sd-more { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
+.of-sharedraw .sd-more em { font-style: normal; font-weight: 400; color: var(--fg2); }
+.of-sharedraw .sd-more svg.ic { width: 14px; height: 14px; flex: none; }
+.of-sharedraw .sd-advanced { padding: 10px 0 2px; border-top: 1px dashed var(--line-soft); }
+.of-sharedraw .sd-sum { margin: 0; color: var(--fg1); font-size: 13px; font-variant-numeric: tabular-nums; }
+.of-sharedraw .sd-warn { margin: 0; color: #f0c27a; font-size: 13px; }
+.of-sharedraw .sd-ok { margin: 0; color: #8fd8a8; font-size: 13px; }
+.of-sharedraw .sd-actions { display: flex; gap: 8px; }
+.of-sharedraw .sd-actions .btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.of-sharedraw .sd-go { position: relative; overflow: hidden; flex: 1; }
+.of-sharedraw .sd-go > span:last-child { position: relative; }
+.of-sharedraw .sd-bar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); transition: width .1s; }
+.of-sharedraw .of-primary { background: var(--accent-dim); border-color: var(--accent); color: #fff; font-weight: 600; }
+.of-sharedraw .of-primary:hover:not(:disabled) { background: var(--accent); color: #0d0f13; }
+.of-sharedraw .of-primary:disabled { opacity: .85; }
+@media (max-width: 520px) {
+  .of-sharedraw .sd-row { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .of-sharedraw .sd-row > span { width: auto; font-size: 12.5px; }
+}
+
+/* Share open: the toolbar's button pressed in (pressed again, the drawer goes away) */
+.of-toolbar .btn-mini.of-primary.of-share-open { background: #10213a; border-color: var(--accent); color: #fff; box-shadow: inset 0 2px 6px rgba(0, 0, 0, .55), 0 0 0 2px rgba(120, 183, 255, .35); }
+.of-toolbar .btn-mini.of-primary.of-share-open:hover { background: #15294a; color: #fff; }

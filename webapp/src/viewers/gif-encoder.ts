@@ -130,8 +130,8 @@ function lzwEncode(indices: Uint8Array, minCodeSize: number, out: number[]): voi
 // ---- container --------------------------------------------------------------
 
 export function encodeGif(frames: Uint8ClampedArray[], w: number, h: number,
-  { delayMs = 100, delaysMs = null, transparent = false, holdMs = 0 }:
-  { delayMs?: number; delaysMs?: number[] | null; transparent?: boolean; holdMs?: number } = {}): Uint8Array<ArrayBuffer> {
+  { delayMs = 100, delaysMs = null, transparent = false, holdMs = 0, once = false }:
+  { delayMs?: number; delaysMs?: number[] | null; transparent?: boolean; holdMs?: number; once?: boolean } = {}): Uint8Array<ArrayBuffer> {
   const palette = buildPalette(frames, w, h, transparent);
   const map = makeMapper(palette, transparent ? 1 : 0);
   const out: number[] = [];
@@ -143,10 +143,12 @@ export function encodeGif(frames: Uint8ClampedArray[], w: number, h: number,
   out.push(0xf7, 0, 0);            // GCT present, 8-bit, 256 entries
   for (const [r, g, b] of palette) out.push(r, g, b);
 
-  // Netscape loop-forever extension
-  str('\x21\xFF\x0BNETSCAPE2.0\x03\x01');
-  u16(0);
-  out.push(0);
+  // Netscape loop-forever extension (left out to play once)
+  if (!once) {
+    str('\x21\xFF\x0BNETSCAPE2.0\x03\x01');
+    u16(0);
+    out.push(0);
+  }
 
   // per-frame delay in centiseconds: delaysMs (measured capture spacing, so a
   // slow capture stays real-time) when given, else the uniform delayMs
@@ -173,4 +175,50 @@ export function encodeGif(frames: Uint8ClampedArray[], w: number, h: number,
   }
   out.push(0x3b);                   // trailer
   return new Uint8Array(out);
+}
+
+// ---- streaming: frames encoded as they come, each with a palette of its own -------
+// (for long or large recordings: no frame is kept once written, and a frame's own palette keeps colours that first
+// appear late, a particle effect's, that a palette from the first frame would miss)
+class Bytes {
+  private buf = new Uint8Array(1 << 20); n = 0;
+  private room(k: number) { if (this.n + k <= this.buf.length) return; const b = new Uint8Array(Math.max(this.buf.length * 2, this.n + k)); b.set(this.buf.subarray(0, this.n)); this.buf = b; }
+  push(...v: number[]) { this.room(v.length); for (const x of v) this.buf[this.n++] = x; }
+  append(v: number[]) { this.room(v.length); for (let i = 0; i < v.length; i++) this.buf[this.n++] = v[i]; }
+  set(at: number, v: number) { this.buf[at] = v; }
+  done() { return this.buf.slice(0, this.n); }
+}
+/** A GIF's opening bytes: its size, and (unless `once`) the block that loops it. */
+export function gifHead(w: number, h: number, once = false): Uint8Array {
+  const out = new Bytes(), str = (t: string) => { for (const c of t) out.push(c.charCodeAt(0)); };
+  str('GIF89a');
+  out.push(w & 0xff, w >> 8, h & 0xff, h >> 8, 0x70, 0, 0);   // (no global palette: each frame has its own)
+  if (!once) { str('\x21\xFF\x0BNETSCAPE2.0\x03\x01'); out.push(0, 0, 0); }
+  return out.done();
+}
+/** GIF frames, each encoded on its own (so several encoders can share a recording): its timing, a palette of its own
+ *  (made again every few frames, reused between with its colour cache) and its pixels. The frame's delay is at bytes
+ *  4 and 5 of what `frame` returns. */
+export class GifFrames {
+  private idx: Uint8Array; private palette: number[][] = []; private map: ((r: number, g: number, b: number) => number) | null = null; private n = 0;
+  constructor(private w: number, private h: number, private o: {delayMs: number, transparent?: boolean}) { this.idx = new Uint8Array(w * h); }
+  frame(f: Uint8ClampedArray): Uint8Array {
+    const {w, h, idx} = this, transparent = !!this.o.transparent, out = new Bytes(), delay = Math.max(2, Math.round(this.o.delayMs / 10));
+    if (!this.map || this.n++ % 8 === 0) { this.palette = buildPalette([f], w, h, transparent); this.map = makeMapper(this.palette, transparent ? 1 : 0); }
+    const palette = this.palette, map = this.map;
+    out.push(0x21, 0xf9, 4, transparent ? 0x09 : 0x00, delay & 0xff, delay >> 8, 0, 0);
+    out.push(0x2c, 0, 0, 0, 0, w & 0xff, w >> 8, h & 0xff, h >> 8, 0x87);   // (a local palette of 256)
+    for (let i = 0; i < 256; i++) { const c = palette[i] ?? [0, 0, 0]; out.push(c[0], c[1], c[2]); }
+    for (let p = 0, o = 0; p < w * h; p++, o += 4) idx[p] = (transparent && f[o + 3] < ALPHA_CUT) ? 0 : map(f[o], f[o + 1], f[o + 2]);
+    const bytes: number[] = [];
+    lzwEncode(idx, 8, bytes);
+    out.append(bytes);
+    return out.done();
+  }
+}
+/** A GIF from its head and frames in order, the last held `holdMs` longer. */
+export function gifJoin(head: Uint8Array, frames: Uint8Array[], delayMs: number, holdMs = 0): Blob {
+  const last = frames.at(-1);
+  if (last && holdMs) { const d = Math.min(65535, Math.max(2, Math.round(delayMs / 10)) + Math.round(holdMs / 10)); last[4] = d & 0xff; last[5] = d >> 8; }
+  return new Blob([head, ...frames, new Uint8Array([0x3b])] as BlobPart[], {type: 'image/gif'});
 }
