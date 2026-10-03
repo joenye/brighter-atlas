@@ -6,7 +6,13 @@ html, body { touch-action: manipulation; overscroll-behavior: none; overflow: hi
    dismissed, left the page ignoring taps); the search box and the saved picture keep theirs */
 .fashion, .creator { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 .fashion input, .fashion textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
-.fashion { display: flex; flex-direction: column; height: 100%; position: relative; }
+.fashion { display: flex; flex-direction: column; height: 100%; position: relative;
+  /* every drawer of the side panel (equipment, animations, the phone's background menu, the designer's panel) takes
+     its insets from these: one place to change them, so the drawers never drift apart */
+  --drawer-pad: 12px; --drawer-gap: 10px; --drawer-pad-bottom: 12px; }
+/* a drawer, and the list in it that scrolls (its gutter and themed scrollbar from the site's scrollbar host) */
+.of-drawer { display: flex; flex-direction: column; gap: var(--drawer-gap); flex: 1; min-height: 0; padding: var(--drawer-pad) var(--drawer-pad) var(--drawer-pad-bottom); }
+.of-drawer-list { flex: 1 1 0; min-height: 0; overflow: auto; }
 .of-title { font-weight: 650; color: var(--fg0); margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--line); }
 .of-exp { margin-left: 4px; }
 .of-gamebuild { color: var(--fg2); font-size: 11px; white-space: nowrap; }
@@ -65,7 +71,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-controls .of-pose { color: var(--fg2); }
 .of-controls .of-pose.active, .of-controls .of-bgbtn.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }
 .of-controls .of-pose svg.ic, .of-controls .of-bgbtn svg.ic { width: 18px; height: 18px; }
-.of-controls .fx-glyph { font-size: 17px; line-height: 1; }
+.of-controls .fx-glyph { display: grid; }
 .of-round { width: 30px; height: 30px; border-radius: 50%; padding: 0; display: inline-grid; place-items: center; }
 .of-pose:disabled { opacity: .45; }
 .of-controls [hidden] { display: none; }
@@ -73,7 +79,6 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 
 /* ---- equipment ---- */
 .of-right { background: var(--bg1); border-left: 1px solid var(--line); overflow: clip;   /* clip, not hidden: nothing may scroll the panel (it would carry the grab bar away) */ display: flex; flex-direction: column; min-height: 0; }
-.wardrobe { padding: 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
 .of-wardhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .of-wardhead h2 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.1px; color: var(--fg2); }
 .of-wardactions { display: flex; gap: 6px; }
@@ -92,7 +97,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .search { width: 100%; padding: 7px 10px; border-radius: 6px; background: var(--bg3); border: 1px solid var(--line); color: var(--fg0); font: inherit; outline: none; flex: none; }
 .search:focus { border-color: var(--accent-dim); }
 .search::placeholder { color: var(--fg2); }
-.items { display: flex; flex-direction: column; gap: 1px; flex: 1 1 0; min-height: 120px; overflow: auto; padding-right: 2px; border-radius: 6px; }
+.items { display: flex; flex-direction: column; gap: 1px; min-height: 120px; padding-right: 2px; border-radius: 6px; }
 .items:focus-visible { outline: 1px solid var(--accent-dim); }
 .group { position: sticky; top: 0; z-index: 1; background: var(--bg1); padding: 8px 4px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--fg2); }
 /* (the list's two halves: equipment, then transmogs) */
@@ -204,8 +209,8 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
   main { display: flex; flex-direction: column; }
   .of-viewer { flex: 0 0 auto; height: 40dvh; }
   .of-right { flex: 1; min-height: 116px; border: 0; border-top: 1px solid var(--line); }   /* never squeezed out: the grab bar and slots stay */
-  .wardrobe { padding: 10px; gap: 8px; }
-  .slots { display: flex; overflow-x: auto; scrollbar-width: none; margin: 0 -10px; padding: 0 10px 2px; }
+  .fashion { --drawer-pad: 10px; --drawer-gap: 8px; --drawer-pad-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .slots { display: flex; overflow-x: auto; scrollbar-width: none; margin: 0 calc(-1 * var(--drawer-pad)); padding: 0 var(--drawer-pad) 2px; }
   .slot-cell { flex: 0 0 66px; }
   .slot { min-height: 58px; }
   .slot-x { width: 28px; height: 28px; }
@@ -301,11 +306,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 }
 /* iPhone Safari's toolbar floats over the page's bottom strip: keep the controls clear of it */
 @media (max-width: 860px) {
-  .ios-browser .wardrobe { padding-bottom: calc(max(env(safe-area-inset-bottom, 0px), 30px) + 4px); }   /* just clear of the toolbar */
+  .ios-browser .fashion { --drawer-pad-bottom: calc(max(env(safe-area-inset-bottom, 0px), 30px) + 4px); }   /* just clear of the toolbar */
 }
 @media (max-width: 860px) and (orientation: landscape) and (max-height: 520px) {
   .of-grip { display: none; }
-  .ios-browser .wardrobe { padding-bottom: 12px; }
+  .ios-browser .fashion { --drawer-pad-bottom: 12px; }
 }
 /* an equipped piece the composer drops (something drawn earlier covers the same place) */
 .hidden-note { margin: 8px 0 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--warn, #d9a441); background: rgba(217, 164, 65, .08); color: var(--fg0); font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
@@ -409,7 +414,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .of-check { min-height: 36px; font-size: 12.5px; gap: 5px; }
   .creator-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--stage-h, 42%) auto minmax(0, 1fr); }
   .creator-body .creator-grip { display: flex; position: relative; left: auto; top: auto; transform: none; height: 29px; min-height: 29px; border-bottom: 1px solid var(--line-soft);   /* (the page's grab bar to the pixel: its drawer's top border, 27px, a soft line) */ box-sizing: border-box; align-items: center; justify-content: center; touch-action: none; cursor: row-resize; border-top: 1px solid var(--line); background: var(--bg1); }
-  .creator-panel { border-left: 0; padding: 10px 10px calc(16px + env(safe-area-inset-bottom, 0px)); gap: 14px; }   /* (the wardrobe's padding) */
+  .creator-panel { border-left: 0; padding: var(--drawer-pad) var(--drawer-pad) var(--drawer-pad-bottom); gap: 14px; }   /* (a drawer's insets) */
   .creator-keys, .stage-hint { display: none; }
   .cp-parts button { padding: 9px 4px; }
   .cp-step { grid-template-columns: 44px minmax(0, 1fr) 44px; }
@@ -426,10 +431,21 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 
 /* touch screens: the always-visible scrollbar (scrollbar.ts) in a gutter of its own; the browser's is hidden */
 
-/* a saved picture on phones: shown to press and hold (iOS over http has no download or share) */
-.of-picture { position: fixed; inset: 0; z-index: 80; background: rgba(6, 8, 11, .9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 20px; }
-.of-picture img { max-width: 100%; max-height: 72dvh; border-radius: 10px; border: 1px solid var(--line); -webkit-touch-callout: default; user-select: auto; }
-.of-picture p { margin: 0; color: var(--fg1); text-align: center; }
+/* Share: the look's picture in a dialog, its link and (desktops) the picture to download; phones press and hold the
+   picture to keep it (iOS over http has no download) */
+.of-picture { position: fixed; inset: 0; z-index: 80; background: rgba(6, 8, 11, .82); display: grid; place-items: center; padding: 16px; }
+.of-picture .pic-box { width: min(520px, 100%); max-height: calc(100dvh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px;
+  background: var(--bg1); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
+.of-picture .pic-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.of-picture .pic-top h2 { margin: 0; font-size: 17px; }
+.of-picture img { display: block; width: 100%; max-height: 56dvh; object-fit: contain; border-radius: 10px; border: 1px solid var(--line); background: var(--bg0); -webkit-touch-callout: default; user-select: auto; }
+.of-picture p { margin: 0; color: var(--fg1); font-size: 13.5px; }
+.of-picture .pic-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.of-picture .pic-actions .btn svg.ic { width: 16px; height: 16px; margin-right: 6px; vertical-align: -3px; }
+.of-picture .pic-wait { aspect-ratio: 1200 / 630; display: grid; place-items: center; border-radius: 10px; border: 1px solid var(--line); background: var(--bg0); }
+/* the picture's frame: the Weapons out button in its lower right, above the corner mark (the mark's right edge, and
+   its top, 18 + 30 of the picture's 630, with a gap) */
+.of-picture .pic-frame { position: relative; }
 .cp-row { flex-wrap: wrap; }
 /* the Ground choices' markers: a ring, a soft shadow, nothing */
 .of-bgdot.floor-ring { background: radial-gradient(circle, rgba(0,0,0,.6) 30%, transparent 62%); box-shadow: inset 0 0 0 1.5px rgba(200, 178, 122, .7); }
@@ -598,7 +614,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 @media (max-width: 860px) {
   #fashion.bg-mode .of-right .wardrobe { display: none; }
   .of-right > .of-bgpop { position: static; flex: 1 1 auto; min-height: 0; max-height: none; width: auto; min-width: 0; overflow-y: auto;
-    padding: 10px 10px calc(16px + env(safe-area-inset-bottom, 0px)); border: 0; border-radius: 0; box-shadow: none; background: none; z-index: auto; }
+    padding: var(--drawer-pad) var(--drawer-pad) var(--drawer-pad-bottom); border: 0; border-radius: 0; box-shadow: none; background: none; z-index: auto; }
   .of-right > .of-bgpop button { padding: 12px 12px; font-size: 14px; }
   .of-right > .of-bgpop .of-bghead { padding: 12px 4px 6px; }
 }
@@ -607,3 +623,53 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-viewer canvas.wait { visibility: hidden; }
 /* and the panel's contents, filling in piece by piece, on its own background */
 .of-right.wait > * { visibility: hidden; }
+
+/* the Animations drawer (the wardrobe's place, as the settings' on a phone) */
+#fashion.anim-mode .of-right .wardrobe { display: none; }
+/* one row: the kinds (a segmented control), then Repeat and Pause as tall as it */
+.of-anims-head { display: flex; align-items: stretch; gap: 6px; }
+.of-anims-head .of-anims-tabs { flex: 1; min-width: 0; }
+/* Repeat and Pause: toggles, lit when on */
+.of-anims-tog { width: 38px; height: auto; padding: 0; display: grid; place-items: center; color: var(--fg2); border-radius: 10px; }
+.of-anims-tog.active { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+.of-anims-tog svg.ic { width: 17px; height: 17px; }
+/* the three kinds: a segmented control */
+.of-anims-tabs { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); }
+.of-anims-tabs button { flex: 1; padding: 7px 4px; border: 0; border-radius: 7px; background: transparent; color: var(--fg1); font: inherit; font-size: 13.5px; cursor: pointer; }
+.of-anims-tabs button:hover { color: var(--fg0); }
+.of-anims-tabs button.on { background: var(--bg3); color: #fff; }
+.of-anims-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.of-anims-list .group { margin: 12px 2px 6px; font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--fg2); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.of-anims-list .group:first-child { margin-top: 4px; }
+.of-anims-list .group.combat { color: var(--accent); }
+.of-anims-list .group b { color: var(--fg1); font-weight: 600; letter-spacing: .02em; text-transform: none; font-size: 12.5px; }
+.of-anims-list .empty { padding: 16px 4px; color: var(--fg2); }
+.of-anims-hint { margin: 10px 2px 0; color: var(--fg2); font-size: 13px; }
+/* the settings on the view's toolbar: its menu opens below it (wider screens) */
+.of-bg-top { position: relative; }
+.of-toolbar .of-bgbtn svg.ic { width: 17px; height: 17px; }
+.of-toolbar .of-bgbtn.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }
+.of-bg-top .of-bgpop { top: calc(100% + 8px); bottom: auto; right: 0; }
+/* every animation a tile: the game's emote pictures (some stored on their side: turned upright), the rest their kind's icon */
+.of-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.of-tile { position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); color: var(--fg0); font: inherit; font-size: 12px; line-height: 1.2; text-align: center; cursor: pointer; }
+.of-tile > :not(.of-anim-bar) { position: relative; }
+.of-tile:hover { background: var(--bg3); border-color: var(--fg2); }
+.of-tile.on { background: var(--sel); border-color: var(--accent); }
+.of-tile img { width: 48px; height: 48px; object-fit: contain; }
+.of-tile img.turned { transform: rotate(-90deg); }
+.of-tile-pic { width: 48px; height: 48px; display: grid; place-items: center; color: var(--fg1); }
+.of-tile-pic svg.ic { width: 28px; height: 28px; }
+.of-tile.combat { border-color: var(--accent-dim); background: #172234; }
+.of-tile.combat .of-tile-pic { color: var(--accent); }
+.of-tile.combat.on { border-color: var(--accent); background: var(--sel); }
+.of-tile.cta { border-style: dashed; border-color: var(--accent); background: transparent; color: var(--accent); }
+.of-tile.cta .of-tile-pic { color: var(--accent); }
+.of-tile.cta:hover { background: #172234; }
+/* the one playing: a wheel while its clip comes, then its progress across the tile (the name and picture over it) */
+.of-anim-bar { position: absolute; inset: 0; background: rgba(120, 183, 255, .22); transform-origin: left center; transform: scaleX(0);
+  animation-name: of-anim-progress; animation-timing-function: linear; animation-fill-mode: forwards; pointer-events: none; }
+@keyframes of-anim-progress { to { transform: scaleX(1); } }
+.of-tile-load .load-card { position: static; transform: none; }
+.of-tile-load .load-card svg { width: 34px; height: 34px; filter: none; }
+@media (prefers-reduced-motion: reduce) { .of-anim-bar { animation: none; transform: none; background: rgba(120, 183, 255, .14); } }

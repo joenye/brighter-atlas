@@ -1,6 +1,7 @@
 // A look as its links carry it: base64url of {g, s, c, e} (gender, the styles and colours in the lists' order,
-// the worn slots), the same code the address, a saved look and a short link hold. After it, the address may name
-// the place behind the character: "#<code>.<place>".
+// the worn slots), the same code the address, a saved look and a short link hold; a shared look adds p, the pose its
+// link opens in and its preview picture shows (1 the combat-ready stance, weapons out; 0 at rest). After it, the
+// address may name the place behind the character: "#<code>.<place>".
 import {STYLE_CATS, COLOUR_CATS, EQUIP_SLOTS, type State, type EquipSlot} from './compose.js';
 
 export const DEFAULT_LOOK: State = {gender: 'male', style: {hair: 7, face: 0, jaw: 8, torso: 9, legs: 1, feet: 1}, colour: {hair: 0, eyes: 12, torso: 2, legs: 25, feet: 20, skin: 5}, equip: {}};
@@ -24,6 +25,18 @@ export function decodeLook(code: string | null, known: (item: number) => boolean
     }
     return st;
   } catch { return null; }
+}
+
+const parse = (code: string) => JSON.parse(atob(code.replace(/-/g, '+').replace(/_/g, '/')));
+const pack = (e: any) => btoa(JSON.stringify(e)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+/** The look's code with its pose: the combat-ready stance or at rest. */
+export function withPose(code: string, combat: boolean): string {
+  try { const e = parse(code); delete e.p; return pack({...e, p: combat ? 1 : 0}); } catch { return code; }
+}
+/** The pose a code names: true the combat-ready stance, false at rest, null none (a look shared before poses were). */
+export function lookPose(code: string | null | undefined): boolean | null {
+  if (!code) return null;
+  try { const p = parse(code).p; return p === 1 ? true : p === 0 ? false : null; } catch { return null; }
 }
 
 // (links, saved looks and choices from before the rename name the beach by its room: East Beach)

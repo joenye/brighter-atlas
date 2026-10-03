@@ -29,21 +29,30 @@ const loader = new THREE.TextureLoader();
 const meshCache = new Map<number, Promise<any>>();
 const texCache = new Map<string, Promise<THREE.Texture | null>>();
 const jsonCache = new Map<string, Promise<any>>();
-const getJson = (url: string) => { let p = jsonCache.get(url); if (!p) { p = fetch(url).then(r => { if (!r.ok) throw Error(`${url}: ${r.status}`); return r.json(); }); jsonCache.set(url, p); } return p; };
+// A download on a weak connection can fail: tried three times (0.8 s, then 1.6 s apart), and a failure is forgotten,
+// so the next ask tries again (the export writes every file the page can ask for: a failure is the network's).
+const retry = async <T,>(f: () => Promise<T>, tries = 3): Promise<T> => {
+  for (let k = 1, wait = 800; ; k++, wait *= 2) { try { return await f(); } catch (e) { if (k >= tries) throw e; await new Promise(r => setTimeout(r, wait)); } }
+};
+const getJson = (url: string) => {
+  let p = jsonCache.get(url);
+  if (!p) { p = retry(() => fetch(url).then(r => { if (!r.ok) throw Error(`${url}: ${r.status}`); return r.json(); })); p.catch(() => jsonCache.delete(url)); jsonCache.set(url, p); }
+  return p;
+};
 const getMesh = (i: number) => {
   let p = meshCache.get(i);
-  if (!p) { p = getJson(at(`mesh/${i}`)).then(m => buildMeshGeometry(m, {boneColors: false})); meshCache.set(i, p); }
+  if (!p) { p = getJson(at(`mesh/${i}`)).then(m => buildMeshGeometry(m, {boneColors: false})); p.catch(() => meshCache.delete(i)); meshCache.set(i, p); }
   return p;
 };
 const getTex = (kind: 'tex' | 'param' | 'light' | 'glow', i: number) => {
   const key = `${kind}/${i}`;
   let p = texCache.get(key);
   if (!p) {
-    p = new Promise(res => loader.load(at(key), t => {
+    p = retry(() => new Promise<THREE.Texture>((res, rej) => loader.load(at(key), t => {
       t.colorSpace = kind === 'tex' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
       t.anisotropy = 4;
       res(t);
-    }, undefined, () => res(null)));
+    }, undefined, rej))).catch(() => { texCache.delete(key); return null; });
     texCache.set(key, p);
   }
   return p;
@@ -60,7 +69,7 @@ export function forgetCaches() {
 // warm the caches (e.g. the next item in a list) without drawing anything
 export function prefetch(parts: DrawPart[]) {
   const game = rendering.lighting === 'game';
-  for (const p of parts) { void getMesh(p.mesh).catch(() => {}); if (p.mat != null) { void getTex('tex', p.mat); void getTex('param', p.mat); if (game && p.spec) { void getTex('light', p.mat); if (p.glow) void getTex('glow', p.mat); } } }
+  for (const p of parts) { void getMesh(p.mesh).catch(() => {}); if (p.mat != null) { void getTex('tex', p.mat); if (!p.plain) void getTex('param', p.mat); if (game && p.spec) { void getTex('light', p.mat); if (p.glow) void getTex('glow', p.mat); } } }
 }
 
 // ---- the game's own lighting of a character part ----
@@ -161,11 +170,52 @@ float gShadow2x2( sampler2D map, vec2 size, float bias, vec4 c ) {
   mat.customProgramCacheKey = () => `game-lit${glow ? '-glow' : ''}:${prevKey()}`;
   mat.needsUpdate = true;
 }
+// A book's cover with the site's mark on it (the Read animation's book is an atlas): its picture drawn four times as
+// large and bound in the site's grey, the mark and the name in gold on the cover's corner of it, upright as the book is held (the picture's +u is
+// the book's top, +v its right, so the drawing is turned a quarter clockwise).
+const covers = new Map<string, Promise<THREE.Texture>>();
+const coverMark = new Image(); coverMark.src = '/brand/mark.svg';
+function covered(map: THREE.Texture, rect: number[], key: string) {
+  let p = covers.get(key);
+  if (!p) covers.set(key, p = (async () => {
+    await Promise.all([coverMark.decode().catch(() => {}), document.fonts?.load('600 40px "BA Brighter"').catch(() => {})]);
+    const src = map.image as HTMLImageElement, k = 4, W = src.width * k, H = src.height * k;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const g = cv.getContext('2d', {willReadFrequently: true})!; g.drawImage(src, 0, 0, W, H);
+    // (bound in the site's own dark grey, its raised panels' (--bg2, #1a1e26), not the game's red: the binding's reds,
+    // their shading kept, the pages and the glyphs on the spine left as they are. The texture's grey is lighter: the
+    // game's lighting keeps about 55% of it, measured, so the cover comes out at the site's)
+    const img = g.getImageData(0, 0, W, H), d = img.data, grey = [0x30, 0x37, 0x46];
+    for (let k = 0; k < d.length; k += 4) {
+      const r = d[k], gr = d[k + 1], b = d[k + 2];
+      if (r < 60 || r < gr * 1.25 || r < b * 1.25) continue;
+      const shade = Math.min(1.6, r / 165);
+      d[k] = grey[0] * shade; d[k + 1] = grey[1] * shade; d[k + 2] = grey[2] * shade;
+    }
+    g.putImageData(img, 0, 0);
+    const [x0, y0, x1, y1] = [rect[0] * W, rect[1] * H, rect[2] * W, rect[3] * H];
+    const w = y1 - y0, h = x1 - x0;   // (the cover as the drawing sees it, turned)
+    // (centred across the cover, a little toward its top: the reader's thumb holds its fore edge low down)
+    g.save(); g.translate((x0 + x1) / 2 + (x1 - x0) * 0.08, (y0 + y1) / 2); g.rotate(Math.PI / 2);
+    const gold = '#e9d49a', size = Math.min(w * 0.42, h * 0.4), sans = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif';
+    g.shadowColor = 'rgba(40, 8, 8, .55)'; g.shadowBlur = size * 0.04; g.shadowOffsetY = size * 0.02;
+    if (coverMark.naturalWidth) g.drawImage(coverMark, -size / 2, -h * 0.38, size, size);
+    g.fillStyle = gold; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+    g.font = `600 ${size * 0.34}px "BA Brighter", ${sans}`; g.fillText('Brighter', 0, -h * 0.38 + size + size * 0.36);
+    g.font = `600 ${size * 0.2}px ${sans}`; (g as any).letterSpacing = `${size * 0.06}px`; g.fillText('ATLAS', 0, -h * 0.38 + size + size * 0.66);
+    g.restore();
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.flipY = map.flipY;
+    return t;
+  })());
+  return p;
+}
 /** A part's material: its texture, recoloured as the game does, lit as the game does where the data says how. */
 async function partMaterial(p: DrawPart) {
   const game = rendering.lighting === 'game' && p.mat != null && !!p.spec;
-  const [map, param, light, glow] = await Promise.all([p.mat != null ? getTex('tex', p.mat) : null, p.mat != null ? getTex('param', p.mat) : null,
+  const [plain, param, light, glow] = await Promise.all([p.mat != null ? getTex('tex', p.mat) : null, p.mat != null && !p.plain ? getTex('param', p.mat) : null,
     game ? getTex('light', p.mat!) : null, game && p.glow ? getTex('glow', p.mat!) : null]);
+  const map = plain && p.cover ? await covered(plain, p.cover, `${p.mat}/${p.cover.join(',')}`) : plain;
+  if (p.mat != null && !map) throw Error(`part texture ${p.mat}: not loaded`);
   const mat = new THREE.MeshStandardMaterial({color: map ? 0xffffff : 0xb9c2cf, map: map ?? null, metalness: 0.02, roughness: 0.82, alphaTest: 0.35, side: THREE.FrontSide});   // (one side, as the game: its rasterizer culls the engine's back faces in every pass; drawn from both, a part's close inner and outer sheets fight for the same pixels and flicker as it moves)
   applyPackedRecolor(mat, param, [p.t1, p.t2]);
   if (light && p.spec) gameLit(mat, light, p.spec, glow);
@@ -231,7 +281,17 @@ function clipBoxToFrustum(b: THREE.Box3, f: THREE.Frustum, out: THREE.Vector3[])
   return out;
 }
 
+// (a fixed drawing resolution, set in this browser's storage, `fashion.pixelRatio`: the test suite draws at 1, as
+// its browser draws on the processor; nothing else sets it)
+function fixedPixelRatio(): number | null {
+  try { const v = Number(localStorage.getItem('fashion.pixelRatio')); return v > 0 && v <= 4 ? v : null; } catch { return null; }
+}
 export interface Framing { dist: number; target: number }
+/** A figure an animation plays beside the character (Preview.setAnimActors): a rig of its own (`skel`), its parts,
+ *  each of the animation's parts' clips for it, where it stands in the character's space (`at`, game units, +y
+ *  ahead), its particle systems, or what is thrown (`thrown`: its release and flight in ticks, how far it goes). */
+export interface AnimActor { skel: number; parts: DrawPart[]; clips: (number | null)[]; at?: number[] | null; fx?: number[];
+  thrown?: {release: number; flight: number; distance: number} }
 export const FRAMES: Record<string, Framing> = {full: {dist: 5600, target: 760}, upper: {dist: 3000, target: 1060}, face: {dist: 1450, target: 1230}};
 
 export class Preview {
@@ -294,7 +354,7 @@ export class Preview {
     this.renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: true, preserveDrawingBuffer: true});
     // at least twice the screen's pixels (on a 1x desktop the frame, which has no antialiasing of its own, is
     // drawn at 2x and scaled down: supersampled), the phone's own 3x at most
-    this.renderer.setPixelRatio(opts.pixelRatio ?? Math.min(3, Math.max(2, devicePixelRatio)));
+    this.renderer.setPixelRatio(opts.pixelRatio ?? fixedPixelRatio() ?? Math.min(3, Math.max(2, devicePixelRatio)));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.autoClear = false;
     // (x, y, z) -> (x, z, y)
@@ -344,16 +404,34 @@ export class Preview {
     await this.apply(this.parts);
   }
   private restClip: number | null = null;
+  // the bones the resting clip hides (scaled to 0.001): what is held
+  private held: number[] | null = null;
+  private heldBones(): number[] {
+    if (this.held) return this.held;
+    const rest = this.restClip != null ? this.clips.get(this.restClip) : null;
+    if (!rest) return [];
+    return this.held = rest.bones.flatMap((b, i) => b?.scale.mode === 'const' && (b.scale as any).value[0] < 0.01 ? [i] : []);
+  }
   private headRest: THREE.Vector3 | null = null;   // the aim point in the head's frame at rest
   private headAt = new THREE.Vector3();
   private focus = new THREE.Vector3();
   private focusOff = new THREE.Vector3();
 
   private wantClip: number | null = null;
-  async setClip(i: number, upper: number | null = null) {
-    this.wantClip = i; this.wantUpper = upper;
+  /** The pose: `clip` (with `upper` over it), and whether held items show (`held`). Both change together, once the
+   *  clips are in, so a weapon never shows in the old pose nor the new pose without it. */
+  async setClip(i: number, upper: number | null = null, held: boolean = this.showHeld, fromStart = false, blend = true) {
+    this.wantClip = i; this.wantUpper = upper; this.wantHeld = held;
     const [json, upperJson] = await Promise.all([getJson(at(`clip/${i}`)), upper != null ? getJson(at(`clip/${upper}`)) : null]);
-    if (this.wantClip !== i || this.wantUpper !== upper) return;
+    if (this.wantClip !== i || this.wantUpper !== upper || this.wantHeld !== held) return;
+    // (a change of pose crossfades as the game's do, over BLEND_TICKS: from the pose drawn at this moment)
+    // (not between the parts of one animation: they are authored to join)
+    if (blend && this.rig && this.clip && (this.clipId !== i || this.upperId !== upper)) {
+      const rig = this.rig, kept = rig.bones.map(b => [b.position.clone(), b.quaternion.clone(), b.scale.clone()] as const);
+      this.blendFrom = {t0: this.clock, pose: () => rig.bones.forEach((b, k) => { b.position.copy(kept[k][0]); b.quaternion.copy(kept[k][1]); b.scale.copy(kept[k][2]); })};
+    }
+    this.showHeld = held;
+    if (fromStart) this.clipT0 = this.clock;   // (an animation picked to play: from its first frame)
     let c = this.clips.get(i);
     if (!c) { c = new ClipSampler(json); this.clips.set(i, c); }
     this.clip = c; this.clipJson = json; this.clipId = i;
@@ -365,6 +443,17 @@ export class Preview {
   // a stance in two clips: `clip` on the whole figure, `upper` over it on the upper body's bones (the game's two bone
   // masks: hips and legs from the stance every weapon shares, everything above from the weapon's own)
   private wantUpper: number | null = null;
+  private wantHeld = false;
+  // the clips' own clock: from the page's start, or from when an animation was picked to play
+  private clipT0 = 0;
+  /** The animations' own clock (ms): it stands still while `paused`, so the character, its effects and a place's
+   *  actors freeze where they are; the camera still turns. */
+  clock = 0;
+  paused = false;
+  /** How long the clip picked last has played (ms of the animations' clock). */
+  clipElapsed() { return this.clock - this.clipT0; }
+  /** Fetch clips ahead (the stances of what is worn), so a later setClip need not wait. */
+  prefetchClips(ids: (number | null | undefined)[]) { for (const i of ids) if (i != null) void getJson(at(`clip/${i}`)).catch(() => {}); }
   private upper: ClipSampler | null = null;
   upperId: number | null = null;
   private upperBones: Set<number> | null = null;
@@ -383,7 +472,7 @@ export class Preview {
   // from still moving
   private blendFrom: {t0: number; pose: (now: number) => void} | null = null;
   private beginFlourish(c: ClipSampler) {
-    const now = performance.now(), rest = this.clip, shift = this.restShift, t0 = this.t0, rig = this.rig;
+    const now = this.clock, rest = this.clip, shift = this.restShift, t0 = this.clipT0, rig = this.rig;
     if (rest && rig) this.blendFrom = {t0: now, pose: (n) => rest.apply(rig, rest.duration ? ((((n - t0) * TICKS_PER_MS + shift) % rest.duration) + rest.duration) % rest.duration : 0)};
     this.flourish = {c, t0: now};
   }
@@ -437,22 +526,46 @@ export class Preview {
     this.want = {dist: d, target: face.target + (full.target - face.target) * Math.max(0, Math.min(1, t))};
   }
 
+  private applyRounds = 0;
   async apply(parts: DrawPart[]) {
+    if (parts !== this.parts) this.applyRounds = 0;
     this.parts = parts;
     if (!this.rig) return;
     const gen = ++this.gen;
     const wanted = new Map(parts.map(p => [p.key, p]));
     const missing = parts.filter(p => !this.active.has(p.key));
-    this.onLoading(missing.length);
+    this.loadingParts = missing.length; this.onLoading(missing.length);
     const built = await Promise.all(missing.map(p => this.build(p).catch(e => { console.warn('part', p, e); return null; })));
     if (gen !== this.gen) { for (const m of built) if (m) (m.material as THREE.Material).dispose(); return; }
+    // (nothing swaps in half: while a new part could not be built, the outfit drawn stays and the loader with it, and
+    // the build is tried again; after three rounds what did build is shown, as a broken file would never come)
+    if (built.some(m => !m) && this.applyRounds < 3) {
+      for (const m of built) if (m) (m.material as THREE.Material).dispose();
+      this.applyRounds++;
+      setTimeout(() => { if (gen === this.gen) void this.apply(this.parts); }, 1500);
+      return;
+    }
+    this.applyRounds = 0;
+    this.holdingProps = parts.some(p => /\/prop\d+(-cover)?$/.test(p.key));
     for (const [key, m] of this.active) if (!wanted.has(key)) { this.root.remove(m); (m.material as THREE.Material).dispose(); this.active.delete(key); }
     missing.forEach((p, i) => { const m = built[i]; if (m) { this.root.add(m); this.active.set(p.key, m); } });
     this.syncLights();
     parts.forEach((p, i) => { const m = this.active.get(p.key); if (m) m.renderOrder = i; });
-    if (this.game) await this.game.setActors(parts, this.rig).catch(e => console.warn('game actors', e));
-    this.onLoading(0);
+    if (this.game) await this.game.setActors(this.gameParts(this.propsShown), this.rig).catch(e => console.warn('game actors', e));
+    this.loadingParts = 0; this.onLoading(0);
   }
+  /** The look drawn holds an animation's props (their bones are the clip's to show and hide). */
+  private holdingProps = false;
+  /** The clips an animation's props show in: until one plays they are hidden and the weapons stay in hand (then
+   *  the other way round), so nothing it holds is seen on the pose before it. */
+  propClips: Set<number> | null = null;
+  private propsShown = false;
+  // (the game's frame draws the parts it is given: the props or the weapons, as the plain view shows them)
+  private gameParts(propsOn: boolean) {
+    return this.parts.filter(p => /\/prop\d+(-cover)?$/.test(p.key) ? propsOn : !(propsOn && /\/h\d+$/.test(p.key)));
+  }
+  /** Parts of the look asked for last still to be drawn (0: the look is all in). */
+  loadingParts = 0;
 
   private async build(p: DrawPart) {
     const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
@@ -474,14 +587,19 @@ export class Preview {
   }
 
   // Show exactly these effect systems (by id); others stop. Their bones follow the playing clip.
-  async setEffects(slots: number[]) {
-    const want = new Set(slots);
-    if (want.size && !this.effects) {
+  /** The particle player, its systems (effects.json) fetched the first time any is wanted. */
+  private async effectsPlayer(): Promise<EffectsPlayer | null> {
+    if (!this.effects) {
       const doc = await getJson(at('effects.json')).catch(() => null);
-      if (!doc || !this.rig) return;
+      if (!doc || !this.rig || this.effects) return this.effects;
       this.effects = new EffectsPlayer({root: this.effectsRoot, doc, url: at,
         rig: {id: this.rig.skelIndex, bones: this.rig.boneInverses.map(m => m.clone().invert().elements)}});
     }
+    return this.effects;
+  }
+  async setEffects(slots: number[]) {
+    const want = new Set(slots);
+    if (want.size) await this.effectsPlayer();
     if (!this.effects) return;
     for (const s of want) if (this.effectSlots.has(s) && !this.wantEffects.has(s)) this.effects.play(s);   // back on: restart it
     for (const s of want) if (!this.effectSlots.has(s)) {
@@ -489,12 +607,142 @@ export class Preview {
       if (sys) sys.triggered = false;   // the game loops it while the item is worn
       if (this.effects.addSystem(s)) this.effectSlots.add(s);
     }
-    for (const s of [...this.effectSlots]) if (!want.has(s)) { this.effects.stop(s); }
-    this.effectsRoot.visible = want.size > 0;
-    this.effects.setRunning(want.size > 0);
+    for (const s of [...this.effectSlots]) if (!want.has(s) && !this.animFx?.slots.some(a => a.slot === s) && !this.fading.some(f => f.slot === s)) this.dropSystem(s);
     this.wantEffects = want;
+    this.effectsOn();
+  }
+  private effectsOn() {
+    const on = this.wantEffects.size > 0 || !!this.animFx || this.fading.length > 0;
+    this.effectsRoot.visible = on;
+    this.effects?.setRunning(on);
+  }
+  // An animation's own particle effects (the systems its controller names): their clock is the animation's (ticks
+  // since it began, plus where a loop clip starts within its controller), so they pause and repeat with it. When it
+  // ends, or another takes its place, the game releases them: nothing new is born, and what is out lives its life
+  // (`fading`, each on its own clock from where it was let go). Asked for again, a system's clock starts over with
+  // its new animation, as does a loop's each time round, while the particles already out run on: they live on the
+  // system's own clock, the controller's only opening its windows. Here a copy of the system takes those over
+  // (`passOn`, a key of its own), released.
+  private animFx: {slots: {slot: number, offset: number}[], t0: number, loop: number | null, last: number} | null = null;
+  private fading: {slot: number, offset: number, endT: number, at: number}[] = [];
+  private copies = -1;
+  // A system no longer played leaves the player: the particle budget is shared among the systems it holds (thinning
+  // them all past it), so one kept after it is done would take its share from every effect played after (fifteen
+  // animations' effects left Teleport an eighth of its particles). Asked for again, it is added afresh.
+  private dropSystem(slot: number) {
+    this.effects?.removeSystem(slot);
+    this.effectSlots.delete(slot);
+  }
+  /** The live particles of `slot`, at animation tick `t`, on to a released copy of their system. */
+  private passOn(e: EffectsPlayer, slot: number, offset: number, t: number) {
+    if (!e.liveCount(slot)) return;
+    const key = this.copies--;
+    if (!e.addSystem(slot, key)) return;
+    e.setAnimation(key, this.effectAnim);
+    e.syncClock(key, (t + offset) * e.clock.tickRate / 600);
+    e.release(key);
+    this.fading.push({slot: key, offset, endT: t, at: this.clock});
+  }
+  async setAnimEffects(fx: {system: number, offset?: number}[] | null, loop = false) {
+    const e = fx?.length ? await this.effectsPlayer() : this.effects;
+    if (this.animFx && e) {
+      const t = this.animTick(this.animFx);
+      for (const s of this.animFx.slots) {
+        if (fx?.some(f => f.system === s.slot)) this.passOn(e, s.slot, s.offset, t);   // (asked for again: starts over)
+        else { e.release(s.slot); this.fading.push({slot: s.slot, offset: s.offset, endT: t, at: this.clock}); }
+      }
+    }
+    this.animFx = null;
+    if (!fx?.length || !e) { this.effectsOn(); return; }
+    for (const f of fx) if (!this.effectSlots.has(f.system)) {
+      const sys = e.doc.systems.find((x: any) => x.slot === f.system); if (!sys) continue;
+      // (driven by the animation, never looping on its own: its windows open once each time round the controller's
+      // clock, which the animation restarts; a loop period of the system's own would fire its bursts again)
+      sys.triggered = true; sys.loop = false;
+      if (e.addSystem(f.system)) this.effectSlots.add(f.system);
+    }
+    const slots = fx.filter(f => this.effectSlots.has(f.system)).map(f => ({slot: f.system, offset: f.offset ?? 0}));
+    for (const s of slots) {
+      // (a released one still out: its particles go on as a copy, the system itself starts over)
+      const was = this.fading.find(f => f.slot === s.slot);
+      if (was) { this.fading = this.fading.filter(f => f !== was); this.passOn(e, s.slot, was.offset, was.endT + (this.clock - was.at) * TICKS_PER_MS); }
+      e.release(s.slot, false);
+    }
+    this.animFx = {slots, t0: this.clipT0, loop: loop && this.clip?.duration ? this.clip.duration : null, last: 0};
+    // (on its new clock at once: not a frame drawn beside its copy)
+    const t = this.animTick(this.animFx);
+    for (const s of slots) e.syncClock(s.slot, (t + s.offset) * e.clock.tickRate / 600);
+    this.effectsOn();
+  }
+  private animTick(a: NonNullable<typeof this.animFx>) {
+    const t = (this.clock - a.t0) * TICKS_PER_MS;
+    return a.loop ? t % a.loop : t;
   }
   private wantEffects = new Set<number>();
+
+  // ---- an animation's other figures: what the game plays beside the character on a rig of its own (a fishing rod,
+  // the rift a deposit opens one tile ahead), each part's clip with the character's, and what is thrown (a snowball,
+  // the throw's own pose kept from its release and carried ahead). Their particle effects play where they stand. ----
+  private actors: {frame: THREE.Group, rig: Rig, meshes: THREE.Mesh[], clips: (ClipSampler | null)[], partClips: number[], at: number[],
+    thrown: AnimActor['thrown'] | null, effects: EffectsPlayer | null, fx: number[], t0: number}[] = [];
+  private actorsGen = 0;
+  async setAnimActors(list: AnimActor[] | null, partClips: number[]) {
+    const gen = ++this.actorsGen;
+    for (const a of this.actors) { this.anchor.remove(a.frame); for (const m of a.meshes) { this.root.remove(m); (m.material as THREE.Material).dispose(); } a.effects?.dispose(); }
+    this.actors = [];
+    if (!list?.length || !this.rig) return;
+    const t0 = NaN;   // (set as its first clip starts: poseActors)
+    const doc = list.some(a => a.fx?.length) ? await getJson(at('effects.json')).catch(() => null) : null;
+    const built = await Promise.all(list.map(async a => {
+      const rig = new Rig(await getJson(at(`skel/${a.skel}`)));
+      const frame = new THREE.Group(); frame.add(...rig.roots);
+      const clips = await Promise.all(a.clips.map(async c => c == null ? null : this.clips.get(c) ?? this.clips.set(c, new ClipSampler(await getJson(at(`clip/${c}`)))).get(c)!));
+      const meshes = await Promise.all(a.parts.map(async p => {
+        const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
+        // (skinned in the character's frame, as its own parts: the figure's place is its bones', moved with its frame)
+        const m = skinned ? new PartSkinnedMesh(geo, mat, this.anchor) : new THREE.Mesh(geo, mat);
+        if (skinned) (m as any).bind(rig.skeleton, new THREE.Matrix4());
+        m.frustumCulled = false; m.castShadow = true;
+        return m;
+      }));
+      // (its effects where it stands: a player of their own, in the character's space, moved to its place)
+      let effects: EffectsPlayer | null = null;
+      if (doc && a.fx?.length) {
+        const root = new THREE.Group(); root.position.fromArray(a.at ?? [0, 0, 0]); this.root.add(root);
+        effects = new EffectsPlayer({root, doc, url: at});
+        for (const sys of a.fx) { const d = doc.systems.find((x: any) => x.slot === sys); if (d) { d.triggered = true; d.loop = false; } effects.addSystem(sys); }
+        const dispose = effects.dispose.bind(effects); effects.dispose = () => { dispose(); this.root.remove(root); };
+      }
+      return {frame, rig, meshes, clips, partClips, at: a.at ?? [0, 0, 0], thrown: a.thrown ?? null, effects, fx: a.fx ?? [], t0};
+    }));
+    if (gen !== this.actorsGen) { for (const a of built) { for (const m of a.meshes) (m.material as THREE.Material).dispose(); a.effects?.dispose(); } return; }
+    for (const a of built) { this.anchor.add(a.frame); for (const m of a.meshes) this.root.add(m); }
+    this.actors = built;
+  }
+  private poseActors(t: number) {
+    for (const a of this.actors) {
+      const i = a.partClips.indexOf(this.clipId ?? -1), c = i >= 0 ? a.clips[i] : null;
+      if (a.thrown) {
+        // (thrown: hidden till its release, then the throw's own pose at the release, carried ahead along a straight
+        // line over its flight, as the game moves a projectile)
+        const k = (t - a.thrown.release) / a.thrown.flight, on = i >= 0 && k >= 0 && k <= 1;
+        for (const m of a.meshes) m.visible = on;
+        // (its pose the last tick the hand still shows it: the clip puts it away over the ticks of the release)
+        if (on && c) c.apply(a.rig, Math.min(Math.max(0, a.thrown.release - 10), c.duration));
+        a.frame.position.set(0, on ? a.thrown.distance * k : 0, 0);
+      } else {
+        a.frame.position.fromArray(a.at);
+        for (const m of a.meshes) m.visible = i >= 0;
+        if (c) c.apply(a.rig, c.duration ? Math.min(t, c.duration) : 0);
+      }
+      // (their effects' clock: from the animation's first frame, each time it starts again)
+      if (i === 0 && a.t0 !== this.clipT0) a.t0 = this.clipT0;
+      if (a.effects && i >= 0) {
+        const ticks = (this.clock - a.t0) * TICKS_PER_MS;
+        for (const sys of a.fx) a.effects.syncClock(sys, ticks * a.effects.clock.tickRate / 600, this.camera);
+      }
+    }
+  }
 
   // ---- a room behind the character (a game place as the backdrop) ----
   private roomGroup = new THREE.Group();
@@ -629,9 +877,19 @@ export class Preview {
   private frameNo = 0;
 
   frame() {
-    const now = performance.now(), dt = Math.min(0.1, (now - this.last) / 1000); this.last = now;
-    const t = (now - this.t0) * TICKS_PER_MS;   // (ticks)
+    const real = performance.now(), dt = Math.min(0.1, (real - this.last) / 1000);
+    if (!this.paused) this.clock += real - this.last;
+    this.last = real;
+    const now = this.clock;
+    const t = (now - this.clipT0) * TICKS_PER_MS;   // (ticks)
     this.frameNo++;
+    // (an animation's props: shown, and the weapons hidden, only while one of its clips plays)
+    const propsOn = this.holdingProps && !!this.propClips?.has(this.clipId ?? -1);
+    if (this.holdingProps || this.propsShown) {
+      for (const [key, m] of this.active) if (/\/prop\d+(-cover)?$/.test(key)) m.visible = propsOn; else if (/\/h\d+$/.test(key)) m.visible = !propsOn;
+      if (propsOn !== this.propsShown && this.game && this.rig) void this.game.setActors(this.gameParts(propsOn), this.rig).catch(e => console.warn('game actors', e));
+      this.propsShown = propsOn;
+    }
     if (this.rig && this.clip) {
       // (a flourish, at rest: started after its wait, played once, then the rest loop again)
       const resting = !!this.idle && this.clipId === this.restClip && !this.designing && !this.showHeld;
@@ -650,19 +908,26 @@ export class Preview {
         this.flourish = null;
         if (this.clip.duration) this.restShift = Math.floor(Math.random() * this.clip.duration) - t;
       }
-      if (!resting) this.blendFrom = null;
       const blendT = this.blendFrom ? (now - this.blendFrom.t0) * TICKS_PER_MS : Infinity;
       const from = blendT < BLEND_TICKS ? this.blendFrom : null;
       if (!from) this.blendFrom = null;
       else { from.pose(now); this.keepPose(this.rig); }
       if (this.flourish) this.flourish.c.apply(this.rig, (now - this.flourish.t0) * TICKS_PER_MS);
-      else this.clip.apply(this.rig, this.clip.duration ? (((t + (resting ? this.restShift : 0)) % this.clip.duration) + this.clip.duration) % this.clip.duration : 0);
+      else this.clip.apply(this.rig, !this.clip.duration ? 0 : (((t + (resting ? this.restShift : 0)) % this.clip.duration) + this.clip.duration) % this.clip.duration);
       if (from) this.mixPose(this.rig, blendT / BLEND_TICKS);
       if (this.upper && !this.flourish) this.upper.apply(this.rig, this.upper.duration ? t % this.upper.duration : 0, this.upperBones);
       // a clip that hides the held bones (the resting clip scales them to 0.001) shows them at rest instead
       if (this.showHeld) this.clip.bones.forEach((b, i) => {
         if (b?.scale.mode === 'const' && (b.scale as any).value[0] < 0.01) this.rig!.resetBoneToRest(i);
       });
+      // and with weapons away nothing is in hand, whatever plays: the held bones go as the resting clip puts them away;
+      // but for an animation's props, which its clip shows and hides itself on those bones (the weapons are out of the
+      // look meanwhile)
+      else if (!propsOn) for (const i of this.heldBones()) {
+        const b = this.rig.bones[i]; if (!b) continue;
+        b.scale.setScalar(0.001); b.matrix.compose(b.position, b.quaternion, b.scale); b.matrixWorldNeedsUpdate = true;
+      }
+      if (this.actors.length) this.poseActors(t);
     }
     // inertia and eased framing
     if (this.yawGoal != null) { this.yaw += (this.yawGoal - this.yaw) * (1 - Math.pow(0.004, dt)); if (Math.abs(this.yawGoal - this.yaw) < 0.002 || this.yawVel) this.yawGoal = null; }
@@ -693,9 +958,9 @@ export class Preview {
     this.camera.updateMatrixWorld();
     this.placeRoom(a);
     this.lights.rotation.y = this.roomPlace ? a : 0;
-    this.tickEffects(dt * 1000);
+    this.tickEffects(this.paused ? 0 : dt * 1000);
     const r = this.renderer;
-    if (this.game && this.roomPlace && this.rig) { this.gameFrame(dt * 1000, f); return; }
+    if (this.game && this.roomPlace && this.rig) { this.gameFrame(this.paused ? 0 : dt * 1000, f); return; }
     if (this.gameBuilds) r.resetState();
     r.clear();
     if (this.ghost && this.active.size) {
@@ -781,7 +1046,9 @@ export class Preview {
     const up = new THREE.Vector3(0, 1, 0).transformDirection(toRoom);
     g.render({eye, target, up, fov: this.camera.fov, width: size.x, height: size.y}, dtMs, this.roomPlace!.z, this.camera);
     r.resetState();
-    // the frame drew the character: three draws only what the frame does not
+    // the frame drew the character: three draws only what the frame does not (each part's own visibility back after:
+    // an animation's props, or the weapons they stand in for, are hidden in turn)
+    const shown = [...this.active.values()].map(m => m.visible);
     for (const m of this.active.values()) m.visible = false;
     const fog = this.scene.fog; this.scene.fog = null;
     // (the sky turns with the place, as the character turns in it: its clouds keep their places over the sea)
@@ -793,7 +1060,7 @@ export class Preview {
     r.render(this.scene, this.camera);
     this.sky.visible = this.haze.visible = false;
     this.scene.fog = fog;
-    for (const m of this.active.values()) m.visible = true;
+    [...this.active.values()].forEach((m, i) => { m.visible = shown[i] ?? true; });
   }
   // The game never looks up far enough to see past its rooms; this view does. A sky fills whatever the
   // frame left empty (its depth still at the far plane): the room's own sky light at the horizon, deeper
@@ -861,14 +1128,57 @@ export class Preview {
   })();
 
   private tickEffects(dtMs: number) {
-    if (!this.effects || !this.wantEffects.size) return;
-    if (!this.effectAnim && this.skelJson && this.clipJson) this.effectAnim = new DrawnBones(this.skelJson, this.clipJson, this.effects.clock.tickRate, () => performance.now() - this.t0,
+    if (!this.effects || (!this.wantEffects.size && !this.animFx && !this.fading.length)) return;
+    if (!this.effectAnim && this.skelJson && this.clipJson) this.effectAnim = new DrawnBones(this.skelJson, this.clipJson, this.effects.clock.tickRate, () => this.clock,
       () => this.rig ? {rig: this.rig, anchor: this.anchor, frame: this.frameNo} : null);
     for (const s of this.wantEffects) this.effects.setAnimation(s, this.effectAnim);
+    const a = this.animFx, rate = this.effects.clock.tickRate / 600;
+    if (a) {
+      const t = this.animTick(a);
+      // (round again: what is out goes on, the system starts over)
+      if (a.loop && t < a.last) for (const s of a.slots) this.passOn(this.effects, s.slot, s.offset, t + a.loop);
+      a.last = t;
+      for (const s of a.slots) { this.effects.setAnimation(s.slot, this.effectAnim); this.effects.syncClock(s.slot, (t + s.offset) * rate); }
+    }
+    if (this.fading.length) {
+      for (const f of this.fading) { this.effects.setAnimation(f.slot, this.effectAnim); this.effects.syncClock(f.slot, (f.endT + (this.clock - f.at) * TICKS_PER_MS + f.offset) * rate); }
+      // (gone: once its last particle is, and at least a second on)
+      const gone = this.fading.filter(f => this.clock - f.at > 1000 && !this.effects!.liveCount(f.slot));
+      if (gone.length) {
+        this.fading = this.fading.filter(f => !gone.includes(f));
+        for (const f of gone) if (this.wantEffects.has(f.slot)) this.effects.play(f.slot); else if (!this.animFx?.slots.some(a => a.slot === f.slot)) this.dropSystem(f.slot);
+        this.effectsOn();
+      }
+    }
     this.effects.tick(dtMs, this.camera);
   }
 
   // a picture at least `minHeight` pixels tall, whatever the canvas's size on screen
+  /** The look as its link's preview picture draws it (the ?picture page): `w` x `h`, the camera at `yaw` and
+   *  `framing`, the floor's shadow alone, no place behind and no flourish; the live view is left as it was. A PNG
+   *  data URL (transparent where nothing is drawn). */
+  picture(w: number, h: number, framing: Framing, yaw: number): string {
+    const fg = this.floorGroup, r = this.renderer;
+    const was = {yaw: this.yaw, yawVel: this.yawVel, yawGoal: this.yawGoal, dist: this.dist, target: this.target, want: this.want, focusOff: this.focusOff.clone(),
+      flourish: this.flourish, blendFrom: this.blendFrom, room: this.roomPlace, roomVis: this.roomGroup.visible, fog: this.scene.fog, floor: fg?.visible, ring: fg?.children[1].visible,
+      wide: this.wide, fov: this.camera.fov, near: this.camera.near, far: this.camera.far, pr: r.getPixelRatio(), ghost: this.ghost, paused: this.paused};
+    try {
+      this.yaw = yaw; this.yawVel = 0; this.yawGoal = null; this.want = {...framing}; this.dist = framing.dist; this.target = framing.target;
+      this.flourish = null; this.blendFrom = null; this.ghost = false; this.paused = true;   // (the pose of this moment)
+      if (this.roomPlace) { this.roomPlace = null; this.roomGroup.visible = false; this.scene.fog = null; this.setWide(false); }
+      if (fg) { fg.visible = true; fg.children[1].visible = false; }
+      r.setPixelRatio(1); r.setSize(w, h, false); this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+      // (a few frames, so the close framing's follow of the head settles where the picture page's has)
+      for (let i = 0; i < 12; i++) { this.last = performance.now() - 100; this.frame(); }
+      return this.canvas.toDataURL('image/png');
+    } finally {
+      Object.assign(this, {yaw: was.yaw, yawVel: was.yawVel, yawGoal: was.yawGoal, dist: was.dist, target: was.target, want: was.want, flourish: was.flourish, blendFrom: was.blendFrom, ghost: was.ghost, paused: was.paused});
+      this.focusOff.copy(was.focusOff);
+      if (was.room) { this.roomPlace = was.room; this.roomGroup.visible = was.roomVis; this.scene.fog = was.fog; this.wide = was.wide; Object.assign(this.camera, {fov: was.fov, near: was.near, far: was.far}); }
+      if (fg) { fg.visible = !!was.floor; fg.children[1].visible = !!was.ring; }
+      r.setPixelRatio(was.pr); this.resize(); this.last = performance.now();
+    }
+  }
   snapshot(minHeight = 0): string {
     const pr = this.renderer.getPixelRatio(), h = this.canvas.clientHeight || 1;
     if (minHeight > h * pr) { this.renderer.setPixelRatio(Math.min(4, minHeight / h)); this.resize(); }

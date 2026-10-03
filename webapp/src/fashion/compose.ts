@@ -10,7 +10,11 @@
 export type Rgb = [number, number, number];
 // material: the ab0 material row (the game frame's programs); spec: its specular bytes (the game's lighting of the part);
 // glow: its texture has an emissive mask
-export interface DrawPart { key: string; mesh: number; mat: number | null; t1: Rgb; t2: Rgb; material?: number | null; spec?: number[] | null; glow?: boolean }
+export interface DrawPart { key: string; mesh: number; mat: number | null; t1: Rgb; t2: Rgb; material?: number | null; spec?: number[] | null; glow?: boolean;
+  /** A book's front cover (u0, v0, u1, v1 of its picture): the site's mark drawn on it. */
+  cover?: number[];
+  /** Its texture has no recolour plane (nothing to ask for). */
+  plain?: boolean }
 
 export const STYLE_CATS = ['hair', 'face', 'jaw', 'torso', 'legs', 'feet'] as const;
 export const COLOUR_CATS = ['hair', 'eyes', 'torso', 'legs', 'feet', 'skin'] as const;
@@ -150,6 +154,16 @@ export function randomise(pack: any, state: State, rnd = Math.random): State {
 
 // One item's own parts (every pass, primary list), tinted as it would be worn:
 // for thumbnails of items the game has no picture for.
+/** What an animation holds while it plays (its props: the meshes its controller lists, skinned to the player's rig,
+ *  shown and hidden by the clip itself), as parts drawn like the rest of the look (tagged `prop`). */
+export function propParts(props: any[] | null | undefined): DrawPart[] {
+  return (props ?? []).filter(p => p?.mesh != null).map((p, i) => {
+    const t1: Rgb = Array.isArray(p.r1) ? p.r1 : NEUTRAL, t2: Rgb = Array.isArray(p.r2) ? p.r2 : NEUTRAL;
+    return {key: `${p.mesh}/${p.mat}/${t1.join(',')}/${t2.join(',')}/prop${i}${p.cover ? '-cover' : ''}`, mesh: p.mesh, mat: p.mat ?? null, t1, t2, material: p.material ?? null,
+      spec: p.spec ?? null, glow: !!p.glow, ...(Array.isArray(p.cover) && p.cover.length === 4 ? {cover: p.cover} : {}), ...(p.plain ? {plain: true} : {})};
+  });
+}
+
 export function itemParts(pack: any, index: ReturnType<typeof makeIndex>, w: Worn, gender: string, state: State): DrawPart[] {
   const ap = itemAppearance(pack, index, w, gender);
   if (!ap) return [];

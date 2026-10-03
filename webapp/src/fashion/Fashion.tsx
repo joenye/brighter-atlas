@@ -6,11 +6,11 @@
 import {Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode} from 'react';
 import * as THREE from '../../vendor/three.module.js';
 import {at, DEV} from './data.js';
-import {compose, makeIndex, randomise, itemParts, hiddenItems, EQUIP_SLOTS} from './compose.js';
+import {compose, makeIndex, randomise, itemParts, hiddenItems, propParts, EQUIP_SLOTS} from './compose.js';
 import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
 import {Preview, FRAMES, prefetch, Thumbnailer, report, forgetCaches, RENDERING_DEFAULTS, configureRendering, type Rendering} from './render.js';
-import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, twoHandedItem, type Faction} from './wardrobe.js';
-import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook} from './look-code.js';
+import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, dyesFor, twoHandedItem, type Faction} from './wardrobe.js';
+import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
 import {attachTurning} from './turning.js';
@@ -54,6 +54,11 @@ const phone = () => matchMedia('(max-width: 860px)').matches && !matchMedia('(or
 const touch = matchMedia('(pointer: coarse)').matches;
 
 /** An icon of the page's own set (wardrobe.ts), as JSX. */
+// the animations the Animations drawer offers (animations.json: the game's emotes and the player's other named clips),
+// fetched the first time the drawer opens
+let ANIMATIONS: any[] = [];
+let animationsLoad: Promise<void> | null = null;
+const loadAnimations = () => animationsLoad ??= fetch(at('animations.json')).then(r => r.ok ? r.json() : []).then(a => { ANIMATIONS = Array.isArray(a) ? a : []; }).catch(() => { animationsLoad = null; });
 const Icon = ({name}: {name: string}) => <svg viewBox="0 0 24 24" aria-hidden="true" className="ic"><path d={PATHS[name] ?? ''} /></svg>;
 const Ic = ({d, children}: {d?: string; children?: ReactNode}) => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">{d ? <path d={d} /> : children}</svg>;
 
@@ -122,51 +127,27 @@ const lookUrl = (l: Shared) => `${location.origin}${location.pathname}#${l.code}
 interface SavedLook { id: string; name: string; code: string; place: string | null; thumb: string; at: number }
 const loadLooks = (): SavedLook[] => { try { const v = JSON.parse(store.get('looks') ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
 
-// ---- the picture's mark: "Made with BrighterAtlas.com" after the site's mark, small in the bottom-right corner
+// ---- the site's mark, for the share picture's corner
 const markImage = new Image();
 markImage.src = '/brand/mark.svg';
-function watermark(g: CanvasRenderingContext2D, w: number, hgt: number, size: number, onLight: boolean) {
-  const pad = Math.round(size * 0.9);
+// the link preview's picture (?picture): 1200 x 630, a three-quarter turn of the whole figure, the shield side away
+// (so a shield never hides the outfit), on the first backdrop, the site's mark in its corner
+const PICTURE_SIZE = [1200, 630] as const, PICTURE_YAW = -0.45;
+const PICTURE_FRAMING = {dist: FRAMES.full.dist * 0.74, target: FRAMES.full.target * 0.96};
+/** The preview picture's corner mark (the page's .of-picmark: the site's mark, "Brighter Fashion"), `k` times its size. */
+async function pictureMark(g: CanvasRenderingContext2D, w: number, h: number, k: number) {
+  await Promise.all([markImage.decode().catch(() => {}), document.fonts?.load(`600 ${20 * k}px "BA Brighter"`).catch(() => {})]);
+  const img = 30 * k, gap = 9 * k, cy = h - 18 * k - img / 2, sans = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif';
   g.save();
-  g.font = `500 ${size}px -apple-system, "Segoe UI", system-ui, Roboto, sans-serif`;
-  g.textAlign = 'right'; g.textBaseline = 'alphabetic';
-  const text = 'Made with BrighterAtlas.com', x = w - pad, y = hgt - pad;
-  const tw = g.measureText(text).width, gap = size * 0.4;
-  g.shadowColor = onLight ? 'rgba(255,255,255,.5)' : 'rgba(0,0,0,.55)'; g.shadowBlur = size * 0.3;
-  g.fillStyle = onLight ? 'rgba(20,24,32,.6)' : 'rgba(255,255,255,.55)';
-  g.fillText(text, x, y);
-  // the mark before the words, a little taller than the letters, standing on their line
-  if (markImage.complete && markImage.naturalWidth) {
-    const ms = size * 1.5;
-    g.shadowBlur = 0; g.globalAlpha = 0.9;
-    g.drawImage(markImage, x - tw - gap - ms, y - ms * 0.92, ms, ms);
-  }
+  g.textBaseline = 'middle'; g.fillStyle = 'rgba(232, 236, 242, .82)'; g.shadowColor = 'rgba(0, 0, 0, .5)'; g.shadowOffsetY = k; g.shadowBlur = 3 * k;
+  const bold = `600 ${20 * k}px "BA Brighter", ${sans}`, plain = `400 ${20 * k}px ${sans}`;
+  g.font = plain; const tail = ' Fashion', tw = g.measureText(tail).width;
+  g.font = bold; const bw = g.measureText('Brighter').width;
+  let x = w - 22 * k - tw - bw;
+  g.fillText('Brighter', x, cy); g.font = plain; g.fillText(tail, x + bw, cy);
+  x -= gap + img; g.shadowColor = 'transparent';
+  if (markImage.naturalWidth) g.drawImage(markImage, x, cy - img / 2, img, img);
   g.restore();
-}
-/** The view as a picture on its backdrop (transparent: cropped to the figure), with the mark or not. */
-function pictureOf(shot: HTMLImageElement, backdrop: Backdrop): (withMark: boolean) => Promise<Blob | null> {
-  let [sx, sy, sw, sh] = [0, 0, shot.width, shot.height];
-  if (!backdrop.stops.length) {
-    const t = document.createElement('canvas'); t.width = shot.width; t.height = shot.height;
-    const tg = t.getContext('2d')!; tg.drawImage(shot, 0, 0);
-    const px = tg.getImageData(0, 0, t.width, t.height).data;
-    let x0 = t.width, y0 = t.height, x1 = -1, y1 = -1;
-    for (let y = 0; y < t.height; y += 2) for (let x = 0; x < t.width; x += 2) if (px[(y * t.width + x) * 4 + 3] > 24) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-    if (x1 > x0 && y1 > y0) { const m = Math.round(0.06 * (y1 - y0)); sx = Math.max(0, x0 - m); sy = Math.max(0, y0 - m); sw = Math.min(t.width, x1 + m) - sx; sh = Math.min(t.height, y1 + m) - sy; }
-  }
-  // the mark's size follows the picture's; a tight transparent crop gets a strip below for it
-  const mark = Math.max(11, Math.round(Math.max(sw, sh) * 0.016)), strip = backdrop.stops.length ? 0 : Math.round(mark * 2.4);
-  const plain = document.createElement('canvas'); plain.width = sw; plain.height = sh + strip;
-  const g = plain.getContext('2d')!;
-  paintBackdrop(g, backdrop, plain.width, plain.height);
-  g.drawImage(shot, sx, sy, sw, sh, 0, 0, sw, sh);
-  return (withMark) => new Promise<Blob | null>(async res => {
-    if (withMark) await markImage.decode().catch(() => {});
-    const out = document.createElement('canvas'); out.width = plain.width; out.height = plain.height;
-    const og = out.getContext('2d')!; og.drawImage(plain, 0, 0);
-    if (withMark) watermark(og, out.width, out.height, mark, !backdrop.stops.length || backdrop.id === 'sand' || backdrop.id === 'studio');
-    out.toBlob(res, 'image/png');
-  });
 }
 
 export function Tool(props: ToolProps) {
@@ -208,23 +189,40 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const state = model.state;
 
   // ---- the page's own state ----
-  const [showHeld, setShowHeld] = useState(PICTURE);   // (weapons away until asked for or one is tried on; a link's picture shows them)
+  // (weapons away until asked for or one is tried on; a shared link opens in the pose it was shared in, and its
+  // picture shows it. A link from before poses were shared: its picture shows the weapons, if any)
+  const [showHeld, setShowHeld] = useState(() => lookPose(addressLook().code) ?? PICTURE);
+  const picturePose = useMemo(() => PICTURE ? lookPose(addressLook().code) : null, []);
   const [showEffects, setShowEffects] = useState(store.get('fx') !== '0');
   const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? BACKDROPS[0]);
   const [floor, setFloorState] = useState<Floor>(PICTURE ? 'shadow' : (FLOORS.map(f => f[0]).find(m => m === store.get('floor')) ?? 'shadow'));   // (the shadow alone by default)
   const [panelCollapsed, setPanelCollapsedState] = useState(store.get('panel') === '1');
   const [bgMode, setBgModeState] = useState(false), [bgOpen, setBgOpen] = useState(false), [bgTouched, setBgTouched] = useState(false);
+  // the Animations drawer, and the animation playing (until stopped; a one-shot then goes back to the pose)
+  const [animMode, setAnimModeState] = useState(false), [anim, setAnim] = useState<{clip: number, loop: boolean, ticks: number, name: string, group: string, fx?: AnimItem['fx'],
+    parts?: AnimItem['parts'], props?: AnimItem['props'], actors?: AnimItem['actors'], part: number, key: number} | null>(null);
+  // (what the animation playing holds, a stable reference while it plays: the look's parts follow it)
+  const animProps = anim && anim.group !== 'Combat' && anim.props?.length ? anim.props : null;
+  const animKeys = useRef(0);
+  // (the framing asked for before an animation with a figure ahead pulled the view back)
+  const wideFrom = useRef<{dist: number, target: number} | null>(null);
+  // (when the animation asked for began to play: its clip fetched and on the character; until then its tile spins)
+  const [animRun, setAnimRun] = useState<{anim: {key: number}, t0: number} | null>(null);
+  const [animTab, setAnimTab] = useState<AnimTab>('emotes');
+  const [animRepeat, setAnimRepeat] = useState(false), [animPause, setAnimPause] = useState(false), [, setAnimListVersion] = useState(0);
   const [designing, setDesigningState] = useState(false), [sharedView, setSharedView] = useState(false);
   const [selected, setSelected] = useState('hair');
   const [currentFrame, setCurrentFrame] = useState<string>('full');
   const [opened, setOpened] = useState(false);
   const [parts, setParts] = useState({loading: false, first: true});
+  const partsReady = useRef<Promise<unknown>>(Promise.resolve());   // (the viewer's last apply of the look's parts: settled once they are drawn)
+  const actorsReady = useRef<Promise<unknown>>(Promise.resolve());   // (an animation's other figures, built)
   const [roomLoading, setRoomLoading] = useState(false);
   const [placeLoad, setPlaceLoad] = useState<{name: string, progress: number | null} | null>(null);
   const [toastMsg, setToastMsg] = useState<{text: string, n: number} | null>(null);
   const [looks, setLooks] = useState<SavedLook[]>(loadLooks);
   const [looksOpen, setLooksOpen] = useState(false), [looksTouched, setLooksTouched] = useState(false), [looksTop, setLooksTop] = useState(0);
-  const [picture, setPicture] = useState<{blob: Blob | null, url: string} | null>(null);
+  const [picture, setPicture] = useState<{blob: Blob | null, url: string} | null>(null), [shareOpen, setShareOpen] = useState(false);
   const [split, setSplit] = useState(Number(store.get('split')) || 0), [cSplit, setCSplit] = useState(Number(store.get('csplit')) || 0);
   const [stageH, setStageH] = useState<string | null>(null);
   const [columnBottom, setColumnBottom] = useState('');
@@ -234,8 +232,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // the name typed for this look in Your looks (null: untouched), and as it was when typing last paused; both go
   // when the look changes
   const [nameDraft, setNameDraft] = useState<string | null>(null), [nameSettled, setNameSettled] = useState<string | null>(null);
-  const live = useRef({} as {nameDraft: string | null, nameSettled: string | null, state: State, showHeld: boolean, backdrop: Backdrop, designing: boolean, sharedView: boolean, selected: string, panelCollapsed: boolean, bgMode: boolean, bgOpen: boolean, looksOpen: boolean, active: boolean, opened: boolean, roomLoading: boolean, parts: {loading: boolean, first: boolean}, currentFrame: string, split: number, looks: SavedLook[], floor: Floor});
-  Object.assign(live.current, {nameDraft, nameSettled, state, showHeld, backdrop, designing, sharedView, selected, panelCollapsed, bgMode, bgOpen, looksOpen, active, opened, roomLoading, parts, currentFrame, split, looks, floor});
+  const live = useRef({} as {nameDraft: string | null, nameSettled: string | null, state: State, showHeld: boolean, backdrop: Backdrop, designing: boolean, sharedView: boolean, selected: string, panelCollapsed: boolean, bgMode: boolean, animMode: boolean, bgOpen: boolean, looksOpen: boolean, active: boolean, opened: boolean, roomLoading: boolean, parts: {loading: boolean, first: boolean}, currentFrame: string, split: number, looks: SavedLook[], floor: Floor});
+  Object.assign(live.current, {nameDraft, nameSettled, state, showHeld, backdrop, designing, sharedView, selected, panelCollapsed, bgMode, animMode, bgOpen, looksOpen, active, opened, roomLoading, parts, currentFrame, split, looks, floor});
 
   const els = {
     main: useRef<HTMLElement>(null), viewer: useRef<HTMLElement>(null), canvas: useRef<HTMLCanvasElement>(null), right: useRef<HTMLElement>(null),
@@ -252,6 +250,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       e.creatorPreview = new Preview(els.cCanvas.current!, {fov: 18, floor: true});
       e.creatorPreview.running = false; e.creatorPreview.setFloor(live.current.floor);
       e.creatorPreview.setDesigning(true);   // (the designer's own view: never a shadow on the face)
+      e.creatorPreview.setMasks(pack.masks);   // (the fists' guard, Weapons out there, is two clips as the page's)
       attachTurning(els.cCanvas.current!, e.creatorPreview);
     }
     return e.creatorPreview;
@@ -280,9 +279,22 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // ---- the drawer's three modes (phones: Character, Equipment, Settings; one on at a time) ----
   const setPanelCollapsed = (on: boolean) => {
     if (on && live.current.bgMode) setBgMode(false);
+    if (on && live.current.animMode) setAnimMode(false);
     live.current.panelCollapsed = on; setPanelCollapsedState(on); store.set('panel', on ? '1' : '0');
   };
-  function setBgMode(on: boolean) { if (live.current.bgMode === on) return; live.current.bgMode = on; setBgModeState(on); setBgOpen(on); }
+  function setBgMode(on: boolean) { if (live.current.bgMode === on) return; if (on) setAnimMode(false); live.current.bgMode = on; setBgModeState(on); setBgOpen(on); }
+  function setAnimMode(on: boolean) {
+    if (live.current.animMode === on) return; if (on) setBgMode(false); live.current.animMode = on; setAnimModeState(on);
+    if (on) void loadAnimations()?.then(() => setAnimListVersion(v => v + 1));
+  }
+  // (the equipment or the designer opened mid-animation stops it; the drawer folded away by its own button, or
+  // Escape, leaves it playing)
+  const stopAnimation = () => { setAnim(null); setAnimPause(false); };
+  const toggleAnimMode = () => {
+    if (live.current.animMode) { setAnimMode(false); return; }
+    if (live.current.designing) leaveDesigner();
+    setPanelCollapsed(false); setAnimMode(true);
+  };
   const toggleBgMode = () => {
     if (live.current.bgMode) { setBgMode(false); setPanelCollapsed(true); return; }
     if (live.current.designing) leaveDesigner();
@@ -347,12 +359,13 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     closeCreator();
   }
   // the drawer in Character mode (the page opens in it)
-  const openCharacter = () => { setBgMode(false); if (live.current.panelCollapsed) setPanelCollapsed(false); openCreator(); };
+  const openCharacter = () => { setBgMode(false); setAnimMode(false); stopAnimation(); if (live.current.panelCollapsed) setPanelCollapsed(false); openCreator(); };
   const modeClick = (designingBtn: boolean) => {
     // (Character with no drawer brings the page's back first: the view and its column sit above the designer's)
     if (designingBtn) { if (!live.current.designing) openCharacter(); else { closeCreator(); setPanelCollapsed(true); } }
     else if (live.current.designing) { leaveDesigner(); setPanelCollapsed(false); }
     else if (live.current.bgMode) setBgMode(false);
+    else if (live.current.animMode) { setAnimMode(false); stopAnimation(); }
     else setPanelCollapsed(!live.current.panelCollapsed);
   };
 
@@ -395,7 +408,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       // (a combat cape: the faction's variant, or any)
       const variant = factionOf(m.item) === 'combat' ? (rs.faction === 'all' ? Math.floor(Math.random() * m.item.variants.length) : Math.max(0, m.item.variants.findIndex((v: any) => v.grade === rs.faction))) : m.variant;
       const v = m.item.variants[variant];
-      equip[slot] = {item: m.item.id, variant, colour: rs.dyes && v?.colourable && takesDye(m.item) ? pick(pack.dyes as any[]).id : null};
+      equip[slot] = {item: m.item.id, variant, colour: rs.dyes && v?.colourable && takesDye(m.item) ? pick(dyesFor(pack, m.item)).id : null};
     }
     if (equip.weapon && equip.shield && (twoHanded(equip.weapon) || Math.random() < 0.5)) delete equip.shield;
     model.state.equip = equip; edited();
@@ -467,8 +480,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       }).then(() => { if (!gone && live.current.backdrop === opening) show(); });
       model.touch();
       // (the page opens on the equipment, as it is first drawn: the designer is a tap away)
-      // (the picture: a three-quarter turn of the whole figure, the shield side away, so a shield never hides the outfit)
-      if (PICTURE) { viewer.yaw = -0.45; viewer.yawVel = 0; viewer.frameTo({dist: FRAMES.full.dist * 0.74, target: FRAMES.full.target * 0.96}, true); }
+      if (PICTURE) { viewer.yaw = PICTURE_YAW; viewer.yawVel = 0; viewer.frameTo(PICTURE_FRAMING, true); }
       forceRender(n => n + 1);
     })();
     return () => {
@@ -483,7 +495,12 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // ---- the look, drawn: the parts, the wardrobe, the address, the pose and the effect ----
   useEffect(() => {
     const e = engine.current; if (!e) return;
-    const st = model.state, partsNow = compose(pack, index, st);
+    const st = model.state, look = compose(pack, index, st);
+    // (an animation that holds something: its props in the weapons' place while it plays)
+    const holding = animProps && !designing ? propParts(animProps) : [];
+    // (the weapons stay in the look: the viewer swaps them for the props on the animation's first frame, not before)
+    const partsNow = holding.length ? [...look, ...holding] : look;
+    e.viewer.propClips = holding.length && anim ? new Set(anim.parts?.map(p => p.clip) ?? [anim.clip]) : null;
     // (an item another covers stays marked in its row: no toast. The rows, and their pictures, are drawn only where
     // they show: never for a picture, and not under the designer, which hides the wardrobe; they draw as it closes)
     e.wardrobe.hidden = hiddenItems(pack, index, st);
@@ -493,7 +510,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     if (!model.holdUndo) store.set('look', code);   // (a design is saved on Done)
     // designing: the body alone (nothing worn, nothing held)
     const designParts = designing ? compose(pack, index, {...st, equip: {}}) : partsNow;
-    void e.viewer.apply(sharedView ? designParts : partsNow);
+    partsReady.current = e.viewer.apply(sharedView ? designParts : partsNow);
     // worn-item effects: the torso appearance against the pack's worn-effect lists
     const torso = st.equip.torso ? index.items.get(st.equip.torso.item) : null;
     const wornId = torso?.variants[st.equip.torso!.variant]?.[st.gender]?.worn;
@@ -501,24 +518,86 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     setFx(effects);
     void e.viewer.setEffects(showEffects ? effects : []);
     if (designing) { warmStyles(); if (!sharedView) void creatorReady.current?.then(() => e.creatorPreview?.apply(designParts)); }
-  }, [model.version, designing, sharedView, showEffects]);
+  }, [model.version, designing, sharedView, showEffects, animProps]);
+  // an animation's other figures (a rod, a rift, a snowball to throw), built as it is picked and drawn from its first
+  // frame on (the clip waits for them, as it does for what it holds)
+  const animActors = anim && !designing && anim.actors?.length ? anim.actors : null;
+  useEffect(() => {
+    const v = engine.current?.viewer; if (!v) return;
+    actorsReady.current = v.setAnimActors(animActors ? animActors.map(a => ({...a, parts: propParts(a.parts)})) : null, anim ? anim.parts?.map(p => p.clip) ?? [anim.clip] : []);
+  }, [animActors]);
   // the pose: weapons out (the worn weapon's combat-ready stance; with no weapon, a shield alone too, fists up as the
   // game does), or away. A link's picture of a look with nothing in hand stays at rest.
   const armed = !!(state.equip.weapon || state.equip.shield);
-  const fighting = showHeld && (armed || !PICTURE);
+  const fighting = showHeld && (armed || !PICTURE || picturePose === true);
   useEffect(() => {
     const e = engine.current; if (!e) return;
-    const plain = designing && sharedView;   // designing: nothing held, the resting pose
-    e.viewer.showHeld = showHeld && !plain;
+    const plain = designing && sharedView;   // designing: nothing held; at rest, or Weapons out the fists' guard
     // (a stance is two clips where the pack says so: the shared lower body and the weapon's own upper body, the
     // fists' guard the same way)
     const weapon = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item) : null;
-    const [lower, upper]: [number | null, number | null] = weapon ? [weapon.stance ?? DEFAULT_STANCE, weapon.stanceUpper ?? null]
-      : pack.unarmedLower != null && pack.masks ? [pack.unarmedLower, UNARMED] : [UNARMED, null];
-    const [clip, top] = fighting && !plain && lower != null ? [lower, upper] : [RELAXED, null];
-    if (e.viewer.clipId !== clip || e.viewer.upperId !== top) void e.viewer.setClip(clip, top);
-    if (designing && !sharedView && e.creatorPreview) { const c = e.creatorPreview; c.showHeld = false; void creatorReady.current?.then(() => { if (c.clipId !== RELAXED) void c.setClip(RELAXED); }); }
-  }, [model.version, showHeld, designing, sharedView]);
+    const fists: [number | null, number | null] = pack.unarmedLower != null && pack.masks ? [pack.unarmedLower, UNARMED] : [UNARMED, null];
+    const [lower, upper]: [number | null, number | null] = weapon ? [weapon.stance ?? DEFAULT_STANCE, weapon.stanceUpper ?? null] : fists;
+    const playing = anim && !plain ? anim : null;
+    const guard = showHeld && fists[0] != null ? fists : [RELAXED, null];
+    const [clip, top] = playing ? [playing.parts?.[playing.part]?.clip ?? playing.clip, null] : plain ? guard : fighting && lower != null ? [lower, upper] : [RELAXED, null];
+    // (the pose and the held items switch on one frame, once the clips are in; the stance of what is worn is fetched
+    // ahead, so taking weapons out does not wait for it)
+    // (weapons are put away while an animation plays, but for a combat one: you would not clap with a sword in hand)
+    const held = showHeld && !plain && (!playing || playing.group === 'Combat');
+    if (playing ? e.viewer.clipId !== clip || animStarted.current !== playing : e.viewer.clipId !== clip || e.viewer.upperId !== top || e.viewer.showHeld !== held) {
+      animStarted.current = playing;
+      // (an animation holding something, or with figures of its own: its first clip starts once they are built, so
+      // they never show on the pose before it)
+      const first = !!playing && playing.part === 0 && !!(playing.props?.length || playing.actors?.length);
+      const start = () => e.viewer.setClip(clip, top, held, !!playing, !(playing && playing.part > 0));
+      poseReady.current = first ? Promise.all([partsReady.current, actorsReady.current]).then(() => animStarted.current === playing ? start() : undefined) : start();
+      // (in: its tile's progress starts; a clip that could not be fetched: the tile stops loading and says so)
+      if (playing) poseReady.current.then(() => { if (animStarted.current === playing && e.viewer.clipId === clip) setAnimRun({anim: playing, t0: performance.now()}); },
+        () => { if (animStarted.current === playing) { setAnim(a => a === playing ? null : a); toast(`Couldn’t load ${playing.name}. Please try again`); } });
+    }
+    e.viewer.prefetchClips([lower, upper]);
+    if (designing && !sharedView && e.creatorPreview) { const c = e.creatorPreview; c.showHeld = false; void creatorReady.current?.then(() => { if (c.clipId !== guard[0] || c.upperId !== guard[1]) void c.setClip(guard[0]!, guard[1], false); }); }
+  }, [model.version, showHeld, designing, sharedView, anim, animPause]);
+  const animStarted = useRef<typeof anim>(null), poseReady = useRef<Promise<unknown>>(Promise.resolve());
+  // the fighting moves the drawer offers: in the combat-ready pose only, the weapon's own (with none, the fists')
+  const heldWeapon = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item) : null;
+  const combatMoves: AnimItem[] = fighting && !designing ? ((heldWeapon ? heldWeapon.moves : pack.unarmedMoves) ?? []).map((m: any) => ({...m, group: 'Combat'})) : [];
+  // a one-shot animation plays once (the game's 600 ticks a second), then the pose it interrupted comes back; Repeat
+  // plays it again and again; Pause at end keeps its last frame until stopped
+  // (counted on the animations' own clock from when it began to play: a clip still on its way plays whole, and a
+  // pause holds it)
+  // A three-piece animation goes on to its next part as one ends (to the first again on Repeat).
+  useEffect(() => {
+    const v = engine.current?.viewer;
+    if (!v || !anim || anim.loop || animPause || !anim.ticks || animRun?.anim !== anim || (animRepeat && !anim.parts)) return;
+    const last = !anim.parts || anim.part >= anim.parts.length - 1;
+    const ticks = anim.parts ? anim.parts[anim.part].ticks ?? 0 : anim.ticks;
+    const t = setTimeout(() => setAnim(a => a !== anim ? a : !last ? {...a, part: a.part + 1} : animRepeat ? {...a, part: 0, key: ++animKeys.current} : null),
+      Math.max(0, ticks / 0.6 + (last ? 50 : 0) - v.clipElapsed()));
+    return () => clearTimeout(t);
+  }, [anim, animRun, animRepeat, animPause]);
+  // the animation's particle effects, once it plays (its clip in), the body type's own where the game has one for each
+  // (a three-piece animation's effect starts with its first part and runs on through the others)
+  useEffect(() => {
+    const v = engine.current?.viewer; if (!v) return;
+    if (anim && anim.part > 0) return;
+    const on = !!anim && animRun?.anim === anim;
+    const fx = on ? (anim!.fx ?? []).filter(f => !f.gender || f.gender === state.gender) : null;
+    void v.setAnimEffects(fx, !anim?.parts && (animRepeat || !!anim?.loop));
+    // (a figure standing well ahead, the rift: seen from the side, not between the view and the character, and from
+    // far enough back for both; the framing asked for before it comes back after)
+    const ahead = on && anim!.actors?.some(a => Math.abs(a.at?.[1] ?? 0) > 500);
+    if (ahead && !wideFrom.current) {
+      wideFrom.current = {...v.want};
+      if (Math.abs(v.yaw) < 0.6) v.turnTo(-1.1);
+      v.frameTo({dist: FRAMES.full.dist * 1.9, target: FRAMES.full.target});
+    } else if (!ahead && wideFrom.current && (!anim || anim.part === 0)) { v.frameTo(wideFrom.current); wideFrom.current = null; }
+  }, [anim, animRun, animRepeat, state.gender]);
+  // Pause: everything stands still where it is (the resting idle too: a way to freeze the character), until it is
+  // let go, an animation is picked, or the equipment or the designer opens (folding the drawer keeps it)
+  useEffect(() => { const v = engine.current?.viewer; if (v) v.paused = animPause; }, [animPause]);
+  // (folding the drawer keeps a pause: the character stays frozen where it was; stopping the animation lets go)
   useEffect(() => { if (designing) frameCreator(); }, [selected]);
 
   // Parts load when first shown. So stepping through styles never waits, the designer loads every style of the
@@ -625,8 +704,10 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // typing asks for no link; a Share press takes the name as typed.
   const wearing = (settled = false): Shared => {
     const code = encode(model.state), typed = (settled ? live.current.nameSettled : live.current.nameDraft)?.trim();
-    return {code, place: live.current.backdrop.room ? live.current.backdrop.id : null, name: typed || live.current.looks.find(l => l.code === code)?.name || null};
+    return {code: posed(code), place: live.current.backdrop.room ? live.current.backdrop.id : null, name: typed || live.current.looks.find(l => l.code === code)?.name || null};
   };
+  /** A code as shared: with the pose the page shows (weapons out or at rest), which its link opens in and its picture shows. */
+  const posed = (code: string) => withPose(code, live.current.showHeld && !live.current.designing);
   const lookName = (st: State) => {
     const pick = (['torso', 'head', 'cape', 'weapon'] as EquipSlot[]).map(s => st.equip[s] && (index.items.get(st.equip[s]!.item) as any)?.name).filter(Boolean);
     // (within the name field's 48 characters: the first two items' names, the first alone when both are long)
@@ -648,35 +729,38 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // it hangs from its button, whatever the bar's height (phones' is taller)
   const placeLooks = () => { const b = els.share.current; if (b) setLooksTop(b.getBoundingClientRect().bottom + 6); };
   const closeLooks = () => setLooksOpen(false);
-  // Every share from a button goes through here (the link field has its own Copy): the look's short link, waited
-  // for, never its long address on the site (a development server, with no link service, has only that); a
-  // phone's share sheet, or a desktop's clipboard with the bubble where the button is. None to be had: said so.
-  const shareLook = async (l: Shared, from?: HTMLElement | null) => {
-    const url = (await askShort(l)) ?? (DEV ? lookUrl(l) : null);
-    if (!url) { bubble(from, 'Could not make a link just now. Please try again'); return; }
-    if (navigator.share && touch) { try { await navigator.share({title: l.name || 'My Brighter Shores look', url}); return; } catch (e: any) { if (e?.name === 'AbortError') return; } }
-    await copyLink(url, from);
-  };
-  // the toolbar's Share: the looks open (as their button opens them, the link in its field there) and the look is
-  // shared at once
-  const shareNow = async (from: HTMLElement) => { setLooksTouched(true); setLooksOpen(true); await shareLook(wearing(), from); };
   const wearLook = (l: SavedLook) => {
     const st = decode(l.code); if (!st) return;
     model.set(st);
     const pl = BACKDROPS.find(b => b.room && b.id === placeId(l.place)); if (pl && pl !== live.current.backdrop) setBackdrop(pl, false);
   };
 
-  // ---- the picture ----
-  const takePicture = () => {
-    const shot = new Image();
-    const b = live.current.backdrop;
-    shot.onload = async () => {
-      const blob = await pictureOf(shot, b)(true);   // (always with the site's mark)
-      setPicture({blob, url: blob ? URL.createObjectURL(blob) : ''});
-    };
-    shot.src = (!live.current.designing ? engine.current!.viewer : designView()).snapshot(1080);
-  };
-  const closePicture = () => setPicture(p => { if (p?.url) URL.revokeObjectURL(p.url); return null; });
+  // ---- the toolbar's Share: the look's link and its preview picture as the link shows it (the same pose, view and
+  // corner mark), drawn here at twice its size; the pose can be switched there (it is the page's Weapons out) ----
+  // (Share takes the character as it stands: whatever plays is frozen where it is, the view as it is, until the sheet
+  // closes; posed with the Pause, then shared)
+  const pausedBefore = useRef(false);
+  const openShare = () => { pausedBefore.current = animPause; setAnimPause(true); setShareOpen(true); };
+  const closePicture = () => { setShareOpen(false); setAnimPause(pausedBefore.current); setPicture(p => { if (p?.url) URL.revokeObjectURL(p.url); return null; }); };
+  useEffect(() => {
+    if (!shareOpen) return;
+    let gone = false;
+    setPicture(p => { if (p?.url) URL.revokeObjectURL(p.url); return null; });
+    void (async () => {
+      // (once the look's parts and its pose are in: a look just put on, a saved one shared from the list, waits for
+      // its parts; whatever was asked for last, should a newer ask overtake one)
+      for (const ready of [partsReady, poseReady]) for (let p = ready.current; ; p = ready.current) { await p.catch(() => {}); if (gone || p === ready.current) break; }
+      while (!gone && engine.current?.viewer.loadingParts) await new Promise(r => setTimeout(r, 100));
+      const e = engine.current; if (gone || !e) return;
+      const k = 2, [w, h] = [PICTURE_SIZE[0] * k, PICTURE_SIZE[1] * k];
+      const v = e.viewer, shot = new Image(); shot.src = v.picture(w, h, {...v.want}, v.yaw); await shot.decode().catch(() => {});
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const g = c.getContext('2d')!; paintBackdrop(g, BACKDROPS[0], w, h); g.drawImage(shot, 0, 0); await pictureMark(g, w, h, k);
+      const blob = await new Promise<Blob | null>(res => c.toBlob(res, 'image/png'));
+      if (!gone) setPicture({blob, url: blob ? URL.createObjectURL(blob) : ''});
+    })();
+    return () => { gone = true; };
+  }, [shareOpen, model.version]);
 
   // ---- keys and the address ----
   useEffect(() => {
@@ -705,6 +789,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         const w = engine.current?.wardrobe;
         if (live.current.looksOpen) { closeLooks(); els.share.current?.focus(); }
         else if (live.current.bgMode) setBgMode(false);
+        else if (live.current.animMode) setAnimMode(false);
         else if (live.current.bgOpen) setBgOpen(false);
         else if (w?.root.classList.contains('adjusting')) w.setAdjusting(false, true);
       }
@@ -717,6 +802,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       const {code, place} = addressLook(), s = decode(code);
       const pl = BACKDROPS.find(b => b.room && b.id === place); if (pl && pl !== live.current.backdrop) setBackdrop(pl, false);
       if (s && encode(s) !== encode(model.state)) model.set(s);
+      const pose = lookPose(code); if (pose != null) setShowHeld(pose);
     };
     const onDocClick = (e: MouseEvent) => {
       const t = e.target as Node;
@@ -753,7 +839,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // ---- drawing ----
   const isPhone = phone();
   const designingShared = designing && sharedView, controlsInStage = designing && !sharedView;
-  const equipOn = !designing && !panelCollapsed && !bgMode;
+  const equipOn = !designing && !panelCollapsed && !bgMode && !animMode;
   const viewerHeight = isPhone && !panelCollapsed && split ? `${(Math.max(0.22, Math.min(0.72, split)) * 100).toFixed(3)}%` : undefined;
   const verb = panelCollapsed ? 'Show' : 'Hide';
   const shareField = (l: Shared) => <ShareField key={shortKey(l)} look={l} />;
@@ -831,34 +917,35 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       <button className={`btn of-pose of-mode-btn${designing ? ' active' : ''}`} aria-pressed={designing} title="Design your character: face, body and hair" aria-label="Character" onClick={() => modeClick(true)}><Icon name="mask" /></button>
       <button className={`btn of-pose of-mode-btn${equipOn ? ' active' : ''}`} aria-pressed={equipOn} title="Equipment: what your character wears" aria-label="Equipment" onClick={() => modeClick(false)}><Icon name="torso" /></button>
       <button className={`btn of-pose of-fx${showEffects ? ' active' : ''}`} hidden={!fx.length} title="Show or hide the particle effect this outfit gives off" aria-label="Effect" aria-pressed={showEffects}
-        onClick={() => { const on = !showEffects; setShowEffects(on); store.set('fx', on ? '1' : '0'); }}><span className="fx-glyph" aria-hidden="true">✦</span></button>
-      <button className={`btn of-pose${fighting && !designing ? ' active' : ''}`} hidden={!armed && UNARMED == null} aria-label="Weapons out" aria-pressed={fighting && !designing}
-        title={designing ? 'Weapons out: leaves the designer for your equipment, in the combat-ready stance' : !state.equip.weapon ? (showHeld ? 'Fists up, in the combat-ready stance, as the game does with no weapon. Click to stand at rest' : 'At rest. Click to put your fists up, in the combat-ready stance, as the game does with no weapon')
+        onClick={() => { const on = !showEffects; setShowEffects(on); store.set('fx', on ? '1' : '0'); }}><span className="fx-glyph" aria-hidden="true"><Icon name="sparkles" /></span></button>
+      <button className={`btn of-pose${fighting ? ' active' : ''}`} hidden={(designing || !armed) && UNARMED == null} aria-label="Weapons out" aria-pressed={fighting}
+        title={designing || !state.equip.weapon ? (showHeld ? 'Fists up, in the combat-ready stance, as the game does with no weapon. Click to stand at rest' : 'At rest. Click to put your fists up, in the combat-ready stance, as the game does with no weapon')
           : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance'}
-        onClick={() => {
-          // (from the designer: to the equipment, weapons out, as the Equipment button goes there)
-          if (live.current.designing) { modeClick(false); live.current.showHeld = true; setShowHeld(true); }
-          else setShowHeld(h => !h);
-        }}><Icon name="weapon" /></button>
-      <div className="of-bg">
-        <button ref={els.bgBtn} className={`btn of-bgbtn${bgMode ? ' active' : ''}`} aria-haspopup="menu" aria-label="Settings" title="Settings: background, ground, the random outfit and rendering"
-          aria-expanded={bgTouched && !isPhone ? bgOpen : undefined} aria-pressed={isPhone ? bgMode : undefined}
-          onClick={e => {
-            e.stopPropagation();
-            if (phone()) { toggleBgMode(); return; }   // (phones: the drawer's third mode)
-            setBgTouched(true); setBgOpen(o => !o);
-          }}><Icon name="gear" /></button>
-        {!bgMode && bgPop}
-      </div>
+        onClick={() => setShowHeld(h => !h)}><Icon name="sword" /></button>
+      <button className={`btn of-pose of-anim-btn${animMode ? ' active' : ''}`} hidden={!pack.animationCount} aria-pressed={animMode} aria-label="Animations"
+        title="Animations: play the game's emotes and other animations on your character" onClick={toggleAnimMode}><Icon name="wave" /></button>
+    </div>
+  );
+  // the settings: on the view's toolbar, right of redo (phones: the drawer's settings mode; wider screens: a menu below it)
+  const settingsButton = (
+    <div className="of-bg of-bg-top">
+      <button ref={els.bgBtn} className={`btn-mini of-icon of-bgbtn${bgMode ? ' active' : ''}`} aria-haspopup="menu" aria-label="Settings" title="Settings: background, ground, the random outfit and rendering"
+        aria-expanded={bgTouched && !isPhone ? bgOpen : undefined} aria-pressed={isPhone ? bgMode : undefined}
+        onClick={e => {
+          e.stopPropagation();
+          if (phone()) { toggleBgMode(); return; }   // (phones: one of the drawer's modes)
+          setBgTouched(true); setBgOpen(o => !o);
+        }}><Icon name="gear" /></button>
+      {!bgMode && bgPop}
     </div>
   );
   useEffect(() => { if (bgOpen && !bgMode) (els.bgPop.current?.querySelector('button.on') as HTMLElement ?? els.bgPop.current?.querySelector('button'))?.focus(); }, [bgOpen]);
   useEffect(() => { if (looksOpen) placeLooks(); }, [looksOpen]);
   useEffect(() => { if (designing) (els.creator.current?.querySelector('.creator-actions .btn-cta') as HTMLElement)?.focus({preventScroll: true}); }, [designing]);
-  const now = wearing(), nowSettled = wearing(true), current = looks.find(l => l.code === now.code);
+  const now = wearing(), nowSettled = wearing(true), current = looks.find(l => l.code === encode(state));
 
   return (
-    <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ' designing' : ''}${designingShared ? ' designing-shared' : ''}`}>
+    <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${animMode ? ' anim-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ' designing' : ''}${designingShared ? ' designing-shared' : ''}`}>
       <main ref={els.main} onScroll={e => { const m = e.currentTarget; if (m.scrollTop) m.scrollTop = 0; }}>
         <section ref={els.viewer} className="of-viewer" style={{background: cssOf(backdrop), height: viewerHeight}} data-loading={parts.loading ? '1' : ''}>
           <canvas ref={els.canvas} className={opened ? undefined : 'wait'} tabIndex={0} aria-label="Your character. Drag to turn, scroll or pinch to zoom, arrow keys turn."
@@ -871,19 +958,19 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
             <svg viewBox="0 0 44 44" aria-hidden="true"><circle className="pl-track" cx="22" cy="22" r="19" /><circle className="pl-fill" cx="22" cy="22" r="19" style={placeShown && placeLoad!.progress != null ? {strokeDashoffset: String(119.4 * (1 - placeLoad!.progress))} : undefined} /></svg>
           </div>
           {/* the one way into face and body (Male/Female and a random look are there, in Body) */}
-          <div className="of-charcard"><button className="btn of-design" aria-label="Character: face, body and hair" title="Design your character: face, body and hair" onClick={() => openCreator()}><Icon name="mask" />Character</button></div>
+          <div className="of-charcard"><button className="btn of-design" aria-label="Character: face, body and hair" title="Design your character: face, body and hair" onClick={() => openCreator()}><Icon name="person" />Character</button></div>
           <div id="toast" role="status" aria-live="polite" className={toastMsg && toastMsg.n > 0 ? 'show' : undefined}>{toastMsg?.text}</div>
           {PICTURE && <div className="of-picmark"><img src="/brand/mark.svg" alt="" /><span><b className="brand-name">Brighter</b> Fashion</span></div>}
           {/* the view's own toolbar, along its top on the right: undo, redo, the picture, the looks */}
           <div id="of-toolbar" className="of-toolbar">
             <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>
             <button id="redo" className="btn-mini of-icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={designing || !model.future.length} onClick={() => model.redo()}><Ic d="M15 7h5V2M20 7a9 9 0 1 0 1.5 9" /></button>
-            <button id="shot" className={`btn-mini of-icon-sm${picture ? ' active' : ''}`} aria-pressed={!!picture} title="Save the view as a picture" aria-label="Save picture" onClick={takePicture}><Ic><path d="M4 7h3l2-3h6l2 3h3v13H4z" /><circle cx="12" cy="13" r="4" /></Ic><span>Save picture</span></button>
+            {settingsButton}
             <button ref={els.share} id="share" className={`btn-mini of-share${looksOpen ? ' active' : ''}`} aria-pressed={looksOpen} title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog" aria-expanded={looksTouched ? looksOpen : undefined}
               onClick={e => { e.stopPropagation(); setLooksTouched(true); setLooksOpen(o => !o); }}><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
             {/* (the one primary button, at the far right: sharing a look is what the page leads to) */}
-            <button id="share-now" className="btn-mini of-icon-sm of-primary" title="Share this look: a link to it, with its picture where it is posted" aria-label="Share"
-              onClick={e => { e.stopPropagation(); void shareNow(e.currentTarget); }}><Icon name="share" /><span>Share</span></button>
+            <button id="share-now" className={`btn-mini of-icon-sm of-primary${shareOpen ? ' active' : ''}`} title="Share this look: its picture, and a link to it that shows the picture where it is posted" aria-label="Share"
+              aria-haspopup="dialog" aria-pressed={shareOpen} onClick={e => { e.stopPropagation(); closeLooks(); openShare(); }}><Icon name="share" /><span>Share</span></button>
           </div>
           {/* (last: over the toast and the toolbar, where the designer's coming and going has always left it) */}
           {!controlsInStage && controls}
@@ -903,6 +990,10 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           </div>
           {/* (the wardrobe's own section follows, wardrobe.ts; phones in Settings mode: the settings menu after it) */}
           {bgMode && <BgSlot>{bgPop}</BgSlot>}
+          {animMode && <AnimationsPanel gender={state.gender} tab={animTab} setTab={setAnimTab} playing={anim} started={!!anim && animRun?.anim.key === anim.key}
+            moves={combatMoves} fighting={fighting && !designing} weapon={heldWeapon?.name ?? null} armed={!!state.equip.weapon} takeOut={() => { live.current.showHeld = true; setShowHeld(true); }}
+            repeat={animRepeat} setRepeat={setAnimRepeat} pause={animPause} setPause={setAnimPause}
+            play={(a: AnimItem) => { setAnimPause(false); setAnim(anim && anim.clip === a.clip ? null : {clip: a.clip, loop: !!a.loop, ticks: a.ticks ?? 0, name: a.name, group: a.group, fx: a.fx, parts: a.parts, props: a.props, actors: a.actors, part: 0, key: ++animKeys.current}); }} />}
         </aside>
       </main>
       <div className="of-rotate" role="alert"><Ic><rect x="7" y="2" width="10" height="20" rx="2" /><path d="M11 18h2" /></Ic><b>Turn your phone upright</b><span>Brighter Fashion is made for holding your phone this way up.</span></div>
@@ -939,7 +1030,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         <div className="lk-top"><b>Your looks</b>
           <button type="button" className="btn-mini of-icon lk-close" aria-label="Close your looks" title="Close" onClick={() => { closeLooks(); els.share.current?.focus(); }}><Icon name="x" /></button></div>
         {looksOpen && <Looks now={now} nowSettled={nowSettled} current={current} looks={looks} name={nameDraft ?? current?.name ?? lookName(state)} setName={setNameDraft} shareField={shareField}
-          share={(l, from) => void shareLook(l, from)} wear={wearLook} remove={l => saveLooks(looks.filter(x => x !== l))}
+          share={l => { wearLook(l); closeLooks(); openShare(); }} wear={wearLook} remove={l => saveLooks(looks.filter(x => x !== l))}
           save={async (label, place) => {
             const thumb = await lookThumb(), name = label.trim() || lookName(model.state), code = encode(model.state);
             const cur = live.current.looks.find(l => l.code === code);
@@ -947,13 +1038,96 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           }} />}
       </div>
       {bubbleAt && <CopiedBubble key={bubbleAt.n} at={bubbleAt} gone={() => setBubbleAt(null)} />}
-      {picture && <PictureSheet picture={picture} close={closePicture} shareField={shareField(nowSettled)} />}
+      {shareOpen && <PictureSheet picture={picture} close={closePicture} shareField={shareField(nowSettled)} />}
     </div>
   );
 }
 
 /** The drawer's Settings mode (phones): the settings menu (background, ground, random outfit), in the wardrobe's place after it. */
 function BgSlot({children}: {children: ReactNode}) { return <>{children}</>; }
+
+/** One animation the drawer offers (the pack's: an emote or another of the player's named clips). */
+interface AnimItem { clip: number; name: string; group: string; loop?: boolean; ticks?: number; gender?: 'male' | 'female'; emote?: boolean; icon?: number; iconRotated?: boolean;
+  /** A three-piece animation's parts (intro, loop and, where it has one, outro), played in turn; `clip` is the first. */
+  parts?: {clip: number; ticks?: number}[];
+  /** An attack's aim: the angle the game plays it at (degrees above the level, below when negative). */
+  aim?: number;
+  /** Its particle effects: the systems its controller names, where a loop clip starts in its controller, and the body type where there is one for each. */
+  fx?: {system: number; offset?: number; gender?: 'male' | 'female'}[];
+  /** What it holds while it plays (a tool, a book, a snowball): parts on the player's rig, in the weapons' place. */
+  props?: any[];
+  /** Its other figures (a rod, a rift, a snowball in flight): parts on a rig of their own (render.ts AnimActor). */
+  actors?: {skel: number; parts: any[]; clips: (number | null)[]; at?: number[] | null; fx?: number[]; thrown?: {release: number; flight: number; distance: number}}[] }
+type AnimTab = 'emotes' | 'combat' | 'more';
+// a tile's picture where the game has none: the kind's own icon (the defeat its own)
+const KIND_ICON: Record<string, string> = {Everyday: 'person', Professions: 'hammer', Magic: 'sparkles', Combat: 'swords'};
+/** The Animations drawer: three tabs (the game's emotes, the moves of the pose and weapon, the rest by kind), every
+ *  animation a tile; a tap plays it, a tap on the one playing stops it; Repeat and Pause beside the title. */
+function AnimationsPanel({gender, tab, setTab, playing, started, moves, fighting, weapon, armed, takeOut, repeat, setRepeat, pause, setPause, play}: {gender: string | number, tab: AnimTab, setTab: (t: AnimTab) => void,
+    playing: {clip: number, name: string, loop: boolean} | null, started: boolean, moves: AnimItem[], fighting: boolean, weapon: string | null, armed: boolean, takeOut: () => void,
+    repeat: boolean, setRepeat: (on: boolean) => void, pause: boolean, setPause: (on: boolean) => void, play: (a: AnimItem) => void}) {
+  const g = gender === 1 || gender === 'female' ? 'female' : 'male';
+  const mine = (a: AnimItem) => !a.gender || a.gender === g;
+  // (what the tab's animations hold, fetched as it opens: a tool is in hand from the first frame)
+  useEffect(() => { if (tab === 'more') prefetch(ANIMATIONS.flatMap(a => propParts(a.props))); }, [tab, ANIMATIONS.length]);
+  const all = (ANIMATIONS as AnimItem[]).filter(mine);
+  const emotes = all.filter(a => a.emote);
+  // (the moves of the pose and weapon, then the defeat: it fits every pose)
+  const combat = [...moves.filter(mine), ...all.filter(a => a.group === 'Combat')];
+  const groups = new Map<string, AnimItem[]>();
+  for (const a of all) if (!a.emote && a.group !== 'Combat') { if (!groups.has(a.group)) groups.set(a.group, []); groups.get(a.group)!.push(a); }
+  const secs = (t?: number) => t ? `${(t / 600).toFixed(1)} s` : '';
+  // the one playing: a wheel while its clip is fetched, then its progress across it (the game's 600 ticks a second;
+  // round and round when it repeats, full when it stops on its last frame)
+  const tile = (a: AnimItem) => {
+    const on = playing?.clip === a.clip, run = on && started;
+    return <button key={`${a.clip}/${a.name}`} type="button" className={`of-tile${a.emote ? ' emote' : ''}${a.group === 'Combat' ? ' combat' : ''}${on ? ' on' : ''}${on ? (run ? ' running' : ' loading') : ''}`}
+      aria-pressed={on} aria-busy={on && !started} title={`${a.name}${a.aim != null ? ` · aims ${a.aim ? `${Math.abs(a.aim)}° ${a.aim > 0 ? 'up' : 'down'}` : 'straight ahead'}` : ''} · ${secs(a.ticks)}${on ? ' · tap to stop' : ''}`} onClick={() => play(a)}>
+      {run && a.ticks ? <span key={`${repeat || playing!.loop}`} className="of-anim-bar" aria-hidden="true" style={{animationDuration: `${a.ticks / 0.6}ms`, animationIterationCount: repeat || playing!.loop ? 'infinite' : 1, animationPlayState: pause ? 'paused' : 'running'}} /> : null}
+      {/* (loading: the site's own loading ring in the picture's place) */}
+      {on && !started ? <span className="of-tile-pic of-tile-load" role="progressbar" aria-label={`Loading ${a.name}`}><span className="load-card spin">
+        <svg viewBox="0 0 44 44" aria-hidden="true"><circle className="pl-track" cx="22" cy="22" r="19" /><circle className="pl-fill" cx="22" cy="22" r="19" /></svg></span></span>
+      : a.emote ? (a.icon != null ? <img src={at(`icon/${a.icon}`)} alt="" loading="lazy" className={a.iconRotated ? 'turned' : undefined} /> : <span className="of-tile-pic" />)
+        : <span className="of-tile-pic"><Icon name={a.name === 'Defeated' ? 'skull' : KIND_ICON[a.group] ?? 'wave'} /></span>}
+      <span className="of-tile-name">{a.name}</span>
+    </button>;
+  };
+  const toggle = (on: boolean, set: (on: boolean) => void, icon: string, label: string, title: string) =>
+    <button type="button" className={`btn-mini of-icon of-anims-tog${on ? ' active' : ''}`} aria-pressed={on} aria-label={label} title={title} onClick={() => set(!on)}><Icon name={icon} /></button>;
+  const TABS: [AnimTab, string][] = [['emotes', 'Emotes'], ['combat', 'Combat'], ['more', 'More']];
+  return (
+    <Drawer className="of-anims" label="Animations">
+      {/* (one row: the kinds, then Repeat and Pause) */}
+      <div className="of-anims-head">
+        <div className="of-anims-tabs" role="tablist" aria-label="Kinds of animation">
+          {TABS.map(([k, label]) => <button key={k} type="button" role="tab" id={`anim-tab-${k}`} aria-selected={tab === k} aria-controls="anim-panel" className={tab === k ? 'on' : undefined} onClick={() => setTab(k)}>
+            {label}</button>)}
+        </div>
+        {toggle(repeat, setRepeat, 'repeat', 'Repeat', 'Repeat: play it again and again')}
+        {toggle(pause, setPause, 'hold', 'Pause', pause ? 'Paused: tap to go on' : 'Pause: freeze your character where it is')}
+      </div>
+      <div className="of-anims-list of-drawer-list" id="anim-panel" role="tabpanel" aria-labelledby={`anim-tab-${tab}`}>
+        {!ANIMATIONS.length ? <div className="empty">Loading animations…</div>
+          : tab === 'emotes' ? <div className="of-tiles">{emotes.map(tile)}</div>
+          : tab === 'combat' ? <>
+            <div className="group combat"><span>{fighting ? 'Moves' : 'At rest'}</span><b>{fighting ? weapon ?? 'Fists' : ''}</b></div>
+            <div className="of-tiles">
+              {!fighting && <button type="button" className="of-tile cta" onClick={takeOut}><span className="of-tile-pic"><Icon name="sword" /></span><span className="of-tile-name">{armed ? 'Weapons out' : 'Fists up'}</span></button>}
+              {combat.map(tile)}
+            </div>
+            {!fighting && <p className="of-anims-hint">{armed ? 'Take your weapons out to see their moves.' : 'Put your fists up to see their moves, or try on a weapon for its own.'}</p>}
+          </>
+          : [...groups].map(([k, items]) => <Fragment key={k}><div className="group">{k}</div><div className="of-tiles">{items.map(tile)}</div></Fragment>)}
+      </div>
+    </Drawer>
+  );
+}
+
+/** A drawer of the side panel: the equipment's insets, gap and scrolling list (css `.of-drawer`, `.of-drawer-list`,
+ *  sized by `--drawer-*` on `.fashion`), the same for every drawer, the wardrobe's own included. */
+function Drawer({className, label, children}: {className?: string, label: string, children: ReactNode}) {
+  return <section className={`of-drawer${className ? ` ${className}` : ''}`} aria-label={label}>{children}</section>;
+}
 
 function BgItem({b, on, pick}: {b: Backdrop, on: boolean, pick: () => void}) {
   return <button role="menuitemradio" aria-checked={on} data-bg={b.id} className={on ? 'on' : undefined} onClick={pick}><span className={`of-bgdot${b.room ? ' place' : ''}`} style={{background: swatchOf(b)}} />{b.name}</button>;
@@ -1034,14 +1208,14 @@ function Looks({now, nowSettled, current, looks, name, setName, shareField, shar
     </div>
     <div className="lk-head"><b>{`Saved looks${looks.length ? ` (${looks.length})` : ''}`}</b></div>
     {looks.length ? <div className="lk-list">{looks.map(l => {
-      const on = l.code === now.code;
+      const on = l === current;
       return (
         <div key={l.id} className={`lk-row${on ? ' on' : ''}`}>
           <button className="lk-wear" title={on ? 'Wearing this look' : 'Wear this look'} onClick={() => wear(l)}>
             {l.thumb ? <img src={l.thumb} alt="" /> : <span className="lk-noimg"><Icon name="torso" /></span>}
             <span className="lk-text"><span className="lk-title">{l.name}</span><span className="lk-sub">{on ? 'Wearing' : new Date(l.at).toLocaleDateString()}</span></span>
           </button>
-          <button className="btn-mini of-icon" title="Share a link to this look" aria-label={`Share ${l.name}`} onClick={e => share(l, e.currentTarget)}><Icon name="share" /></button>
+          <button className="btn-mini of-icon" title="Share this look: wears it and opens Share (Undo goes back)" aria-label={`Share ${l.name}`} onClick={e => { e.stopPropagation(); share(l, e.currentTarget); }}><Icon name="share" /></button>
           <button className="btn-mini of-icon" title="Delete this look" aria-label={`Delete ${l.name}`} onClick={() => remove(l)}><Icon name="x" /></button>
         </div>
       );
@@ -1079,7 +1253,7 @@ function DesignerPanel({state, selected, pack, paletteFor, edited, select, rando
 
 // The picture, on a page of its own, with the site's mark: Share link (the look's link, as Looks shares it) is
 // the way to share it; phones save it by pressing and holding the picture, desktops with Download.
-function PictureSheet({picture, close, shareField}: {picture: {blob: Blob | null, url: string}, close: () => void, shareField: ReactNode}) {
+function PictureSheet({picture, close, shareField}: {picture: {blob: Blob | null, url: string} | null, close: () => void, shareField: ReactNode}) {
   const closeBtn = useRef<HTMLButtonElement>(null);
   // (Escape closes it wherever focus is, and focus goes back to what opened it)
   useEffect(() => {
@@ -1090,15 +1264,23 @@ function PictureSheet({picture, close, shareField}: {picture: {blob: Blob | null
     return () => { document.removeEventListener('keydown', onKey, true); opener?.focus?.(); };
   }, []);
   return (
-    <div className="of-picture" role="dialog" aria-modal="true" aria-label="Your picture" onClick={e => { if (e.target === e.currentTarget) close(); }}>
-      <img src={picture.url} alt="Your look" />
-      {touch ? <p>Press and hold the picture to save it to Photos.</p> : null}
-      <div className="pic-share">{shareField}</div>
-      <div className="pic-actions">
-        <button ref={closeBtn} className="btn" onClick={close}>Close</button>
-        {!touch && <button className="btn" disabled={!picture.blob} onClick={() => {
-          const a = document.createElement('a'); a.href = picture.url; a.download = 'brighter-atlas-fashion.png'; document.body.append(a); a.click(); a.remove();
-        }}>Download</button>}
+    <div className="of-picture" role="dialog" aria-modal="true" aria-labelledby="pic-title" onClick={e => { if (e.target === e.currentTarget) close(); }}>
+      <div className="pic-box">
+        <div className="pic-top"><h2 id="pic-title">Share your look</h2>
+          <button type="button" className="btn-mini of-icon pic-x" aria-label="Close" title="Close" onClick={close}><Icon name="x" /></button></div>
+        {/* the character as it stands, frozen where it was when Share was pressed, seen as the view sees it */}
+        <div className="pic-frame">
+          {picture?.url ? <img src={picture.url} alt="Your look, as it stands" /> : <div className="pic-wait" aria-label="Drawing the picture"><span className="share-wheel" /></div>}
+        </div>
+        <p>{touch ? 'Press and hold the picture to save it. The link shows it wherever you post it.' : 'The link shows this picture wherever you post it.'}</p>
+        <div className="pic-share">{shareField}</div>
+        <div className="pic-actions">
+          <button ref={closeBtn} className="btn" onClick={close}>Close</button>
+          {!touch && <button className="btn" disabled={!picture?.blob} onClick={() => {
+            if (!picture) return;
+            const a = document.createElement('a'); a.href = picture.url; a.download = 'brighter-atlas-fashion.png'; document.body.append(a); a.click(); a.remove();
+          }}><Icon name="download" />Download picture</button>}
+        </div>
       </div>
     </div>
   );

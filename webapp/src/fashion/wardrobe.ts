@@ -17,6 +17,7 @@ export const PATHS: Record<string, string> = {
   reset: 'M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5',
   help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.6 9.3a2.5 2.5 0 0 1 4.9.8c0 1.7-2.5 2.1-2.5 3.8M12 17h.01',
   eyeOff: 'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10 10 0 0 1 12 5c5 0 9 4 10 7a11 11 0 0 1-2.6 3.8M6.6 6.6A11 11 0 0 0 2 12c1 3 5 7 10 7a10 10 0 0 0 3.4-.6',
+  wave: 'M8.5 13.5V6.2a1.4 1.4 0 0 1 2.8 0v5.3M11.3 11V4.6a1.4 1.4 0 0 1 2.8 0V11M14.1 11V5.6a1.4 1.4 0 0 1 2.8 0v6.9M16.9 10.2a1.4 1.4 0 0 1 2.8 0v4.3a7 7 0 0 1-7 7h-.9a6.5 6.5 0 0 1-5-2.4l-3-3.7a1.4 1.4 0 0 1 2.1-1.8l2.6 2.3M3.6 7.2a5 5 0 0 1 2.2-3.4M2.2 4.8a8 8 0 0 1 2-2.6',
   gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   turnLeft: 'M14 6l-6 6 6 6',
   turnRight: 'M10 6l6 6-6 6',
@@ -33,6 +34,17 @@ export const PATHS: Record<string, string> = {
   shield: 'M12 3l8 3v6c0 5-4 8-8 9-4-1-8-4-8-9V6z',
   weapon: 'M14.5 17.5L3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2',
   none: 'M5 5l14 14M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
+  // (the Weapons out button's)
+  sword: 'M20 4v3.5L9.5 18 6 14.5 16.5 4zM4.5 12.5l7 7M6.5 17.5 3.5 20.5',
+  hanger: 'M12 7.5a2 2 0 1 1 2-2c0 1-.9 1.4-2 2.2v1.8M12 9.5 3.4 16.3c-.8.6-.3 1.7.6 1.7h16c.9 0 1.4-1.1.6-1.7z',
+  sparkles: 'M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
+  swords: 'M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M9.5 6.5 14 2h3v3l-4.5 4.5M5 14l4 4M7 17l-3 3M3 19l2 2',
+  download: 'M21 15v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4M12 3v12M7 10l5 5 5-5',
+  repeat: 'M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3',
+  hold: 'M9 5v14M15 5v14',
+  bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
+  hammer: 'M14.5 4.5l5 5M12 7l5 5M9.5 4.5l7 7 2-2-5-5c-1.2-1.2-2.8-1.6-4-1zM13.2 10.8 4.5 19.5',
+  skull: 'M12 3C8.1 3 5 5.9 5 9.8c0 2.3 1.1 4 2.6 5V18a1 1 0 0 0 1 1h6.8a1 1 0 0 0 1-1v-3.2c1.5-1 2.6-2.7 2.6-5C19 5.9 15.9 3 12 3zM7.8 10.3a1.7 1.7 0 1 0 3.4 0 1.7 1.7 0 1 0-3.4 0M12.8 10.3a1.7 1.7 0 1 0 3.4 0 1.7 1.7 0 1 0-3.4 0M12 13.2l-.9 1.8h1.8zM10.2 19v2M13.8 19v2',
 };
 export const icon = (name: string) => {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -52,6 +64,10 @@ export const factionOf = (it: any): Faction | 'Guard' | 'combat' | null =>
   it.kind === 'cape' ? (it.variants.length > 1 ? 'combat' : null)
   : FACTIONS.includes(it.faction) ? it.faction
   : it.kind === 'armour' || it.kind === 'shield' || it.kind === 'weapon' ? 'Guard' : null;
+
+/** The dyes an item can wear: Guard gear only the colours it drops in (the pack's guardDyes), anything else every dye. */
+export const dyesFor = (pack: any, it: any): any[] => factionOf(it) === 'Guard' && Array.isArray(pack.guardDyes) && pack.guardDyes.length
+  ? pack.dyes.filter((d: any) => pack.guardDyes.includes(d.id)) : pack.dyes;
 
 export const SLOT_LABEL: Record<EquipSlot, string> = {head: 'Head', torso: 'Torso', legs: 'Legs', hands: 'Hands', feet: 'Feet', cape: 'Cape', shield: 'Shield', weapon: 'Weapon'};
 const EMPTY: Record<EquipSlot, [string, string]> = {
@@ -163,14 +179,15 @@ export class Wardrobe {
     this.slotBar = el('div', {class: 'slots', role: 'tablist', 'aria-label': 'Equipment slots'});
     this.search = el('input', {type: 'search', placeholder: 'Search all equipment (“plate”, “santa”, “cape”)', class: 'search', 'aria-label': 'Search all equipment', enterkeyhint: 'search',
       oninput: () => { this.query = this.search.value.trim().toLowerCase(); this.renderList(); this.renderCrumbs(); }}) as HTMLInputElement;
-    this.list = el('div', {class: 'items', tabindex: '0', 'aria-label': 'Items (↑ ↓ try them on)'});
+    this.list = el('div', {class: 'items of-drawer-list', tabindex: '0', 'aria-label': 'Items (↑ ↓ try them on)'});
     this.list.addEventListener('keydown', e => this.onKey(e));
     // ↓ from the search box goes on into the results (trying the first on)
     this.search.addEventListener('keydown', e => { if (e.key === 'ArrowDown' && this.shown.length) { e.preventDefault(); this.list.focus({preventScroll: true}); this.onKey(e); } });
     this.details = el('div', {class: 'details'});
     // phones: the slots are the master view; a slot opens its detail under a breadcrumb back to them
     this.crumbs = el('nav', {class: 'crumbs', 'aria-label': 'Equipment'});
-    this.root = el('section', {class: 'wardrobe'}, header, this.slotBar, this.crumbs, this.search, this.list, this.details);
+    // (a drawer of the side panel: its insets and scrolling list shared with the others, css `.of-drawer`)
+    this.root = el('section', {class: 'wardrobe of-drawer'}, header, this.slotBar, this.crumbs, this.search, this.list, this.details);
     host.append(this.root);
     attachScrollbar(this.list); attachScrollbar(this.details); attachScrollbar(this.slotBar); attachScrollbar(this.root);   // (the root: the phones' master view scrolls whole)
   }
@@ -498,17 +515,23 @@ export class Wardrobe {
     if (v.colourable && takesDye(it)) {
       const cur = w.colour ?? this.pack.defaultColour;
       const dye = this.pack.dyes.find((d: any) => d.id === cur);
-      kids.push(el('div', {class: 'label'}, 'Dye', el('b', {}, dye?.name ?? '')));
-      const others = this.slots.filter(s => s !== this.slot && this.state.equip[s] && takesDye(this.entryOf(this.state.equip[s])?.members[0].item ?? {}) && this.state.equip[s]!.colour !== cur);
+      kids.push(el('div', {class: 'label'}, factionOf(it) === 'Guard' && this.pack.guardDyes?.length ? 'Colour' : 'Dye', el('b', {}, dye?.name ?? '')));
+      const allowed = dyesFor(this.pack, it), guard = allowed !== this.pack.dyes;
+      // (the other pieces that can wear this colour: Guard gear only its own)
+      const others = this.slots.filter(s => { const o = this.state.equip[s] && this.entryOf(this.state.equip[s])?.members[0].item;
+        return s !== this.slot && o && takesDye(o) && this.state.equip[s]!.colour !== cur && dyesFor(this.pack, o).some((d: any) => d.id === cur); });
       if (others.length) kids.push(el('button', {class: 'btn of-wide of-dyeall', onclick: () => {
         const changes: Partial<Record<EquipSlot, Worn>> = {};
         for (const s of others) changes[s] = {...this.state.equip[s]!, colour: cur};
         this.hooks.equipMany(changes);
       }}, icon('drop'), `Dye your other pieces ${dye?.name ?? 'this colour'} too`));
-      for (const vendor of ['The Color Wheel', 'City Dyes']) {
+      const swatch = (d: any) => el('button', {class: `swatch${cur === d.id ? ' on' : ''}`, 'aria-pressed': String(cur === d.id), title: d.name ?? d.colour, 'aria-label': d.name, style: `background:${d.colour}`, onclick: () => this.hooks.equip(e.slot, {...w, colour: d.id})});
+      if (guard) {
+        kids.push(el('p', {class: 'hint small'}, 'Guard equipment can’t be dyed: it keeps the colour it drops in, and foes drop only these colours.'));
+        kids.push(el('div', {class: 'swatches'}, ...allowed.map(swatch)));
+      } else for (const vendor of ['The Color Wheel', 'City Dyes']) {
         kids.push(el('div', {class: 'sublabel'}, vendor === 'City Dyes' ? 'City Dyes (Crenopolis)' : 'The Color Wheel (Hopeforest)'));
-        kids.push(el('div', {class: 'swatches'}, ...this.pack.dyes.filter((d: any) => d.vendor === vendor).map((d: any) =>
-          el('button', {class: `swatch${cur === d.id ? ' on' : ''}`, 'aria-pressed': String(cur === d.id), title: d.name ?? d.colour, 'aria-label': d.name, style: `background:${d.colour}`, onclick: () => this.hooks.equip(e.slot, {...w, colour: d.id})}))));
+        kids.push(el('div', {class: 'swatches'}, ...this.pack.dyes.filter((d: any) => d.vendor === vendor).map(swatch)));
       }
     } else if (it.kind === 'armour' || it.kind === 'shield') {
       kids.push(el('p', {class: 'hint small'}, takesDye(it) ? 'This tier has no dyeable areas.' : 'This piece can’t be dyed.'));

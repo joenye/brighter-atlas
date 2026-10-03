@@ -86,7 +86,6 @@ export const FashionPage = memo(() => (
     <div id="of-toolbar" className="of-toolbar" hidden>
       <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo"><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>
       <button id="redo" className="btn-mini of-icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo"><Ic d="M15 7h5V2M20 7a9 9 0 1 0 1.5 9" /></button>
-      <button id="shot" className="btn-mini of-icon-sm" title="Save the view as a picture" aria-label="Save picture"><Ic><path d="M4 7h3l2-3h6l2 3h3v13H4z" /><circle cx="12" cy="13" r="4" /></Ic><span>Save picture</span></button>
       <button id="share" className="btn-mini of-share" title="Your looks: save this one, wear a saved one, share a link" aria-haspopup="dialog"><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
     </div>
     {/* the layout before the code: the view and the equipment panel, replaced by the real ones on mount */}
