@@ -65,7 +65,7 @@ export function attachScrollbar(el: HTMLElement): void {
   const place = () => {
     frame = 0;
     const parent = el.parentElement;
-    if (!parent || !el.isConnected) return;
+    if (!parent || !el.isConnected) { track.remove(); return; }   // (a scroller gone: its bar with it)
     if (track.parentElement !== parent) parent.append(track);
     // (shown: on screen by its boxes, as a fixed sheet has no offset parent)
     const can = el.scrollHeight > el.clientHeight + 1 && el.getClientRects().length > 0 && el.clientHeight > 0;
@@ -96,6 +96,9 @@ export function attachScrollbar(el: HTMLElement): void {
   const schedule = () => { if (!frame) frame = requestAnimationFrame(place); };
   el.addEventListener('scroll', schedule, {passive: true});
   new ResizeObserver(schedule).observe(el);
+  // (hidden from above, a class on an ancestor (a drawer giving way to another): Safari reports no resize for it,
+  // and a bar left standing would sit beside the next drawer's own; its leaving the screen is reported everywhere)
+  new IntersectionObserver(schedule).observe(el);
   // (`open`: a <details> inside folding or unfolding changes what there is to scroll without resizing the scroller)
   new MutationObserver(schedule).observe(el, {childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'style', 'open']});
   onResize(schedule);
