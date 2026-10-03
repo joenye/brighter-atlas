@@ -11,7 +11,7 @@ import type {State, EquipSlot, StyleCat, ColourCat, Worn} from './compose.js';
 import {Preview, FRAMES, prefetch, Thumbnailer, report, forgetCaches, RENDERING_DEFAULTS, configureRendering, type Rendering, type Crop} from './render.js';
 import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, dyesFor, twoHandedItem, type Faction} from './wardrobe.js';
 import {Mp4Writer, avcCodec} from './mp4-mux.js';
-import {gifHead, gifJoin} from '../viewers/gif-encoder.js';
+import {gifHead, gifJoin, gifPalette} from '../viewers/gif-encoder.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose, withShot, lookShot, type Shot} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
@@ -996,83 +996,102 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
    *  to the encoder without the page waiting on their pixels (a video: the browser's own encoder, fed the canvas; a
    *  GIF: a worker reads and encodes each as it comes). */
   const recordLook = (o: RecOpts, cropNow: Crop, progress: (k: number) => void) => runJob(async tok => {
-    // (once the look's parts and pose are in: a saved look just put on waits for its parts)
-    for (const ready of [partsReady, poseReady]) for (let p = ready.current; ; p = ready.current) { await p.catch(() => {}); if (p === ready.current) break; }
-    while (engine.current?.viewer.loadingParts) await new Promise(r => setTimeout(r, 100));
-    const e = engine.current; if (!e) throw new Error('not ready');
-    const stopped = () => { if (tok.stop) throw new Error('stopped'); };
-    const v = e.viewer, look = saveLook(o), c0 = els.canvas.current!, [w, h] = outSize(o, cropNow, c0.clientWidth || 1, c0.clientHeight || 1);
-    const framing = {...v.want}, yaw = v.yaw, k = Math.min(w, h) / 630;
-    // (what goes behind and over every frame, drawn once)
-    const layer = () => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
-    const back = look.paint ? layer() : null; if (back) paintBackdrop(back.getContext('2d')!, look.paint!, w, h);
-    const mark = look.transparent ? null : layer(); if (mark) await pictureMark(mark.getContext('2d')!, w, h, k);
-    const c = layer(), g = c.getContext('2d')!;
-    const compose = (src: CanvasImageSource) => { g.clearRect(0, 0, w, h); if (back) g.drawImage(back, 0, 0); g.drawImage(src, 0, 0); if (mark) g.drawImage(mark, 0, 0); };
-    if (o.fmt === 'picture') {
-      const shot = new Image(); shot.src = v.picture(w, h, framing, yaw, look.floor, cropNow); await shot.decode().catch(() => {});
-      stopped(); compose(shot); progress(1);
-      return await new Promise<Blob>((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('no picture')), 'image/png'));
-    }
-    const a = sharedAnim(), plan = recordPlan(o), fx = a ? (a.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender) : null, fps = fpsOf(o);
-    const shoot = (each: (c: HTMLCanvasElement) => void | Promise<void>) => v.record({w, h, framing, yaw, floor: look.floor, stepMs: 1000 / fps, crop: cropNow, plan, fx,
-      turn: o.turns, turnMs: SPIN_MS}, src => { stopped(); compose(src); return each(c); }, x => progress(x * 0.95));
-    if (o.fmt === 'gif') {
-      // (the frames shared among a few workers, each encoding as they come; put back in order at the end)
-      const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
-      const workers = Array.from({length: n}, () => new Worker(new URL('/js/fashion/save-worker.js', location.href), {type: 'module'}));
-      const blocks: Uint8Array[] = [];
-      let got = 0, sent = 0, wake: (() => void) | null = null, failed: unknown = null, watch = 0;
-      const nudge = () => { const f = wake; wake = null; f?.(); };
-      // (wait for the workers: as they answer, or stop)
-      const until = (ok: () => boolean) => new Promise<void>((res, rej) => { const t = () => { if (failed) rej(new Error(String(failed))); else if (ok() || tok.stop) res(); else wake = t; }; t(); });
-      try {
-        for (const wk of workers) {
-          wk.onmessage = (m: MessageEvent) => { blocks[m.data.i] = m.data.bytes; got++; nudge(); };
-          wk.onerror = err => { failed = err.message || 'the GIF maker failed'; nudge(); };
-          wk.postMessage({start: {w, h, delayMs: 1000 / fps, transparent: look.transparent}});
-        }
-        watch = window.setInterval(() => { if (tok.stop) nudge(); }, 100);   // (a stop: no waiting on the workers)
-        await shoot(async cv => {
-          const bmp = await createImageBitmap(cv), i = sent++;
-          workers[i % n].postMessage({frame: bmp, i}, [bmp]);
-          await until(() => sent - got <= 3 * n);   // (a few frames ahead of the workers, no more: memory stays small)
-        });
-        await until(() => got >= sent); stopped();
-        return gifJoin(gifHead(w, h), blocks, 1000 / fps);
-      } finally { clearInterval(watch); for (const wk of workers) wk.terminate(); }
-    }
-    // a video: the browser's own encoder where it has one (most do), fed the canvas itself; else one in the page
-    const codec = avcCodec(w, h, fps), bitrate = o.quality === 'high' ? 20e6 : 8e6;
-    const native = typeof VideoEncoder !== 'undefined' && await VideoEncoder.isConfigSupported({codec, width: w, height: h, bitrate, framerate: fps}).then(r => !!r.supported, () => false);
-    if (native) {
-      const mp4 = new Mp4Writer(w, h, fps);
-      let failed: unknown = null;
-      const enc = new VideoEncoder({output: (chunk, meta) => mp4.add(chunk, meta), error: err => { failed = err; }});
-      enc.configure({codec, width: w, height: h, bitrate, framerate: fps, avc: {format: 'avc'}});
-      try {
-        let i = 0;
-        await shoot(async cv => {
-          if (failed) throw failed;
-          const frame = new VideoFrame(cv, {timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps)});
-          enc.encode(frame, {keyFrame: i % (fps * 2) === 0}); frame.close(); i++;
-          if (enc.encodeQueueSize > 4) await new Promise<void>(r => enc.addEventListener('dequeue', () => r(), {once: true}));
-        });
-        stopped();
-        await enc.flush(); if (failed) throw failed;
-        return mp4.finish();
-      } finally { if (enc.state !== 'closed') enc.close(); }
-    }
-    const {default: HME} = await import('../../vendor/h264-mp4-encoder.module.js' as any);
-    const enc = await HME.createH264MP4Encoder(); enc.width = w; enc.height = h; enc.frameRate = fps; enc.kbps = bitrate / 1000; enc.initialize();
+    // (every canvas it makes let go of at the end, however it ends: Safari holds a canvas's memory till it is
+    // collected, and a phone has little to spare)
+    const made: HTMLCanvasElement[] = [];
     try {
-      const rg = document.createElement('canvas').getContext('2d', {willReadFrequently: true})!; rg.canvas.width = w; rg.canvas.height = h;
-      await shoot(cv => { rg.drawImage(cv, 0, 0); enc.addFrameRgba(rg.getImageData(0, 0, w, h).data); });
-      stopped(); enc.finalize();
-      const data = enc.FS.readFile(enc.outputFilename);
-      try { enc.FS.unlink(enc.outputFilename); } catch {}
-      return new Blob([data], {type: 'video/mp4'});
-    } finally { enc.delete(); }
+      // (once the look's parts and pose are in: a saved look just put on waits for its parts)
+      for (const ready of [partsReady, poseReady]) for (let p = ready.current; ; p = ready.current) { await p.catch(() => {}); if (p === ready.current) break; }
+      while (engine.current?.viewer.loadingParts) await new Promise(r => setTimeout(r, 100));
+      const e = engine.current; if (!e) throw new Error('not ready');
+      const stopped = () => { if (tok.stop) throw new Error('stopped'); };
+      const v = e.viewer, look = saveLook(o), c0 = els.canvas.current!, [w, h] = outSize(o, cropNow, c0.clientWidth || 1, c0.clientHeight || 1);
+      const framing = {...v.want}, yaw = v.yaw, k = Math.min(w, h) / 630;
+      // (what goes behind and over every frame, drawn once)
+      const layer = () => { const c = document.createElement('canvas'); c.width = w; c.height = h; made.push(c); return c; };
+      const back = look.paint ? layer() : null; if (back) paintBackdrop(back.getContext('2d')!, look.paint!, w, h);
+      const mark = look.transparent ? null : layer(); if (mark) await pictureMark(mark.getContext('2d')!, w, h, k);
+      const c = layer(), g = c.getContext('2d')!;
+      const compose = (src: CanvasImageSource) => { g.clearRect(0, 0, w, h); if (back) g.drawImage(back, 0, 0); g.drawImage(src, 0, 0); if (mark) g.drawImage(mark, 0, 0); };
+      if (o.fmt === 'picture') {
+        const shot = new Image(); shot.src = v.picture(w, h, framing, yaw, look.floor, cropNow); await shot.decode().catch(() => {});
+        stopped(); compose(shot); progress(1);
+        return await new Promise<Blob>((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('no picture')), 'image/png'));
+      }
+      const a = sharedAnim(), plan = recordPlan(o), fx = a ? (a.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender) : null, fps = fpsOf(o);
+      const shoot = (each: (c: HTMLCanvasElement) => void | Promise<void>) => v.record({w, h, framing, yaw, floor: look.floor, stepMs: 1000 / fps, crop: cropNow, plan, fx,
+        turn: o.turns, turnMs: SPIN_MS}, src => { stopped(); compose(src); return each(c); }, x => progress(x * 0.95));
+      if (o.fmt === 'gif') {
+        // (one palette for the whole GIF, so no frame is coloured differently from the next: made first from a few
+        // small frames spread across it, those an effect brings later included)
+        const sw = Math.min(w, 240), sh = even(h * sw / w), sg = layer().getContext('2d', {willReadFrequently: true})!;
+        sg.canvas.width = sw; sg.canvas.height = sh;
+        const samples: Uint8ClampedArray[] = [];
+        await v.record({w: sw, h: sh, framing, yaw, floor: look.floor, stepMs: Math.max(1000 / fps, recordMs(o) / 8), crop: cropNow, plan, fx, turn: o.turns, turnMs: SPIN_MS},
+          src => { stopped(); sg.clearRect(0, 0, sw, sh); if (back) sg.drawImage(back, 0, 0, sw, sh); sg.drawImage(src, 0, 0, sw, sh); if (mark) sg.drawImage(mark, 0, 0, sw, sh); samples.push(sg.getImageData(0, 0, sw, sh).data); });
+        const palette = gifPalette(samples, sw, sh, look.transparent);
+        // (the frames shared among a few workers, each encoding as they come; put back in order at the end)
+        const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+        const workers = Array.from({length: n}, () => new Worker(new URL('/js/fashion/save-worker.js', location.href), {type: 'module'}));
+        const blocks: Uint8Array[] = [];
+        let got = 0, sent = 0, wake: (() => void) | null = null, failed: unknown = null, watch = 0;
+        const nudge = () => { const f = wake; wake = null; f?.(); };
+        // (wait for the workers: as they answer, or stop)
+        const until = (ok: () => boolean) => new Promise<void>((res, rej) => { const t = () => { if (failed) rej(new Error(String(failed))); else if (ok() || tok.stop) res(); else wake = t; }; t(); });
+        try {
+          for (const wk of workers) {
+            wk.onmessage = (m: MessageEvent) => { blocks[m.data.i] = m.data.bytes; got++; nudge(); };
+            wk.onerror = err => { failed = err.message || 'the GIF maker failed'; nudge(); };
+            wk.postMessage({start: {w, h, delayMs: 1000 / fps, transparent: look.transparent, palette}});
+          }
+          watch = window.setInterval(() => { if (tok.stop) nudge(); }, 100);   // (a stop: no waiting on the workers)
+          await shoot(async cv => {
+            const bmp = await createImageBitmap(cv), i = sent++;
+            workers[i % n].postMessage({frame: bmp, i}, [bmp]);
+            await until(() => sent - got <= 3 * n);   // (a few frames ahead of the workers, no more: memory stays small)
+          });
+          await until(() => got >= sent); stopped();
+          return gifJoin(gifHead(w, h, false, palette), blocks, 1000 / fps);
+        } finally { clearInterval(watch); for (const wk of workers) wk.terminate(); }
+      }
+      // a video: the browser's own encoder where it has one (most do), fed the canvas itself; else one in the page
+      const codec = avcCodec(w, h, fps), bitrate = o.quality === 'high' ? 20e6 : 8e6;
+      // (the encoder in its low-latency mode: each frame handed back as it is encoded. In its other mode Safari's kept
+      // every frame it was given, at 8 MB each for 1080p, till the end, and iOS reloaded the page for the memory)
+      const config: VideoEncoderConfig = {codec, width: w, height: h, bitrate, framerate: fps, latencyMode: 'realtime', avc: {format: 'avc'}};
+      const native = typeof VideoEncoder !== 'undefined' && await VideoEncoder.isConfigSupported(config).then(r => !!r.supported, () => false);
+      if (native) {
+        const mp4 = new Mp4Writer(w, h, fps);
+        let failed: unknown = null, back = 0, wake: (() => void) | null = null;
+        const nudge = () => { const f = wake; wake = null; f?.(); };
+        const enc = new VideoEncoder({output: (chunk, meta) => { mp4.add(chunk, meta); back++; nudge(); }, error: err => { failed = err; nudge(); }});
+        enc.configure(config);
+        try {
+          let i = 0;
+          await shoot(async cv => {
+            if (failed) throw failed;
+            const frame = new VideoFrame(cv, {timestamp: Math.round(i * 1e6 / fps), duration: Math.round(1e6 / fps)});
+            enc.encode(frame, {keyFrame: i % (fps * 2) === 0}); frame.close(); i++;
+            // (never more than a few frames inside the encoder, counted by what it has handed back; a second at most, should
+            // an encoder keep some back of its own accord)
+            if (i - back > 4) await new Promise<void>(r => { const t = setTimeout(r, 1000); wake = () => { clearTimeout(t); r(); }; if (i - back <= 4 || failed) nudge(); });
+          });
+          stopped();
+          await enc.flush(); if (failed) throw failed;
+          return mp4.finish();
+        } finally { if (enc.state !== 'closed') enc.close(); }
+      }
+      const {default: HME} = await import('../../vendor/h264-mp4-encoder.module.js' as any);
+      const enc = await HME.createH264MP4Encoder(); enc.width = w; enc.height = h; enc.frameRate = fps; enc.kbps = bitrate / 1000; enc.initialize();
+      try {
+        const rg = layer().getContext('2d', {willReadFrequently: true})!;
+        await shoot(cv => { rg.drawImage(cv, 0, 0); enc.addFrameRgba(rg.getImageData(0, 0, w, h).data); });
+        stopped(); enc.finalize();
+        const data = enc.FS.readFile(enc.outputFilename);
+        try { enc.FS.unlink(enc.outputFilename); } catch {}
+        return new Blob([data], {type: 'video/mp4'});
+      } finally { enc.delete(); }
+    } finally { for (const cv of made) { cv.width = 0; cv.height = 0; } }
   });
   const saveName = (o: RecOpts) => {
     const a = o.fmt === 'picture' ? (anim ? sharedAnim() : null) : sharedAnim(), t = new Date(), hms = [t.getHours(), t.getMinutes(), t.getSeconds()].map(x => String(x).padStart(2, '0')).join('');

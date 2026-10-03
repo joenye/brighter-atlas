@@ -188,11 +188,18 @@ class Bytes {
   set(at: number, v: number) { this.buf[at] = v; }
   done() { return this.buf.slice(0, this.n); }
 }
-/** A GIF's opening bytes: its size, and (unless `once`) the block that loops it. */
-export function gifHead(w: number, h: number, once = false): Uint8Array {
+/** One palette for a whole GIF, from a few of its frames (small copies will do): every frame coloured the same way, so
+ *  nothing shimmers from one to the next. */
+export function gifPalette(frames: Uint8ClampedArray[], w: number, h: number, transparent = false): number[][] {
+  return buildPalette(frames, w, h, transparent);
+}
+/** A GIF's opening bytes: its size, its palette (none: each frame has its own) and (unless `once`) the block that
+ *  loops it. */
+export function gifHead(w: number, h: number, once = false, palette: number[][] | null = null): Uint8Array {
   const out = new Bytes(), str = (t: string) => { for (const c of t) out.push(c.charCodeAt(0)); };
   str('GIF89a');
-  out.push(w & 0xff, w >> 8, h & 0xff, h >> 8, 0x70, 0, 0);   // (no global palette: each frame has its own)
+  out.push(w & 0xff, w >> 8, h & 0xff, h >> 8, palette ? 0xf7 : 0x70, 0, 0);
+  if (palette) for (let i = 0; i < 256; i++) { const c = palette[i] ?? [0, 0, 0]; out.push(c[0], c[1], c[2]); }
   if (!once) { str('\x21\xFF\x0BNETSCAPE2.0\x03\x01'); out.push(0, 0, 0); }
   return out.done();
 }
@@ -201,14 +208,19 @@ export function gifHead(w: number, h: number, once = false): Uint8Array {
  *  4 and 5 of what `frame` returns. */
 export class GifFrames {
   private idx: Uint8Array; private palette: number[][] = []; private map: ((r: number, g: number, b: number) => number) | null = null; private n = 0;
-  constructor(private w: number, private h: number, private o: {delayMs: number, transparent?: boolean}) { this.idx = new Uint8Array(w * h); }
+  /** `palette`: the GIF's own (gifPalette), used for every frame; none: a palette of each frame's own. */
+  constructor(private w: number, private h: number, private o: {delayMs: number, transparent?: boolean, palette?: number[][] | null}) {
+    this.idx = new Uint8Array(w * h);
+    if (o.palette) { this.palette = o.palette; this.map = makeMapper(o.palette, o.transparent ? 1 : 0); }
+  }
   frame(f: Uint8ClampedArray): Uint8Array {
     const {w, h, idx} = this, transparent = !!this.o.transparent, out = new Bytes(), delay = Math.max(2, Math.round(this.o.delayMs / 10));
-    if (!this.map || this.n++ % 8 === 0) { this.palette = buildPalette([f], w, h, transparent); this.map = makeMapper(this.palette, transparent ? 1 : 0); }
-    const palette = this.palette, map = this.map;
+    const own = !this.o.palette;
+    if (own && (!this.map || this.n++ % 8 === 0)) { this.palette = buildPalette([f], w, h, transparent); this.map = makeMapper(this.palette, transparent ? 1 : 0); }
+    const palette = this.palette, map = this.map!;
     out.push(0x21, 0xf9, 4, transparent ? 0x09 : 0x00, delay & 0xff, delay >> 8, 0, 0);
-    out.push(0x2c, 0, 0, 0, 0, w & 0xff, w >> 8, h & 0xff, h >> 8, 0x87);   // (a local palette of 256)
-    for (let i = 0; i < 256; i++) { const c = palette[i] ?? [0, 0, 0]; out.push(c[0], c[1], c[2]); }
+    out.push(0x2c, 0, 0, 0, 0, w & 0xff, w >> 8, h & 0xff, h >> 8, own ? 0x87 : 0);   // (a local palette of 256, or the GIF's)
+    if (own) for (let i = 0; i < 256; i++) { const c = palette[i] ?? [0, 0, 0]; out.push(c[0], c[1], c[2]); }
     for (let p = 0, o = 0; p < w * h; p++, o += 4) idx[p] = (transparent && f[o + 3] < ALPHA_CUT) ? 0 : map(f[o], f[o + 1], f[o + 2]);
     const bytes: number[] = [];
     lzwEncode(idx, 8, bytes);
