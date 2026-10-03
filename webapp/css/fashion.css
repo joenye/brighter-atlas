@@ -695,7 +695,7 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-sharedraw .sd-transport .of-anim-time { flex: 1; min-width: 0; }
 .of-sharedraw .sd-rows { display: flex; flex-direction: column; gap: 8px; }
 .of-sharedraw .sd-row { display: flex; align-items: center; gap: 10px; }
-.of-sharedraw .sd-row > span { flex: none; width: 84px; color: var(--fg2); font-size: 13px; }
+.of-sharedraw .sd-row > span { flex: none; width: 132px; white-space: nowrap; color: var(--fg2); font-size: 13px; }
 .of-sharedraw .sd-row .chips button { padding: 5px 11px; font-size: 13px; }
 .of-sharedraw .sd-row .chips button:disabled { opacity: .5; cursor: default; }
 .of-sharedraw .sd-clear { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--fg0); flex-wrap: wrap; }

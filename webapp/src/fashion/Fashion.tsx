@@ -143,9 +143,9 @@ type Shape = 'wide' | 'square' | 'tall' | 'free';
 interface RecOpts {
   fmt: SaveFmt; clear: boolean; shape: Shape; crop: Crop | null;
   // (More options)
-  quality: 'standard' | 'high'; fps: number; plays: number; spin: boolean;
+  quality: 'standard' | 'high'; fps: number; plays: number; turns: number;
 }
-const REC_DEFAULTS: RecOpts = {fmt: 'picture', clear: false, shape: 'wide', crop: null, quality: 'standard', fps: 0, plays: 1, spin: false};
+const REC_DEFAULTS: RecOpts = {fmt: 'picture', clear: false, shape: 'wide', crop: null, quality: 'standard', fps: 0, plays: 1, turns: 0};
 const SHAPE_RATIO: Record<Exclude<Shape, 'free'>, number> = {wide: 16 / 9, square: 1, tall: 9 / 16};
 // (the file's long edge; High for those who want it sharp: 4K pictures, big GIFs, 1440p video)
 const LONG_EDGE: Record<SaveFmt, Record<RecOpts['quality'], number>> = {picture: {standard: 1920, high: 3840}, gif: {standard: 640, high: 1080}, video: {standard: 1920, high: 2560}};
@@ -155,7 +155,7 @@ const FPS_DEFAULT: Record<SaveFmt, number> = {picture: 0, gif: 25, video: 30};
 const fpsOf = (o: RecOpts) => FPS_CHOICES[o.fmt].includes(o.fps) ? o.fps : FPS_DEFAULT[o.fmt];
 // (what a file of each kind weighs a pixel, measured on this page's looks: for the size it is said to be)
 const BYTES_PER_PX: Record<SaveFmt, number> = {picture: 0.65, gif: 0.1, video: 0};
-const SPIN_MS = 4000;       // (one turn, when no animation plays)
+const SPIN_MS = 4000;       // (how long a save with no animation runs: the idle's whole loops, about this long)
 const even = (x: number) => Math.max(2, Math.round(x / 2) * 2);
 const megabytes = (bytes: number) => bytes < 1e6 ? 'under 1 MB' : `about ${bytes < 10e6 ? (bytes / 1e6).toFixed(0) : Math.round(bytes / 5e6) * 5} MB`;
 const slug = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -976,7 +976,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     for (let i = 0; i < o.plays; i++) ps.forEach((p, j) => plan.push({clip: p.clip, ms: p.ms, restart: j === 0}));
     return plan;
   };
-  // (a turn with no animation: a whole number of the pose's idle loops, about SPIN_MS, as record() draws it)
+  // (a save with no animation: a whole number of the pose's idle loops, about SPIN_MS, as record() draws it)
   const recordMs = (o: RecOpts) => {
     const plan = recordPlan(o); if (plan) return plan.reduce((t, p) => t + p.ms, 0);
     const idle = (engine.current?.viewer.clipDuration() ?? 0) / 0.6;
@@ -1016,7 +1016,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     }
     const a = sharedAnim(), plan = recordPlan(o), fx = a ? (a.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender) : null, fps = fpsOf(o);
     const shoot = (each: (c: HTMLCanvasElement) => void | Promise<void>) => v.record({w, h, framing, yaw, floor: look.floor, stepMs: 1000 / fps, crop: cropNow, plan, fx,
-      turn: !plan || o.spin ? 1 : 0, turnMs: SPIN_MS}, src => { stopped(); compose(src); return each(c); }, x => progress(x * 0.95));
+      turn: o.turns, turnMs: SPIN_MS}, src => { stopped(); compose(src); return each(c); }, x => progress(x * 0.95));
     if (o.fmt === 'gif') {
       // (the frames shared among a few workers, each encoding as they come; put back in order at the end)
       const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
@@ -1080,7 +1080,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   };
   // the download: being made, saved, or failed; it downloads by itself once made
   const [saveState, setSaveState] = useState<{k: number} | {saved: string} | {error: string} | null>(null);
-  useEffect(() => { setSaveState(st => st && 'k' in st ? st : null); }, [rec.fmt, rec.clear, rec.shape, rec.quality, rec.fps, rec.plays, rec.spin, rec.crop]);
+  useEffect(() => { setSaveState(st => st && 'k' in st ? st : null); }, [rec.fmt, rec.clear, rec.shape, rec.quality, rec.fps, rec.plays, rec.turns, rec.crop]);
   const download = async () => {
     const o = rec, t0 = performance.now();
     setSaveState({k: 0});
@@ -1491,8 +1491,8 @@ function ShareDrawer({shareField, rec, setRec, dlOpen, toggleDl, anim, timeline,
   );
   const chips = <T,>(list: readonly (readonly [T, string, string?])[], now: T | null, pick: (v: T) => void): Chip[] => list.map(([v, t, title]) => [t, now === v, () => pick(v), title]);
   // (what More options has away from its usual, named while it is shut)
-  const on = [rec.quality === 'high' && 'High quality', moving && rec.fps && fps !== FPS_DEFAULT[rec.fmt] && `${fps} frames a second`,
-    moving && anim && rec.plays > 1 && (rec.plays === 2 ? 'plays twice' : `plays ${rec.plays} times`), moving && anim && rec.spin && 'one turn'].filter(Boolean) as string[];
+  const on = [rec.quality === 'high' && 'High quality', moving && rec.fps && fps !== FPS_DEFAULT[rec.fmt] && `${fps} frames per second`,
+    moving && anim && rec.plays > 1 && (rec.plays === 2 ? 'plays twice' : `plays ${rec.plays} times`), moving && rec.turns > 0 && (rec.turns === 1 ? '1 rotation' : `${rec.turns} rotations`)].filter(Boolean) as string[];
   const clearNote = rec.fmt === 'video' ? 'A video can’t be transparent' : look.pageClear ? 'Your background is transparent' : undefined;
   return (
     <Drawer className="of-sharedraw" label="Share">
@@ -1521,12 +1521,12 @@ function ShareDrawer({shareField, rec, setRec, dlOpen, toggleDl, anim, timeline,
             <button type="button" className="sd-more" aria-expanded={more} onClick={toggleMore}>More options{!more && on.length ? <em>: {on.join(', ')}</em> : null}<Icon name="chevron" /></button>
             {more && <div className="sd-rows sd-advanced">
               {row('Quality', chips([['standard', 'Standard'], ['high', 'High', 'Sharper and bigger: 4K pictures, larger GIFs, 1440p video']] as const, rec.quality, v => setRec({quality: v})))}
-              {moving && row('Frame rate', FPS_CHOICES[rec.fmt].map(n => [`${n} a second`, fps === n, () => setRec({fps: n})] as Chip))}
+              {moving && row('Frames per second', FPS_CHOICES[rec.fmt].map(n => [`${n}`, fps === n, () => setRec({fps: n})] as Chip))}
               {moving && anim && row('Play', chips([[1, 'Once'], [2, 'Twice'], [3, '3 times']] as const, rec.plays, n => setRec({plays: n})))}
-              {moving && anim && row('Spin', chips([[false, 'Off'], [true, 'One turn']] as const, rec.spin, v => setRec({spin: v})))}
+              {moving && row('Rotations', chips([[0, 'None'], [1, '1'], [2, '2'], [3, '3']] as const, rec.turns, v => setRec({turns: v})))}
             </div>}
-            <p className="sd-sum">{moving ? `${anim ?? 'One turn'}, ${(ms / 1000).toFixed(1)} seconds · ` : ''}{w} × {h}{moving ? ` · ${fps} a second` : ''} · {megabytes(bytes)}</p>
-            {moving && !anim && <p className="sd-note">No animation is playing, so your character turns once.</p>}
+            <p className="sd-sum">{moving ? `${anim ?? 'Idle'}, ${(ms / 1000).toFixed(1)} seconds · ` : ''}{w} × {h}{moving ? ` · ${fps} frames per second` : ''} · {megabytes(bytes)}</p>
+            {moving && !anim && <p className="sd-note">No animation is playing: your character stands, breathing{rec.turns ? ' as it turns' : ''}.</p>}
             {state && 'error' in state && <p className="sd-warn" role="alert">{state.error}</p>}
             {state && 'saved' in state && <p className="sd-ok" role="status">{state.saved}</p>}
             <div className="sd-actions">
