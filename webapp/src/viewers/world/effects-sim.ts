@@ -105,7 +105,10 @@ interface ShapeSpec {
   pitch: number;          // point cone polar range (rad)
   radius: number;         // ring radius (native units)
   sweep: number;          // ring arc (rad)
-  spiral: { r0: number; rRate: number; a0: number; aRate: number } | null;
+  // a ring turning with time: radius and angle at a particle's birth, in the plane spanned by `x` and `y` (the
+  // images of +x and +y under the shortest turn from +z to the ring's axis), about the centre or a draw from `range`
+  spiral: { r0: number; rRate: number; a0: number; aRate: number; x: Vec3; y: Vec3;
+    range: [EffectSample, EffectSample, EffectSample] | null; axisRange: [EffectSample, EffectSample, EffectSample] | null } | null;
   // 'segment': spawn spread evenly between these two local-frame endpoints
   segment: { from: Vec3; to: Vec3 } | null;
 }
@@ -142,6 +145,43 @@ function linear(m: readonly number[], v: Vec3): Vec3 {
   return [m[0] * v[0] + m[4] * v[1] + m[8] * v[2], m[1] * v[0] + m[5] * v[1] + m[9] * v[2], m[2] * v[0] + m[6] * v[1] + m[10] * v[2]];
 }
 
+// The plane a turning ring lies in, as the game places it: the shortest turn from +z to the ring's normalised axis,
+// applied to the ring's own (x, y). A zero axis leaves the ring flat; an axis of exactly -z collapses it onto its
+// centre, as the game's turn does (it has no single shortest turn).
+function ringPlane(axis: Vec3): { x: Vec3; y: Vec3 } {
+  const len = Math.hypot(axis[0], axis[1], axis[2]);
+  if (!len) return { x: [1, 0, 0], y: [0, 1, 0] };
+  const ax = axis[0] / len, ay = axis[1] / len, c = axis[2] / len;
+  if (c <= -1) return { x: [0, 0, 0], y: [0, 0, 0] };
+  const k = 1 / (1 + c);
+  return { x: [1 - ax * ax * k, -ax * ay * k, -ax], y: [-ax * ay * k, 1 - ay * ay * k, -ay] };
+}
+
+/** A turning ring's point at the game's clock `t` (ticks: a particle's birth tick less one): the centre plus the
+ *  ring's radius and angle at `t`, in the ring's plane. */
+export function turningRingPoint(center: readonly number[], axis: readonly number[], radius0: number, radiusPerSecond: number,
+  angle0Deg: number, anglePerSecondDeg: number, t: number, tickRate = 600): Vec3 {
+  const plane = ringPlane([axis[0], axis[1], axis[2]]);
+  const r = radius0 + radiusPerSecond / tickRate * t, a = (angle0Deg + anglePerSecondDeg / tickRate * t) * DEG;
+  const ca = Math.cos(a) * r, sa = Math.sin(a) * r;
+  return [0, 1, 2].map(i => center[i] + ca * plane.x[i] + sa * plane.y[i]) as Vec3;
+}
+
+// A wave slot as the particle shader reads it: the period (whole ticks) and the birth amplitude packed as 16-bit
+// whole numbers, the amplitude's change over the life, and the phase as a byte (a fraction of a cycle, clamped).
+// The shader's own constant is 6.282, not 2 pi.
+type WaveSlot = { period: number; a1: number; a2: number; phase: number };
+function waveSlot(w: { period?: number; a1?: number; a2?: number; phase?: number } | null | undefined): WaveSlot {
+  const p = finite(w?.phase, 0);
+  return { period: Math.trunc(finite(w?.period, 0)) & 0xffff, a1: Math.trunc(finite(w?.a1, 0)) & 0xffff,
+    a2: finite(w?.a2, 0), phase: (p <= 0 ? 0 : p >= 1 ? 255 : Math.trunc(p * 255)) / 255 };
+}
+/** One axis's wave offset at a particle's age (ticks) and life fraction. */
+export function waveOffset(w: WaveSlot, age: number, u: number): number {
+  if (!w.period) return 0;
+  return (w.a1 + (w.a2 - w.a1) * u) * Math.sin(6.282 * (age / w.period + w.phase));
+}
+
 function axisFrame(axis: Vec3): { w: Vec3; u: Vec3; v: Vec3 } {
   const w = normalize(axis, [0, 0, 1]);
   const a: Vec3 = Math.abs(w[2]) < 0.99 ? [0, 0, 1] : [1, 0, 0];
@@ -172,7 +212,8 @@ function vec3Of(value: any, fallback: Vec3): Vec3 {
 function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate: number): ShapeSpec {
   const kind = config?.kind === 'shape' ? (config.shape_kind || 'other') : 'other';
   const center = vec3Of(config?.radial?.center ?? config?.center, [0, 0, 0]);
-  const axis = vec3Of(config?.spiral?.axis ?? config?.axis, fallbackAxis);
+  // (a turning ring is aimed by the config's own axis and cone; its ring has an axis of its own)
+  const axis = vec3Of(config?.shape_kind !== 'spiral' && config?.spiral?.axis ? config.spiral.axis : config?.axis, fallbackAxis);
   const frame = axisFrame(axis);
   const spec: ShapeSpec = {
     kind: kind === 'point' || kind === 'ring' || kind === 'spiral' || kind === 'segment' || kind === 'radial'
@@ -204,6 +245,9 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
       rRate: finite(config.spiral.radius_rate, 0) / tickRate,
       a0: finite(config.spiral.start_angle, 0) * DEG,
       aRate: (finite(config.spiral.angle_rate, 0) * DEG) / tickRate,
+      ...ringPlane(vec3Of(config.spiral.axis, [0, 0, 0])),
+      range: config.spiral.center_range?.length === 3 ? config.spiral.center_range as [EffectSample, EffectSample, EffectSample] : null,
+      axisRange: config.spiral.cone_axis_range?.length === 3 ? config.spiral.cone_axis_range as [EffectSample, EffectSample, EffectSample] : null,
     };
   } else if (spec.kind === 'spiral') {
     spec.kind = 'other';
@@ -258,6 +302,7 @@ export class EmitterSim {
   // already folded into the constants above.
   private _fields: EffectFieldValues | null = null;
   private _random = false;
+  private _waves: [WaveSlot, WaveSlot, WaveSlot] | null = null;
   private _perParticle = false;
   private _sampledColour = false;
   private _accelBasis: readonly number[] | null = null;
@@ -369,11 +414,12 @@ export class EmitterSim {
     this._fields = this._perParticle ? fields : null;
     this.spriteChoices = emitter.sprite_choices?.sprites?.length ?? 0;
 
+    this._waves = emitter.waves?.length === 3 ? [waveSlot(emitter.waves[0]), waveSlot(emitter.waves[1]), waveSlot(emitter.waves[2])] : null;
     const fallbackAxis = normalize(vec3Of(emitter.direction?.v, [0, 0, 1]), [0, 0, 1]);
     const shapeCfg = emitter.shape != null ? configs[String(emitter.shape)] || null : null;
     this.shape = resolveShape(shapeCfg, fallbackAxis, tickRate);
     this._random = !!this._scales || this._perParticle || this.spriteChoices > 1
-      || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number');
+      || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number') || !!this.shape.spiral?.range || !!this.shape.spiral?.axisRange;
 
     // Burst schedule. A missing/degenerate burst leaves the emitter inert
     // (alive stays zero); siblings are unaffected.
@@ -502,6 +548,13 @@ export class EmitterSim {
   }
 
   get alive(): number { return this.head - this.tail; }
+
+  /** Particles alive at T among those born by `by` (a released system's survivors). */
+  aliveBornBy(T: number, by: number): number {
+    let n = 0;
+    for (let j = this.tail; j < this.head; j++) { const b = this.birth[j % this.capacity]; if (b <= by && T - b >= 0 && T - b < this.life) n++; }
+    return n;
+  }
 
   /** Spawn tick of the j-th KEPT spawn (n = j * k). Infinity past the end of
    *  a one-shot schedule. */
@@ -663,16 +716,22 @@ export class EmitterSim {
       y += s.radius * (ct * s.u[1] + st * s.v[1]);
       z += s.radius * (ct * s.u[2] + st * s.v[2]);
     } else if (s.kind === 'spiral' && s.spiral) {
-      // spiral state is a pure function of the SPAWN time, folded to the
-      // cycle so looping systems never walk off to infinity
-      const sp = s.spiral;
-      const st0 = this.period ? tick % this.period : tick;
-      const angle = sp.a0 + sp.aRate * st0;
-      const radius = sp.r0 + sp.rRate * st0;
-      const ca = Math.cos(angle); const sa = Math.sin(angle);
-      x += radius * (ca * s.u[0] + sa * s.v[0]);
-      y += radius * (ca * s.u[1] + sa * s.v[1]);
-      z += radius * (ca * s.u[2] + sa * s.v[2]);
+      // the ring's point at the particle's birth (the game's clock: the birth tick less one, never folded to a
+      // cycle), about its centre or the particle's own draw of it; the particle stays where it was born, aimed
+      // through the config's cone
+      const sp = s.spiral, t = tick - 1;
+      if (sp.range) { x = draw(sp.range[0]); y = draw(sp.range[1]); z = draw(sp.range[2]); }
+      const angle = sp.a0 + sp.aRate * t;
+      const ringRadius = sp.r0 + sp.rRate * t;
+      const ca = Math.cos(angle) * ringRadius; const sa = Math.sin(angle) * ringRadius;
+      x += ca * sp.x[0] + sa * sp.y[0];
+      y += ca * sp.x[1] + sa * sp.y[1];
+      z += ca * sp.x[2] + sa * sp.y[2];
+      const yaw: [number, number] = s.cone ? [s.cone.yaw[0] * DEG, s.cone.yaw[1] * DEG] : [0, s.yaw];
+      const pitch: [number, number] = s.cone ? [s.cone.pitch[0] * DEG, s.cone.pitch[1] * DEG] : [0, s.pitch];
+      // (an aiming axis drawn per particle: its three components, then normalised; none drawn, the config's)
+      const axis = sp.axisRange ? normalize([draw(sp.axisRange[0]), draw(sp.axisRange[1]), draw(sp.axisRange[2])], s.w) : s.w;
+      [dx, dy, dz] = sampleConeDirection(axis, yaw, pitch, r0, r1);
     } else {
       const yaw: [number, number] = s.cone ? [s.cone.yaw[0] * DEG, s.cone.yaw[1] * DEG] : [0, s.yaw];
       const pitch: [number, number] = s.cone ? [s.cone.pitch[0] * DEG, s.cone.pitch[1] * DEG] : [0, s.pitch];
@@ -819,10 +878,13 @@ export class EmitterSim {
    * acceleration-slope term is one quarter of age cubed, as defined by the
    * particle program, rather than the one-sixth term of jerk integration.
    * Roll = spin age; scale follows age/life and colour its three windows.
+   * `bornBy`: a released system's cut-off, after which nothing new is drawn.
    */
+  /** `emit`'s last three: the particle's wave offset, in world axes, added after its owner's placement. */
   evaluate(T: number, emit: (x: number, y: number, z: number, scale: number,
-    r: number, g: number, b: number, a: number, rot: number, nx: number, ny: number, nz: number, facingMode: number) => void,
-    choice = -1): void {
+    r: number, g: number, b: number, a: number, rot: number, nx: number, ny: number, nz: number, facingMode: number,
+    ox: number, oy: number, oz: number) => void,
+    choice = -1, bornBy = Infinity): void {
     const cap = this.capacity;
     const life = this.life;
     const per = this._perParticle;
@@ -844,7 +906,7 @@ export class EmitterSim {
     for (let j = this.tail; j < this.head; j++) {
       const slot = j % cap;
       const age = T - this.birth[slot];
-      if (!(age >= 0) || age >= life) continue;
+      if (!(age >= 0) || age >= life || !(this.birth[slot] <= bornBy)) continue;
       if (filter && this.choice[slot] !== choice) continue;
       if (per) {
         ax = this._ax[slot]; ay = this._ay[slot]; az = this._az[slot];
@@ -876,6 +938,8 @@ export class EmitterSim {
         g = (g0c * pa0 + (g1c * pa1 - g0c * pa0) * k1) / alpha;
         b = (b0c * pa0 + (b1c * pa1 - b0c * pa0) * k1) / alpha;
       }
+      const waves = this._waves;
+      const ox = waves ? waveOffset(waves[0], age, u) : 0, oy = waves ? waveOffset(waves[1], age, u) : 0, oz = waves ? waveOffset(waves[2], age, u) : 0;
       emit(x, y, z,
         this._scales ? this._sizes0[slot] + (this._sizes1[slot] - this._sizes0[slot]) * u
           : this.scale0 + (this.scale1 - this.scale0) * u,
@@ -887,7 +951,7 @@ export class EmitterSim {
         velocityFacing ? this.tickRate * (this.vx[slot] + age * (ax + this.sx[slot] + .5 * age * jx)) : this.nx[slot],
         velocityFacing ? this.tickRate * (this.vy[slot] + age * (ay + this.sy[slot] + .5 * age * jy)) : this.ny[slot],
         velocityFacing ? this.tickRate * (this.vz[slot] + age * (az + this.sz[slot] + .5 * age * jz)) : this.nz[slot],
-        facingMode);
+        facingMode, ox, oy, oz);
     }
   }
 }

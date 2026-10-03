@@ -54,6 +54,39 @@ try {
     assert.deepEqual(snapshot(), at120, 'a stopped system can be replayed deterministically');
   } finally { player.dispose(); }
 
+  // Released as the game releases an animation's effect: nothing new is born, what is out lives its life.
+  const flow = {...system, slot: 2, emitters: [{...system.emitters[0]}]};
+  const flowDoc = {tick_rate: {value: 600}, systems: [flow], configs: {1: {kind: 'burst_windowed', per_second: 60, windows: [[0, 100000]]}}};
+  const flowPlayer = new T.EffectsPlayer({root: new T.Group(), doc: flowDoc, url: (s: string) => s});
+  try {
+    flowPlayer.addSystem(2);
+    flowPlayer.syncClock(2, 500);
+    const out = flowPlayer.liveCount(2);
+    assert.ok(out > 1, `a flowing system has particles out (${out})`);
+    flowPlayer.release(2);
+    flowPlayer.syncClock(2, 900);
+    assert.ok(flowPlayer.liveCount(2) > 0 && flowPlayer.liveCount(2) <= out, 'released: the particles out live on, none are born');
+    flowPlayer.syncClock(2, 1600);
+    assert.equal(flowPlayer.liveCount(2), 0, 'released: gone once its last particle has lived its life');
+    flowPlayer.release(2, false);
+    assert.ok(flowPlayer.liveCount(2) > 0, 'asked for again, the same system emits again');
+    flowPlayer.release(2); flowPlayer.stop(2); flowPlayer.syncClock(2, 1600);
+    assert.ok(flowPlayer.liveCount(2) > 0, 'stop clears a release');
+    // a system started over: a copy under its own key takes the particles out, the system itself begins again
+    flowPlayer.syncClock(2, 700); const before = flowPlayer.liveCount(2);
+    assert.equal(flowPlayer.addSystem(2, -1), 'timed', 'a copy of the same system, under its own key');
+    flowPlayer.syncClock(-1, 700); flowPlayer.release(-1);
+    assert.equal(flowPlayer.liveCount(-1), before, 'the copy holds the same particles');
+    flowPlayer.syncClock(2, 10);
+    assert.ok(flowPlayer.liveCount(2) < before, 'the system itself starts over');
+    flowPlayer.syncClock(-1, 1200);
+    assert.ok(flowPlayer.liveCount(-1) > 0 && flowPlayer.liveCount(-1) < before, 'the copy\'s particles live on, none born');
+    flowPlayer.removeSystem(-1);
+    assert.equal(flowPlayer.liveCount(-1), 0, 'removed');
+    flowPlayer.syncClock(2, 10);
+    assert.ok(flowPlayer.liveCount(2) > 0, 'and the system is untouched');
+  } finally { flowPlayer.dispose(); }
+
   // Exercise real clip loading with controlled completion order, without DOM.
   const pending = new Map<string, {resolve: (v: any) => void; reject: (e: Error) => void}>();
   const errors: string[] = [];
@@ -82,5 +115,5 @@ try {
   const disposed = bar.loadClip(entry(7)); bar.destroy(); finish(7);
   assert.equal(await disposed, false); assert.equal(bar.clipJson.i, 5); assert.equal(bar.playing, false);
   assert.equal(await bar.loadClip(entry(8)), false, 'disposed transport cannot restart loading');
-  console.log('Effect playback: frozen render buffers, seek/replay, stop, and stale/failed/disposed clip loads passed');
+  console.log('Effect playback: frozen render buffers, seek/replay, stop, release, copies, and stale/failed/disposed clip loads passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

@@ -36,6 +36,13 @@ for (const start of [3, 9, 22]) {
   assert.equal(readEffectTransformBinding([num(start, 5), num(start + 1, 2)], pairLayout)?.secondary, 2);
   assert.equal(inferEffectTransformLayout([[num(start - 1, 1), mark(start)]]), null);
   assert.equal(inferEffectTransformLayout([root, pair]), null);
+  // most families follow the attachment with a second pair of markers (another transform setting, which can
+  // name a bone too): the attachment is the first, whether or not it names a bone in any row
+  const trail = (rows: any[][]) => rows.map(r => [...r, mark(start + 3), { ...mark(start + 4) }]);
+  assert.deepEqual(inferEffectTransformLayout(trail([root, bone])), layout);
+  assert.deepEqual(inferEffectTransformLayout(trail([root])), layout);
+  assert.deepEqual(inferEffectTransformLayout([...trail([root]), [num(start - 1, 1), mark(start), flag(start + 1, false), mark(start + 2), num(start + 3, 2), mark(start + 4)]]), layout);
+  assert.equal(readEffectTransformBinding(trail([bone])[0], inferEffectTransformLayout(trail([root, bone])))?.primary, 6);
   assert.equal(readEffectTransformBinding([num(start, -1), mark(start + 1)], pairLayout), null);
   const none = (op: number) => ({ op, kind: 'symbol', index: 8, name: '$none' });
   // Adjacent references default all symbols to root. The mode-bearing

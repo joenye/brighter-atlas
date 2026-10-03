@@ -1057,13 +1057,14 @@ export class WorldEffectsLayer {
         const Tm = this._instanceTime(member.instance);
         const m = anchor.m;
         sim.ensure(Tm);
-        sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode) => {
+        sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode, ox, oy, oz) => {
           if (idx >= cap) return;
           // Owner frame applied after the sim's birth transforms, inlined (no
           // per-particle tuple): this loop runs thousands of times a frame.
-          const wx = m[0] * x + m[4] * y + m[8] * z + m[12];
-          const wy = m[1] * x + m[5] * y + m[9] * z + m[13];
-          const wz = m[2] * x + m[6] * y + m[10] * z + m[14];
+          // A particle's waves move it along the world's axes, after its owner's placement.
+          const wx = m[0] * x + m[4] * y + m[8] * z + m[12] + ox;
+          const wy = m[1] * x + m[5] * y + m[9] * z + m[13] + oy;
+          const wz = m[2] * x + m[6] * y + m[10] * z + m[14] + oz;
           const at4 = idx * 4;
           posSize[at4] = wx;
           posSize[at4 + 1] = wy;

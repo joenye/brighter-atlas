@@ -52,7 +52,10 @@ export function configureSpriteSampling(texture: THREE.Texture): void {
 
 /** How to draw one sprite container: which sub-image, its dimensions in
  *  native units, and whether its single channel is coverage. */
-export interface SpriteDraw { sub: number; w: number; h: number; mask: boolean }
+/** `turned`: the picture is stored a quarter turn from how it is drawn (the game packs tall pictures lying wide). */
+/** `uv`: the stretch of the stored picture the frame spans (u0, v0, u1, v1, v down from the top), where it is not all
+ *  of it: the game samples a little past the picture's edge, which is empty. */
+export interface SpriteDraw { sub: number; w: number; h: number; mask: boolean; turned?: boolean; uv?: [number, number, number, number] }
 
 /** Used when a container carries no readable image metadata, and for the
  *  built-in fallback dot. Square, straight-alpha, first sub-image. */
@@ -67,6 +70,8 @@ export function spriteDrawOf(sprite: { draw?: SpriteDraw | null } | null | undef
     sub: Number(draw.sub) || 0,
     w: Number(draw.w), h: Number(draw.h),
     mask: !!draw.mask,
+    ...(draw.turned ? { turned: true } : {}),
+    ...(Array.isArray(draw.uv) && draw.uv.length === 4 && draw.uv.every(Number.isFinite) ? { uv: draw.uv.map(Number) as [number, number, number, number] } : {}),
   };
 }
 
@@ -99,11 +104,17 @@ attribute vec3 aFacing;
 attribute float aFacingMode;
 uniform vec2 uSpriteSize;
 uniform float uFacingSizeScale;
+uniform float uTurned;
+uniform vec4 uUvRect;
 varying vec2 vUv;
 varying vec4 vColor;
 #include <common>
 void main() {
-  vUv = uv;
+  // A picture stored turned is turned back a quarter here (the game's corner pairing: picture across = quad up,
+  // picture down = quad across, mirrored as this quad's across is the game's).
+  vec2 st = uTurned > 0.5 ? vec2( uv.y, 1.0 - uv.x ) : uv;
+  // The stretch of the stored picture the frame spans (its rows run down, the texture's up).
+  vUv = vec2( mix( uUvRect.x, uUvRect.z, st.x ), 1.0 - mix( uUvRect.y, uUvRect.w, 1.0 - st.y ) );
   vColor = aColor;
   vec4 mvPosition = modelViewMatrix * vec4( aPosSize.xyz, 1.0 );
   vec2 e = position.xy * uSpriteSize * aPosSize.w;
@@ -158,7 +169,9 @@ varying vec4 vColor;
 #include <common>
 void main() {
   vec4 texel = texture2D( map, vUv );
-  float coverage = mix( texel.a, texel.r, uMask );
+  // (past the picture's edge the game's page is empty)
+  float inside = step( 0.0, vUv.x ) * step( vUv.x, 1.0 ) * step( 0.0, vUv.y ) * step( vUv.y, 1.0 );
+  float coverage = mix( texel.a, texel.r, uMask ) * inside;
   vec3 tint = mix( texel.rgb, vec3( 1.0 ), uMask );
   gl_FragColor = vec4( tint * vColor.rgb, coverage * vColor.a );
 }`;
@@ -171,6 +184,8 @@ export function spriteUniforms(draw: SpriteDraw, facingSizeScale = 1): Record<st
     uFacingSizeScale: { value: facingSizeScale },
     uSpriteSize: { value: new THREE.Vector2(draw.w, draw.h) },
     uMask: { value: draw.mask ? 1 : 0 },
+    uTurned: { value: draw.turned ? 1 : 0 },
+    uUvRect: { value: new THREE.Vector4(...(draw.uv ?? [0, 0, 1, 1])) },
   };
 }
 

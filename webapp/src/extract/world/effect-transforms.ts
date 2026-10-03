@@ -88,6 +88,10 @@ const isTrue = (e: EffectExtra | null | undefined): boolean => e?.kind === 'othe
 // to a marker is insufficient: configuration flags can occupy that position.
 // The two supported shapes are reference/boolean/reference and two adjacent
 // references. The latter needs a row containing both marker defaults.
+// Most families carry a second pair of markers after the attachment (a later
+// transform setting, which can name a bone too), which fits the two-marker
+// shape as well. Of several shapes, the attachment is the first in the row: it
+// leads. None when two start on the same field.
 export function inferEffectTransformLayout(rows: Iterable<EffectExtra[]>): EffectTransformLayout | null {
   const candidates = new Map<string, EffectTransformLayout>();
   for (const ops of rows) {
@@ -103,7 +107,10 @@ export function inferEffectTransformLayout(rows: Iterable<EffectExtra[]>): Effec
       if (layout) candidates.set(JSON.stringify(layout), layout);
     }
   }
-  return candidates.size === 1 ? candidates.values().next().value! : null;
+  if (candidates.size <= 1) return candidates.size ? candidates.values().next().value! : null;
+  const [first, next] = [...candidates.values()].sort((x, y) => x.primaryOp - y.primaryOp);
+  // (two shapes on the same first field: no telling which)
+  return next && next.primaryOp === first.primaryOp ? null : first;
 }
 
 export function readEffectTransformBinding(

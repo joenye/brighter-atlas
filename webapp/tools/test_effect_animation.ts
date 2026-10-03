@@ -27,10 +27,8 @@ try {
     layer.setOccurrenceAnimation(1,2,animation);
     layer.addRoom(1,[8192,-4096]);
     const rec = () => layer._rooms.get(1)[0];
-    const phase = (ticks: number) => {
-      const ms = ticks * 1000 / 600;
-      return Math.trunc(loop && ms > 40 ? ms % 40 : Math.min(40,ms));
-    };
+    // (a clip's time is the game's ticks, 600 a second, as the effects' own clock here)
+    const phase = (ticks: number) => Math.trunc(loop && ticks > 40 ? ticks % 40 : Math.min(40, ticks));
     const verify = (ticks: number) => {
       timeMs = ticks * 1000 / 600;
       const sim = rec().emitters[0].sim;
@@ -67,11 +65,12 @@ try {
   assert.equal(T.effectBirthFrames({primary: 0,secondary:'root',mode:'skin'},[identity],identity,[]),null);
   assert.equal(T.effectBirthFrames({primary: 0,secondary:'root',mode:'bone'},[[NaN,...identity.slice(1)]],identity,[identity]),null);
   const bar=Object.create(T.PlaybackBar.prototype);
-  bar.t=0; bar.loop=true; bar.speed=1; bar.playing=true; bar.sampler={duration:40};
+  // (the bar's time is the clip's: the game's ticks, 600 a second, so 0.6 a millisecond; elapsed time stays real time)
+  bar.t=0; bar.loop=true; bar.speed=1; bar.playing=true; bar.sampler={duration:60};
   bar.applyPose=()=>{}; bar.playBtn={textContent:''};
-  bar.tick(40); assert.equal(bar.t,40); bar.tick(40); assert.equal(bar.t,0); assert.equal(bar.elapsedMs,80);
-  bar.tick(15); assert.equal(bar.t,15); assert.equal(bar.elapsedMs,95);
-  bar.t=7; assert.equal(bar.elapsedMs,7); bar.loop=false; bar.tick(100); assert.equal(bar.t,40); assert.equal(bar.elapsedMs,40); assert.equal(bar.playing,false);
+  bar.tick(100); assert.equal(bar.t,60); bar.tick(100); assert.equal(bar.t,0); assert.equal(bar.elapsedMs,200);
+  bar.tick(25); assert.equal(bar.t,15); assert.equal(bar.elapsedMs,225);
+  bar.t=6; assert.equal(bar.elapsedMs,10); bar.loop=false; bar.tick(1000); assert.equal(bar.t,60); assert.equal(bar.elapsedMs,100); assert.equal(bar.playing,false);
   bar.play(); assert.equal(bar.t,0); assert.equal(bar.elapsedMs,0);
   console.log(`Animated effect checks passed: ${checks}; rewind, loop, pause, room reload, rig rejection and transport`);
 } finally { await rm(tmp,{recursive:true,force:true}); }

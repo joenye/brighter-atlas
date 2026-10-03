@@ -67,7 +67,8 @@ try {
         assert.equal(worldRows.length,births.length);
         for(let j=0;j<births.length;j++) {
           const born=births[j], age=(ticks-born)/600;
-          const ms=born*1000/600, phase=Math.trunc(loop&&ms>200?ms%200:Math.min(ms,200));
+          // (a clip's time is the game's ticks, 600 a second, as the effects' own clock here)
+          const phase=Math.trunc(loop&&born>200?born%200:Math.min(born,200));
           const posed=bonesAt(phase*.2);
           const pm=typeof primary==='number'?posed[primary].clone():identity;
           if(typeof primary==='number'&&mode==='skin')pm.multiply(rest[primary].clone().invert());

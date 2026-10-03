@@ -116,13 +116,25 @@ export interface EffectConfig {
   radius?: number | null; sweep?: number | null;
   spread_yaw?: number | null; spread_pitch?: number | null;
   cone?: { yaw: [number, number]; pitch: [number, number] };
+  // 'spiral': a ring that turns with time. Each particle is born where the
+  // ring's moving point is at its birth tick: radius start_radius +
+  // radius_rate * t, angle start_angle + angle_rate * t (degrees; rates per
+  // second), in the plane the shortest turn from +z to `axis` takes the ring
+  // to, about the centre (`center`, or each particle's draw from
+  // `center_range`). `axis` is the ring's; the config's own axis and cone aim
+  // the particles.
   spiral?: { axis: [number, number, number]; start_radius: number; radius_rate: number;
-             start_angle: number; angle_rate: number } | null;
+             start_angle: number; angle_rate: number;
+             center_range?: [number | [number, number], number | [number, number], number | [number, number]];
+             // (an aiming axis drawn per particle, as the centre can be)
+             cone_axis_range?: [number | [number, number], number | [number, number], number | [number, number]] } | null;
   // 'segment': spawn spread evenly along a line, given as its two endpoints in
   // the owner's local frame. A shoreline wave uses one a full tile wide.
   segment?: { from: [number, number, number]; to: [number, number, number] } | null;
   extra: EffectExtra[];
 }
+
+export interface EffectWaveSlot { period: number; a1: number; a2: number; phase: number }
 
 export interface EffectEmitter {
   slot: number; family: number;
@@ -138,7 +150,9 @@ export interface EffectEmitter {
   // defaults rather than assume a size.
   sprite: {
     material: number; images: number[];
-    draw: { sub: number; w: number; h: number; mask: boolean } | null;
+    // turned: the picture is stored turned a quarter (the game turns it back as it draws)
+    // uv: the stretch of the stored picture the frame spans (u0, v0, u1, v1; v down), where it is not all of it
+    draw: { sub: number; w: number; h: number; mask: boolean; turned?: boolean; uv?: [number, number, number, number] } | null;
   } | null;
   sprite_choices?: {kind: 'uniform'; sprites: NonNullable<EffectEmitter['sprite']>[]} | null;
   blend: 'add' | 'mix' | null;                 // emitter override, else system's
@@ -149,6 +163,9 @@ export interface EffectEmitter {
   color1: { rgba: [number, number, number, number]; op: number } | null;
   color_override_alpha?: number;
   facing?: EffectFacing | null;
+  // Waves: per world axis (x, y, z), a sine offset over the particle's life: amplitude a1 at birth to a2 at death,
+  // a period in ticks and a phase (a fraction of a cycle). Absent when every axis is still.
+  waves?: [EffectWaveSlot, EffectWaveSlot, EffectWaveSlot] | null;
   scales?: EffectScales;
   // Spawn-time properties read through verified per-build field bindings
   // (absent without them). Sampled ranges are drawn per particle.
@@ -775,6 +792,77 @@ function extractEffects(
   }
   progressBase += targetList.length;
 
+  // A sprite's frame: the game sizes a particle by its material's frame, never by the picture's pixels (a picture
+  // carries a border round the frame). In the material record: its scale (the first single value), the frame's width
+  // and height (the next two), and four insets (the four whole numbers that follow): (width - left - right) * scale,
+  // (height - top - bottom) * scale. Unreadable: none, and the picture's own size stands.
+  // And whether its picture is stored turned: the picture record (a typed value in the material: two colours, ten whole
+  // numbers, a yes/no, then three lists) says so in its yes/no. The game packs tall pictures turned to lie wide, and
+  // turns them back where it draws them.
+  // Where the picture sits in its frame: the record's first page rectangle (x0, y0, x1, y1, page pixels) is what the
+  // game samples, with the picture's first pixel at the first variant's first offset; so the frame spans the stored
+  // picture from (x0 - ox) / width to (x1 - ox) / width (a little past its edge, where the page is empty).
+  type PicturePlace = { rect: [number, number, number, number]; offset: [number, number] };
+  const frames = new Map<number, { w: number; h: number; turned: boolean; place: PicturePlace | null } | null>();
+  const resolve = (n: PoolNode | null | undefined): PoolNode | null => (n && n.tag === 0x00 ? derefPool(builder.pool, n.value) : n) ?? null;
+  const intsOf = (n: PoolNode | null, k: number): number[] | null => {
+    if (!n || !Array.isArray(n.value) || n.value.length !== k) return null;
+    return Array.from({ length: k }, (_, i) => builder.view.getInt32(n.start + 1 + 4 * i, false));
+  };
+  const placeOf = (parsed: ReparsedOp[]): PicturePlace | null => {
+    for (const p of parsed) {
+      if (p.kind !== 'G') continue;
+      const n = resolve(p.node);
+      if (!n || n.tag !== 0x24 || !n.fields || n.fields.length < 16) continue;
+      const f = n.fields.map(resolve);
+      if (![0x0c, 0x0d].includes(f[12]?.tag ?? -1)) continue;
+      const variants = f[14]?.values?.map((v: PoolNode) => resolve(v)) ?? [];
+      const offset = intsOf(resolve(variants[0]?.values?.[0]), 2);
+      const rect = intsOf(resolve(f[15]?.values?.[0]), 4);
+      return rect && offset && rect[2] > rect[0] && rect[3] > rect[1] ? { rect: rect as PicturePlace['rect'], offset: offset as PicturePlace['offset'] } : null;
+    }
+    return null;
+  };
+  const isPictureRecord = (e: EffectExtra): e is Extract<EffectExtra, { kind: 'typed' }> => e.kind === 'typed' && e.fields.length >= 16
+    && e.fields[0].kind === 'color' && e.fields[1].kind === 'color' && e.fields.slice(2, 12).every((f) => f.kind === 'int')
+    && (e.fields[12].kind === 'scalar' || e.fields[12].kind === 'other') && [0x0c, 0x0d].includes((e.fields[12] as { tag: number }).tag)
+    && e.fields.slice(13, 16).every((f) => f.kind === 'list');
+  const frameOf = (material: number): { w: number; h: number; turned: boolean; place: PicturePlace | null } | null => {
+    if (frames.has(material)) return frames.get(material)!;
+    let frame: { w: number; h: number; turned: boolean; place: PicturePlace | null } | null = null;
+    const row = rows[material], sel = row && profile.selectors[String(row.selector)];
+    const parsed = sel ? reparseRow(dec, sel, row, audit) : null;
+    const ops = parsed ? opsToExtras(builder, parsed) : null;
+    if (ops) {
+      const picture = ops.filter(isPictureRecord);
+      const turned = picture.length === 1 && (picture[0].fields[12] as { tag: number }).tag === 0x0c;
+      const single = (e: EffectExtra) => e.kind === 'float' ? e.value : e.kind === 'fixed' && e.floats?.length === 1 ? e.floats[0] : null;
+      const singles = ops.map((e, i) => ({ v: single(e), i, op: e.op })).filter((x) => x.v !== null && Number.isFinite(x.v)) as { v: number; i: number; op: number }[];
+      const scale = singles[0], w = singles[1], h = singles[2];
+      if (scale && w && h && h.op === w.op + 1 && scale.v > 0 && w.v > 0 && h.v > 0) {
+        const after = ops.slice(h.i + 1);
+        const run = after.findIndex((e, k) => [0, 1, 2, 3].every((d) => after[k + d]?.kind === 'int' && after[k + d].op === e.op + d));
+        const inset = run >= 0 ? [0, 1, 2, 3].map((d) => Number((after[run + d] as any).value) || 0) : [0, 0, 0, 0];
+        const fw = (w.v - inset[0] - inset[2]) * scale.v, fh = (h.v - inset[1] - inset[3]) * scale.v;
+        if (fw > 0 && fh > 0) frame = { w: fw, h: fh, turned, place: placeOf(parsed!) };
+      }
+      if (!frame && turned) frame = { w: 0, h: 0, turned, place: placeOf(parsed!) };
+    }
+    frames.set(material, frame);
+    return frame;
+  };
+  const framed = <T extends { material: number; draw: { w: number; h: number; turned?: boolean; uv?: [number, number, number, number] } | null } | null | undefined>(sprite: T): T => {
+    const f = sprite?.draw ? frameOf(sprite.material) : null;
+    if (f && sprite?.draw) {
+      // (the picture's own pixels, before the frame takes their place)
+      const pw = sprite.draw.w, ph = sprite.draw.h, pl = f.place;
+      const uv = pl && pw > 0 && ph > 0 ? [(pl.rect[0] - pl.offset[0]) / pw, (pl.rect[1] - pl.offset[1]) / ph, (pl.rect[2] - pl.offset[0]) / pw, (pl.rect[3] - pl.offset[1]) / ph] as [number, number, number, number] : null;
+      const whole = !uv || uv.every((v, i) => Math.abs(v - (i < 2 ? 0 : 1)) < 1e-4);
+      sprite.draw = { ...sprite.draw, ...(f.w > 0 ? { w: f.w, h: f.h } : {}), ...(f.turned ? { turned: true } : {}), ...(!whole ? { uv: uv!.map((v) => Math.round(v * 1e5) / 1e5) as [number, number, number, number] } : {}) };
+    }
+    return sprite;
+  };
+
   // ---- E3: config classification by decoded content, never by ref position --
   interface ConfigInfo {
     slot: number; family: number;
@@ -863,6 +951,58 @@ function extractEffects(
       consumed.add(topInts[0].i);
     } else if (vec3Count >= 1 || floatCount >= 2) {
       info.kind = 'shape';
+      // A RING THAT TURNS WITH TIME: a start radius and its rate, then a start
+      // angle (degrees) and its rate, after the centre and the ring's axis;
+      // before the centre, the cone that aims each particle (its axis, then
+      // its azimuth and polar ranges). No other shape carries two rates, and
+      // its parts are read relative to them: here two vectors are a centre and
+      // the ring's axis, never the ends of a line, which put Teleport's circle
+      // and On fire's rings on a vertical line through the body.
+      const turning = (() => {
+        if (topRates.length < 2) return null;
+        const aRate = topRates[topRates.length - 1], rRate = topRates[topRates.length - 2];
+        const rOp = ops[rRate.i].op, aOp = ops[aRate.i].op;
+        if (aOp !== rOp + 2) return null;
+        const at = (op: number) => ops.findIndex((e) => e.op === op);
+        const scalarAt = (op: number) => { const k = at(op), e = ops[k];
+          return e?.kind === 'float' ? { v: e.value, k } : e?.kind === 'fixed' && e.floats?.length === 1 ? { v: e.floats[0], k } : null; };
+        const vecAt = (op: number) => topVec3.find((t) => ops[t.i].op === op) ?? null;
+        // (a random vector: a class-588 triple of plain values or (min, max) draws)
+        const rangeAt = (op: number) => { const k = at(op), e = ops[k] as any;
+          if (e?.kind !== 'typed' || e.fields?.length !== 3) return null;
+          const lane = (f: any) => f?.kind === 'float' ? f.value : f?.kind === 'typed' && f.fields?.length === 2
+            && f.fields.every((x: any) => x?.kind === 'float') ? [f.fields[0].value, f.fields[1].value] : null;
+          const lanes = e.fields.map(lane);
+          return lanes.every((l: any) => l !== null) ? { lanes, k } : null; };
+        const r0 = scalarAt(rOp - 1), a0 = scalarAt(aOp - 1);
+        const ring = vecAt(rOp - 2), centre = vecAt(rOp - 3), centreRange = centre ? null : rangeAt(rOp - 3);
+        if (!r0 || !a0 || (!centre && !centreRange)) return null;
+        const cone = [rOp - 7, rOp - 6, rOp - 5, rOp - 4].map(scalarAt);
+        const coneAxis = vecAt(rOp - 8), coneAxisRange = coneAxis ? null : rangeAt(rOp - 8);
+        return { aRate, rRate, r0, a0, ring, centre, centreRange, cone: cone.every(Boolean) ? cone as { v: number; k: number }[] : null, coneAxis, coneAxisRange };
+      })();
+      if (turning) {
+        const t = turning, perSecond = (r: { value: number; den: number }) => r.den ? r.value * 600 / r.den : 0;
+        info.shapeKind = 'spiral';
+        info.center = t.centre ? t.centre.v : [0, 0, 0];
+        info.axis = t.coneAxis ? t.coneAxis.v : [0, 0, 1];
+        info.spiral = {
+          axis: t.ring ? t.ring.v : [0, 0, 0],
+          start_radius: t.r0.v, radius_rate: perSecond(t.rRate),
+          start_angle: t.a0.v, angle_rate: perSecond(t.aRate),
+          ...(t.centreRange ? { center_range: t.centreRange.lanes } : {}),
+          ...(t.coneAxisRange ? { cone_axis_range: t.coneAxisRange.lanes } : {}),
+        };
+        if (t.cone) {
+          info.cone = { yaw: [t.cone[0].v, t.cone[1].v], pitch: [t.cone[2].v, t.cone[3].v] };
+          info.spreadYaw = Math.abs(t.cone[1].v - t.cone[0].v);
+          info.spreadPitch = Math.abs(t.cone[3].v - t.cone[2].v);
+        }
+        for (const k of [t.aRate.i, t.rRate.i, t.r0.k, t.a0.k, t.ring?.i, t.centre?.i, t.centreRange?.k, t.coneAxis?.i, t.coneAxisRange?.k, ...(t.cone ?? []).map((c) => c.k)]) if (k !== undefined) consumed.add(k);
+        for (let i = 0; i < ops.length; i++) if (!consumed.has(i)) info.extra.push(ops[i]);
+        configInfo.set(slot, info);
+        return info;
+      }
       // Centre and axis are told apart by MAGNITUDE, not by order: the axis is
       // a unit direction while a centre is an offset in native units (hundreds
       // of them). Order is not reliable, since a config may store its centre
@@ -1282,6 +1422,8 @@ function extractEffects(
           shared.effectProperties?.(ref, sysOps ?? []) ?? null,
           shared.effectFacing?.(ref, ops) ?? null,
           shared.effectSprites?.(ref) ?? null);
+        framed(emitter.sprite);
+        for (const choice of (emitter.sprite_choices as any)?.sprites ?? []) framed(choice);
         emitters.push(emitter);
         const fields = shared.effectFields?.(ref, ops);
         if (fields) applyEffectFields(emitter, fields);
@@ -1741,6 +1883,25 @@ function buildEmitter(
       if (ops[i].kind === 'symbol') consumed.add(i);
     }
   }
+  // Waves: three consecutive slots (x, y, z), each four values (period, amplitude at birth, amplitude at death:
+  // whole numbers; phase: a fraction of a cycle). A slot with no amplitude is still: kept only when one moves.
+  let waves: EffectEmitter['waves'] = null;
+  {
+    const slotOf = (e: EffectExtra | undefined): EffectWaveSlot | null => {
+      const f = (e as any)?.kind === 'typed' ? (e as any).fields : null;
+      return Array.isArray(f) && f.length === 4 && f.slice(0, 3).every((x: any) => x?.kind === 'int') && f[3]?.kind === 'float'
+        ? { period: f[0].value, a1: f[1].value, a2: f[2].value, phase: f[3].value } : null;
+    };
+    for (let i = 0; i + 2 < ops.length; i++) {
+      const run = [ops[i], ops[i + 1], ops[i + 2]];
+      if (run[1].op !== run[0].op + 1 || run[2].op !== run[0].op + 2) continue;
+      const slots = run.map(slotOf);
+      if (!slots.every(Boolean)) continue;
+      for (let k = 0; k < 3; k++) consumed.add(i + k);
+      if (slots.some((w) => w!.a1 || w!.a2)) waves = slots as [EffectWaveSlot, EffectWaveSlot, EffectWaveSlot];
+      break;
+    }
+  }
   const transform = readEffectTransformBinding(ops, template.transform ?? null);
   const bone = typeof transform?.primary === 'number' ? transform.primary : null;
   if (transform) {
@@ -1756,6 +1917,7 @@ function buildEmitter(
     slot: row.slot, family: row.runtime,
     burst, shape, bone, transform, sprite, blend, facing,
     sprite_choices: spriteChoices ? {kind: 'uniform', sprites: spriteChoices.map(spriteOf)} : null,
+    ...(waves ? { waves } : {}),
     life: life && { ticks: life.ticks, op: life.op },
     fade_in: fadeIn && { ticks: fadeIn.ticks, op: fadeIn.op },
     fade_out: fadeOut && { ticks: fadeOut.ticks, op: fadeOut.op },

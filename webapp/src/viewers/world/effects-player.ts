@@ -46,6 +46,7 @@ export type EffectsPlayerMode = 'loop' | 'timed';
 
 interface Instance {
   slot: number;
+  key: number;           // its own key: the slot, or another for a second copy of the same system (addSystem)
   system: EffectSystem;
   mode: EffectsPlayerMode;
   // effective sim time source: 'loop' instances always follow the master
@@ -54,6 +55,8 @@ interface Instance {
   startTick: number | null;
   timeSource: 'master' | 'external' | 'frozen';
   slavedTick: number;
+  // released: nothing born from this tick on (the live particles finish); Infinity while it emits
+  stopAt: number;
   animation: EffectBoneAnimation | null;
   configureAnimation: (animation: EffectBoneAnimation | null) => void;
   // One entry per drawn sprite outcome; a selecting emitter repeats its sim.
@@ -131,9 +134,12 @@ export class EffectsPlayer {
    *  the assigned mode, or null when the slot is
    *  unknown or has no emitters (nothing to render, caller skips it). Safe
    *  to call once per slot; a repeat call is a no-op returning the existing
-   *  mode. */
-  addSystem(slot: number): EffectsPlayerMode | null {
-    const existing = this._instances.get(slot);
+   *  mode. `key`: another copy of the same system under its own key (every
+   *  other method takes the key), as when a restarted system's live particles
+   *  run on beside its new start; the copy reproduces them, the draws being
+   *  fixed by tick. */
+  addSystem(slot: number, key = slot): EffectsPlayerMode | null {
+    const existing = this._instances.get(key);
     if (existing) return existing.mode;
     const system = this._systemsBySlot.get(slot);
     if (!system || !system.emitters.length) return null;
@@ -141,11 +147,13 @@ export class EffectsPlayer {
     const animationSetters: ((animation: EffectBoneAnimation | null) => void)[] = [];
     const inst: Instance = {
       slot,
+      key,
       system,
       mode,
       startTick: mode === 'loop' ? 0 : null,
       timeSource: 'master',
       slavedTick: 0,
+      stopAt: Infinity,
       animation: null,
       configureAnimation: () => {},
       // Emitters with nothing drawable are skipped rather than given a fallback dot.
@@ -171,7 +179,7 @@ export class EffectsPlayer {
       inst.animation = accepted;
       for (const set of animationSetters) set(accepted);
     };
-    this._instances.set(slot, inst);
+    this._instances.set(key, inst);
     for (const { sim, batchKey, choice } of inst.emitters) {
       this._batchFor(batchKey).members.push({ sim, instance: inst, choice });
     }
@@ -185,6 +193,7 @@ export class EffectsPlayer {
   play(slot: number): void {
     const inst = this._instances.get(slot);
     if (!inst) return;
+    inst.stopAt = Infinity;
     inst.timeSource = 'master';
     inst.startTick = this.clock.t;
     inst.configureAnimation(null);
@@ -207,6 +216,23 @@ export class EffectsPlayer {
     this._fill(camera);
   }
 
+  /** Drop an instance (a second copy, `addSystem(slot, key)`, once its particles are gone). */
+  removeSystem(key: number): void {
+    const inst = this._instances.get(key);
+    if (!inst) return;
+    this._instances.delete(key);
+    for (const batch of this._batches.values()) batch.members = batch.members.filter((m) => m.instance !== inst);
+    this._rebalance();
+  }
+
+  /** Release a system as the game does when what drives it ends: from its current tick nothing new is born, and the
+   *  particles already out live their lives (`liveCount` falls to 0). `false` lets it emit again (the same effect asked
+   *  for once more keeps its system). */
+  release(slot: number, on = true): void {
+    const inst = this._instances.get(slot);
+    if (inst) inst.stopAt = on ? this._effectiveT(inst) : Infinity;
+  }
+
   /** Stop driving a slaved instance externally; it freezes at its last tick
    *  until play() or syncClock() resumes it. */
   unslave(slot: number): void {
@@ -219,6 +245,7 @@ export class EffectsPlayer {
   stop(slot: number, camera: THREE.Camera | null = null): void {
     const inst = this._instances.get(slot);
     if (!inst) return;
+    inst.stopAt = Infinity;
     inst.timeSource = 'master';
     inst.startTick = null;
     inst.configureAnimation(null);
@@ -248,8 +275,9 @@ export class EffectsPlayer {
   liveCount(slot?: number): number {
     let n = 0;
     for (const inst of this._instances.values()) {
-      if (slot != null && inst.slot !== slot) continue;
-      for (const { sim, choice } of inst.emitters) if (choice <= 0) n += sim.alive;
+      if (slot != null && inst.key !== slot) continue;
+      const T = this._effectiveT(inst);
+      for (const { sim, choice } of inst.emitters) if (choice <= 0) n += inst.stopAt === Infinity ? sim.alive : sim.aliveBornBy(T, inst.stopAt);
     }
     return n;
   }
@@ -461,12 +489,13 @@ export class EffectsPlayer {
         const { sim, instance, choice } = member;
         const T = this._effectiveT(instance);
         sim.ensure(T);
-        sim.evaluate(T, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode) => {
+        sim.evaluate(T, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode, ox, oy, oz) => {
           if (idx >= cap) return;
           const at4 = idx * 4;
-          posSize[at4] = x;
-          posSize[at4 + 1] = y;
-          posSize[at4 + 2] = z;
+          // (a particle's waves move it along the axes it is drawn in, after its placement)
+          posSize[at4] = x + ox;
+          posSize[at4 + 1] = y + oy;
+          posSize[at4 + 2] = z + oz;
           posSize[at4 + 3] = scale;
           color[at4] = r;
           color[at4 + 1] = g;
@@ -482,7 +511,7 @@ export class EffectsPlayer {
             batch.depth[idx] = this._scratch.sub(this._camPos).dot(this._camFwd);
           }
           idx++;
-        }, choice);
+        }, choice, instance.stopAt);
       }
       if (sortable && idx > 1 && idx <= MIX_SORT_CAP) this._sortBatch(batch, idx);
       batch.count = idx;
