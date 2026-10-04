@@ -3,7 +3,7 @@
 // (compose.ts). The look lives in the address (look-code.ts), is remembered on this device, and has undo
 // (look-model.ts). The drawing is render.ts's (the character, a place behind it); the equipment panel is
 // wardrobe.ts's.
-import {Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode} from 'react';
+import {Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode} from 'react';
 import * as THREE from '../../vendor/three.module.js';
 import {at, DEV} from './data.js';
 import {compose, makeIndex, randomise, itemParts, hiddenItems, propParts, itemAppearance, EQUIP_SLOTS} from './compose.js';
@@ -189,20 +189,38 @@ async function deliver(blob: Blob, name: string) {
 // how far a shot flies with no foe to aim at (tiles of 1024 units)
 const SHOT_TILES = 4;
 const PICTURE_FRAMING = {dist: FRAMES.full.dist * 0.74, target: FRAMES.full.target * 0.96};
-/** The preview picture's corner mark (the page's .of-picmark: the site's mark, "Brighter Fashion"), `k` times its size. */
-async function pictureMark(g: CanvasRenderingContext2D, w: number, h: number, k: number) {
-  await Promise.all([markImage.decode().catch(() => {}), document.fonts?.load(`600 ${20 * k}px "BA Brighter"`).catch(() => {})]);
-  const img = 30 * k, gap = 9 * k, cy = h - 18 * k - img / 2, sans = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif';
+/** The site's lockup (the mark, "Brighter", "ATLAS" in the site's blue, as the home page's footer sets it), the
+ * size of its letters in a picture `w` by `h`: every picture the site makes carries it in its lower right, the same. */
+const lockupSize = (w: number, h: number) => Math.max(15, Math.round(Math.min(w, h * 1.6) * 0.017));
+function Lockup({s}: {s: number}) {
+  return <span className="of-lockup" style={{'--s': `${s}px`} as CSSProperties}><img src="/brand/mark.svg" alt="" /><b>Brighter</b><i>Atlas</i></span>;
+}
+/** The lockup drawn into a picture `w` by `h`, as `.of-lockup` draws it on the page. */
+async function pictureMark(g: CanvasRenderingContext2D, w: number, h: number) {
+  const s = lockupSize(w, h), sans = '-apple-system, "Segoe UI", system-ui, Roboto, sans-serif';
+  await Promise.all([markImage.decode().catch(() => {}), document.fonts?.load(`600 ${s}px "BA Brighter"`).catch(() => {})]);
+  const name = `600 ${s}px "BA Brighter", ${sans}`, sub = `700 ${Math.round(s * 0.74)}px ${sans}`, ls = (c: CanvasRenderingContext2D, em: number) => { (c as any).letterSpacing = `${em}px`; };
+  const m = Math.round(s * 1.75), gap = Math.round(s * 0.5), subGap = Math.round(s * 0.32);
+  // (laid out on a layer of its own, then laid on the picture over its two shadows: a soft dark halo and a close drop)
+  const t = document.createElement('canvas').getContext('2d')!;
+  t.font = name; ls(t, s * 0.02); const nw = t.measureText('Brighter').width;
+  t.font = sub; ls(t, s * 0.74 * 0.11); const aw = t.measureText('ATLAS').width;
+  const pad = s, lw = Math.ceil(m + gap + nw + subGap + aw), lh = m;
+  const L = t.canvas; L.width = lw + 2 * pad; L.height = lh + 2 * pad;
+  const cy = pad + lh / 2;
+  if (markImage.naturalWidth) t.drawImage(markImage, pad, pad, m, m);
+  t.textBaseline = 'middle';
+  t.font = name; ls(t, s * 0.02); t.fillStyle = '#e8ecf2'; t.fillText('Brighter', pad + m + gap, cy);
+  t.font = sub; ls(t, s * 0.74 * 0.11); t.fillStyle = '#78b7ff'; t.fillText('ATLAS', pad + m + gap + nw + subGap, cy);
+  const x = w - Math.round(s * 1.2) - lw - pad, y = h - s - lh - pad, f = s / 17;
   g.save();
-  g.textBaseline = 'middle'; g.fillStyle = 'rgba(232, 236, 242, .82)'; g.shadowColor = 'rgba(0, 0, 0, .5)'; g.shadowOffsetY = k; g.shadowBlur = 3 * k;
-  const bold = `600 ${20 * k}px "BA Brighter", ${sans}`, plain = `400 ${20 * k}px ${sans}`;
-  g.font = plain; const tail = ' Fashion', tw = g.measureText(tail).width;
-  g.font = bold; const bw = g.measureText('Brighter').width;
-  let x = w - 22 * k - tw - bw;
-  g.fillText('Brighter', x, cy); g.font = plain; g.fillText(tail, x + bw, cy);
-  x -= gap + img; g.shadowColor = 'transparent';
-  if (markImage.naturalWidth) g.drawImage(markImage, x, cy - img / 2, img, img);
+  for (const [dy, blur, a] of [[0, 10, 0.35], [1, 3, 0.55]]) {
+    g.shadowColor = `rgba(0, 0, 0, ${a})`; g.shadowBlur = blur * f; g.shadowOffsetX = 1e4; g.shadowOffsetY = dy * f;
+    g.drawImage(L, x - 1e4, y);
+  }
   g.restore();
+  g.drawImage(L, x, y);
+  L.width = 0;
 }
 
 export function Tool(props: ToolProps) {
@@ -1006,7 +1024,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       const e = engine.current; if (!e) throw new Error('not ready');
       const stopped = () => { if (tok.stop) throw new Error('stopped'); };
       const v = e.viewer, look = saveLook(o), c0 = els.canvas.current!, [w, h] = outSize(o, cropNow, c0.clientWidth || 1, c0.clientHeight || 1);
-      const framing = {...v.want}, yaw = v.yaw, k = Math.min(w, h) / 630;
+      const framing = {...v.want}, yaw = v.yaw;
       const layer = () => { const c = document.createElement('canvas'); c.width = w; c.height = h; made.push(c); return c; };
       // a picture: the background, the view (drawn in tiles, no canvas its size but this one) and the mark, all into one
       if (o.fmt === 'picture') {
@@ -1014,13 +1032,13 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         if (look.paint) paintBackdrop(g, look.paint, w, h);
         v.pictureInto(g, w, h, framing, yaw, look.floor, cropNow, touch ? 1024 : 2048);
         stopped();
-        if (!look.transparent) await pictureMark(g, w, h, k);
+        if (!look.transparent) await pictureMark(g, w, h);
         progress(1);
         return await new Promise<Blob>((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('no picture')), 'image/png'));
       }
       // (what goes behind and over every frame, drawn once)
       const back = look.paint ? layer() : null; if (back) paintBackdrop(back.getContext('2d')!, look.paint!, w, h);
-      const mark = look.transparent ? null : layer(); if (mark) await pictureMark(mark.getContext('2d')!, w, h, k);
+      const mark = look.transparent ? null : layer(); if (mark) await pictureMark(mark.getContext('2d')!, w, h);
       const c = layer(), g = c.getContext('2d')!;
       const compose = (src: CanvasImageSource) => { g.clearRect(0, 0, w, h); if (back) g.drawImage(back, 0, 0); g.drawImage(src, 0, 0); if (mark) g.drawImage(mark, 0, 0); };
       const a = sharedAnim(), plan = recordPlan(o), fx = a ? (a.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender) : null, fps = fpsOf(o);
@@ -1323,7 +1341,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           {/* the one way into face and body (Male/Female and a random look are there, in Body) */}
           <div className="of-charcard"><button className="btn of-design" aria-label="Character: face, body and hair" title="Design your character: face, body and hair" onClick={() => openCreator()}><Icon name="person" />Character</button></div>
           <div id="toast" role="status" aria-live="polite" className={toastMsg && toastMsg.n > 0 ? 'show' : undefined}>{toastMsg?.text}</div>
-          {PICTURE && <div className="of-picmark"><img src="/brand/mark.svg" alt="" /><span><b className="brand-name">Brighter</b> Fashion</span></div>}
+          {PICTURE && <Lockup s={lockupSize(innerWidth, innerHeight)} />}
           {/* the view's own toolbar, along its top on the right: undo, redo, the picture, the looks */}
           <div id="of-toolbar" className="of-toolbar">
             <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>
@@ -1377,7 +1395,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         onPointerDownCapture={() => { if (!designUsed.current) { designUsed.current = true; warmStyles(); } }} onKeyDownCapture={() => { if (!designUsed.current) { designUsed.current = true; warmStyles(); } }}>
         <div className="creator-box">
           <div className="creator-bar"><h2>Design your character</h2></div>
-          <div ref={els.body} className="creator-body" style={{'--stage-h': stageH ?? (cSplit ? `${(cSplit * 100).toFixed(3)}%` : '')} as React.CSSProperties}>
+          <div ref={els.body} className="creator-body" style={{'--stage-h': stageH ?? (cSplit ? `${(cSplit * 100).toFixed(3)}%` : '')} as CSSProperties}>
             <div ref={els.stage} className="creator-stage" style={designing ? {background: cssOf(backdrop)} : undefined}>
               <canvas ref={els.cCanvas} aria-label="Preview: drag to turn, scroll to zoom" /><span className="stage-hint">Drag to turn</span>
               {controlsInStage && controls}
@@ -1567,7 +1585,7 @@ function ShareDrawer({shareField, rec, setRec, dlOpen, toggleDl, anim, timeline,
  *  size and the mark where a download carries it. Turning and zooming pass through to the character. */
 function RecordOverlay({crop, size, mark, view, setCrop}: {crop: Crop, size: [number, number], mark: boolean, view: [number, number], setCrop: (c: Crop) => void}) {
   const box = useRef<HTMLDivElement>(null);
-  const [vw, vh] = view, pw = crop.w * vw, ph = crop.h * vh, k = Math.min(pw, ph) / 630;
+  const [vw, vh] = view, pw = crop.w * vw;
   const drag = (edge: 'top' | 'bottom' | 'left' | 'right') => (e: React.PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
     const el = e.currentTarget as HTMLElement, r = box.current!.getBoundingClientRect(), MIN = 0.12;
@@ -1589,8 +1607,7 @@ function RecordOverlay({crop, size, mark, view, setCrop}: {crop: Crop, size: [nu
     <div ref={box} className="of-rec">
       <div className="of-crop" style={{left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.w * 100}%`, height: `${crop.h * 100}%`}}>
         <span className="of-crop-size">{size[0]} × {size[1]}</span>
-        {mark && <span className="of-crop-mark" style={{right: 22 * k, bottom: 18 * k, gap: 9 * k, fontSize: 20 * k}}>
-          <img src="/brand/mark.svg" alt="" style={{width: 30 * k, height: 30 * k}} /><span><b className="brand-name">Brighter</b> Fashion</span></span>}
+        {mark && <Lockup s={lockupSize(size[0], size[1]) * pw / size[0]} />}
         {(['top', 'bottom', 'left', 'right'] as const).map(edge => <span key={edge} className={`of-crop-bar ${edge}`} role="slider" aria-label={`Crop: ${edge} edge`}
           aria-valuenow={Math.round((edge === 'top' ? crop.y : edge === 'bottom' ? crop.y + crop.h : edge === 'left' ? crop.x : crop.x + crop.w) * 100)} aria-valuemin={0} aria-valuemax={100}
           tabIndex={0} onPointerDown={drag(edge)} />)}

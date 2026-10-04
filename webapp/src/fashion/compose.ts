@@ -13,6 +13,10 @@ export type Rgb = [number, number, number];
 export interface DrawPart { key: string; mesh: number; mat: number | null; t1: Rgb; t2: Rgb; material?: number | null; spec?: number[] | null; glow?: boolean;
   /** A book's front cover (u0, v0, u1, v1 of its picture): the site's mark drawn on it. */
   cover?: number[];
+  /** A book's open pages (u0, v0, u1, v1 of the picture both read, +v toward their top): a word of thanks across them. */
+  pages?: number[];
+  /** A sheet of paper (u0, v0, u1, v1 of its picture): a child's drawing on it. */
+  drawing?: number[];
   /** Its texture has no recolour plane (nothing to ask for). */
   plain?: boolean }
 
@@ -161,7 +165,7 @@ export function propParts(props: any[] | null | undefined): DrawPart[] {
   return (props ?? []).filter(p => p?.mesh != null).map((p, i) => {
     const t1: Rgb = Array.isArray(p.r1) ? p.r1 : NEUTRAL, t2: Rgb = Array.isArray(p.r2) ? p.r2 : NEUTRAL;
     return {key: `${p.mesh}/${p.mat}/${t1.join(',')}/${t2.join(',')}/prop${i}${p.cover ? '-cover' : ''}`, mesh: p.mesh, mat: p.mat ?? null, t1, t2, material: p.material ?? null,
-      spec: p.spec ?? null, glow: !!p.glow, ...(Array.isArray(p.cover) && p.cover.length === 4 ? {cover: p.cover} : {}), ...(p.plain ? {plain: true} : {})};
+      spec: p.spec ?? null, glow: !!p.glow, ...(Array.isArray(p.cover) && p.cover.length === 4 ? {cover: p.cover} : {}), ...(Array.isArray(p.pages) && p.pages.length === 4 ? {pages: p.pages} : {}), ...(Array.isArray(p.drawing) && p.drawing.length === 4 ? {drawing: p.drawing} : {}), ...(p.plain ? {plain: true} : {})};
   });
 }
 

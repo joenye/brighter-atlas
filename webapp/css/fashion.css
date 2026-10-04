@@ -575,14 +575,20 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   #fashion.designing-shared .creator-grip, #fashion.designing-shared .creator-drawer { pointer-events: auto; background: var(--bg1); }
 }
 
-/* ?picture: the look alone for a link's preview picture (the view only, the site's mark in its corner) */
-.of-picmark { display: none; }
+/* the site's lockup in a picture's lower right (the link preview, the download's preview; pictures draw the same):
+   the mark, "Brighter" and "ATLAS" in the site's blue, as the home page's footer and the release pictures set it,
+   its letters --s */
+.of-lockup { position: absolute; right: calc(var(--s) * 1.2); bottom: var(--s); display: inline-flex; align-items: center; line-height: 1; white-space: nowrap; pointer-events: none;
+  font: 600 var(--s) -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+  filter: drop-shadow(0 calc(var(--s) / 17) calc(var(--s) * 3 / 17) rgba(0, 0, 0, .55)) drop-shadow(0 0 calc(var(--s) * 10 / 17) rgba(0, 0, 0, .35)); }
+.of-lockup img { width: calc(var(--s) * 1.75); height: calc(var(--s) * 1.75); margin-right: calc(var(--s) * .5); }
+.of-lockup b { font-family: "BA Brighter", sans-serif; font-weight: 600; color: #e8ecf2; letter-spacing: .02em; }
+.of-lockup i { font-style: normal; font-weight: 700; font-size: calc(var(--s) * .74); color: #78b7ff; text-transform: uppercase; letter-spacing: .11em; margin-left: calc(var(--s) * .32); }
+#fashion.picture .of-lockup { z-index: 3; }
+/* ?picture: the look alone for a link's preview picture (the view only, the site's lockup in its corner) */
 #fashion.picture #topbar, #fashion.picture .of-right, #fashion.picture .of-toolbar, #fashion.picture .of-controls, #fashion.picture .of-charcard,
 #fashion.picture .load-card, #fashion.picture #toast { display: none !important; }
 #fashion.picture main { grid-template-columns: minmax(0, 1fr); }
-#fashion.picture .of-picmark { display: flex; position: absolute; right: 22px; bottom: 18px; align-items: center; gap: 9px;
-  color: rgba(232, 236, 242, .82); font-size: 20px; letter-spacing: .01em; text-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
-#fashion.picture .of-picmark img { width: 30px; height: 30px; }
 /* phones: Background, the drawer's third mode: the background menu itself in the equipment's place */
 @media (max-width: 860px) {
   #fashion.bg-mode .of-right .wardrobe { display: none; }
@@ -664,8 +670,6 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-rec { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
 .of-crop { position: absolute; outline: 1px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 100vmax rgba(4, 6, 9, .5); }
 .of-crop-size { position: absolute; left: 6px; top: 6px; padding: 2px 7px; border-radius: 6px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; }
-.of-crop-mark { position: absolute; display: inline-flex; align-items: center; color: rgba(232, 236, 242, .82); white-space: nowrap; text-shadow: 0 1px 3px rgba(0, 0, 0, .5); line-height: 1; }
-.of-crop-mark b { font-weight: 600; }
 .of-crop-bar { position: absolute; pointer-events: auto; touch-action: none; background: #fff; border-radius: 4px; box-shadow: 0 1px 5px rgba(0, 0, 0, .55); }
 .of-crop-bar::before { content: ''; position: absolute; inset: -14px; }   /* (a bigger target than it looks) */
 .of-crop-bar.top, .of-crop-bar.bottom { left: 50%; width: 40px; height: 5px; margin-left: -20px; cursor: ns-resize; }

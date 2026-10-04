@@ -63,7 +63,9 @@ let gameroomChunk: typeof import('./gameroom.js') | null = null;
 export function forgetCaches() {
   for (const p of texCache.values()) void p.then(t => t?.dispose());
   for (const p of meshCache.values()) void p.then(m => m?.geo?.dispose(), () => {});
-  texCache.clear(); meshCache.clear(); jsonCache.clear();
+  for (const g of bookGeos.values()) g.dispose();
+  for (const p of [...covers.values(), ...drawings.values()]) void p.then(t => t.dispose(), () => {});
+  texCache.clear(); meshCache.clear(); jsonCache.clear(); bookGeos.clear(); covers.clear(); drawings.clear();
   gameroomChunk?.forget();
 }
 // warm the caches (e.g. the next item in a list) without drawing anything
@@ -175,7 +177,7 @@ float gShadow2x2( sampler2D map, vec2 size, float bias, vec4 c ) {
 // the book's top, +v its right, so the drawing is turned a quarter clockwise).
 const covers = new Map<string, Promise<THREE.Texture>>();
 const coverMark = new Image(); coverMark.src = '/brand/mark.svg';
-function covered(map: THREE.Texture, rect: number[], key: string) {
+function covered(map: THREE.Texture, rect: number[], key: string, pages: BookPage[] | null) {
   let p = covers.get(key);
   if (!p) covers.set(key, p = (async () => {
     await Promise.all([coverMark.decode().catch(() => {}), document.fonts?.load('600 40px "BA Brighter"').catch(() => {})]);
@@ -195,8 +197,8 @@ function covered(map: THREE.Texture, rect: number[], key: string) {
     g.putImageData(img, 0, 0);
     const [x0, y0, x1, y1] = [rect[0] * W, rect[1] * H, rect[2] * W, rect[3] * H];
     const w = y1 - y0, h = x1 - x0;   // (the cover as the drawing sees it, turned)
-    // (centred across the cover, a little toward its top: the reader's thumb holds its fore edge low down)
-    g.save(); g.translate((x0 + x1) / 2 + (x1 - x0) * 0.08, (y0 + y1) / 2); g.rotate(Math.PI / 2);
+    // (as a title sits on a real cover: right of the middle, clear of the spine's hinge, and a little below the top)
+    g.save(); g.translate((x0 + x1) / 2, (y0 + y1) / 2); g.rotate(Math.PI / 2); g.translate(w * 0.05, h * 0.03);
     const gold = '#e9d49a', size = Math.min(w * 0.42, h * 0.4), sans = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif';
     g.shadowColor = 'rgba(40, 8, 8, .55)'; g.shadowBlur = size * 0.04; g.shadowOffsetY = size * 0.02;
     if (coverMark.naturalWidth) g.drawImage(coverMark, -size / 2, -h * 0.38, size, size);
@@ -204,17 +206,247 @@ function covered(map: THREE.Texture, rect: number[], key: string) {
     g.font = `600 ${size * 0.34}px "BA Brighter", ${sans}`; g.fillText('Brighter', 0, -h * 0.38 + size + size * 0.36);
     g.font = `600 ${size * 0.2}px ${sans}`; (g as any).letterSpacing = `${size * 0.06}px`; g.fillText('ATLAS', 0, -h * 0.38 + size + size * 0.66);
     g.restore();
-    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.flipY = map.flipY;
+    const out = pages ? thanked(cv, pages) : cv;
+    const t = new THREE.CanvasTexture(out); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.flipY = map.flipY;
+    if (pages) t.channel = 1;
     return t;
   })());
   return p;
+}
+
+// The open book's pages: both read one picture, each the other's mirror. So the book's texture is drawn twice side by
+// side, the reader's right page reading the second copy (a second set of coordinates, `bookGeometry`), and each copy
+// carries its page's half of the thanks, upright and unmirrored as the reader sees it.
+interface BookPage { verts: number[]; right: boolean; flipU: boolean; spineAtU1: boolean; rect: number[] }
+// (a triangle's surface per unit of its picture's u and v, image v (down), and its front face's normal)
+function uvFrame(pos: THREE.BufferAttribute, uv: THREE.BufferAttribute, a: number, b: number, c: number) {
+  const P = (i: number) => new THREE.Vector3().fromBufferAttribute(pos, i);
+  const e1 = P(b).sub(P(a)), e2 = P(c).sub(P(a));
+  const d1 = [uv.getX(b) - uv.getX(a), uv.getY(a) - uv.getY(b)], d2 = [uv.getX(c) - uv.getX(a), uv.getY(a) - uv.getY(c)];
+  const det = d1[0] * d2[1] - d2[0] * d1[1], n = e1.clone().cross(e2);
+  if (Math.abs(det) < 1e-12 || n.lengthSq() === 0) return null;
+  // ([e1 e2] = [dP/du dP/dv] [d1 d2])
+  const du = e1.clone().multiplyScalar(d2[1]).addScaledVector(e2, -d1[1]).divideScalar(det);
+  const dv = e2.clone().multiplyScalar(d1[0]).addScaledVector(e1, -d2[0]).divideScalar(det);
+  return {du, dv, n: n.normalize(), area: n.length()};
+}
+const pageCache = new WeakMap<THREE.BufferGeometry, Map<string, BookPage[] | null>>();
+function bookPages(geo: THREE.BufferGeometry, rect: number[]): BookPage[] | null {
+  const key = rect.join(','), known = pageCache.get(geo) ?? new Map(); pageCache.set(geo, known);
+  if (known.has(key)) return known.get(key)!;
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute, uv = geo.getAttribute('uv') as THREE.BufferAttribute, idx = geo.index!;
+  const inside = (i: number) => { const u = uv.getX(i), v = 1 - uv.getY(i); return u >= rect[0] && u <= rect[2] && v >= rect[1] && v <= rect[3]; };
+  // (the triangles wholly on the picture, in pieces joined by their corners: one a page)
+  const parent = new Map<number, number>(), root = (i: number): number => { const r = parent.get(i) ?? i; return r === i ? i : root(r); };
+  const tris: number[][] = [];
+  for (let t = 0; t < idx.count; t += 3) {
+    const tri = [idx.getX(t), idx.getX(t + 1), idx.getX(t + 2)];
+    if (!tri.every(inside)) continue;
+    tris.push(tri); for (const i of tri) if (!parent.has(i)) parent.set(i, i);
+    parent.set(root(tri[1]), root(tri[0])); parent.set(root(tri[2]), root(tri[0]));
+  }
+  const groups = new Map<number, number[][]>();
+  for (const tri of tris) { const r = root(tri[0]); groups.set(r, [...groups.get(r) ?? [], tri]); }
+  let found: BookPage[] | null = null;
+  if (groups.size === 2) {
+    const shapes = [...groups.values()].map(list => {
+      const frame = list.map(t => uvFrame(pos, uv, t[0], t[1], t[2])).filter(f => f != null).sort((x, y) => y!.area - x!.area)[0]!;
+      const verts = [...new Set(list.flat())], c = new THREE.Vector3();
+      for (const i of verts) c.add(new THREE.Vector3().fromBufferAttribute(pos, i)); c.divideScalar(verts.length);
+      const us = verts.map(i => uv.getX(i)), vs = verts.map(i => 1 - uv.getY(i));
+      return {frame, verts, c, rect: [Math.min(...us), Math.min(...vs), Math.max(...us), Math.max(...vs)]};
+    });
+    if (shapes.every(x => x.frame)) {
+      // (the reader faces the pages' fronts, their tops up: in the world the reader's right is up x the facing normal;
+      // the parts' frame is the world's mirror (the root swaps y and z), so here it is the other way round)
+      const n = shapes[0].frame.n.clone().add(shapes[1].frame.n).normalize(), right = n.clone().cross(shapes[0].frame.dv).normalize();
+      const order = shapes[0].c.dot(right) > shapes[1].c.dot(right);
+      found = shapes.map((x, k) => {
+        const other = shapes[1 - k].c, near = x.verts.reduce((b, i) => new THREE.Vector3().fromBufferAttribute(pos, i).distanceTo(other) < new THREE.Vector3().fromBufferAttribute(pos, b).distanceTo(other) ? i : b);
+        return {verts: x.verts, right: (k === 0) === order, flipU: x.frame.du.dot(right) < 0, spineAtU1: uv.getX(near) > (x.rect[0] + x.rect[2]) / 2, rect: x.rect};
+      });
+    }
+  }
+  known.set(key, found);
+  return found;
+}
+/** The book's mesh with its second coordinates: the texture twice as wide, the right page on the second copy. */
+const bookGeos = new Map<string, THREE.BufferGeometry>();
+function bookGeometry(geo: THREE.BufferGeometry, pages: BookPage[], key: string) {
+  let g = bookGeos.get(key);
+  if (!g) {
+    g = new THREE.BufferGeometry(); g.setIndex(geo.index);
+    for (const [name, attr] of Object.entries(geo.attributes)) g.setAttribute(name, attr);
+    const uv = geo.getAttribute('uv') as THREE.BufferAttribute, uv1 = new Float32Array(uv.count * 2);
+    for (let i = 0; i < uv.count; i++) { uv1[2 * i] = uv.getX(i) / 2; uv1[2 * i + 1] = uv.getY(i); }
+    for (const p of pages) if (p.right) for (const i of p.verts) uv1[2 * i] += 0.5;
+    g.setAttribute('uv1', new THREE.BufferAttribute(uv1, 2));
+    bookGeos.set(key, g);
+  }
+  return g;
+}
+// The thanks, half on each page: the cover's picture twice, the paper cleaned of its made-up writing, the words in ink.
+function thanked(cv: HTMLCanvasElement, pages: BookPage[]) {
+  const W = cv.width, H = cv.height, out = document.createElement('canvas'); out.width = W * 2; out.height = H;
+  const g = out.getContext('2d', {willReadFrequently: true})!; g.drawImage(cv, 0, 0); g.drawImage(cv, W, 0);
+  const sans = getComputedStyle(document.body).fontFamily || 'system-ui, sans-serif', ink = '#2b2622';
+  for (const p of pages) {
+    const ox = p.right ? W : 0, [x0, y0, x1, y1] = [ox + p.rect[0] * W, p.rect[1] * H, ox + p.rect[2] * W, p.rect[3] * H], pw = x1 - x0, ph = y1 - y0;
+    // (the paper's own colour, the brightest tenth of it, laid over the page; the fold in shade toward the spine)
+    const px = g.getImageData(Math.round(x0), Math.round(y0), Math.round(pw), Math.round(ph)).data, lum: number[][] = [];
+    for (let k = 0; k < px.length; k += 4) lum.push([px[k] + px[k + 1] + px[k + 2], px[k], px[k + 1], px[k + 2]]);
+    lum.sort((a, b) => b[0] - a[0]); const top = lum.slice(0, Math.max(1, lum.length >> 3)), mean = [1, 2, 3].map(j => top.reduce((t, x) => t + x[j], 0) / top.length * 0.97);
+    g.fillStyle = `rgb(${mean.map(Math.round).join(',')})`; g.fillRect(x0, y0, pw, ph);
+    const fold = g.createLinearGradient(p.spineAtU1 ? x1 : x0, 0, p.spineAtU1 ? x1 - pw * 0.22 : x0 + pw * 0.22, 0);
+    fold.addColorStop(0, 'rgba(70, 52, 30, .30)'); fold.addColorStop(1, 'rgba(70, 52, 30, 0)');
+    g.fillStyle = fold; g.fillRect(x0, y0, pw, ph);
+    // (the words upright as the page is read: its top is +v, so the drawing is turned over, and mirrored where the
+    // page's u runs leftward)
+    g.save(); g.translate((x0 + x1) / 2, (y0 + y1) / 2); g.scale(p.flipU ? -1 : 1, -1);
+    g.fillStyle = ink; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const fit = (text: string, font: (px: number) => string, px: number, max: number) => { g.font = font(px); const w = g.measureText(text).width; if (w > max) g.font = font(px * max / w); };
+    if (!p.right) {
+      fit('Thanks', z => `italic 600 ${z}px Georgia, "Times New Roman", serif`, ph * 0.2, pw * 0.8); g.fillText('Thanks', 0, -ph * 0.14);
+      fit('for using', z => `italic 500 ${z}px Georgia, "Times New Roman", serif`, ph * 0.13, pw * 0.8); g.fillText('for using', 0, ph * 0.08);
+    } else {
+      fit('Brighter', z => `600 ${z}px "BA Brighter", ${sans}`, ph * 0.17, pw * 0.82); g.fillText('Brighter', 0, -ph * 0.2);
+      (g as any).letterSpacing = `${ph * 0.012}px`; fit('ATLAS', z => `700 ${z}px ${sans}`, ph * 0.11, pw * 0.7); g.fillStyle = '#2f5f9e'; g.fillText('ATLAS', 0, -ph * 0.05);
+      (g as any).letterSpacing = '0px';
+      // (a heart, drawn: the same on every device)
+      const r = Math.min(pw, ph) * 0.17, hy = ph * 0.19;
+      g.fillStyle = '#c8323c'; g.beginPath();
+      g.moveTo(0, hy + r * 0.9);
+      g.bezierCurveTo(-r * 1.25, hy + r * 0.1, -r * 0.95, hy - r * 0.95, 0, hy - r * 0.4);
+      g.bezierCurveTo(r * 0.95, hy - r * 0.95, r * 1.25, hy + r * 0.1, 0, hy + r * 0.9);
+      g.fill();
+    }
+    g.restore();
+  }
+  cv.width = 0;
+  return out;
+}
+
+// A sheet of paper with a small child's pencil drawing of a cat on it (the Draw animation's sheet), on its face toward
+// whoever holds it: the sheet's two faces read the same corner of the picture, so, as the book's pages, each reads a copy
+// of its own, side by side in a picture of the sheet alone (its second coordinates, `sheetGeometry`), the cat on one.
+const drawings = new Map<string, Promise<THREE.Texture>>();
+function drawn(map: THREE.Texture, rect: number[], geo: THREE.BufferGeometry) {
+  const key = `${map.id}/${rect.join(',')}`;
+  let p = drawings.get(key);
+  if (!p) drawings.set(key, p = (async () => {
+    const src = map.image as HTMLImageElement, [u0, v0, u1, v1] = rect;
+    // (as large as the sheet is in the world, not as its texels: u and v are scaled unequally)
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute, uv = geo.getAttribute('uv') as THREE.BufferAttribute, idx = geo.index!;
+    let best: ReturnType<typeof uvFrame> = null;
+    for (let t = 0; t < idx.count; t += 3) { const f = uvFrame(pos, uv, idx.getX(t), idx.getX(t + 1), idx.getX(t + 2)); if (f && (!best || f.area > best.area)) best = f; }
+    const aspect = best ? best.du.length() * (u1 - u0) / (best.dv.length() * (v1 - v0)) : 0.72, H = 512, W = Math.round(H * aspect);
+    const cv = document.createElement('canvas'); cv.width = 2 * W; cv.height = H;
+    const g = cv.getContext('2d')!;
+    // (the paper's own colour, its bright part's, over both copies)
+    g.drawImage(src, u0 * src.width, v0 * src.height, (u1 - u0) * src.width, (v1 - v0) * src.height, 0, 0, W, H);
+    const px = g.getImageData(0, 0, W, H).data; let r = 0, gr = 0, b = 0, n = 0;
+    for (let k = 0; k < px.length; k += 4) if (px[k] + px[k + 1] + px[k + 2] > 560) { r += px[k]; gr += px[k + 1]; b += px[k + 2]; n++; }
+    g.drawImage(cv, 0, 0, W, H, W, 0, W, H);
+    if (n) { g.fillStyle = `rgb(${Math.round(r / n)},${Math.round(gr / n)},${Math.round(b / n)})`; g.fillRect(0, 0, 2 * W, H); }
+    g.save(); g.translate(W * 1.5, H / 2); g.scale(1, -1); catDrawing(g, W, H); g.restore();
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.flipY = true; t.channel = 1;
+    return t;
+  })());
+  return p;
+}
+/** The sheet's mesh with its second coordinates: its corner of the picture stretched over a copy, the face toward the
+ * holder on the second (the face looking along +z in the part's frame, seen in the Draw animation). */
+function sheetGeometry(geo: THREE.BufferGeometry, rect: number[], key: string) {
+  let g = bookGeos.get(key);
+  if (!g) {
+    g = new THREE.BufferGeometry(); g.setIndex(geo.index);
+    for (const [name, attr] of Object.entries(geo.attributes)) g.setAttribute(name, attr);
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute, uv = geo.getAttribute('uv') as THREE.BufferAttribute, idx = geo.index!;
+    const [u0, v0, u1, v1] = rect, uv1 = new Float32Array(uv.count * 2);
+    // (v: the texture is uploaded flipped, so its top row, the picture's v0, is at 1)
+    for (let i = 0; i < uv.count; i++) { uv1[2 * i] = (uv.getX(i) - u0) / (u1 - u0) / 2; uv1[2 * i + 1] = 1 - ((1 - uv.getY(i)) - v0) / (v1 - v0); }
+    const inner = new Set<number>();
+    for (let t = 0; t < idx.count; t += 3) {
+      const tri = [idx.getX(t), idx.getX(t + 1), idx.getX(t + 2)], f = uvFrame(pos, uv, tri[0], tri[1], tri[2]);
+      if (f && f.n.z > 0) for (const i of tri) inner.add(i);
+    }
+    for (const i of inner) uv1[2 * i] += 0.5;
+    g.setAttribute('uv1', new THREE.BufferAttribute(uv1, 2));
+    bookGeos.set(key, g);
+  }
+  return g;
+}
+// The cat as a three-year-old draws it in pencil: a lumpy round head with ears that do not match, dot eyes, a big
+// smile and whiskers, a body like a potato, four stick legs and a long curly tail. Its wobbles are seeded: the same
+// cat every time. Drawn about the origin, y down, in a sheet `w` by `h`.
+function catDrawing(g: CanvasRenderingContext2D, w: number, h: number) {
+  let seed = 7;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const j = (a: number) => (rnd() - 0.5) * 2 * a;
+  const s = Math.min(w, h * 0.8), lw = s * 0.016;
+  // a pencil line through points, gone over twice a little apart, wavering
+  const line = (pts: number[][], closed = false) => {
+    for (let pass = 0; pass < 2; pass++) {
+      g.lineWidth = lw * (pass ? 0.7 : 1); g.strokeStyle = pass ? 'rgba(84, 84, 94, .45)' : 'rgba(72, 72, 82, .8)';
+      g.lineCap = 'round'; g.lineJoin = 'round';
+      const q = pts.map(([x, y]) => [x * s + j(s * 0.008), y * s + j(s * 0.008)]);
+      g.beginPath(); g.moveTo(q[0][0], q[0][1]);
+      for (let i = 1; i < q.length; i++) { const [x, y] = q[i], [px, py] = q[i - 1]; g.quadraticCurveTo(px + (x - px) * 0.5 + j(s * 0.01), py + (y - py) * 0.5 + j(s * 0.01), x, y); }
+      if (closed) g.lineTo(q[0][0] + j(s * 0.02), q[0][1] + j(s * 0.02));
+      g.stroke();
+    }
+  };
+  const blob = (cx: number, cy: number, rx: number, ry: number, k = 22, wob = 0.08) => {
+    const pts: number[][] = [];
+    for (let i = 0; i <= k; i++) { const a = i / k * Math.PI * 2 - 0.6, f = 1 + j(wob); pts.push([cx + Math.cos(a) * rx * f, cy + Math.sin(a) * ry * f]); }
+    line(pts);
+  };
+  // head, with ears
+  const hx = -0.02, hy = -0.27, hr = 0.2;
+  blob(hx, hy, hr * 1.08, hr, 24, 0.07);
+  line([[hx - hr * 0.82, hy - hr * 0.45], [hx - hr * 0.7, hy - hr * 1.55], [hx - hr * 0.2, hy - hr * 0.9]]);
+  line([[hx + hr * 0.25, hy - hr * 0.95], [hx + hr * 0.95, hy - hr * 1.35], [hx + hr * 0.88, hy - hr * 0.4]]);
+  // eyes: scribbled dots, not the same size
+  for (const [ex, er] of [[-0.38, 0.13], [0.36, 0.1]]) {
+    const pts: number[][] = []; for (let i = 0; i < 14; i++) { const a = i * 2.3; pts.push([hx + hr * ex + Math.cos(a) * hr * er * (0.4 + rnd() * 0.6), hy - hr * 0.15 + Math.sin(a) * hr * er * (0.4 + rnd() * 0.6)]); }
+    line(pts);
+  }
+  // nose and a wide smile
+  line([[hx - hr * 0.08, hy + hr * 0.18], [hx + hr * 0.1, hy + hr * 0.17], [hx, hy + hr * 0.3], [hx - hr * 0.08, hy + hr * 0.18]]);
+  line([[hx - hr * 0.42, hy + hr * 0.35], [hx - hr * 0.2, hy + hr * 0.55], [hx, hy + hr * 0.38], [hx + hr * 0.22, hy + hr * 0.56], [hx + hr * 0.45, hy + hr * 0.32]]);
+  // whiskers, three a side, every which way
+  for (const side of [-1, 1]) for (let i = 0; i < 3; i++) {
+    const y0 = hy + hr * (0.15 + i * 0.16), x0 = hx + side * hr * 0.45;
+    line([[x0, y0], [x0 + side * hr * (0.95 + j(0.25)), y0 + hr * ((i - 1) * 0.35 + j(0.1))]]);
+  }
+  // the body: a potato under the head, a little off to one side
+  blob(0.03, 0.1, 0.27, 0.19, 26, 0.09);
+  // legs, sticks with round feet
+  for (const [lx, len] of [[-0.17, 0.2], [-0.06, 0.23], [0.1, 0.21], [0.21, 0.18]]) {
+    const top = 0.1 + 0.19 * Math.sqrt(Math.max(0, 1 - (lx - 0.03) ** 2 / 0.27 ** 2)) - 0.015;
+    line([[lx, top], [lx + j(0.02), top + len]]);
+    blob(lx + 0.015, top + len + 0.015, 0.035, 0.022, 10, 0.15);
+  }
+  // the tail, long and curly, out of the back (on the side the drawing hand leaves clear)
+  const tail: number[][] = [];
+  for (let i = 0; i <= 26; i++) { const t = i / 26, a = t * Math.PI * 3.2; tail.push([-0.27 - t * 0.12 - Math.sin(a) * 0.04 * (1 - t * 0.4), 0.06 - t * 0.38 + Math.cos(a) * 0.03]); }
+  line(tail);
+}
+
+/** A part's mesh: the book's and the drawing sheet's with their second coordinates (see `bookPages`, `drawn`). */
+async function partMesh(p: DrawPart) {
+  const m = await getMesh(p.mesh), pages = p.pages && p.cover && p.mat != null ? bookPages(m.geo, p.pages) : null;
+  if (pages) return {...m, geo: bookGeometry(m.geo, pages, `${p.mesh}/${p.pages!.join(',')}`)};
+  return p.drawing && p.mat != null ? {...m, geo: sheetGeometry(m.geo, p.drawing, `${p.mesh}/sheet/${p.drawing.join(',')}`)} : m;
 }
 /** A part's material: its texture, recoloured as the game does, lit as the game does where the data says how. */
 async function partMaterial(p: DrawPart) {
   const game = rendering.lighting === 'game' && p.mat != null && !!p.spec;
   const [plain, param, light, glow] = await Promise.all([p.mat != null ? getTex('tex', p.mat) : null, p.mat != null && !p.plain ? getTex('param', p.mat) : null,
     game ? getTex('light', p.mat!) : null, game && p.glow ? getTex('glow', p.mat!) : null]);
-  const map = plain && p.cover ? await covered(plain, p.cover, `${p.mat}/${p.cover.join(',')}`) : plain;
+  const pages = p.pages && plain ? bookPages((await getMesh(p.mesh)).geo, p.pages) : null;
+  const map = plain && p.cover ? await covered(plain, p.cover, `${p.mat}/${p.cover.join(',')}${pages ? `/${p.mesh}/${p.pages!.join(',')}` : ''}`, pages)
+    : plain && p.drawing ? await drawn(plain, p.drawing, (await getMesh(p.mesh)).geo) : plain;
   if (p.mat != null && !map) throw Error(`part texture ${p.mat}: not loaded`);
   const mat = new THREE.MeshStandardMaterial({color: map ? 0xffffff : 0xb9c2cf, map: map ?? null, metalness: 0.02, roughness: 0.82, alphaTest: 0.35, side: THREE.FrontSide});   // (one side, as the game: its rasterizer culls the engine's back faces in every pass; drawn from both, a part's close inner and outer sheets fight for the same pixels and flicker as it moves)
   applyPackedRecolor(mat, param, [p.t1, p.t2]);
@@ -600,7 +832,7 @@ export class Preview {
   loadingParts = 0;
 
   private async build(p: DrawPart) {
-    const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
+    const [{geo, skinned}, mat] = await Promise.all([partMesh(p), partMaterial(p)]);
     // (its shadow: cut out where the texture is, as the part is)
     const depth = new THREE.MeshDepthMaterial({depthPacking: THREE.RGBADepthPacking, map: mat.map, alphaTest: 0.35, side: THREE.FrontSide});
     mat.addEventListener('dispose', () => depth.dispose());
@@ -743,7 +975,7 @@ export class Preview {
       const frame = new THREE.Group(); frame.add(...rig.roots);
       const clips = await Promise.all(a.clips.map(async c => c == null ? null : this.clips.get(c) ?? this.clips.set(c, new ClipSampler(await getJson(at(`clip/${c}`)))).get(c)!));
       const meshes = await Promise.all(a.parts.map(async p => {
-        const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
+        const [{geo, skinned}, mat] = await Promise.all([partMesh(p), partMaterial(p)]);
         // (skinned in the character's frame, as its own parts: the figure's place is its bones', moved with its frame)
         const m = skinned ? new PartSkinnedMesh(geo, mat, this.anchor) : new THREE.Mesh(geo, mat);
         if (skinned) (m as any).bind(rig.skeleton, new THREE.Matrix4());
@@ -1494,7 +1726,7 @@ export class Thumbnailer {
     const meshes: THREE.Mesh[] = [];
     const box = new THREE.Box3();
     for (const p of parts) {
-      const [{geo, skinned}, mat] = await Promise.all([getMesh(p.mesh), partMaterial(p)]);
+      const [{geo, skinned}, mat] = await Promise.all([partMesh(p), partMaterial(p)]);
       const mesh = skinned ? new PartSkinnedMesh(geo, mat, this.anchor) : new THREE.Mesh(geo, mat);
       if (skinned) (mesh as any).bind(this.rig.skeleton, new THREE.Matrix4());
       mesh.frustumCulled = false;
