@@ -43,6 +43,8 @@ export interface RenderDecodeData {
     light: {field: number; colour: number; intensity: number};
     avatarZ: string;
     overrides: {roomRuntime: number; presetOffset: number}[];
+    /** Rooms an event haunts (07-Oct-2026 on): the preset they take while it haunts them. */
+    haunted?: {roomRuntime: number; presetOffset: number}[];
     /** Rooms whose environment follows a quest: the quest variable and, from
      *  each of its states on, the preset shown ([state, preset offset], -1:
      *  the room's own); with the fields that name the quest. */
@@ -110,7 +112,10 @@ export function validRenderData(d: any): d is RenderDecodeData {
  *  (render-shape.ts reads the rest from the user's bundles): the rooms whose
  *  lighting follows a quest, and the element field of the dynamic list. */
 export interface RenderBuildData {
-  story?: {rooms: {roomRuntime: number; variable: number; steps: [number, number][]}[]};
+  /** Rooms whose lighting follows a quest; rooms whose lighting the game fixes whatever the story (07-Oct-2026
+   *  on: an event's rooms), with the preset they take while the event haunts them where it does. */
+  story?: {rooms: {roomRuntime: number; variable: number; steps: [number, number][]}[];
+    fixed?: {roomRuntime: number; presetOffset: number; haunted?: number}[]};
   scene?: {dynamicField: number};
   /** The rooms whose fog the game draws (07-Oct-2026 on), by room runtime, and each one's fog area. */
   fog?: {rooms: FogRoom[]};
@@ -124,6 +129,8 @@ export function validRenderBuildData(d: any): d is RenderBuildData {
   if (d.story !== undefined && !(Array.isArray(d.story?.rooms) && d.story.rooms.every((r: any) => index(r?.roomRuntime)
     && index(r?.variable) && Array.isArray(r.steps) && r.steps.length > 0 && r.steps.every((st: any) => Array.isArray(st)
       && st.length === 2 && index(st[0]) && (st[1] === -1 || index(st[1])))))) return false;
+  if (d.story?.fixed !== undefined && !(Array.isArray(d.story.fixed) && d.story.fixed.every((f: any) => index(f?.roomRuntime)
+    && index(f?.presetOffset) && (f.haunted === undefined || index(f.haunted))))) return false;
   if (d.fog !== undefined && !(Array.isArray(d.fog?.rooms) && d.fog.rooms.every((f: any) => index(f?.room)
     && Array.isArray(f.rect) && f.rect.length === 4 && f.rect.every(Number.isFinite) && f.rect[2] > f.rect[0] && f.rect[3] > f.rect[1]))) return false;
   return d.scene === undefined || index(d.scene?.dynamicField);

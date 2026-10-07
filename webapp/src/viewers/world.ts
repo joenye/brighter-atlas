@@ -1411,7 +1411,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }, { title: 'The light lamps, torches and fires cast (game shading)' });
   const gameFogCheck = check('gfog', 'Fog', () => {
     if (gameFrame) gameFrame.showFog = !!state.gfog;
-  }, { title: 'The low fog some rooms have during events, at its thickest (game shading)' });
+  }, { title: 'The fog and deeper light of the rooms an event haunts, as when nothing scares them off (game shading)' });
   gameLightsCheck.classList.add('wp-sub');
   gameFogCheck.classList.add('wp-sub');
   const lightSection = section('Lighting & effects',

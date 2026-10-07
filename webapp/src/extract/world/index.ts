@@ -901,6 +901,7 @@ export async function extractWorld({
     if (render && validRenderData(render)) {
       const environments: Record<string, RenderEnvironment> = {};
       const story: Record<string, StoryEnvironment> = {};
+      const haunted: Record<string, RenderEnvironment> = {};
       const field = (slot: number, op: number) => recordField(rows, rowDecoder, pool.values, slot, op);
       const text = (n: PoolNode | null) => (n?.tag === 0x0e && Array.isArray(n.values) ? String.fromCodePoint(...(n.values as number[])) : null);
       for (const roomId of new Set([...environmentSlots.keys(), ...environmentPresets.keys()])) {
@@ -915,6 +916,10 @@ export async function extractWorld({
         const read = (p: PoolNode | null) => readEnvironmentPreset(render, p, rows, rowDecoder, pool.values, dt.symbols);
         const env = read(override ? archivedValue(ab0, profile, override.presetOffset) : own);
         if (env) environments[roomId] = env;
+        // an event's haunted room: the lighting it takes while the event haunts it (with its fog)
+        const haunt = render.environment.haunted?.find(o => runtime === o.roomRuntime);
+        const hauntedEnv = haunt ? read(archivedValue(ab0, profile, haunt.presetOffset)) : null;
+        if (hauntedEnv) haunted[roomId] = hauntedEnv;
         // Rooms whose lighting follows a quest: every step, named by the quest
         // and its region ("Main Story (Hopeforest)").
         const s = render.environment.story;
@@ -937,6 +942,7 @@ export async function extractWorld({
         samplers: render.samplers, blends: render.blends, waterPrograms: render.waterPrograms,
         materials: readRenderMaterials(render, rows, rowDecoder, pool.values, dt.symbols),
         environments,
+        ...(Object.keys(haunted).length ? {haunted} : {}),
         ...(Object.keys(story).length ? {story} : {}),
         lighting: {direction: archivedFloats(ab0, profile, render.lighting.directionOffset, 0x22, 3),
           gamma: render.lighting.gamma, fade: render.lighting.fade},

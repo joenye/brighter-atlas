@@ -24,6 +24,8 @@ import { PLANE_GAME_DISTANCE, planeCount, planeGroups, TILE_QUAD, type PlaneTile
 
 export interface GameRenderIndex extends GameRenderTables {
   waterPrograms: { surface: number[]; curtain: number[]; surfaceRing?: number[]; curtainLit?: number[] };
+  /** The rooms an event haunts (07-Oct-2026 on): the environment each takes while it does. */
+  haunted?: Record<string, GameRenderIndex['environments'][string]>;
   /** The volumetric fog's passes and the rooms that have it (07-Oct-2026 on): each one's fog area (room
    *  frame), the ground it lies on and the room's place on the map (tiles). */
   fog?: { programs: { noise: number; march: number; blurX: number; blurY: number; edge: number };
@@ -970,7 +972,9 @@ export class GameFrame {
     const t = this.ensureTargets(camera.width, camera.height);
     this.updateActors();
     const solid = this.solidDraws();
-    const env = this.environmentOverride ?? idx.environments[String(this.room.roomId)] ?? null;
+    // a room an event haunts takes its haunted lighting while its fog shows (the event's state the fog draws)
+    const haunting = this.showFog && idx.fog?.rooms.some((f) => f.id === this.room!.roomId) ? idx.haunted?.[String(this.room.roomId)] : undefined;
+    const env = this.environmentOverride ?? haunting ?? idx.environments[String(this.room.roomId)] ?? null;
 
     // Shadow receiver fit over the scene box.
     // (the room's rect grown by the margin, within the loaded rooms, merged

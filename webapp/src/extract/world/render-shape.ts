@@ -449,12 +449,16 @@ export function deriveRenderData(src: {
     const preset = r.steps[r.steps.length - 1][1];
     return preset >= 0 ? [{ roomRuntime: r.roomRuntime, presetOffset: preset }] : [];
   });
+  // rooms whose lighting the game fixes (an event's), and what the haunted ones take while it haunts them
+  const fixed = build?.story?.fixed ?? [];
+  overrides.push(...fixed.map((f) => ({ roomRuntime: f.roomRuntime, presetOffset: f.presetOffset })));
+  const haunted = fixed.flatMap((f) => (f.haunted !== undefined ? [{ roomRuntime: f.roomRuntime, presetOffset: f.haunted }] : []));
   const { ssaoPrograms, fullscreenVertex, fogPrograms: fogPasses, ...draw } = tables;
   const fog = fogPasses && build?.fog?.rooms.length ? { fog: { programs: fogPasses, rooms: build.fog.rooms } } : {};
   return {
     ...draw, ...fog, materials,
     lighting: { directionOffset: lights.direction, ...ENGINE.lighting },
-    environment: { assetValue: 0, ...environment, ...ENGINE.environment, overrides,
+    environment: { assetValue: 0, ...environment, ...ENGINE.environment, overrides, ...(haunted.length ? { haunted } : {}),
       ...(fields ? { story: { fields, rooms } } : {}) },
     shadow: { size: ENGINE.shadow.size, lightViewOffset: lights.lightView, normalOffsetTexels: ENGINE.shadow.normalOffsetTexels,
       borderTexels: ENGINE.shadow.borderTexels, marginTiles: ENGINE.shadow.marginTiles, layerHeight: ENGINE.shadow.layerHeight },
