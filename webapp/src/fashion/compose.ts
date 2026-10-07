@@ -95,21 +95,27 @@ export function compose(pack: any, index: ReturnType<typeof makeIndex>, state: S
     // (a weapon's other pieces with it: a bow's arrow, a crossbow's bolt, the second of a pair of throwing knives)
     else if (ap.a.held != null) for (const id of [ap.a.held, ...(ap.a.also ?? [])]) heldList.push({parts: pack.held[id], colour: ap.colour, id});
   }
-  const [feet, legs, torso, hands, head, back, cape] = [0, 1, 2, 3, 4, 5, 6].map(i => wornAt[i]);
+  const [feet, legs, torso, hands, head, back, worn6] = [0, 1, 2, 3, 4, 5, 6].map(i => wornAt[i]);
+  // (since the 7-Oct-2026 update a torso piece can take no scarf: the cape, when it is one, is left off before anything
+  // goes on, as the Vampire Torso leaves off a Snowman Scarf)
+  const cape = scarfDropped(torso?.w, worn6?.w) ? undefined : worn6;
   // (a torso piece marked `early`, the Shark Hoodies since the 29-Sep-2026 update, goes on with the hands before
   // the head, back and cape: it claims their places first)
   const upper = torso?.w.first ? [torso, hands] : [hands, torso];
   const order = [...(torso?.w.early ? [...upper, head, back, cape] : [head, back, cape, ...upper]),
     ...(legs?.w.first ? [legs, feet] : [feet, legs])].filter(Boolean);
   let accum = 0;
-  const useAlt = new Map<any, boolean>();
+  // which of its looks an item wears, chosen when it is first reached: a torso's hat look under a hat that asks for it
+  // with the head already claimed (since the 7-Oct-2026 update; the Vampire Torso's), else its alternate when its
+  // bit is claimed (sleeves into gloves), else its own
+  const look = new Map<any, 'parts' | 'alt' | 'hat'>();
   for (const pass of [0, 1]) {
     for (const e of order) {
       const w = e.w;
-      if (!useAlt.has(e)) useAlt.set(e, !!w.altWhen && (accum & w.altWhen) !== 0);
-      const alt = useAlt.get(e);
-      const list: number[] = alt ? w.alt : w.parts;
-      const mask: number = (alt ? w.altMask : w.mask)[pass];
+      if (!look.has(e)) look.set(e, w.hat && head?.w.hatAsks && (accum & 1) ? 'hat' : w.altWhen && (accum & w.altWhen) ? 'alt' : 'parts');
+      const which = look.get(e)!;
+      const list: number[] = which === 'hat' ? w.hat : which === 'alt' ? w.alt : w.parts;
+      const mask: number = (which === 'hat' ? w.hatMask : which === 'alt' ? w.altMask : w.mask)[pass];
       if (pass === 1 && !mask) continue;   // the second loop only visits items with a pass-1 mask
       if (accum & mask) continue;
       for (const id of list) { const p = pack.parts[id]; if (p.pass === pass) add(p, null, e.colour, `w${e.id}`); }
@@ -157,6 +163,9 @@ export function randomise(pack: any, state: State, rnd = Math.random): State {
   return {...state, style, colour};
 }
 
+/** Whether a torso piece leaves off the cape: it takes no scarf and the cape is one. */
+function scarfDropped(torso: any, cape: any): boolean { return !!(torso?.noScarf && cape?.scarf); }
+
 // One item's own parts (every pass, primary list), tinted as it would be worn:
 // for thumbnails of items the game has no picture for.
 /** What an animation holds while it plays (its props: the meshes its controller lists, skinned to the player's rig,
@@ -199,8 +208,10 @@ export function hiddenItems(pack: any, index: ReturnType<typeof makeIndex>, stat
   const out = new Map<EquipSlot, EquipSlot[]>();
   for (const [slot, {id, w}] of worn) {
     if (drawn(id) || !w.parts?.some((p: number) => pack.parts[p]?.mesh != null)) continue;
-    const mask = (w.mask?.[0] ?? 0) | (w.altMask?.[0] ?? 0);
+    const mask = (w.mask?.[0] ?? 0) | (w.altMask?.[0] ?? 0) | (w.hatMask?.[0] ?? 0);
     out.set(slot, [...worn].filter(([s, o]) => s !== slot && drawn(o.id) && ((o.w.mask?.[0] ?? 0) & mask)).map(([s]) => s));
   }
+  // (a scarf the torso piece leaves off is hidden by it)
+  if (out.has('cape') && scarfDropped(worn.get('torso')?.w, worn.get('cape')?.w)) out.set('cape', ['torso']);
   return out;
 }
