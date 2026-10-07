@@ -136,6 +136,8 @@ export class SatelliteHarness {
     frame.neighbourFade = false;          // neighbours at full light
     frame.planeDistance = Infinity;       // the endless floor
     frame.showPlane = true;
+    // the fog lies on the ground seen from the room's own camera: from straight above it would only veil it
+    frame.showFog = false;
     const images = new Map((await store.index('images')).map((e) => [e.i, e.h ?? null]));
     const boxes = new Map((await store.index('meshes')).map((e) => [e.i, Array.isArray(e.bbox) ? e.bbox.map(Number) : null]));
     const inputs = new FrameInputs(index, frame.shaders, (id) => images.get(id) ?? null);

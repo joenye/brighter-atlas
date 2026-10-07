@@ -38,6 +38,9 @@ export interface BakeInstance {
 
 export interface BakeInputs {
   instances: BakeInstance[];
+  /** A ring program's per-vertex ring centre: the water element's origin, in
+   *  the space positions are baked in (radial ripples, 07-Oct-2026 on). */
+  ringCentre?: boolean;
   /** One vertex layout per program that draws the batch (main, then depth). */
   layouts: { elements: number[]; attributes: AttributeBinding[] }[];
   specular: [number, number, number];
@@ -96,6 +99,7 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
   const sty = new Uint8Array(total * 4);
   const tints = [new Uint8Array(total * 4), new Uint8Array(total * 4)];
   const win = new Uint16Array(total * 2);
+  const centre = input.ringCentre ? new Float32Array(total * 2) : null;
   const bones = input.skinned ? new Uint8Array(total * 4) : null;
   const weights = input.skinned ? new Uint8Array(total * 4) : null;
   const neutral = packColour([127 / 255, 127 / 255, 127 / 255, 1]);   // neutral recolour tint (half range)
@@ -140,6 +144,7 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
       if (input.style) sty.set(input.style, o * 4);
       tints[0].set(tintBytes[0], o * 4); tints[1].set(tintBytes[1], o * 4);
       if (input.window) { win[o * 2] = input.window[0]; win[o * 2 + 1] = input.window[1]; }
+      if (centre) { centre[o * 2] = matrix.elements[12]; centre[o * 2 + 1] = matrix.elements[13]; }
     }
     // Source triangles are clockwise; a mirrored placement reverses them.
     for (let k = 0; k < source.length; k += 3) {
@@ -194,6 +199,7 @@ export function bakeGameGeometry(input: BakeInputs): THREE.BufferGeometry[] {
       else if (role === 'tint0' || role === 'tint1') attribute = new THREE.BufferAttribute(tints[role === 'tint0' ? 0 : 1], 4, true);
       else if (role === 'boneIndex' && bones) { attribute = new THREE.BufferAttribute(bones, 4); attribute.gpuType = THREE.IntType; }
       else if (role === 'boneWeight' && weights) attribute = new THREE.BufferAttribute(weights, 4, true);
+      else if (role === 'position2' && centre) attribute = new THREE.BufferAttribute(centre, 2);
       else return;
       geometry.setAttribute(name, attribute);
     });

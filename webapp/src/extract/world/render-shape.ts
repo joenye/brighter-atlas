@@ -47,7 +47,7 @@ export const ENGINE = {
 };
 
 /** What the draw tables need from one shader. */
-export interface ShaderFacts { names: Set<string>; outputs: number; mipLevel: number }
+export interface ShaderFacts { names: Set<string>; outputs: number; mipLevel: number; code?: Uint32Array }
 
 /** A bundle shader object's first shader, or null when it is not DXBC. */
 export function shaderFacts(object: Uint8Array): ShaderFacts | null {
@@ -70,14 +70,57 @@ export function shaderFacts(object: Uint8Array): ShaderFacts | null {
         }
       }
     }
-    return { names, outputs: parseSignature(parts.get('OSGN')).length, mipLevel };
+    return { names, outputs: parseSignature(parts.get('OSGN')).length, mipLevel,
+      code: code ? new Uint32Array(code.buffer.slice(code.byteOffset, code.byteOffset + (code.byteLength & ~3))) : undefined };
   } catch {
     return null;
   }
 }
 
 type Tables = Pick<RenderDecodeData, 'programs' | 'vertexShaders' | 'pixelShaders' | 'samplers' | 'blends' | 'waterPrograms'>
-  & { ssaoPrograms: RenderDecodeData['ssao']['programs']; fullscreenVertex: number };
+  & { ssaoPrograms: RenderDecodeData['ssao']['programs']; fullscreenVertex: number; fogPrograms?: FogPrograms };
+
+/** The volumetric fog's passes (07-Oct-2026 on): noise, march, blur along x and y, edge smoothing. */
+export interface FogPrograms { noise: number; march: number; blurX: number; blurY: number; edge: number }
+
+const bits = (x: number) => new Uint32Array(new Float32Array([x]).buffer)[0];
+/** Whether a shader's code holds these words in a row (literal operands; a zero matches -0 too). */
+function holds(f: ShaderFacts, words: number[]): boolean {
+  const c = f.code;
+  if (!c) return false;
+  const same = (got: number, want: number) => got === want || (want === 0 && got === 0x80000000);
+  for (let at = 0; at + words.length <= c.length; at++) {
+    let k = 0;
+    while (k < words.length && same(c[at + k], words[k])) k++;
+    if (k === words.length) return true;
+  }
+  return false;
+}
+
+/** The fog passes by their shaders: the march reads the fog's constants and the most textures; the two
+ *  blurs share its constants and step two texels along x or y; the edge pass samples the fog; the noise
+ *  is the hash (0.1031, 33.33). Null unless each is one shader of one program. */
+function fogPrograms(g: GraphicsHeader, ps: ShaderFacts[], programOf: (s: number) => number): FogPrograms | null {
+  const fog = ps.map((f, i) => i).filter((i) => ps[i].names.has('v_fog_shape') && ps[i].names.has('v_march_box_min'));
+  if (fog.length < 4) return null;
+  const textures = (i: number) => g.pixelShaders[i].textures.length;
+  const most = Math.max(...fog.map(textures));
+  const one = (list: number[]) => (list.length === 1 ? list[0] : -1);
+  const march = one(fog.filter((i) => textures(i) === most));
+  const blurX = one(fog.filter((i) => holds(ps[i], [bits(-2), 0, bits(-1), 0])));
+  const blurY = one(fog.filter((i) => holds(ps[i], [0, bits(-2), 0, bits(-1)])));
+  const edge = one(fog.filter((i) => i !== march && i !== blurX && i !== blurY && g.pixelShaders[i].textures.some((t) => t.sampler >= 0)));
+  const noise = one(ps.map((f, i) => i).filter((i) => holds(ps[i], [bits(0.1031), bits(0.1031)]) && holds(ps[i], [bits(33.33), bits(33.33), bits(33.33)])));
+  const programs = { noise, march, blurX, blurY, edge };
+  const out: Partial<FogPrograms> = {};
+  for (const [k, s] of Object.entries(programs)) {
+    if (s < 0) return null;
+    const p = programOf(s);
+    if (p < 0) return null;
+    out[k as keyof FogPrograms] = p;
+  }
+  return out as FogPrograms;
+}
 
 /** The draw tables, or null when a value is outside the engine's known set or a pick is not unique. */
 export function renderTables(g: GraphicsHeader, vs: ShaderFacts[], ps: ShaderFacts[]): Tables | null {
@@ -116,35 +159,55 @@ export function renderTables(g: GraphicsHeader, vs: ShaderFacts[], ps: ShaderFac
   // Water programs: shaders with the wave constants; the surface also scrolls
   // its first texture. Keys (skinned, 32-bit indices, vignette), where the
   // vignette variant is the twin with more outputs.
-  const water = (surface: boolean): number[] | null => {
+  // Water programs: shaders with the wave constants; the surface also scrolls
+  // its first texture. Keys (skinned, 32-bit indices, vignette), where the
+  // vignette variant is the twin with more outputs. From 07-Oct-2026 every
+  // twin draws the vignette and the one with more outputs is another
+  // feature's: the surface's ripple rings (its pixel shader binds one more
+  // texture) or the curtain's point lights (its pixel shader reads the light
+  // buffers). The plain twin then stands for both keys; the feature's are
+  // kept apart, keyed (skinned, 32-bit indices).
+  const water = (surface: boolean): { order: number[]; feature: number[] | null } | null => {
     const shaders = vs.map((f, i) => i).filter((i) => vs[i].names.has('v_sine_wave_x')
       && vs[i].names.has('v_uv0_scale_and_translate') === surface);
-    // From 07-Oct-2026 every twin draws the vignette and the one with more
-    // outputs is the ripple ring's instead (its pixel shader binds one more
-    // texture): the plain twin then stands for both keys.
     const candidates = g.programs.map((p, i) => i).filter((i) => shaders.includes(g.pairs[g.programs[i].pair][0]));
-    const textures = (i: number) => g.pixelShaders[g.pairs[g.programs[i].pair][1]].textures.length;
+    const pixel = (i: number) => g.pixelShaders[g.pairs[g.programs[i].pair][1]];
+    const textures = (i: number) => pixel(i).textures.length;
     const ring = new Set(candidates.map(textures)).size > 1 ? Math.max(...candidates.map(textures)) : null;
-    const rows = new Map<string, number>();
+    const isFeature = (i: number) => (ring !== null && textures(i) === ring) || pixel(i).constants.some((c) => c.kind === 2);
+    const featured = candidates.some(isFeature);
+    const rows = new Map<string, number>(), extra = new Map<string, number>();
     for (const i of candidates) {
       const v = g.pairs[g.programs[i].pair][0];
       const twins = shaders.filter((j) => skinned(j) === skinned(v));
       if (twins.length !== 2 || vs[twins[0]].outputs === vs[twins[1]].outputs) return null;
-      if (ring !== null && textures(i) === ring) continue;
+      const sw = `${skinned(v)},${g.programs[i].indexFormat === 1}`;
+      if (featured && isFeature(i)) {
+        if (extra.has(sw)) return null;
+        extra.set(sw, i);
+        continue;
+      }
       const vignette = vs[v].outputs === Math.max(...twins.map((j) => vs[j].outputs));
-      for (const vig of ring === null ? [vignette] : [true, false]) {
-        const key = `${skinned(v)},${g.programs[i].indexFormat === 1},${vig}`;
+      for (const vig of featured ? [true, false] : [vignette]) {
+        const key = `${sw},${vig}`;
         if (rows.has(key)) return null;
         rows.set(key, i);
       }
     }
-    const order: number[] = [];
-    for (const s of [false, true]) for (const w of [false, true]) for (const vig of [true, false]) {
-      const p = rows.get(`${s},${w},${vig}`);
-      if (p === undefined) return null;
-      order.push(p);
+    const order: number[] = [], feature: number[] = [];
+    for (const s of [false, true]) for (const w of [false, true]) {
+      for (const vig of [true, false]) {
+        const p = rows.get(`${s},${w},${vig}`);
+        if (p === undefined) return null;
+        order.push(p);
+      }
+      if (featured) {
+        const p = extra.get(`${s},${w}`);
+        if (p === undefined) return null;
+        feature.push(p);
+      }
     }
-    return order;
+    return { order, feature: featured ? feature : null };
   };
   const surface = water(true), curtain = water(false);
   const one = (list: number[]) => (list.length === 1 ? list[0] : -1);
@@ -165,7 +228,11 @@ export function renderTables(g: GraphicsHeader, vs: ShaderFacts[], ps: ShaderFac
   if (all.some((p) => p < 0)) return null;
   const fullscreen = [...new Set(all.map((p) => programs[p][0]))];
   if (fullscreen.length !== 1) return null;
-  return { programs, vertexShaders, pixelShaders, samplers, blends, waterPrograms: { surface, curtain }, ssaoPrograms,
+  const fog = fogPrograms(g, ps, programOf);
+  return { programs, vertexShaders, pixelShaders, samplers, blends,
+    waterPrograms: { surface: surface.order, curtain: curtain.order,
+      ...(surface.feature ? { surfaceRing: surface.feature } : {}), ...(curtain.feature ? { curtainLit: curtain.feature } : {}) },
+    ssaoPrograms, ...(fog ? { fogPrograms: fog } : {}),
     fullscreenVertex: fullscreen[0] };
 }
 
@@ -382,9 +449,10 @@ export function deriveRenderData(src: {
     const preset = r.steps[r.steps.length - 1][1];
     return preset >= 0 ? [{ roomRuntime: r.roomRuntime, presetOffset: preset }] : [];
   });
-  const { ssaoPrograms, fullscreenVertex, ...draw } = tables;
+  const { ssaoPrograms, fullscreenVertex, fogPrograms: fogPasses, ...draw } = tables;
+  const fog = fogPasses && build?.fog?.rooms.length ? { fog: { programs: fogPasses, roomRuntimes: build.fog.rooms } } : {};
   return {
-    ...draw, materials,
+    ...draw, ...fog, materials,
     lighting: { directionOffset: lights.direction, ...ENGINE.lighting },
     environment: { assetValue: 0, ...environment, ...ENGINE.environment, overrides,
       ...(fields ? { story: { fields, rooms } } : {}) },

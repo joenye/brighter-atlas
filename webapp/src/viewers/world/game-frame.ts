@@ -12,6 +12,8 @@
 // single sampled, and the finished frame is copied texel for texel to the
 // canvas.
 import { THREE } from '../three-common.js';
+import { packPointLights, type ListedLight } from './point-lights.js';
+import { fogMarchConstants } from './game-fog.js';
 import { GameShaderLibrary, putFloats, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
 import { bakeGameGeometry, type BakeInstance } from './game-geometry.js';
@@ -21,8 +23,10 @@ import { detectChains } from '../../texture-roles.js';
 import { PLANE_GAME_DISTANCE, planeCount, planeGroups, TILE_QUAD, type PlaneTile } from './ground-plane.js';
 
 export interface GameRenderIndex extends GameRenderTables {
-  waterPrograms: { surface: number[]; curtain: number[] };
-  materials: Record<string, { main: number[][]; depth: number[][]; specular: [number, number, number]; opacity: number }>;
+  waterPrograms: { surface: number[]; curtain: number[]; surfaceRing?: number[]; curtainLit?: number[] };
+  /** The volumetric fog's passes and the rooms that have it (07-Oct-2026 on). */
+  fog?: { programs: { noise: number; march: number; blurX: number; blurY: number; edge: number }; rooms: number[] };
+  materials: Record<string, { main: number[][]; lit?: number[][]; depth: number[][]; specular: [number, number, number]; opacity: number }>;
   environments: Record<string, {
     sky: number[]; ground: number[]; sun: number[]; vignette: number[];
     height: number | 'avatar'; floor: number | 'avatar';
@@ -92,9 +96,11 @@ export interface GameRoomSource {
   /** The floor the game lays under and around the room (room frame),
    *  nearest first, out to the endless floor's far pieces. */
   plane?: PlaneTile[];
+  /** The room's point lights (room frame). */
+  lights?: ListedLight[];
   /** Neighbouring rooms drawn with it (placed in the same frame): the room's
    *  own bounds, environment and vignette still govern the frame. */
-  others?: { roomId: number; batches: GameBatchSource[]; actors?: GameActorSource[] }[];
+  others?: { roomId: number; batches: GameBatchSource[]; actors?: GameActorSource[]; lights?: ListedLight[] }[];
 }
 
 export interface GameCamera {
@@ -290,11 +296,57 @@ export class GameFrame {
   /** The main-pass program of a material for the default settings (shadows,
    *  occlusion and vignette on); `skinned` and `wide` (32-bit indices) pick the
    *  actor and large-mesh variants. */
-  mainProgram(material: number, skinned = false, wide = false): number | null {
+  mainProgram(material: number, skinned = false, wide = false, lit = this.building ? this.buildingLit : this.lit): number | null {
     const m = this.index.materials[String(material)];
+    // with point lights in the scene, the programs that add them (from 07-Oct-2026)
+    if (lit && m?.lit) {
+      const row = m.lit.find((k) => k[0] === +skinned && k[1] === +wide && k[2] === 1 && k[3] === 1)
+        ?? m.lit.find((k) => k[0] === +skinned && k[1] === 0 && k[2] === 1 && k[3] === 1);
+      if (row) return row[4];
+    }
     const row = m?.main.find((k) => k[0] === +skinned && k[1] === +wide && k[2] === 1 && k[3] === 1 && k[4] === 1)
       ?? m?.main.find((k) => k[0] === +skinned && k[1] === 0 && k[2] === 1 && k[3] === 1 && k[4] === 1);
     return row ? row[5] : null;
+  }
+
+  /** The point lights of the scene shown and of the one being built: the light list, the cells and the
+   *  grid (origin, scale), or null without lights. */
+  private lit = false;
+  private buildingLit = false;
+  private pointLights: { data: GameTexture; cells: GameTexture; grid: [number, number, number]; count: number } | null = null;
+  /** The game's point light strength (the grid's fourth value) at full scene light. */
+  pointLightStrength = 1;
+
+  private packLights(room: GameRoomSource): { data: GameTexture; cells: GameTexture; grid: [number, number, number]; count: number } | null {
+    // the room's lights, and its neighbours' where their range reaches the room
+    const u = this.tileUnits, w = room.bounds.inner[2] * u, h = room.bounds.inner[3] * u;
+    const reaches = (l: ListedLight) => {
+      const [x, y] = l.light.position;
+      return Math.hypot(Math.max(-x, 0, x - w), Math.max(-y, 0, y - h)) <= l.light.range;
+    };
+    const lights = [...(room.lights ?? []), ...(room.others ?? []).flatMap((o) => (o.lights ?? []).filter(reaches))];
+    if (!lights.length) return null;
+    const packed = packPointLights(lights, { x: 0, y: 0, w, h, tile: u });
+    const gl = this.context;
+    const upload = (words: Float32Array) => {
+      const t = this.gl.texture2D(words.length / 4, 1, gl.RGBA32F);
+      gl.bindTexture(gl.TEXTURE_2D, t.texture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, t.width, 1, gl.RGBA, gl.FLOAT, words);
+      return t;
+    };
+    // the cells' words keep their bits (a float view of the integers)
+    return { data: upload(packed.data), cells: upload(new Float32Array(packed.cells.buffer)), grid: packed.grid, count: packed.count };
+  }
+
+  /** The point lights drawn (test handle): how many, and the grid. */
+  lightInfo(): { lit: boolean; count: number; grid: [number, number, number] | null } {
+    return { lit: this.lit, count: this.pointLights?.count ?? 0, grid: this.pointLights?.grid ?? null };
+  }
+
+  private freeLights(lights: { data: GameTexture; cells: GameTexture } | null): void {
+    if (!lights) return;
+    this.context.deleteTexture(lights.data.texture);
+    this.context.deleteTexture(lights.cells.texture);
   }
 
   depthProgram(material: number, skinned = false, wide = false): number | null {
@@ -306,6 +358,8 @@ export class GameFrame {
   private passPrograms = new Map<number, GameProgram>();
   /** Test switch: draw the frame without its water. */
   skipWater = false;
+  /** Draw the volumetric fog where the room has it (the game's "Volumetric Fog" setting, on by default). */
+  showFog = true;
   /** The room's lighting at a chosen story step, in place of its own
    *  story-complete one (null: the room's own). */
   environmentOverride: GameRenderIndex['environments'][string] | null = null;
@@ -323,13 +377,16 @@ export class GameFrame {
 
   async setRoom(room: GameRoomSource): Promise<void> {
     const p = this.index.ssao.programs;
-    for (const index of [...p.mips, p.sao, p.blurH, p.blurV]) {
+    const fogPasses = this.index.fog ? Object.values(this.index.fog.programs) : [];
+    for (const index of [...p.mips, p.sao, p.blurH, p.blurV, ...fogPasses]) {
       if (!this.passPrograms.has(index)) this.passPrograms.set(index, await this.shaders.program(index, 'clip'));
     }
     // build the new scene beside the one shown, then swap them
     const next: SceneDraws = { draws: [], actorDraws: [], waterDraws: [], planeDraws: [] };
     const buffers: WebGLBuffer[] = [];
     this.building = room;
+    this.buildingLit = !!(room.lights?.length || room.others?.some((o) => o.lights?.length))
+      && Object.values(this.index.materials).some((m) => m.lit?.length);
     this.gl.collect = buffers;
     try {
       await this.buildDraws(room, next);
@@ -343,6 +400,9 @@ export class GameFrame {
     this.releaseRoom();
     Object.assign(this, next);
     this.roomBuffers = buffers;
+    this.lit = this.buildingLit;
+    this.freeLights(this.pointLights);
+    this.pointLights = this.lit ? this.packLights(room) : null;
     this.room = room;
   }
 
@@ -533,9 +593,19 @@ export class GameFrame {
 
   /** A batch's main and depth programs (indices). */
   private batchPrograms(batch: GameBatchSource): [number | null, number | null] {
-    // water: key (skinned, 32-bit, vignette) = (false, false, true)
-    const main = batch.water ? this.index.waterPrograms[batch.water.kind][0] : this.mainProgram(batch.material);
+    // water: key (skinned, 32-bit, vignette) = (false, false, true); a style
+    // with radial ripples draws with its ring twin
+    const lit = this.building ? this.buildingLit : this.lit;
+    const curtainLit = batch.water?.kind === 'curtain' && lit ? this.index.waterPrograms.curtainLit?.[0] : undefined;
+    const main = batch.water ? (this.ringProgram(batch) ?? curtainLit ?? this.index.waterPrograms[batch.water.kind][0]) : this.mainProgram(batch.material);
     return [main, batch.water ? null : this.depthProgram(batch.material)];
+  }
+
+  /** The ring twin of a water surface whose style has radial ripples (key (false, false)), else null. */
+  private ringProgram(batch: GameBatchSource): number | null {
+    if (batch.water?.kind !== 'surface') return null;
+    const style = (this.building ?? this.room)?.water?.styles[batch.water.style];
+    return style?.radial ? this.index.waterPrograms.surfaceRing?.[0] ?? null : null;
   }
 
   /** Every program the scenes will draw with, compiled together before the draws are built, the page
@@ -569,6 +639,7 @@ export class GameFrame {
       opacity: batch.water ? batch.water.opacity : (material?.opacity ?? 1),
       style: style ? styleColourBytes(style.colour) : undefined,
       window: batch.water?.kind === 'curtain' ? [Math.round(batch.water.window[0] * 65535), Math.round(batch.water.window[1] * 65535)] : undefined,
+      ringCentre: programIndex === this.ringProgram(batch),
     });
     const glProgram = this.gl.compile(program.translated);
     const vao = this.vertexArray(glProgram, geometry);
@@ -681,6 +752,7 @@ export class GameFrame {
         const style = scene.water.styles[batch.water.style];
         if (name === 'v_texture_normal') texture = await this.texturePlane(style.normal, [0, 1, 2], false);
         else if (name === 'v_texture_cubemap') texture = await this.cube(style.cube, 18);
+        else if (name === 'v_texture_ring' && style.radial) texture = await this.texturePlane(style.radial.image, [0, 1, 2], false);
         else if (name === 'v_texture_albedo_plane' && batch.renderTexture >= 0) {
           const meta = scene.textureMeta(batch.renderTexture);
           if (meta?.albedo != null) texture = await this.texturePlane(batch.renderTexture, this.planeSubs(meta, meta.albedo), true);
@@ -735,6 +807,11 @@ export class GameFrame {
       blur3Fb: this.gl.framebuffer(blur3, null),
       mainColour: null as GameTexture | null, mainDepth: null as GameTexture | null, mainFb: null as WebGLFramebuffer | null,
     };
+    // the fog: its half-resolution target and the blur's, and the noise it reads (made once)
+    const fog = [this.gl.texture2D(w, h, gl.RGBA16F), this.gl.texture2D(w, h, gl.RGBA16F)];
+    const noise = this.gl.texture2D(256, 256, gl.RGBA8);
+    Object.assign(this.targets, { fog, fogFb: fog.map((t) => this.gl.framebuffer(t, null)), noise,
+      noiseFb: this.gl.framebuffer(noise, null), noiseReady: false });
     this.targets.mainColour = this.gl.texture2D(width, height, gl.RGBA8);
     this.targets.mainDepth = this.gl.texture2D(width, height, gl.DEPTH_COMPONENT32F);
     this.targets.mainFb = this.gl.framebuffer(this.targets.mainColour, this.targets.mainDepth);
@@ -991,6 +1068,8 @@ export class GameFrame {
         dir.x, dir.y, dir.z, 0,
         ...ssaoOffsetScale,
         scale, 0, 0, 0,
+        // the point light grid: origin, cells per unit, strength (07-Oct-2026 on; older programs stop before it)
+        ...(this.pointLights ? [...this.pointLights.grid, f32(this.pointLightStrength * scale)] : [0, 0, 0, 0]),
       ];
     };
     const psLight = lighting(idx.lighting.fade);
@@ -1017,6 +1096,8 @@ export class GameFrame {
       d.program.translated.samplers.forEach((s) => {
         const desc = d.program.samplers[s.sampler ?? -1] ?? null;
         if (s.textureName === 'v_texture_shadow_map') textures[s.texture] = { texture: t.shadowDepth, sampler: shadowSampler };
+        else if (s.textureName === 'v_cbo_f1' && this.pointLights) textures[s.texture] = { texture: this.pointLights.data, sampler: null };
+        else if (s.textureName === 'v_cbo_f2' && this.pointLights) textures[s.texture] = { texture: this.pointLights.cells, sampler: null };
         else if (s.textureName === 'v_texture_ssao') textures[s.texture] = { texture: t.blur3, sampler: this.gl.sampler(desc) };
         else if (d.textures[s.texture]) textures[s.texture] = { texture: d.textures[s.texture], sampler: this.gl.sampler(desc) };
       });
@@ -1037,13 +1118,98 @@ export class GameFrame {
         style.waves.amplitude[1], style.waves.frequency[1], f32(style.waves.rate[1] * ticks), style.waves.tilt[1],
         water.level, style.level, 0, 0,
       ];
+      // From 07-Oct-2026 the surface's buffer goes on: the outer fade (start, radius) in the level's
+      // last two words, then the rings (amplitude, frequency, phase, inner radius); every style writes it.
+      const ringBuffer = d.program.translated.constantBuffers.vs.find((b) => b.slot === 1);
+      const ringWords = d.water!.kind === 'surface' && ringBuffer && ringBuffer.sizeVec4 * 4 >= 24 ? new Uint32Array(24) : null;
+      if (ringWords) {
+        const r = style.radial;
+        const outer = Math.max(r?.outer ?? 0, 2);
+        sine[10] = f32(Math.min(r?.fadeStart ?? 0.6, 0.99) * outer); sine[11] = outer;
+        const phase = r ? f32(r.speed * ticks) % 1 : 0;
+        putFloats(ringWords, 80, r ? [r.amplitude, r.frequency, phase < 0 ? phase + 1 : phase, Math.max(r.inner, 1)] : [0, 0, 0, 1]);
+      }
       if (d.water!.kind === 'surface') {
-        putFloats(words, 0, [l0[0], l0[1], f32(l0[2] * ticks), f32(l0[3] * ticks), l1[0], l1[1], f32(l1[2] * ticks), f32(l1[3] * ticks), ...sine]);
+        putFloats(ringWords ?? words, 0, [l0[0], l0[1], f32(l0[2] * ticks), f32(l0[3] * ticks), l1[0], l1[1], f32(l1[2] * ticks), f32(l1[3] * ticks), ...sine]);
       } else putFloats(words, 0, sine);
-      drawMain(d, words);
+      drawMain(d, ringWords ?? words);
+    }
+    if (this.showFog && !card && idx.fog?.rooms.includes(this.room.roomId)) {
+      const viewToWorld = toInYDown.clone().multiply(view).invert();
+      const words = fogMarchConstants({
+        w: t.w, h: t.h, pad: t.pad, focal: fAo, near, far, viewToWorld, eye: camera.eye,
+        area: [rect[0], rect[1], rect[2], rect[3]], ground: 0, seconds: ticks / idx.clock.ticksPerSecond,
+        focus: [camera.target.x, camera.target.y],
+        ellipse: [f32(f32(rect[0] + rect[2]) * 0.5), f32(f32(rect[1] + rect[3]) * 0.5), f32(1 / hx), f32(1 / hy)],
+        vignette: [vignetteColour[0] * idx.lighting.fade, vignetteColour[1] * idx.lighting.fade, vignetteColour[2] * idx.lighting.fade],
+        reach: k, fade: [0, height, floorValue],
+        shadow: rows(shadow.receiver), sunDirection: idx.lighting.direction, sunColour: [1, 224 / 255, 144 / 255],
+      });
+      this.renderFog(t, words, fullscreen, camera.width, camera.height);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.mainFb);
+      gl.viewport(0, 0, camera.width, camera.height);
     }
     gl.bindVertexArray(null);
     if (!offscreen) this.present(t, camera.width, camera.height);
+  }
+
+  private compositeProgram: { program: WebGLProgram; size: WebGLUniformLocation } | null = null;
+
+  /** The fog's passes: the noise (once), the march over the half-resolution depth, the blur along x then
+   *  y, the edge pass, then the fog laid over the frame premultiplied (one, one minus source alpha). */
+  private renderFog(t: any, march: number[], fullscreen: (programIndex: number, fb: WebGLFramebuffer, w: number, h: number,
+    cbs: (p: GameProgram) => Record<string, Uint32Array>, textures: Record<number, GameTexture>) => void, width: number, height: number): void {
+    const gl = this.context;
+    const fog = this.index.fog!.programs;
+    const constants = (values: number[]) => (p: GameProgram) => {
+      const binding = p.translated.constantBuffers.ps[0];
+      if (!binding) return {};
+      const words = new Uint32Array(binding.sizeVec4 * 4);
+      putFloats(words, 0, values);
+      return { [binding.uniform]: words };
+    };
+    // textures by name for a pass (its resources by slot)
+    const named = (program: number, byName: Record<string, GameTexture>) => {
+      const out: Record<number, GameTexture> = {};
+      for (const s of this.passPrograms.get(program)!.translated.samplers) if (byName[s.textureName]) out[s.texture] = byName[s.textureName];
+      return out;
+    };
+    if (!t.noiseReady) {
+      fullscreen(fog.noise, t.noiseFb, 256, 256, () => ({}), {});
+      t.noiseReady = true;
+    }
+    const depth = t.prepassDepth;
+    fullscreen(fog.march, t.fogFb[0], t.w, t.h, constants(march), named(fog.march, {
+      v_texture_depth: depth, v_texture_noise: t.noise, v_texture_shadow_map: t.shadowDepth }));
+    fullscreen(fog.blurX, t.fogFb[1], t.w, t.h, constants(march), { 0: t.fog[0], 1: depth });
+    fullscreen(fog.blurY, t.fogFb[0], t.w, t.h, constants(march), { 0: t.fog[1], 1: depth });
+    fullscreen(fog.edge, t.fogFb[1], t.w, t.h, constants(march), { 0: t.fog[0], 1: depth });
+    if (!this.compositeProgram) {
+      const program = this.gl.linkSources(`#version 300 es
+void main() {
+  gl_Position = vec4(float((gl_VertexID & 1) * 4) - 1.0, float((gl_VertexID & 2) * 2) - 1.0, 0.0, 1.0);
+}`, `#version 300 es
+precision highp float;
+uniform highp sampler2D u_fog;
+uniform vec2 u_size;
+out vec4 o;
+void main() {
+  o = texture(u_fog, gl_FragCoord.xy / u_size);
+}`);
+      gl.useProgram(program);
+      gl.uniform1i(gl.getUniformLocation(program, 'u_fog'), 0);
+      this.compositeProgram = { program, size: gl.getUniformLocation(program, 'u_size')! };
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.mainFb);
+    gl.viewport(0, 0, width, height);
+    this.gl.applyState({ depthTest: false, depthFunc: gl.ALWAYS, depthWrite: false, cull: null, colourWrite: true,
+      blend: [gl.FUNC_ADD, gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.FUNC_ADD, gl.ONE, gl.ONE_MINUS_SRC_ALPHA] });
+    gl.useProgram(this.compositeProgram.program);
+    gl.uniform2f(this.compositeProgram.size, width, height);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, t.fog[1].texture);
+    gl.bindSampler(0, this.gl.sampler([20, 3, 3, 3, 1, 0, 10, 0, 1]));
+    gl.bindVertexArray(null);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   private presentProgram: { program: WebGLProgram; height: WebGLUniformLocation } | null = null;

@@ -30,7 +30,11 @@ export interface RenderDecodeData {
     keys: {shadows: [string, string]; ssao: [string, string]; vignette: [string, string]; pointLights?: [string, string]; colours: string};
   };
   /** Water programs in key order (skinned, 32-bit indices, vignette): FFT FFF FTT FTF TFT TFF TTT TTF. */
-  waterPrograms: {surface: number[]; curtain: number[]};
+  // From 07-Oct-2026 the surface's ring twins and the curtain's point light twins, keyed
+  // (skinned, 32-bit indices): FF FT TF TT.
+  waterPrograms: {surface: number[]; curtain: number[]; surfaceRing?: number[]; curtainLit?: number[]};
+  /** The volumetric fog (07-Oct-2026 on): its passes and the rooms that have it, by room runtime. */
+  fog?: {programs: {noise: number; march: number; blurX: number; blurY: number; edge: number}; roomRuntimes: number[]};
   lighting: {directionOffset: number; gamma: number; fade: number};
   environment: {
     assetValue: number; family: number; field: number; presetClass: number;
@@ -107,6 +111,8 @@ export function validRenderData(d: any): d is RenderDecodeData {
 export interface RenderBuildData {
   story?: {rooms: {roomRuntime: number; variable: number; steps: [number, number][]}[]};
   scene?: {dynamicField: number};
+  /** The rooms whose fog the game draws (07-Oct-2026 on), by room runtime. */
+  fog?: {rooms: number[]};
 }
 
 export function validRenderBuildData(d: any): d is RenderBuildData {
@@ -114,6 +120,7 @@ export function validRenderBuildData(d: any): d is RenderBuildData {
   if (d.story !== undefined && !(Array.isArray(d.story?.rooms) && d.story.rooms.every((r: any) => index(r?.roomRuntime)
     && index(r?.variable) && Array.isArray(r.steps) && r.steps.length > 0 && r.steps.every((st: any) => Array.isArray(st)
       && st.length === 2 && index(st[0]) && (st[1] === -1 || index(st[1])))))) return false;
+  if (d.fog !== undefined && !(Array.isArray(d.fog?.rooms) && d.fog.rooms.every(index))) return false;
   return d.scene === undefined || index(d.scene?.dynamicField);
 }
 
@@ -133,6 +140,8 @@ export function recordField(rows: FillRow[], decode: Decode, pool: PoolNode[], s
  *  depth-pass keys [skinned, 32-bit, program], its specular bytes and opacity. */
 export interface RenderMaterial {
   main: number[][];
+  /** From 07-Oct-2026: the main programs with point lights, keys [skinned, 32-bit, shadows, ssao, program]. */
+  lit?: number[][];
   depth: number[][];
   specular: [number, number, number];
   opacity: number;
@@ -180,7 +189,7 @@ export function readRenderMaterials(data: RenderDecodeData, rows: FillRow[], dec
   const out: Record<string, RenderMaterial> = {};
   for (const row of rows) {
     if (!row || !families.has(row.runtime)) continue;
-    const main: number[][] = [], depth: number[][] = [];
+    const main: number[][] = [], depth: number[][] = [], lit: number[][] = [];
     for (const [key, value] of pairs(field(row.slot, f.programs)) ?? []) {
       const k = (key.fields ?? []).map(n => resolveValue(pool, n));
       const p = program(value);
@@ -191,7 +200,13 @@ export function readRenderMaterials(data: RenderDecodeData, rows: FillRow[], dec
       // viewer has none to give) stand as the vignette ones.
       let vignette = pick(k[4], keys.vignette);
       if (vignette < 0 && keys.pointLights) {
-        if (pick(k[4], keys.pointLights) !== 0) continue;
+        const lights = pick(k[4], keys.pointLights);
+        if (lights === 1) {
+          const row = [flag(k[0]), width, pick(k[2], keys.shadows), pick(k[3], keys.ssao), p];
+          if (row.slice(0, 4).every(v => v === 0 || v === 1)) lit.push(row);
+          continue;
+        }
+        if (lights !== 0) continue;
         vignette = 1;
       }
       const row6 = [flag(k[0]), width, pick(k[2], keys.shadows), pick(k[3], keys.ssao), vignette, p];
@@ -212,7 +227,7 @@ export function readRenderMaterials(data: RenderDecodeData, rows: FillRow[], dec
       return n?.tag === 0x0a && Number.isInteger(n.value) ? n.value & 0xff : 0;
     };
     const opacity = field(row.slot, f.opacity);
-    out[row.slot] = {main, depth, specular: [byte(f.specular[0]), byte(f.specular[1]), byte(f.specular[2])],
+    out[row.slot] = {main, ...(lit.length ? {lit} : {}), depth, specular: [byte(f.specular[0]), byte(f.specular[1]), byte(f.specular[2])],
       opacity: opacity?.tag === 0x0b && Array.isArray(opacity.value) && Number.isFinite(opacity.value[0]) ? opacity.value[0] : 1};
   }
   return out;

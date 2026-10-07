@@ -132,6 +132,8 @@ const DEFAULT_STATE = Object.freeze({
   inspect: false,
   water: true,
   game: true,
+  glights: true,                    // game shading: lamps, torches and fires
+  gfog: true,                       // game shading: the fog of the rooms that have one
   effects: true,
   idle: true,
   wcolor: 'auto',
@@ -997,6 +999,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       frame.showPlane = !!state.ground;
       frame.planeDistance = groundDistance();
       frame.neighbourFade = !!state.neighbourfade;
+      frame.pointLightStrength = state.glights ? 1 : 0;
+      frame.showFog = !!state.gfog;
       gameFrame = frame;
       applyGameShading();
       setupStory(room.id);
@@ -1401,9 +1405,19 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     storyBox.hidden = false;
   }
 
+  // the game's own lamps and fog (game shading; rooms that have them)
+  const gameLightsCheck = check('glights', 'Lamps and torches', () => {
+    if (gameFrame) gameFrame.pointLightStrength = state.glights ? 1 : 0;
+  }, { title: 'The light lamps, torches and fires cast (game shading)' });
+  const gameFogCheck = check('gfog', 'Fog', () => {
+    if (gameFrame) gameFrame.showFog = !!state.gfog;
+  }, { title: 'The low fog some rooms have during events, at its thickest (game shading)' });
+  gameLightsCheck.classList.add('wp-sub');
+  gameFogCheck.classList.add('wp-sub');
   const lightSection = section('Lighting & effects',
     check('game', 'Game shading', () => applyGameShading(),
       { swatch: '#c9a86a', title: "Draw the room with the game's own lights, shadows, shading and water (single room)" }),
+    gameLightsCheck, gameFogCheck,
     storyBox,
     range('ambient', 'Ambient / sky', 0, 2.5, 0.05, (v) => v.toFixed(2), applyLights),
     range('sun', 'Sun', 0, 3, 0.05, (v) => v.toFixed(2), applyLights),
@@ -5411,6 +5425,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       ready: () => gameActive(),
       actors: () => gameFrame?.actorInfo() ?? null,
       plane: () => gameFrame?.planeInfo() ?? null,
+      lights: () => gameFrame?.lightInfo() ?? null,
       /** The viewer's own floor (a room's, or the all-rooms one). */
       groundPlane: () => groundPlaneInfo(),
       setCamera(eye: number[] | null, target?: number[]) {

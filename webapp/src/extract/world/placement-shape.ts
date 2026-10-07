@@ -102,10 +102,15 @@ export function waterLayout(reg: Registry): WaterDecodeData | null {
   };
   const plane = texture(2), cube = texture(3);
   if (!plane || !cube) return null;
+  // From 07-Oct-2026 eight more: the ring texture (or none), six scalars and the flag.
+  const ringKinds = [...Array(8)].map((_, k) => s.get(k + 17)?.tag);
+  const ring = (ringKinds[0] === 0x02 || ringKinds[0] === 0x0f) && ringKinds.slice(1, 7).every((t) => t === 0x0b)
+    && (ringKinds[7] === 0x0c || ringKinds[7] === 0x0d)
+    ? { texture: 17, amplitude: 18, frequency: 19, speed: 20, inner: 21, outer: 22, fadeStart: 23, on: 24 } : null;
   return {
     link: { families, field: [...fields][0] }, surface, curtain, style, opacity: opacity[0], textureRect: rect[0],
     styleFields: { colour: 1, normal: 2, cube: 3, uv0: [4, 5], uv1: [6, 7], amplitude: [8, 12], frequency: [9, 13],
-      rate: [10, 14], tilt: [11, 15], level: 16 },
+      rate: [10, 14], tilt: [11, 15], level: 16, ...(ring ? { ring } : {}) },
     textures: { plane, cube }, waterLevel: 1024,
   };
 }

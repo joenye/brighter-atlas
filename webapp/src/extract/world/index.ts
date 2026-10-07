@@ -32,6 +32,7 @@ import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader
 import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape.js';
 import {effectLayout} from './effect-shape.js';
 import {groundPlaneLayout, roomGroundPlane, type GroundPlaneLayout} from './ground-plane.js';
+import {lightCarrier, roomPointLights} from './point-lights.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
@@ -584,6 +585,8 @@ export async function extractWorld({
   try {
     planeLayout = groundPlaneLayout(shapeRegistry, dt.symbols, ctx.roomIds.map((id) => ctx.occupancy(id).occurrences));
   } catch { planeLayout = null; }
+  // Point lights (07-Oct-2026 on): the lights the placed scenery's kinds carry.
+  const lightsOf = lightCarrier(pool.values, rowDecoder);
   step('shards', 0, ctx.roomIds.length);
   for (const roomId of ctx.roomIds) {
     bail();
@@ -623,6 +626,10 @@ export async function extractWorld({
       } catch { plane = null; }
       if (plane) shard.ground_plane = { records: plane.records, tiles: b64FromTyped(plane.tiles) };
     }
+    try {
+      const lights = roomPointLights(shard.occurrences ?? [], shardsMod.OCCURRENCE_COLUMNS, lightsOf);
+      if (lights.length) shard.point_lights = lights;
+    } catch { /* unreadable lights: the room draws without them */ }
     putBatch.push([`world:room:${roomId}`, shard]);
     if (putBatch.length >= 32) await flushShards();
     // ordinal-free room content hash: the diff identity for this room, so
@@ -927,6 +934,14 @@ export async function extractWorld({
         shadow: {...render.shadow, lightView: archivedFloats(ab0, profile, render.shadow.lightViewOffset, 0x30, 12)},
         ssao: render.ssao, camera: render.camera, vignette: render.vignette, clock: render.clock,
       };
+      // the rooms with volumetric fog (07-Oct-2026 on), from their owners' runtimes
+      if (render.fog) {
+        const runtimes = new Set(render.fog.roomRuntimes);
+        const rooms = [...environmentSlots.keys(), ...environmentPresets.keys(), ...roomMetadata.keys()]
+          .filter((id, k, all) => all.indexOf(id) === k && runtimes.has(rows[roomMetadata.get(id)?.owner as number]?.runtime as number))
+          .sort((a, b) => a - b);
+        if (rooms.length) worldIndex.render.fog = { programs: render.fog.programs, rooms };
+      }
     }
   } catch { /* unreadable render data: no render bindings */ }
   bail();

@@ -93,8 +93,9 @@ export class FrameInputs {
         // main rows end with their program, depth rows hold it third
         const main = await Promise.all((m.main ?? []).map(async (k: number[]) => [...k.slice(0, -1), await this.program(k[k.length - 1])]));
         const depth = await Promise.all((m.depth ?? []).map(async (k: number[]) => [...k.slice(0, 2), await this.program(k[2]), ...k.slice(3)]));
-        const { main: _m, depth: _d, ...other } = m;
-        return sha256(JSON.stringify([main, depth, other]));
+        const lit = m.lit ? await Promise.all(m.lit.map(async (k: number[]) => [...k.slice(0, -1), await this.program(k[k.length - 1])])) : null;
+        const { main: _m, depth: _d, lit: _l, ...other } = m;
+        return sha256(JSON.stringify(lit ? [main, depth, other, lit] : [main, depth, other]));
       })();
       this.materials.set(id, p);
     }
@@ -153,8 +154,8 @@ export class FrameInputs {
       mesh: meshOf(a), material: keys.get(a.material), texture: this.texture(a.renderTexture), bones: a.bones,
       tint: a.tint, recolours: a.recolours, palette: Array.from(a.palette() ?? []),
     });
-    const scene = (s: { batches: GameRoomSource['batches']; actors?: GameRoomSource['actors'] }) => ({
-      batches: s.batches.map(batch), actors: (s.actors ?? []).map(actor),
+    const scene = (s: { batches: GameRoomSource['batches']; actors?: GameRoomSource['actors']; lights?: GameRoomSource['lights'] }) => ({
+      batches: s.batches.map(batch), actors: (s.actors ?? []).map(actor), ...(s.lights?.length ? { lights: s.lights } : {}),
     });
     const inputs: Record<string, unknown> = {
       settings, frame: await this.frame(),

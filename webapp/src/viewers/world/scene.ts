@@ -15,6 +15,7 @@ import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
 import { b64f32, b64u8, type AppStore } from '../../store.js';
 import type { GameRoomSource, GameBatchSource, GameActorSource } from './game-frame.js';
+import { placedLight, type ListedLight } from './point-lights.js';
 import { emissionKey } from './draw-order.js';
 import {
   planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh,
@@ -1366,7 +1367,7 @@ export class WorldScene {
     const others = [];
     for (const n of neighbours) {
       const parts = await this._gameRoomParts(n);
-      others.push({ roomId: n.id, batches: parts.batches, actors: parts.actors });
+      others.push({ roomId: n.id, batches: parts.batches, actors: parts.actors, ...(parts.lights ? { lights: parts.lights } : {}) });
     }
     // the floor as the game lays it with these neighbours, in the frame the
     // parts are placed in
@@ -1446,6 +1447,14 @@ export class WorldScene {
     }
     const grid = room.shard.colour_grid ?? null;
     const [w, h] = room.shard.size ?? [room.meta?.w ?? 0, room.meta?.h ?? 0];
+    // the point lights the room's scenery carries (07-Oct-2026 on), each placed by its object's own frame
+    const lights: ListedLight[] = [];
+    for (const def of room.shard.point_lights ?? []) {
+      try {
+        this._lightOwnerMatrix(room.shard, def.occurrence, matrix);
+        lights.push(placedLight(def, room.group.matrix.clone().multiply(matrix)));
+      } catch { /* an occurrence the room lacks: no light */ }
+    }
     return {
       roomId: room.id,
       bounds: {
@@ -1454,7 +1463,25 @@ export class WorldScene {
         layers: Number(room.shard.layers) || 1,
       },
       grid, batches, actors, water, textureMeta: (id: number) => this.textureMeta(id),
+      ...(lights.length ? { lights } : {}),
     };
+  }
+
+  /** An object's own frame (native), where the lights its kind carries sit: its placement without the
+   *  mesh's forward half turn (lights are authored in the object's frame) or a part's local matrix. */
+  _lightOwnerMatrix(shard: any, occurrenceIndex: number, target: THREE.Matrix4): THREE.Matrix4 {
+    const oc = this.occurrenceColumns;
+    const occurrence = shard.occurrences[occurrenceIndex];
+    if (!occurrence) throw new Error(`light references occurrence ${occurrenceIndex}`);
+    const anchor = this._placementAnchor(shard, occurrenceIndex);
+    return composePlacementMatrix(target, {
+      centerX: anchor?.center[0] ?? finite(occurrence[oc.x]) + 0.5,
+      centerY: anchor?.center[1] ?? finite(occurrence[oc.y]) + 0.5,
+      z: finite(occurrence[oc.z]), quarterTurns: finite(occurrence[oc.rotation_quarters], 0) & 3,
+      meshForwardQuarterTurns: 0,
+      packedFlags: finite(occurrence[oc.appearance_packed_flags ?? oc.packed_flags], 0),
+      tileUnits: this.tileUnits, layerUnits: this.layerUnits,
+    });
   }
 
   /** A spawn batch for the game's frame. Rigged parts become actors: the mesh

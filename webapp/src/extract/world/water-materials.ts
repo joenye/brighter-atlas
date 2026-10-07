@@ -18,6 +18,11 @@ export interface WaterDecodeData {
     uv0: [number, number]; uv1: [number, number];   // scale, scroll
     amplitude: [number, number]; frequency: [number, number];
     rate: [number, number]; tilt: [number, number]; level: number;
+    // From 07-Oct-2026: rings moving out from a water element's centre
+    // (texture, amplitude, frequency, speed, inner and outer radius, outer
+    // fade start, on).
+    ring?: {texture: number; amplitude: number; frequency: number; speed: number;
+      inner: number; outer: number; fadeStart: number; on: number};
   };
   textures: {plane: {family: number; image: number}; cube: {family: number; image: number}};
   waterLevel: number;                 // curtain tops at or above this height move
@@ -39,6 +44,9 @@ export interface WorldWaterStyle {
   layers: [[number, number, number, number], [number, number, number, number]];
   waves: WorldWaterWaves;
   level: number;                                 // surface height offset
+  // Rings moving out from the element's centre (radial ripple), when on.
+  radial?: {image: number; amplitude: number; frequency: number; speed: number;
+    inner: number; outer: number; fadeStart: number};
 }
 export interface WorldWaterMaterial {
   kind: 'surface' | 'curtain';
@@ -61,6 +69,7 @@ export function validWaterData(value: any): value is WaterDecodeData {
     && [value.surface, value.curtain, value.style, value.opacity, value.textureRect].every(index)
     && !!f && [f.colour, f.normal, f.cube, f.level].every(index)
     && [f.uv0, f.uv1, f.amplitude, f.frequency, f.rate, f.tilt].every(pair)
+    && (f.ring === undefined || Object.values(f.ring).every(index))
     && ['plane', 'cube'].every(k => index(value.textures?.[k]?.family) && index(value.textures?.[k]?.image))
     && Number.isFinite(value.waterLevel);
 }
@@ -96,6 +105,7 @@ export function readWorldWater(data: WaterDecodeData | undefined, rows: FillRow[
       return ref(field(record, binding.image), 0x47);
     };
     const normal = image(f.normal, 'plane'), cube = image(f.cube, 'cube');
+    const image0 = (op: number) => image(op, 'plane');
     const vec = (op: number) => floats(field(slot, op), 0x18, 2);
     const layer = ([scale, scroll]: [number, number]) => {
       const a = vec(scale), b = vec(scroll);
@@ -110,8 +120,16 @@ export function readWorldWater(data: WaterDecodeData | undefined, rows: FillRow[
     const level = float(field(slot, f.level));
     if (!colour || normal === null || cube === null || !layers[0] || !layers[1]
       || !amplitude || !frequency || !rate || !tilt || level === null) return null;
+    const ring = f.ring && field(slot, f.ring.on)?.tag === 0x0c ? (() => {
+      const r = f.ring!, image = image0(r.texture);
+      const v = [r.amplitude, r.frequency, r.speed, r.inner, r.outer, r.fadeStart].map(op => float(field(slot, op)));
+      if (image === null || v.some(x => x === null)) return null;
+      const [amplitude, frequency, speed, inner, outer, fadeStart] = v as number[];
+      return {image, amplitude, frequency, speed, inner, outer, fadeStart};
+    })() : null;
     styles.push({colour: colour as [number, number, number, number], normal, cube,
-      layers: layers as WorldWaterStyle['layers'], waves: {amplitude, frequency, rate, tilt}, level});
+      layers: layers as WorldWaterStyle['layers'], waves: {amplitude, frequency, rate, tilt}, level,
+      ...(ring ? {radial: ring} : {})});
     styleIndex.set(slot, styles.length - 1);
     return styles.length - 1;
   };
