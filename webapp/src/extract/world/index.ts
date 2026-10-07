@@ -28,11 +28,11 @@ import { fillRoomNames } from './room-graph.js';
 import { deriveRoomAmbience } from './room-ambience.js';
 import { mapRoomRecords } from '../maps/map-shape.js';
 import { decodeGlyphText, deriveRoomMetadata, resolveValue } from './room-metadata.js';
-import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader,type PlacementDecodeData} from './placement.js';
+import {placementDataOf,decodeDefaultAppearances,createAppearanceCandidateReader,createEffectMotionReader,roomGroundHeight,type PlacementDecodeData} from './placement.js';
 import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape.js';
 import {effectLayout} from './effect-shape.js';
 import {groundPlaneLayout, roomGroundPlane, type GroundPlaneLayout} from './ground-plane.js';
-import {lightCarrier, roomPointLights} from './point-lights.js';
+import {lightCarrier, restingLights, roomPointLights, type ShardSpawnLights} from './point-lights.js';
 import {createEffectPropertyReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
@@ -629,6 +629,15 @@ export async function extractWorld({
     try {
       const lights = roomPointLights(shard.occurrences ?? [], shardsMod.OCCURRENCE_COLUMNS, lightsOf);
       if (lights.length) shard.point_lights = lights;
+      // the lights of the states an actor's resting animation plays (from its own animation reference)
+      const sc = shardsMod.SPAWN_COLUMNS, record = sc.indexOf('record'), source = sc.indexOf('idle_source'), op = sc.indexOf('idle_field_op');
+      const spawnLights: ShardSpawnLights[] = [];
+      (shard.spawns ?? []).forEach((row: any[], spawn: number) => {
+        if (row[source] !== shardsMod.SPAWN_IDLE_SOURCE.animatic || !Number.isInteger(row[op]) || row[op] < 0) return;
+        const lights = restingLights(pool.values, rowDecoder, row[record], row[op]);
+        if (lights.length) spawnLights.push({spawn, lights});
+      });
+      if (spawnLights.length) shard.spawn_lights = spawnLights;
     } catch { /* unreadable lights: the room draws without them */ }
     putBatch.push([`world:room:${roomId}`, shard]);
     if (putBatch.length >= 32) await flushShards();
@@ -934,12 +943,19 @@ export async function extractWorld({
         shadow: {...render.shadow, lightView: archivedFloats(ab0, profile, render.shadow.lightViewOffset, 0x30, 12)},
         ssao: render.ssao, camera: render.camera, vignette: render.vignette, clock: render.clock,
       };
-      // the rooms with volumetric fog (07-Oct-2026 on), from their owners' runtimes
+      // the rooms with volumetric fog (07-Oct-2026 on), from their owners' runtimes: each one's fog area,
+      // the ground the fog lies on and the room's place on the map (the fog's noise is anchored to the map)
       if (render.fog) {
-        const runtimes = new Set(render.fog.roomRuntimes);
+        const areas = new Map(render.fog.rooms.map((f) => [f.room, f.rect]));
+        const grids = ctx.actorHeight?.grids;
         const rooms = [...environmentSlots.keys(), ...environmentPresets.keys(), ...roomMetadata.keys()]
-          .filter((id, k, all) => all.indexOf(id) === k && runtimes.has(rows[roomMetadata.get(id)?.owner as number]?.runtime as number))
-          .sort((a, b) => a - b);
+          .filter((id, k, all) => all.indexOf(id) === k)
+          .sort((a, b) => a - b)
+          .flatMap((id) => {
+            const rect = areas.get(rows[roomMetadata.get(id)?.owner as number]?.runtime as number);
+            const grid = grids?.get(id);
+            return rect ? [{ id, rect, ground: grid ? roomGroundHeight(grid) : 0, origin: grid ? [grid.origin[0], grid.origin[1]] : [0, 0] }] : [];
+          });
         if (rooms.length) worldIndex.render.fog = { programs: render.fog.programs, rooms };
       }
     }

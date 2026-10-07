@@ -189,19 +189,33 @@ export function packedRoomHeight(word:number,layer:number):number {
   return layer===1 ? (word&0xf00000 ? base+span+((word>>>16)&15) : 0) : span ? base : 0;
 }
 
+/** A room's placement grid: its size in tiles, its place on the map (tiles), a height word per tile and
+ *  the rooms it links to. */
+export interface RoomPlacementGrid {width:number;height:number;origin:number[];words:number[];links:number[]}
+
+/** The ground the game measures a room by (its fog lies on it): half a tile times the commonest positive
+ *  level of the room's tiles (ties to the lower level), 0 when no tile has one. */
+export function roomGroundHeight(grid:RoomPlacementGrid):number {
+  const counts=new Map<number,number>();
+  for(const word of grid.words){const level=packedRoomHeight(word,0);if(level>0)counts.set(level,(counts.get(level)??0)+1);}
+  let best=0,most=0;
+  for(const level of [...counts.keys()].sort((a,b)=>a-b))if(counts.get(level)!>most){best=level;most=counts.get(level)!;}
+  return best*512;
+}
+
 export function createActorHeightReader({data,rooms,roomRows,rows,pool,bytes,profile}:{
   data:PlacementDecodeData|null;
   rooms:Map<number,{top:RoomNode[];table:RoomNode[]}>;
   roomRows:Map<number,RoomRowRef>;
   rows:RegistryRow[];pool:any[];bytes?:Uint8Array;profile:WorldProfile;
-}):((room:number,actor:SpawnRecord)=>ActorHeight)|null {
+}):(((room:number,actor:SpawnRecord)=>ActorHeight)&{grids:Map<number,RoomPlacementGrid>})|null {
   if(!data?.rooms)return null;
   validatePlacementData(data,profile.bundle0?.raw_sha256??'');
   if(!bytes)throw Error('placement decoding needs the source registry');
   const actorParent=data.actors!.parent;
   const decode=makeRegistryRowDecoder(rows as FillRow[],bytes,profile);
   const byOwner=new Map([...roomRows].map(([id,r])=>[r.record,id]));
-  const grids=new Map<number,{width:number;height:number;origin:number[];words:number[];links:number[]}>();
+  const grids=new Map<number,RoomPlacementGrid>();
   for(const [id,room] of rooms){
     const fields=room.top.slice(room.table.length),binding=data.rooms;
     if(fields.length!==binding.fieldCount)throw Error(`room ${id} placement field count changed`);
@@ -224,7 +238,7 @@ export function createActorHeightReader({data,rooms,roomRows,rows,pool,bytes,pro
   }
   const at=(grid:{width:number;height:number;words:number[]},x:number,y:number,layer:number)=>
     x<0||y<0||x>=grid.width||y>=grid.height?0:packedRoomHeight(grid.words[y*grid.width+x],layer);
-  return (room,actor)=>{
+  return Object.assign((room:number,actor:SpawnRecord):ActorHeight=>{
     const grid=grids.get(room),owner=roomRows.get(room)?.record;
     if(!grid||owner===undefined)throw Error(`missing actor height grid ${room}`);
     const parent=rows[actor.record]?.v?.find(v=>v[0]===actorParent&&v[1]==='U')?.[2];
@@ -239,5 +253,5 @@ export function createActorHeightReader({data,rooms,roomRows,rows,pool,bytes,pro
       if(height>0)return {height,z:height*512,room:linked};
     }
     return {height:0,z:0,room:null};
-  };
+  },{grids});
 }

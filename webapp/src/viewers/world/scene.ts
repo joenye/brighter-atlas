@@ -14,8 +14,9 @@ import { idlePoseKey, skinVertices } from '../../extract/world/idle-poses.js';
 import { applyPackedRecolor } from '../../recolor.js';
 import { pad5 } from '../../ui.js';
 import { b64f32, b64u8, type AppStore } from '../../store.js';
-import type { GameRoomSource, GameBatchSource, GameActorSource } from './game-frame.js';
+import type { GameRoomSource, GameBatchSource, GameActorSource, GameActorLight } from './game-frame.js';
 import { placedLight, type ListedLight } from './point-lights.js';
+import { restWorldMatrices } from '../../extract/skeleton.js';
 import { emissionKey } from './draw-order.js';
 import {
   planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh,
@@ -1447,12 +1448,33 @@ export class WorldScene {
     }
     const grid = room.shard.colour_grid ?? null;
     const [w, h] = room.shard.size ?? [room.meta?.w ?? 0, room.meta?.h ?? 0];
-    // the point lights the room's scenery carries (07-Oct-2026 on), each placed by its object's own frame
+    // the point lights the room's scenery carries (07-Oct-2026 on), each placed by its object's frame: the
+    // scenery's own (the room's group) and its models' (street lamps: the model group). Its seed is its
+    // stack's place in the room (the occurrence's tile, layer and entry slot), complemented for models.
     const lights: ListedLight[] = [];
     for (const def of room.shard.point_lights ?? []) {
       try {
-        this._lightOwnerMatrix(room.shard, def.occurrence, matrix);
-        lights.push(placedLight(def, room.group.matrix.clone().multiply(matrix)));
+        const owner = room.group.matrix.clone().multiply(this._lightOwnerMatrix(room.shard, def.occurrence, matrix));
+        const row = room.shard.occurrences[def.occurrence];
+        const stack = (Math.imul((Math.imul(h, finite(row[oc.z])) + finite(row[oc.y])) | 0, w) + finite(row[oc.x])) | 0;
+        const place = (Math.imul(stack, 4) + finite(row[oc.entry_slot], 0)) | 0;
+        if (def.model) { lights.push(placedLight(def, owner, ~place, 'model')); continue; }
+        const light = placedLight(def, owner, place, 'own');
+        lights.push(light);
+        if (Number.isInteger(def.attach)) {
+          // attached to a node of its object's model: the light rides the node (at rest here), its footprint
+          // stays on the object's own point, widened by the definition's margin and its cone's spread
+          Object.assign(light, { centre: [light.light.position[0], light.light.position[1]], extra: def.margin ?? 0, axis: light.light.direction });
+          const node = await this._lightNodeMatrix(room, def.occurrence, def.attach as number).catch(() => null);
+          if (node) {
+            const at = new THREE.Vector3(def.offset[0], def.offset[1], def.offset[2]).applyMatrix4(node);
+            light.light.position = [at.x, at.y, at.z];
+            if (def.direction) {
+              const axis = new THREE.Vector3(def.direction[0], def.direction[1], def.direction[2]).transformDirection(node);
+              light.light.direction = [axis.x, axis.y, axis.z];
+            }
+          }
+        }
       } catch { /* an occurrence the room lacks: no light */ }
     }
     return {
@@ -1467,8 +1489,27 @@ export class WorldScene {
     };
   }
 
-  /** An object's own frame (native), where the lights its kind carries sit: its placement without the
-   *  mesh's forward half turn (lights are authored in the object's frame) or a part's local matrix. */
+  /** A node of an occurrence's model at rest, in the room (native): its rigged part's placement times the
+   *  node's rest matrix; null when the occurrence has no rigged part with that node. */
+  async _lightNodeMatrix(room: WorldSceneRoom, occurrenceIndex: number, node: number): Promise<THREE.Matrix4 | null> {
+    const pc = this.placementColumns;
+    for (const placement of room.shard.placements ?? []) {
+      if (placement[pc.occurrence] !== occurrenceIndex) continue;
+      const payload = await this.store.payload(`meshes/${pad5(Number(placement[pc.mesh]))}.json`).catch(() => null);
+      const rig = Number(payload?.skel);
+      if (!payload?.skinned || !(rig >= 0)) continue;
+      const skeleton = await this.store.payload(`rigs/${pad5(rig)}.json`).catch(() => null);
+      if (!skeleton?.bones?.length || node < 0 || node >= skeleton.bones.length) continue;
+      const world = restWorldMatrices(skeleton.bones)[node];
+      if (!world) continue;
+      const rest = new THREE.Matrix4().fromArray(world);
+      return room.group.matrix.clone().multiply(this._placementMatrix(room.shard, placement, new THREE.Matrix4())).multiply(rest);
+    }
+    return null;
+  }
+
+  /** An object's frame (native), where the lights its kind carries sit: its placement as its model is
+   *  placed (the same turn, mirror and anchor), without a part's local matrix. */
   _lightOwnerMatrix(shard: any, occurrenceIndex: number, target: THREE.Matrix4): THREE.Matrix4 {
     const oc = this.occurrenceColumns;
     const occurrence = shard.occurrences[occurrenceIndex];
@@ -1478,7 +1519,7 @@ export class WorldScene {
       centerX: anchor?.center[0] ?? finite(occurrence[oc.x]) + 0.5,
       centerY: anchor?.center[1] ?? finite(occurrence[oc.y]) + 0.5,
       z: finite(occurrence[oc.z]), quarterTurns: finite(occurrence[oc.rotation_quarters], 0) & 3,
-      meshForwardQuarterTurns: 0,
+      meshForwardQuarterTurns: this.meshForwardQuarterTurns,
       packedFlags: finite(occurrence[oc.appearance_packed_flags ?? oc.packed_flags], 0),
       tileUnits: this.tileUnits, layerUnits: this.layerUnits,
     });
@@ -1511,10 +1552,21 @@ export class WorldScene {
       return;
     }
     const rest = await this._restPalette(payload, Number(payload.skel), batch.idleClip ?? -1);
+    // the lights the actor's resting states carry (07-Oct-2026 on): on a bone of its rig (its bind matrix
+    // turns this frame's skin matrix into the bone's posed one), or at its place; once per actor
+    const lit = new Set<number>(actors.flatMap((a: any) => a.lights?.length ? [a.spawn] : []));
+    const binds = room.shard.spawn_lights?.length ? await this._rigBinds(Number(payload.skel)) : null;
     for (const entry of batch.entries) {
       const placement = place(entry.row);
       const palette = placeSkin(placement, rest);
       const spawnIndex = Number(entry.row[spc.spawn]);
+      const own = lit.has(spawnIndex) ? null : room.shard.spawn_lights?.find((l: any) => l.spawn === spawnIndex);
+      const lights: GameActorLight[] = (own?.lights ?? []).map((def: any, j: number) => {
+        const bone = Number.isInteger(def.attach) && binds && def.attach < binds.length ? def.attach as number : null;
+        // the game's seed: the actor's place in the room's list (31 apart), less the light's
+        return { def, bone, bind: bone === null ? null : binds![bone], placement, seed: ~(31 * (1 + spawnIndex)) - j };
+      });
+      if (lights.length) lit.add(spawnIndex);
       actors.push({
         mesh, material: Number(batch.material), renderTexture: Number(batch.renderTexture), payload,
         bones: rest.length / 12, tint: null, recolours,
@@ -1522,8 +1574,16 @@ export class WorldScene {
           const live = this.actorPalette?.(room.id, spawnIndex, entry.placementIndex, mesh, palette);
           return live === undefined ? palette : live;
         },
+        ...(lights.length ? { lights, spawn: spawnIndex } : {}),
       });
     }
+  }
+
+  /** A rig's bones' bind matrices (mesh space), or null without the rig. */
+  async _rigBinds(rig: number): Promise<THREE.Matrix4[] | null> {
+    if (!(rig >= 0)) return null;
+    const skeleton = await this.store.payload(`rigs/${pad5(rig)}.json`).catch(() => null);
+    return skeleton?.bones?.length ? restWorldMatrices(skeleton.bones).map((m) => new THREE.Matrix4().fromArray(m)) : null;
   }
 
   /** A rig's skin matrices at the first frame of `clip` (mesh space, row-major

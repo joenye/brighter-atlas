@@ -27,9 +27,26 @@ export interface ShardPointLight {
   falloff: number;
   specular: number;
   flicker: {depth: number; rate: number; colour: [number, number, number] | null};
+  /** The attach point (a model's bone, or none), and the definition's two reach numbers: the margin its
+   *  square cull and footprint add, and the spread added to a spot's cone. */
+  attach: number | null;
+  margin: number;
+  spread: number;
 }
 
 type Definition = Omit<ShardPointLight, 'occurrence'>;
+
+/** A model's light with when it shines: always (`windows` null) or in windows of its state's time (ticks),
+ *  fading in and out over `fadeIn` / `fadeOut` ticks; `loop` the holder's looping flag. */
+export interface TimedLight extends Definition {
+  windows: [number, number][] | null;
+  fadeIn: number;
+  fadeOut: number;
+  loop: boolean;
+}
+
+/** An actor's lights: those of the states its resting animation plays (each once). */
+export interface ShardSpawnLights {spawn: number; lights: TimedLight[]}
 type Decode = (slot: number) => {op: number; kind: string; node?: any}[] | null;
 
 /** A style: a colour, five numbers (intensity, falloff, specular, flicker depth and rate), a flicker
@@ -56,24 +73,74 @@ function readDefinition(pool: PoolNode[], n: PoolNode | null): Definition | null
   const vec = (k: number) => (f[k]?.tag === 0x22 && Array.isArray(f[k]!.value) && f[k]!.value.length === 3
     ? f[k]!.value.map(Number) as [number, number, number] : null);
   const offset = vec(2), direction = vec(3), range = num(1), cone = num(4), feather = num(5), width = num(6);
+  const margin = num(8), spread = num(9);
+  const id = f[7]?.tag === 0x0a ? (Array.isArray(f[7].value) ? f[7].value[0] : f[7].value) : null;
+  const attach = Number.isInteger(id) ? id as number : null;
   if (!style || !offset || (!direction && f[3]?.tag !== 0x0f) || range === null || cone === null || feather === null
-    || width === null || (f[7]?.tag !== 0x0f && f[7]?.tag !== 0x0a) || num(8) === null || num(9) === null
+    || width === null || (f[7]?.tag !== 0x0f && attach === null) || margin === null || spread === null
     || (f[10]?.tag !== 0x0c && f[10]?.tag !== 0x0d)) return null;
-  return {offset, range, direction, cone, feather, width, ...style};
+  return {offset, range, direction, cone, feather, width, ...style, attach, margin, spread};
 }
 
-/** A model's lights (one, or a list): each with the times it shines (`$all`, or windows), fade in and out,
- *  and a flag. The always-on ones (a still frame shows them; windowed ones belong to an animation's moment). */
-function readModelLights(pool: PoolNode[], n: PoolNode | null): Definition[] {
+/** A tick count stored as two 32-bit halves in a pair of float bit patterns (high, low). */
+function ticks(n: PoolNode | null): number | null {
+  if (n?.tag !== 0x28 || !Array.isArray(n.value) || n.value.length !== 2) return null;
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat32(0, Number(n.value[0])); view.setFloat32(4, Number(n.value[1]));
+  return view.getInt32(0) * 2 ** 32 + view.getUint32(4);
+}
+
+/** A model's light holder: its definition, when it shines (`$all`, or a list of start and end times), its
+ *  fades and its looping flag. */
+function readHolder(pool: PoolNode[], h: PoolNode | null): TimedLight | null {
+  if (h?.tag !== 0x24 || !Array.isArray(h.fields) || h.fields.length !== 5) return null;
+  const f = h.fields.map((x) => resolveValue(pool, x));
+  const light = readDefinition(pool, f[0]);
+  const fadeIn = ticks(f[2]), fadeOut = ticks(f[3]);
+  if (!light || fadeIn === null || fadeOut === null || (f[4]?.tag !== 0x0c && f[4]?.tag !== 0x0d)) return null;
+  let windows: [number, number][] | null = null;
+  if (f[1]?.tag !== 0x0f) {
+    if (f[1]?.tag === 0x0e || !Array.isArray(f[1]?.values)) return null;
+    windows = [];
+    for (const item of f[1]!.values) {
+      const w = typeof item === 'object' ? resolveValue(pool, item) : null;
+      const range = w?.tag === 0x24 && Array.isArray(w.fields) && w.fields.length === 2 ? w.fields.map((x) => ticks(resolveValue(pool, x))) : null;
+      if (!range || range[0] === null || range[1] === null) return null;
+      windows.push([range[0], range[1]]);
+    }
+  }
+  return {...light, windows, fadeIn, fadeOut, loop: f[4]!.tag === 0x0c};
+}
+
+/** A model state's lights (one holder, or a list of them). */
+function readHolders(pool: PoolNode[], n: PoolNode | null): TimedLight[] {
   const items = n?.tag === 0x24 ? [n] : n && n.tag !== 0x0e && Array.isArray(n.values) ? n.values : [];
-  const out: Definition[] = [];
+  const out: TimedLight[] = [];
   for (const item of items) {
-    const h = typeof item === 'object' ? resolveValue(pool, item) : null;
-    if (h?.tag !== 0x24 || !Array.isArray(h.fields) || h.fields.length !== 5) return [];
-    const f = h.fields.map((x) => resolveValue(pool, x));
-    const light = readDefinition(pool, f[0]);
-    if (!light || f[2]?.tag !== 0x28 || f[3]?.tag !== 0x28 || (f[4]?.tag !== 0x0c && f[4]?.tag !== 0x0d)) return [];
-    if (f[1]?.tag === 0x0f) out.push(light);
+    const holder = readHolder(pool, typeof item === 'object' ? resolveValue(pool, item) : null);
+    if (!holder) return [];
+    out.push(holder);
+  }
+  return out;
+}
+
+/** A model state's always-on lights (scenery models: what a still scene shows). */
+function readModelLights(pool: PoolNode[], n: PoolNode | null): Definition[] {
+  return readHolders(pool, n).filter((h) => h.windows === null)
+    .map(({windows: _w, fadeIn: _i, fadeOut: _o, loop: _l, ...light}) => light);
+}
+
+/** An actor's resting lights: every light of the states listed in the field its resting animation comes
+ *  from (the states play together with its clip), each state once. */
+export function restingLights(pool: PoolNode[], decode: Decode, record: number, op: number): TimedLight[] {
+  const field = fieldsOf(decode, record).find((f) => f.kind === 'G' && f.op === op);
+  if (!field) return [];
+  const refs = new Set<number>();
+  references(pool, resolveValue(pool, field.node), refs);
+  const out: TimedLight[] = [];
+  for (const ref of refs) {
+    if (ref === record) continue;
+    for (const f of fieldsOf(decode, ref)) if (f.kind === 'G') out.push(...readHolders(pool, resolveValue(pool, f.node)));
   }
   return out;
 }

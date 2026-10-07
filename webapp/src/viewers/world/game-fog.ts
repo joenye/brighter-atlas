@@ -1,10 +1,13 @@
 // The game's volumetric fog (07-Oct-2026 on): a height fog ray-marched over
 // the half-resolution depth, blurred along x then y with a depth-aware
 // weight, smoothed along depth edges and laid over the frame premultiplied.
-// The game asks the room for its fog each frame; the rooms that have one
-// build it from a live amount (the event's state), which a viewer cannot
-// know: the viewer draws it at full amount. These are the settings the
-// game builds at full amount, and the march pass's constants from them.
+// The game asks the room for its fog each frame. The rooms that have one
+// build it from a live amount (an event's progress and what is happening in
+// the room), which a viewer cannot know: the viewer draws it at full amount,
+// as a player sees it while the event haunts the room. These are the
+// settings the game builds at full amount, and the march pass's constants
+// from them: the fog lies on the room's ground over the room's fog area, its
+// noise anchored to the map, lit by the sun and by the room's point lights.
 
 import { THREE } from '../three-common.js';
 
@@ -46,14 +49,16 @@ export interface FogFrame {
   /** Camera space (x right, y down, z forward) to the native frame. */
   viewToWorld: THREE.Matrix4;
   eye: THREE.Vector3;
-  /** The room's area (native x0, y0, x1, y1) and its ground height. */
+  /** The room's fog area (native x0, y0, x1, y1) and the ground the fog lies on. */
   area: [number, number, number, number];
   ground: number;
-  /** The clock in seconds and the point the camera looks at (native xy). */
+  /** The clock in seconds, and the noise's anchor: minus the room's place on the map (native xy). */
   seconds: number;
   focus: [number, number];
   /** The frame's vignette: ellipse (cx, cy, 1/hx, 1/hy), colour, outer ratio, height fade (z0, scale, floor). */
   ellipse: number[]; vignette: number[]; reach: number; fade: [number, number, number];
+  /** The point light grid (origin x, y, cells per unit) and strength, or null for a room without lights. */
+  lights: [number, number, number, number] | null;
   /** The shadow map's transform (world to (u, v, depth)), rows. */
   shadow: number[];
   /** The sun: direction (native, not normalised) and authored colour. */
@@ -102,10 +107,10 @@ export function fogMarchConstants(fr: FogFrame): number[] {
     f32(pow(fr.sunColour[0]) * 1.5), f32(pow(fr.sunColour[1]) * 1.5), f32(pow(fr.sunColour[2]) * 1.5), 0, // 19 light colour
     ...fr.ellipse,                                                                    // 20 vignette ellipse
     fr.vignette[0], fr.vignette[1], fr.vignette[2], Math.max(fr.reach, 1.0001),        // 21 vignette colour
-    fr.fade[0], fr.fade[1], fr.fade[2], 1,                                            // 22 vignette chasm
+    fr.fade[0], fr.fade[1], fr.fade[2], fr.fade[2] !== 1 ? 1 : 0,                     // 22 vignette chasm
     0, 0, 0, 0,                                                                       // 23 wake box: no wake
     ...S.wake,                                                                        // 24 wake shape
-    0, 0, 0, 0,                                                                       // 25 point lights in the fog: none
+    ...(fr.lights ?? [0, 0, 0, 0]),                                                   // 25 point lights in the fog
     S.lightSamples, 0, S.steps, 0,                                                    // 26 light samples, steps
     0, fr.ground, 0, 1,                                                               // 27 haze: none
     0, fr.ground, 0, 1,                                                               // 28 global haze: none

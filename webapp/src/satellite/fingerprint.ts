@@ -153,6 +153,7 @@ export class FrameInputs {
     const actor = (a: NonNullable<GameRoomSource['actors']>[number]) => ({
       mesh: meshOf(a), material: keys.get(a.material), texture: this.texture(a.renderTexture), bones: a.bones,
       tint: a.tint, recolours: a.recolours, palette: Array.from(a.palette() ?? []),
+      ...(a.lights?.length ? { lights: a.lights.map((l) => ({ def: l.def, bone: l.bone, bind: l.bind?.elements ?? null, seed: l.seed })) } : {}),
     });
     const scene = (s: { batches: GameRoomSource['batches']; actors?: GameRoomSource['actors']; lights?: GameRoomSource['lights'] }) => ({
       batches: s.batches.map(batch), actors: (s.actors ?? []).map(actor), ...(s.lights?.length ? { lights: s.lights } : {}),

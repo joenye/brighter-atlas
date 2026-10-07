@@ -450,7 +450,7 @@ export function deriveRenderData(src: {
     return preset >= 0 ? [{ roomRuntime: r.roomRuntime, presetOffset: preset }] : [];
   });
   const { ssaoPrograms, fullscreenVertex, fogPrograms: fogPasses, ...draw } = tables;
-  const fog = fogPasses && build?.fog?.rooms.length ? { fog: { programs: fogPasses, roomRuntimes: build.fog.rooms } } : {};
+  const fog = fogPasses && build?.fog?.rooms.length ? { fog: { programs: fogPasses, rooms: build.fog.rooms } } : {};
   return {
     ...draw, ...fog, materials,
     lighting: { directionOffset: lights.direction, ...ENGINE.lighting },

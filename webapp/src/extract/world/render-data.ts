@@ -33,8 +33,9 @@ export interface RenderDecodeData {
   // From 07-Oct-2026 the surface's ring twins and the curtain's point light twins, keyed
   // (skinned, 32-bit indices): FF FT TF TT.
   waterPrograms: {surface: number[]; curtain: number[]; surfaceRing?: number[]; curtainLit?: number[]};
-  /** The volumetric fog (07-Oct-2026 on): its passes and the rooms that have it, by room runtime. */
-  fog?: {programs: {noise: number; march: number; blurX: number; blurY: number; edge: number}; roomRuntimes: number[]};
+  /** The volumetric fog (07-Oct-2026 on): its passes and the rooms that have it, by room runtime, with
+   *  each one's fog area (room frame, native units). */
+  fog?: {programs: {noise: number; march: number; blurX: number; blurY: number; edge: number}; rooms: FogRoom[]};
   lighting: {directionOffset: number; gamma: number; fade: number};
   environment: {
     assetValue: number; family: number; field: number; presetClass: number;
@@ -111,16 +112,20 @@ export function validRenderData(d: any): d is RenderDecodeData {
 export interface RenderBuildData {
   story?: {rooms: {roomRuntime: number; variable: number; steps: [number, number][]}[]};
   scene?: {dynamicField: number};
-  /** The rooms whose fog the game draws (07-Oct-2026 on), by room runtime. */
-  fog?: {rooms: number[]};
+  /** The rooms whose fog the game draws (07-Oct-2026 on), by room runtime, and each one's fog area. */
+  fog?: {rooms: FogRoom[]};
 }
+
+/** A room type with fog and the area it covers (room frame, native units: x0, y0, x1, y1). */
+export interface FogRoom {room: number; rect: [number, number, number, number]}
 
 export function validRenderBuildData(d: any): d is RenderBuildData {
   if (!d || typeof d !== 'object') return false;
   if (d.story !== undefined && !(Array.isArray(d.story?.rooms) && d.story.rooms.every((r: any) => index(r?.roomRuntime)
     && index(r?.variable) && Array.isArray(r.steps) && r.steps.length > 0 && r.steps.every((st: any) => Array.isArray(st)
       && st.length === 2 && index(st[0]) && (st[1] === -1 || index(st[1])))))) return false;
-  if (d.fog !== undefined && !(Array.isArray(d.fog?.rooms) && d.fog.rooms.every(index))) return false;
+  if (d.fog !== undefined && !(Array.isArray(d.fog?.rooms) && d.fog.rooms.every((f: any) => index(f?.room)
+    && Array.isArray(f.rect) && f.rect.length === 4 && f.rect.every(Number.isFinite) && f.rect[2] > f.rect[0] && f.rect[3] > f.rect[1]))) return false;
   return d.scene === undefined || index(d.scene?.dynamicField);
 }
 

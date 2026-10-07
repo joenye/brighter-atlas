@@ -12,7 +12,7 @@
 // single sampled, and the finished frame is copied texel for texel to the
 // canvas.
 import { THREE } from '../three-common.js';
-import { packPointLights, type ListedLight } from './point-lights.js';
+import { packPointLights, packLightData, flickers, lightMultiplier, placedLight, type ListedLight, type GamePointLight, type LightDefinition } from './point-lights.js';
 import { fogMarchConstants } from './game-fog.js';
 import { GameShaderLibrary, putFloats, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
@@ -24,8 +24,10 @@ import { PLANE_GAME_DISTANCE, planeCount, planeGroups, TILE_QUAD, type PlaneTile
 
 export interface GameRenderIndex extends GameRenderTables {
   waterPrograms: { surface: number[]; curtain: number[]; surfaceRing?: number[]; curtainLit?: number[] };
-  /** The volumetric fog's passes and the rooms that have it (07-Oct-2026 on). */
-  fog?: { programs: { noise: number; march: number; blurX: number; blurY: number; edge: number }; rooms: number[] };
+  /** The volumetric fog's passes and the rooms that have it (07-Oct-2026 on): each one's fog area (room
+   *  frame), the ground it lies on and the room's place on the map (tiles). */
+  fog?: { programs: { noise: number; march: number; blurX: number; blurY: number; edge: number };
+    rooms: { id: number; rect: [number, number, number, number]; ground: number; origin: [number, number] }[] };
   materials: Record<string, { main: number[][]; lit?: number[][]; depth: number[][]; specular: [number, number, number]; opacity: number }>;
   environments: Record<string, {
     sky: number[]; ground: number[]; sun: number[]; vignette: number[];
@@ -73,10 +75,33 @@ export interface GameActorSource {
   /** This frame's skin matrices in the native frame (placement included),
    *  row-major 3x4 per bone; null leaves the part out of the frame. */
   palette: () => Float32Array | null;
+  /** The lights the states of the actor's resting animation carry (07-Oct-2026 on). */
+  lights?: GameActorLight[];
+}
+
+/** A light an actor carries: its definition with when it shines, the bone it hangs from (with that bone's
+ *  bind matrix, native, to follow the pose) or the actor's placement, and its seed. */
+export interface GameActorLight {
+  def: LightDefinition & { windows: [number, number][] | null; fadeIn: number; fadeOut: number };
+  bone: number | null;
+  bind: THREE.Matrix4 | null;
+  placement: THREE.Matrix4;
+  seed: number;
 }
 
 /** One scene's draws, by pass. */
 interface SceneDraws { draws: Draw[]; actorDraws: Draw[]; waterDraws: Draw[]; planeDraws: Draw[] }
+
+/** A room's point lights on the GPU: the light list and cells, the grid, and what the list is made from
+ *  (refreshed each frame when a light flickers). */
+interface PackedLightTextures {
+  data: GameTexture; cells: GameTexture; grid: [number, number, number]; count: number;
+  words: Float32Array; lights: GamePointLight[]; flickering: boolean; seconds: number;
+  /** What the list is gathered from: the room's and its neighbours' lights, the actors' (placed each
+   *  frame, at their pose and how strongly each shines), and the room's area. */
+  listed: ListedLight[]; actors: { actor: GameActorSource; light: GameActorLight }[];
+  area: { x: number; y: number; w: number; h: number; tile: number }; ticks0: number | null;
+}
 
 /** A neighbouring room's lights against the room's (the game's scale at rest). */
 const NEIGHBOUR_LIGHT = 0.1;
@@ -313,34 +338,92 @@ export class GameFrame {
    *  grid (origin, scale), or null without lights. */
   private lit = false;
   private buildingLit = false;
-  private pointLights: { data: GameTexture; cells: GameTexture; grid: [number, number, number]; count: number } | null = null;
+  private pointLights: PackedLightTextures | null = null;
   /** The game's point light strength (the grid's fourth value) at full scene light. */
   pointLightStrength = 1;
 
-  private packLights(room: GameRoomSource): { data: GameTexture; cells: GameTexture; grid: [number, number, number]; count: number } | null {
-    // the room's lights, and its neighbours' where their range reaches the room
-    const u = this.tileUnits, w = room.bounds.inner[2] * u, h = room.bounds.inner[3] * u;
-    const reaches = (l: ListedLight) => {
-      const [x, y] = l.light.position;
-      return Math.hypot(Math.max(-x, 0, x - w), Math.max(-y, 0, y - h)) <= l.light.range;
-    };
-    const lights = [...(room.lights ?? []), ...(room.others ?? []).flatMap((o) => (o.lights ?? []).filter(reaches))];
-    if (!lights.length) return null;
-    const packed = packPointLights(lights, { x: 0, y: 0, w, h, tile: u });
+  private packLights(room: GameRoomSource): PackedLightTextures | null {
+    // the room's lights (its scenery's, its scenery models'), its neighbours' and its actors'
+    const u = this.tileUnits, area = { x: 0, y: 0, w: room.bounds.inner[2] * u, h: room.bounds.inner[3] * u, tile: u };
+    const listed = [...(room.lights ?? []),
+      ...(room.others ?? []).flatMap((o) => (o.lights ?? []).map((l): ListedLight => (l.group === 'own' ? { ...l, group: 'neighbour' } : l)))];
+    const actors = (room.actors ?? []).flatMap((actor) => (actor.lights ?? []).map((light) => ({ actor, light })));
+    if (!listed.length && !actors.length) return null;
+    const packed = packPointLights(listed, area);
     const gl = this.context;
-    const upload = (words: Float32Array) => {
-      const t = this.gl.texture2D(words.length / 4, 1, gl.RGBA32F);
-      gl.bindTexture(gl.TEXTURE_2D, t.texture);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, t.width, 1, gl.RGBA, gl.FLOAT, words);
-      return t;
-    };
-    // the cells' words keep their bits (a float view of the integers)
-    return { data: upload(packed.data), cells: upload(new Float32Array(packed.cells.buffer)), grid: packed.grid, count: packed.count };
+    const make = (words: Float32Array) => this.gl.texture2D(words.length / 4, 1, gl.RGBA32F);
+    const textures = { data: make(packed.data), cells: make(new Float32Array(packed.cells.buffer)) };
+    const out: PackedLightTextures = { ...textures, grid: packed.grid, count: 0, words: packed.data, lights: [],
+      flickering: false, seconds: NaN, listed, actors, area, ticks0: null };
+    this.uploadLights(out, packed);
+    return out;
   }
 
-  /** The point lights drawn (test handle): how many, and the grid. */
-  lightInfo(): { lit: boolean; count: number; grid: [number, number, number] | null } {
-    return { lit: this.lit, count: this.pointLights?.count ?? 0, grid: this.pointLights?.grid ?? null };
+  /** A new light list and cells onto the GPU (the cells' words keep their bits: a float view of them). */
+  private uploadLights(l: PackedLightTextures, packed: ReturnType<typeof packPointLights>): void {
+    const gl = this.context;
+    for (const [t, words] of [[l.data, packed.data], [l.cells, new Float32Array(packed.cells.buffer)]] as const) {
+      gl.bindTexture(gl.TEXTURE_2D, t.texture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, t.width, 1, gl.RGBA, gl.FLOAT, words);
+    }
+    Object.assign(l, { grid: packed.grid, count: packed.count, words: packed.data, lights: packed.lights,
+      flickering: packed.lights.some(flickers), seconds: NaN });
+  }
+
+  /** The lights at the frame's clock. Actors' lights follow their pose and shine as their state's time
+   *  says (gathered and binned again each frame); every light flickers on the game's clock, in seconds
+   *  that wrap every hour (`ticks` mod 2,160,000 over 600). */
+  private updateLights(ticks: number): void {
+    const l = this.pointLights;
+    if (!l) return;
+    if (l.actors.length) {
+      l.ticks0 ??= ticks;
+      const placed = l.actors.flatMap(({ actor, light }) => {
+        const shine = lightMultiplier(light.def, ticks - l.ticks0!);
+        if (!(shine > 0)) return [];
+        const at = this.actorLightPoint(actor, light);
+        return at ? [placedLight(light.def, light.placement, light.seed, 'model', at, shine)] : [];
+      });
+      this.uploadLights(l, packPointLights([...l.listed, ...placed], l.area));
+    }
+    if (!l.flickering) return;
+    const tps = this.index.clock.ticksPerSecond;
+    const seconds = (((ticks % (3600 * tps)) + 3600 * tps) % (3600 * tps)) / tps;
+    if (seconds === l.seconds) return;
+    l.seconds = seconds;
+    packLightData(l.lights, seconds, l.words);
+    const gl = this.context;
+    gl.bindTexture(gl.TEXTURE_2D, l.data.texture);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, l.data.width, 1, gl.RGBA, gl.FLOAT, l.words);
+  }
+
+  /** Where an actor's light is this frame: on its bone (the bone's posed matrix: this frame's skin matrix
+   *  times its bind matrix), offset and axis turned with it; or at the actor's place with the offset and
+   *  axis as authored (unturned). */
+  private actorLightPoint(actor: GameActorSource, light: GameActorLight): { point: THREE.Vector3; axis: THREE.Vector3 | null } | null {
+    const { offset, direction } = light.def;
+    const axis = direction ? new THREE.Vector3(direction[0], direction[1], direction[2]) : null;
+    if (light.bone === null || !light.bind) {
+      const point = new THREE.Vector3().setFromMatrixPosition(light.placement).add(new THREE.Vector3(offset[0], offset[1], offset[2]));
+      return { point, axis };
+    }
+    const palette = actor.palette();
+    const o = light.bone * 12;
+    if (!palette || palette.length < o + 12) return null;
+    const bone = new THREE.Matrix4().set(
+      palette[o], palette[o + 1], palette[o + 2], palette[o + 3],
+      palette[o + 4], palette[o + 5], palette[o + 6], palette[o + 7],
+      palette[o + 8], palette[o + 9], palette[o + 10], palette[o + 11],
+      0, 0, 0, 1).multiply(light.bind);
+    return { point: new THREE.Vector3(offset[0], offset[1], offset[2]).applyMatrix4(bone), axis: axis ? axis.transformDirection(bone) : null };
+  }
+
+  /** The point lights drawn (test handle): how many, the grid, and what they were gathered from (each
+   *  light's group, position, range and margin; the room's area). */
+  lightInfo(): { lit: boolean; count: number; grid: [number, number, number] | null; gathered: unknown[]; area: unknown; actors: number } {
+    const l = this.pointLights;
+    return { lit: this.lit, count: l?.count ?? 0, grid: l?.grid ?? null, area: l?.area ?? null, actors: l?.actors.length ?? 0,
+      gathered: (l?.listed ?? []).map((g) => [g.group, g.light.position.map(Math.round), g.light.range, g.margin ?? 0]) };
   }
 
   private freeLights(lights: { data: GameTexture; cells: GameTexture } | null): void {
@@ -385,7 +468,7 @@ export class GameFrame {
     const next: SceneDraws = { draws: [], actorDraws: [], waterDraws: [], planeDraws: [] };
     const buffers: WebGLBuffer[] = [];
     this.building = room;
-    this.buildingLit = !!(room.lights?.length || room.others?.some((o) => o.lights?.length))
+    this.buildingLit = !!(room.lights?.length || room.others?.some((o) => o.lights?.length) || room.actors?.some((a) => a.lights?.length))
       && Object.values(this.index.materials).some((m) => m.lit?.length);
     this.gl.collect = buffers;
     try {
@@ -867,6 +950,7 @@ export class GameFrame {
 
   private renderFrame(camera: GameCamera, ticks: number, avatarZ: number, offscreen: boolean): void {
     if (!this.room || !this.passPrograms.size) return;
+    this.updateLights(ticks);
     const gl = this.context;
     const idx = this.index;
     const near = camera.near ?? idx.camera.near, far = camera.far ?? idx.camera.far;
@@ -1134,12 +1218,15 @@ export class GameFrame {
       } else putFloats(words, 0, sine);
       drawMain(d, ringWords ?? words);
     }
-    if (this.showFog && !card && idx.fog?.rooms.includes(this.room.roomId)) {
+    const fogRoom = this.showFog && !card ? idx.fog?.rooms.find((f) => f.id === this.room!.roomId) : undefined;
+    if (fogRoom) {
       const viewToWorld = toInYDown.clone().multiply(view).invert();
+      const u = this.tileUnits, lights = this.pointLights;
       const words = fogMarchConstants({
         w: t.w, h: t.h, pad: t.pad, focal: fAo, near, far, viewToWorld, eye: camera.eye,
-        area: [rect[0], rect[1], rect[2], rect[3]], ground: 0, seconds: ticks / idx.clock.ticksPerSecond,
-        focus: [camera.target.x, camera.target.y],
+        area: fogRoom.rect, ground: fogRoom.ground, seconds: ticks / idx.clock.ticksPerSecond,
+        focus: [-fogRoom.origin[0] * u, -fogRoom.origin[1] * u],
+        lights: lights ? [...lights.grid, this.pointLightStrength] : null,
         ellipse: [f32(f32(rect[0] + rect[2]) * 0.5), f32(f32(rect[1] + rect[3]) * 0.5), f32(1 / hx), f32(1 / hy)],
         vignette: [vignetteColour[0] * idx.lighting.fade, vignetteColour[1] * idx.lighting.fade, vignetteColour[2] * idx.lighting.fade],
         reach: k, fade: [0, height, floorValue],
@@ -1179,8 +1266,10 @@ export class GameFrame {
       t.noiseReady = true;
     }
     const depth = t.prepassDepth;
+    // the march reads the room's point lights too (the same list and cells the materials read)
+    const lights: Record<string, GameTexture> = this.pointLights ? { v_point_lights: this.pointLights.data, v_point_light_cells: this.pointLights.cells } : {};
     fullscreen(fog.march, t.fogFb[0], t.w, t.h, constants(march), named(fog.march, {
-      v_texture_depth: depth, v_texture_noise: t.noise, v_texture_shadow_map: t.shadowDepth }));
+      v_texture_depth: depth, v_texture_noise: t.noise, v_texture_shadow_map: t.shadowDepth, ...lights }));
     fullscreen(fog.blurX, t.fogFb[1], t.w, t.h, constants(march), { 0: t.fog[0], 1: depth });
     fullscreen(fog.blurY, t.fogFb[0], t.w, t.h, constants(march), { 0: t.fog[1], 1: depth });
     fullscreen(fog.edge, t.fogFb[1], t.w, t.h, constants(march), { 0: t.fog[0], 1: depth });
