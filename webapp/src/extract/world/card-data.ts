@@ -63,9 +63,11 @@ export function carriesCard(row: FillRow, recordClass: number, deref: (n: any) =
 }
 
 const scratch = new DataView(new ArrayBuffer(4));
-/** The card distance: the record's one 4-byte F field, a big-endian float (null: none or several). */
+/** The card distance: the record's one 4-byte F field, a big-endian float (null: none or several).
+ *  From 07-Oct-2026 actor records carry a second one, zero: of several, only set ones count. */
 export function cardDistance(ops: readonly { kind: string; raw?: ArrayLike<number> }[]): number | null {
-  const f4 = ops.filter((x) => x.kind === 'F' && x.raw?.length === 4);
+  let f4 = ops.filter((x) => x.kind === 'F' && x.raw?.length === 4);
+  if (f4.length > 1) f4 = f4.filter((x) => Array.prototype.some.call(x.raw, (b: number) => b !== 0));
   if (f4.length !== 1) return null;
   for (let i = 0; i < 4; i++) scratch.setUint8(i, f4[0].raw![i]);
   return scratch.getFloat32(0, false);

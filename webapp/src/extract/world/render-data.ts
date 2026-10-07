@@ -27,7 +27,7 @@ export interface RenderDecodeData {
   materials: {
     families: number[];
     fields: {programs: number; depth: number; specular: [number, number, number]; opacity: number; texture: number};
-    keys: {shadows: [string, string]; ssao: [string, string]; vignette: [string, string]; colours: string};
+    keys: {shadows: [string, string]; ssao: [string, string]; vignette: [string, string]; pointLights?: [string, string]; colours: string};
   };
   /** Water programs in key order (skinned, 32-bit indices, vignette): FFT FFF FTT FTF TFT TFF TTT TTF. */
   waterPrograms: {surface: number[]; curtain: number[]};
@@ -186,7 +186,15 @@ export function readRenderMaterials(data: RenderDecodeData, rows: FillRow[], dec
       const p = program(value);
       if (k.length < 6 || p < 0 || symbol(k[5]) !== keys.colours) continue;
       const width = k[1]?.value;
-      const row6 = [flag(k[0]), width, pick(k[2], keys.shadows), pick(k[3], keys.ssao), pick(k[4], keys.vignette), p];
+      // From 07-Oct-2026 the fifth key switches point lights and every
+      // program draws the vignette: the programs without point lights (the
+      // viewer has none to give) stand as the vignette ones.
+      let vignette = pick(k[4], keys.vignette);
+      if (vignette < 0 && keys.pointLights) {
+        if (pick(k[4], keys.pointLights) !== 0) continue;
+        vignette = 1;
+      }
+      const row6 = [flag(k[0]), width, pick(k[2], keys.shadows), pick(k[3], keys.ssao), vignette, p];
       if (row6.slice(0, 5).some(v => v !== 0 && v !== 1)) continue;
       main.push(row6);
     }

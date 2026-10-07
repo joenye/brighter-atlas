@@ -21,6 +21,7 @@ const BLEND = new Map<string, number[]>([
 const SAMPLER = new Map<number, number[]>([
   [0x787, [21, 3, 3, 3, 1, 0, 15, 0, 1]], [0x3, [20, 3, 3, 3, 1, 0, 0, 0, 1]], [0x503, [20, 3, 3, 3, 1, 0, 10, 0, 1]],
   [0xa0787, [149, 3, 3, 3, 4, 0, 15, 0, 1]], [0x507, [21, 3, 3, 3, 1, 0, 10, 0, 1]], [0x2f87, [21, 1, 1, 3, 1, 0, 15, 0, 1]],
+  [0x500, [0, 3, 3, 3, 1, 0, 10, 0, 1]], [0xa803, [20, 1, 1, 1, 1, 0, 0, 0, 1]],
 ]);
 
 /** Frame values the engine fixes. */
@@ -35,6 +36,7 @@ export const ENGINE = {
     shadows: ['$utilise_shadows_false', '$utilise_shadows_true'] as [string, string],
     ssao: ['$utilise_ssao_false', '$utilise_ssao_true'] as [string, string],
     vignette: ['$vignette_false', '$vignette_true'] as [string, string],
+    pointLights: ['$point_lights_false', '$point_lights_true'] as [string, string],
     colours: '$vbo_colors',
   },
   environment: {
@@ -117,16 +119,24 @@ export function renderTables(g: GraphicsHeader, vs: ShaderFacts[], ps: ShaderFac
   const water = (surface: boolean): number[] | null => {
     const shaders = vs.map((f, i) => i).filter((i) => vs[i].names.has('v_sine_wave_x')
       && vs[i].names.has('v_uv0_scale_and_translate') === surface);
+    // From 07-Oct-2026 every twin draws the vignette and the one with more
+    // outputs is the ripple ring's instead (its pixel shader binds one more
+    // texture): the plain twin then stands for both keys.
+    const candidates = g.programs.map((p, i) => i).filter((i) => shaders.includes(g.pairs[g.programs[i].pair][0]));
+    const textures = (i: number) => g.pixelShaders[g.pairs[g.programs[i].pair][1]].textures.length;
+    const ring = new Set(candidates.map(textures)).size > 1 ? Math.max(...candidates.map(textures)) : null;
     const rows = new Map<string, number>();
-    for (let i = 0; i < g.programs.length; i++) {
+    for (const i of candidates) {
       const v = g.pairs[g.programs[i].pair][0];
-      if (!shaders.includes(v)) continue;
       const twins = shaders.filter((j) => skinned(j) === skinned(v));
       if (twins.length !== 2 || vs[twins[0]].outputs === vs[twins[1]].outputs) return null;
+      if (ring !== null && textures(i) === ring) continue;
       const vignette = vs[v].outputs === Math.max(...twins.map((j) => vs[j].outputs));
-      const key = `${skinned(v)},${g.programs[i].indexFormat === 1},${vignette}`;
-      if (rows.has(key)) return null;
-      rows.set(key, i);
+      for (const vig of ring === null ? [vignette] : [true, false]) {
+        const key = `${skinned(v)},${g.programs[i].indexFormat === 1},${vig}`;
+        if (rows.has(key)) return null;
+        rows.set(key, i);
+      }
     }
     const order: number[] = [];
     for (const s of [false, true]) for (const w of [false, true]) for (const vig of [true, false]) {
