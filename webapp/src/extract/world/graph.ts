@@ -291,10 +291,30 @@ export class AssetGraph {
     return result;
   }
 
-  // Top-level generic fields keyed by native reader operation number.
+  // Top-level generic fields keyed by native reader operation number (kept for the rest of the extraction).
   fields(ownerSlot: number): Map<number, DecodedField> {
-    let decoded = this._fieldCache.get(ownerSlot);
+    let decoded = this._fieldCache.get(ownerSlot) ?? this._scanCache?.get(ownerSlot);
     if (decoded) return decoded;
+    decoded = this._decodeFields(ownerSlot);
+    if (this._scanCache) {
+      // a registry-wide learning pass: kept only while its own work may ask again
+      if (this._scanCache.size >= 512) this._scanCache.clear();
+      this._scanCache.set(ownerSlot, decoded);
+    } else this._fieldCache.set(ownerSlot, decoded);
+    return decoded;
+  }
+
+  // While a registry-wide learning pass runs (the face bases), what it decodes is kept briefly, not for good.
+  private _scanCache: Map<number, Map<number, DecodedField>> | null = null;
+
+  // The same fields for a registry-wide scan that reads most rows once: kept only where already kept (a scan
+  // that kept every row it read held over a gigabyte of decoded fields to the end of the extraction).
+  private _scanFields(ownerSlot: number): Map<number, DecodedField> {
+    return this._fieldCache.get(ownerSlot) ?? this._decodeFields(ownerSlot);
+  }
+
+  private _decodeFields(ownerSlot: number): Map<number, DecodedField> {
+    let decoded: Map<number, DecodedField>;
     // Edge rows omit inline array boundaries, scalar payloads and matrices.
     // Read the complete source fields when available, with the row decoder's
     // exact endpoint check. Pooled and inline values then share one path.
@@ -311,7 +331,6 @@ export class AssetGraph {
           elements, leaves: elements.map((element: any) => this.leaves(element)), series,
         });
       }
-      this._fieldCache.set(ownerSlot, decoded);
       return decoded;
     }
     const grouped = new Map<number, number[]>(); // op -> pool indices, first-occurrence order
@@ -337,7 +356,6 @@ export class AssetGraph {
         series: explicitSeries || elements.length > 1,
       });
     }
-    this._fieldCache.set(ownerSlot, decoded);
     return decoded;
   }
 
@@ -507,7 +525,7 @@ export class AssetGraph {
       const seenOps = new Set<number>();
       for (const e of row.g) if (e[1] === 0 && e[2] === 0) seenOps.add(e[0]);
       if (seenOps.size < 5) continue;
-      const fields = this.fields(row.slot);
+      const fields = this._scanFields(row.slot);
       let start = -1;
       for (const s of Array.from(fields.keys()).sort((a, b) => a - b)) {
         if (isPositiveInt(fields, s) && isPositiveInt(fields, s + 1)
@@ -579,7 +597,7 @@ export class AssetGraph {
       let markers = 0;
       for (const e of row.g) if (e[1] === 0 && e[2] === 0) markers++;
       if (markers < 5) continue;
-      const fields = this.fields(row.slot);
+      const fields = this._scanFields(row.slot);
       const ops = Array.from(fields.keys()).sort((a, b) => a - b);
       let firstMesh = -1;
       for (const op of ops) { if (this.oneMesh(fields.get(op)) !== null) { firstMesh = op; break; } }
@@ -1025,6 +1043,7 @@ export class AssetGraph {
     if (this._runtimeFaceBases === null) {
       this._buildingRuntimeFaceBases = true;
       const byRuntime = new Map<number, Map<number, number>>(); // runtime -> Map(base -> count)
+      this._scanCache = new Map();
       try {
         for (const candidate of this._candidateBlockOwners()) {
           const layout = this._blockLayout(candidate);
@@ -1047,6 +1066,7 @@ export class AssetGraph {
         }
       } finally {
         this._buildingRuntimeFaceBases = false;
+        this._scanCache = null;
         // Ambiguous owners examined while learning had no fallback yet; let
         // their real call retry against the completed evidence.
         for (const [slot, layout] of Array.from(this._blockLayoutCache)) {
