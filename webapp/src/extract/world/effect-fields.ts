@@ -127,3 +127,16 @@ export function effectHslToRgb(hue: number, saturation: number, lightness: numbe
   const [r, g, b] = h < 1 ? [c, x, 0] : h < 2 ? [x, c, 0] : h < 3 ? [0, c, x] : h < 4 ? [0, x, c] : h < 5 ? [x, 0, c] : [c, 0, x];
   return [r + m, g + m, b + m];
 }
+
+// A speed the game computes (from 07-Oct-2026: the Halloween teleports' bats): a uniform draw between two ends, native
+// units per second, for every emitter of its instance.
+export interface EffectSpeedBinding { instance: number; speed: [number, number] }
+export function validEffectSpeeds(v: any): v is EffectSpeedBinding[] {
+  return validBindingList(v, b => Array.isArray(b.speed) && b.speed.length === 2
+    && b.speed.every((n: any) => Number.isFinite(n) && n >= 0) && b.speed[0] <= b.speed[1]);
+}
+export function createEffectSpeedReader(bindings: EffectSpeedBinding[] | undefined, objects: ConstructorRecord[]) {
+  if (bindings !== undefined && !validEffectSpeeds(bindings)) throw Error('invalid effect speed bindings');
+  const bindingOf = instanceLookup((bindings || []).map(b => [b.instance, b.speed] as const), objects);
+  return (slot: number): [number, number] | undefined => bindingOf(slot);
+}

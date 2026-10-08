@@ -98,6 +98,8 @@ interface ShapeSpec {
   kind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'other';
   center: Vec3;
   radial: EffectConfig['radial'] | null;
+  // a point source's cylinder: each particle born a drawn distance (up to the radius), angle and height from the centre
+  cylinder: EffectConfig['cylinder'] | null;
   cone: EffectConfig['cone'] | null;
   // orthonormal frame: w = emission axis, u/v span its perpendicular plane
   w: Vec3; u: Vec3; v: Vec3;
@@ -220,6 +222,7 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
       ? kind : 'other',
     center,
     radial: config?.radial ?? null,
+    cylinder: config?.cylinder ?? null,
     cone: config?.cone ?? null,
     ...frame,
     yaw: clamp(finite(config?.spread_yaw, 360), 0, 360) * DEG,
@@ -309,6 +312,9 @@ export class EmitterSim {
   /** Number of sprite outcomes; each particle stores its uniform choice. */
   spriteChoices = 0;
   choice!: Uint8Array;
+  /** Each particle's own draw for where an animated picture starts (0 to 1): from its seed alone, so the other draws
+   *  keep their order. */
+  frameStart!: Float32Array;
   private _ax!: Float32Array; private _ay!: Float32Array; private _az!: Float32Array;
   private _jx!: Float32Array; private _jy!: Float32Array; private _jz!: Float32Array;
   private _spin!: Float32Array;
@@ -419,7 +425,8 @@ export class EmitterSim {
     const shapeCfg = emitter.shape != null ? configs[String(emitter.shape)] || null : null;
     this.shape = resolveShape(shapeCfg, fallbackAxis, tickRate);
     this._random = !!this._scales || this._perParticle || this.spriteChoices > 1
-      || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number') || !!this.shape.spiral?.range || !!this.shape.spiral?.axisRange;
+      || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number') || !!this.shape.spiral?.range || !!this.shape.spiral?.axisRange
+      || !!this.shape.cylinder;
 
     // Burst schedule. A missing/degenerate burst leaves the emitter inert
     // (alive stays zero); siblings are unaffected.
@@ -524,6 +531,7 @@ export class EmitterSim {
     this.ny = new Float32Array(capacity);
     this.nz = new Float32Array(capacity);
     this.choice = new Uint8Array(this.spriteChoices > 1 ? capacity : 0);
+    this.frameStart = new Float32Array(capacity);
     const motion = this._perParticle ? capacity : 0;
     this._ax = new Float32Array(motion); this._ay = new Float32Array(motion); this._az = new Float32Array(motion);
     this._jx = new Float32Array(motion); this._jy = new Float32Array(motion); this._jz = new Float32Array(motion);
@@ -624,6 +632,7 @@ export class EmitterSim {
   private _spawn(j: number, counter = j * this.k, tick = this.spawnTick(j)): void {
     const slot = j % this.capacity;
     const particleSeed = hash32(this.seed, counter | 0);
+    this.frameStart[slot] = hash32(particleSeed, 0x66726d) / 4294967296;
     const rng = mulberry32(particleSeed);
     const r0 = rng();
     const r1 = rng();
@@ -635,6 +644,12 @@ export class EmitterSim {
     const random = this._random ? new EffectRandom(BigInt(particleSeed)) : null;
     const draw = (v: EffectSample) => typeof v === 'number' ? v : random!.range(v[0], v[1]);
     const radius = this.shape.radial ? draw(this.shape.radial.radius) : 0;
+    // (a cylinder's three draws: distance, angle in degrees, height; the across pair scaled per axis)
+    const cyl = this.shape.cylinder;
+    const cylinder = cyl ? (() => {
+      const r = draw([0, cyl.radius]), a = draw([0, 360]) * DEG, h = draw([0, cyl.height]);
+      return [r * Math.cos(a) * cyl.axisScale[0], r * Math.sin(a) * cyl.axisScale[1], h];
+    })() : null;
     let speed = this.speed; let speedSlope = this.speedSlope;
     const f = this._fields;
     if (f) {
@@ -680,6 +695,7 @@ export class EmitterSim {
     }
     const s = this.shape;
     let x = s.center[0]; let y = s.center[1]; let z = s.center[2];
+    if (cylinder) { x += cylinder[0]; y += cylinder[1]; z += cylinder[2]; }
     let dx = s.w[0]; let dy = s.w[1]; let dz = s.w[2];
     if (s.kind === 'radial' && s.radial) {
       const radial = s.radial;
@@ -880,10 +896,11 @@ export class EmitterSim {
    * Roll = spin age; scale follows age/life and colour its three windows.
    * `bornBy`: a released system's cut-off, after which nothing new is drawn.
    */
-  /** `emit`'s last three: the particle's wave offset, in world axes, added after its owner's placement. */
+  /** `emit`'s `ox`, `oy`, `oz`: the particle's wave offset, in world axes, added after its owner's placement; `age`
+   *  its age in ticks and `start` its draw for an animated picture's first frame (spriteFrame). */
   evaluate(T: number, emit: (x: number, y: number, z: number, scale: number,
     r: number, g: number, b: number, a: number, rot: number, nx: number, ny: number, nz: number, facingMode: number,
-    ox: number, oy: number, oz: number) => void,
+    ox: number, oy: number, oz: number, age: number, start: number) => void,
     choice = -1, bornBy = Infinity): void {
     const cap = this.capacity;
     const life = this.life;
@@ -951,7 +968,7 @@ export class EmitterSim {
         velocityFacing ? this.tickRate * (this.vx[slot] + age * (ax + this.sx[slot] + .5 * age * jx)) : this.nx[slot],
         velocityFacing ? this.tickRate * (this.vy[slot] + age * (ay + this.sy[slot] + .5 * age * jy)) : this.ny[slot],
         velocityFacing ? this.tickRate * (this.vz[slot] + age * (az + this.sz[slot] + .5 * age * jz)) : this.nz[slot],
-        facingMode, ox, oy, oz);
+        facingMode, ox, oy, oz, age, this.frameStart[slot]);
     }
   }
 }

@@ -34,7 +34,7 @@ import type {EffectWindow, createEffectWindowReader} from './effect-windows.js';
 import type {createEffectSpriteReader} from './effect-sprites.js';
 import type {EffectFacing, createEffectFacingReader} from './effect-facing.js';
 import type {RadialOrigin, createEffectOriginReader} from './effect-origins.js';
-import type {EffectFieldValues, createEffectFieldReader} from './effect-fields.js';
+import type {EffectFieldValues, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
 import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader} from './effect-properties.js';
@@ -105,6 +105,8 @@ export interface EffectConfig {
   // 'burst_wave': fires when the water height at its point crests.
   wave?: EffectWave;
   radial?: RadialOrigin;
+  // A cylinder about `center` (a point source's cone aims it): radius, height and the two across scales.
+  cylinder?: { radius: number; height: number; axisScale: [number, number] };
   // 'bound': origin and direction come from verified per-build decode
   // data rather than the structural shape guess.
   origin?: 'bound';
@@ -152,7 +154,8 @@ export interface EffectEmitter {
     material: number; images: number[];
     // turned: the picture is stored turned a quarter (the game turns it back as it draws)
     // uv: the stretch of the stored picture the frame spans (u0, v0, u1, v1; v down), where it is not all of it
-    draw: { sub: number; w: number; h: number; mask: boolean; turned?: boolean; uv?: [number, number, number, number] } | null;
+    draw: { sub: number; w: number; h: number; mask: boolean; turned?: boolean; uv?: [number, number, number, number];
+      frames?: { count: number; step: [number, number]; rate: number; loop: boolean; random: boolean } } | null;
   } | null;
   sprite_choices?: {kind: 'uniform'; sprites: NonNullable<EffectEmitter['sprite']>[]} | null;
   blend: 'add' | 'mix' | null;                 // emitter override, else system's
@@ -288,6 +291,7 @@ export interface WorldEffectsShared {
   effectOrigin?: ReturnType<typeof createEffectOriginReader>;
   effectProperties?: ReturnType<typeof createEffectPropertyReader>;
   effectFields?: ReturnType<typeof createEffectFieldReader>;
+  effectSpeed?: ReturnType<typeof createEffectSpeedReader>;
   effectWave?: ReturnType<typeof createEffectWaveReader>;
   effectMotion?: (controller: number, hit: RoomOccurrence, room: number) => EffectAttachmentMotion | null;
   rigBoneTranslations: Map<number, number[][]>;
@@ -802,8 +806,14 @@ function extractEffects(
   // Where the picture sits in its frame: the record's first page rectangle (x0, y0, x1, y1, page pixels) is what the
   // game samples, with the picture's first pixel at the first variant's first offset; so the frame spans the stored
   // picture from (x0 - ox) / width to (x1 - ox) / width (a little past its edge, where the page is empty).
-  type PicturePlace = { rect: [number, number, number, number]; offset: [number, number] };
-  const frames = new Map<number, { w: number; h: number; turned: boolean; place: PicturePlace | null } | null>();
+  // An animated picture (one material on 07-Oct-2026: the Halloween teleports' bats): its material also holds a typed
+  // value of a rate and two symbols (`$loop` or not, `$random` or not: whether each particle starts on a frame of its
+  // own) and, next, the frame count; its frames lie side by side across the page (the record's page size, its first
+  // list), the picture's first frame first, each the page's width over the count on from the last.
+  type PicturePlace = { rect: [number, number, number, number]; offset: [number, number]; page: [number, number] | null };
+  type FrameAnimation = { count: number; rate: number; loop: boolean; random: boolean };
+  type Frame = { w: number; h: number; turned: boolean; place: PicturePlace | null; anim: FrameAnimation | null };
+  const frames = new Map<number, Frame | null>();
   const resolve = (n: PoolNode | null | undefined): PoolNode | null => (n && n.tag === 0x00 ? derefPool(builder.pool, n.value) : n) ?? null;
   const intsOf = (n: PoolNode | null, k: number): number[] | null => {
     if (!n || !Array.isArray(n.value) || n.value.length !== k) return null;
@@ -819,7 +829,8 @@ function extractEffects(
       const variants = f[14]?.values?.map((v: PoolNode) => resolve(v)) ?? [];
       const offset = intsOf(resolve(variants[0]?.values?.[0]), 2);
       const rect = intsOf(resolve(f[15]?.values?.[0]), 4);
-      return rect && offset && rect[2] > rect[0] && rect[3] > rect[1] ? { rect: rect as PicturePlace['rect'], offset: offset as PicturePlace['offset'] } : null;
+      const page = intsOf(resolve(f[13]?.values?.[0]), 2) as [number, number] | null;
+      return rect && offset && rect[2] > rect[0] && rect[3] > rect[1] ? { rect: rect as PicturePlace['rect'], offset: offset as PicturePlace['offset'], page } : null;
     }
     return null;
   };
@@ -827,9 +838,19 @@ function extractEffects(
     && e.fields[0].kind === 'color' && e.fields[1].kind === 'color' && e.fields.slice(2, 12).every((f) => f.kind === 'int')
     && (e.fields[12].kind === 'scalar' || e.fields[12].kind === 'other') && [0x0c, 0x0d].includes((e.fields[12] as { tag: number }).tag)
     && e.fields.slice(13, 16).every((f) => f.kind === 'list');
-  const frameOf = (material: number): { w: number; h: number; turned: boolean; place: PicturePlace | null } | null => {
+  const animationOf = (ops: EffectExtra[]): FrameAnimation | null => {
+    for (let i = 0; i + 1 < ops.length; i++) {
+      const e = ops[i], next = ops[i + 1];
+      if (e.kind !== 'typed' || e.fields.length !== 3 || next.kind !== 'int' || next.op !== e.op + 1) continue;
+      const [rate, a, b] = e.fields;
+      if (rate.kind !== 'rate' || a.kind !== 'symbol' || b.kind !== 'symbol' || !(rate.den > 0) || !(rate.value > 0) || !(next.value > 1)) continue;
+      return { count: next.value, rate: rate.value / rate.den, loop: a.name === '$loop', random: b.name === '$random' };
+    }
+    return null;
+  };
+  const frameOf = (material: number): Frame | null => {
     if (frames.has(material)) return frames.get(material)!;
-    let frame: { w: number; h: number; turned: boolean; place: PicturePlace | null } | null = null;
+    let frame: Frame | null = null;
     const row = rows[material], sel = row && profile.selectors[String(row.selector)];
     const parsed = sel ? reparseRow(dec, sel, row, audit) : null;
     const ops = parsed ? opsToExtras(builder, parsed) : null;
@@ -844,21 +865,27 @@ function extractEffects(
         const run = after.findIndex((e, k) => [0, 1, 2, 3].every((d) => after[k + d]?.kind === 'int' && after[k + d].op === e.op + d));
         const inset = run >= 0 ? [0, 1, 2, 3].map((d) => Number((after[run + d] as any).value) || 0) : [0, 0, 0, 0];
         const fw = (w.v - inset[0] - inset[2]) * scale.v, fh = (h.v - inset[1] - inset[3]) * scale.v;
-        if (fw > 0 && fh > 0) frame = { w: fw, h: fh, turned, place: placeOf(parsed!) };
+        if (fw > 0 && fh > 0) frame = { w: fw, h: fh, turned, place: placeOf(parsed!), anim: animationOf(ops) };
       }
-      if (!frame && turned) frame = { w: 0, h: 0, turned, place: placeOf(parsed!) };
+      if (!frame && turned) frame = { w: 0, h: 0, turned, place: placeOf(parsed!), anim: animationOf(ops) };
     }
     frames.set(material, frame);
     return frame;
   };
-  const framed = <T extends { material: number; draw: { w: number; h: number; turned?: boolean; uv?: [number, number, number, number] } | null } | null | undefined>(sprite: T): T => {
+  const framed = <T extends { material: number; draw: { w: number; h: number; turned?: boolean; uv?: [number, number, number, number]; frames?: { count: number; step: [number, number]; rate: number; loop: boolean; random: boolean } } | null } | null | undefined>(sprite: T): T => {
     const f = sprite?.draw ? frameOf(sprite.material) : null;
     if (f && sprite?.draw) {
       // (the picture's own pixels, before the frame takes their place)
       const pw = sprite.draw.w, ph = sprite.draw.h, pl = f.place;
       const uv = pl && pw > 0 && ph > 0 ? [(pl.rect[0] - pl.offset[0]) / pw, (pl.rect[1] - pl.offset[1]) / ph, (pl.rect[2] - pl.offset[0]) / pw, (pl.rect[3] - pl.offset[1]) / ph] as [number, number, number, number] : null;
       const whole = !uv || uv.every((v, i) => Math.abs(v - (i < 2 ? 0 : 1)) < 1e-4);
-      sprite.draw = { ...sprite.draw, ...(f.w > 0 ? { w: f.w, h: f.h } : {}), ...(f.turned ? { turned: true } : {}), ...(!whole ? { uv: uv!.map((v) => Math.round(v * 1e5) / 1e5) as [number, number, number, number] } : {}) };
+      // (an animated picture's frames: one row across the page, each the page's width over the count on; a page of
+      // more than one row is not met yet and stays still)
+      const a = f.anim, page = pl?.page, cell = a && page ? page[0] / a.count : 0;
+      const frames = a && page && pw > 0 && cell >= pl!.rect[2] - pl!.rect[0] && page[1] < 2 * (pl!.rect[3] - pl!.rect[1])
+        ? { count: a.count, step: [Math.round(cell / pw * 1e5) / 1e5, 0] as [number, number], rate: a.rate, loop: a.loop, random: a.random } : null;
+      sprite.draw = { ...sprite.draw, ...(f.w > 0 ? { w: f.w, h: f.h } : {}), ...(f.turned ? { turned: true } : {}), ...(!whole ? { uv: uv!.map((v) => Math.round(v * 1e5) / 1e5) as [number, number, number, number] } : {}),
+        ...(frames ? { frames } : {}) };
     }
     return sprite;
   };
@@ -1427,6 +1454,14 @@ function extractEffects(
         emitters.push(emitter);
         const fields = shared.effectFields?.(ref, ops);
         if (fields) applyEffectFields(emitter, fields);
+        // (a speed the game computes: a uniform draw per particle, per second)
+        const computed = shared.effectSpeed?.(ref);
+        if (computed) {
+          const speed = {value: computed, ticks: TICK_DEN_DEFAULT};
+          emitter.fields = {...(emitter.fields ?? {angularSpeed: null, acceleration: null, scale: null, rotation: null, color: null}),
+            speed: {start: speed, end: 'start'}};
+          emitter.speed = null; emitter.speed1 = null;
+        }
         const scales = fields?.scale ?? shared.effectScales?.(ref, ops);
         if (scales) {
           emitter.scales = scales;
@@ -1520,6 +1555,13 @@ function extractEffects(
       // second vector is the cone axis, not the far end of a segment.
       const {position, axis, yaw, pitch} = origin.point;
       cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = position; cfg.axis = axis;
+      cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
+      cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
+      cfg.origin = 'bound';
+    } else if (origin?.kind === 'cylinder') {
+      const {center, radius, height, axisScale, axis, yaw, pitch} = origin.cylinder;
+      cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = center; cfg.axis = axis;
+      cfg.cylinder = {radius, height, axisScale};
       cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
       cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
       cfg.origin = 'bound';

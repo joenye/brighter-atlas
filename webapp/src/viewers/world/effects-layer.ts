@@ -51,7 +51,7 @@ import {
 import { composePlacementMatrix, DEFAULT_MESH_FORWARD_QUARTER_TURNS } from './scene.js';
 import {
   BILLBOARD_VERTEX, BILLBOARD_FRAGMENT, DEFAULT_SPRITE_DRAW,
-  spriteDrawOf, spriteUniforms, spriteColorSpace, spriteMaterialState, configureSpriteSampling, emitterSpriteDraws, type SpriteDraw,
+  spriteDrawOf, spriteUniforms, spriteColorSpace, spriteMaterialState, configureSpriteSampling, emitterSpriteDraws, spriteFrame, type SpriteDraw,
 } from './effects-sprite.js';
 import type { WorldEffectsDoc, EffectSystem } from '../../extract/world/effects.js';
 
@@ -216,6 +216,8 @@ interface Batch {
   aFacing: THREE.InstancedBufferAttribute;
   facingMode: Float32Array;
   aFacingMode: THREE.InstancedBufferAttribute;
+  frame: Float32Array;
+  aFrame: THREE.InstancedBufferAttribute;
   // normal-blend sort scratch (allocated lazily with the batch arrays)
   depth: Float32Array;
   order: number[];
@@ -868,7 +870,7 @@ export class WorldEffectsLayer {
       geometry, material, mesh,
       posSize: new Float32Array(0), color: new Float32Array(0), rot: new Float32Array(0),
       aPosSize: null as any, aColor: null as any, aRot: null as any, facing: new Float32Array(0), aFacing: null as any, facingMode: new Float32Array(0), aFacingMode: null as any,
-      depth: new Float32Array(0), order: [],
+      frame: new Float32Array(0), aFrame: null as any, depth: new Float32Array(0), order: [],
     };
     this._allocBatchArrays(batch, 4);
     this._batches.set(key, batch);
@@ -882,6 +884,7 @@ export class WorldEffectsLayer {
     batch.rot = new Float32Array(capacity);
     batch.facing = new Float32Array(capacity * 3);
     batch.facingMode = new Float32Array(capacity);
+    batch.frame = new Float32Array(capacity);
     batch.depth = new Float32Array(capacity);
     batch.order = [];
     batch.aPosSize = new THREE.InstancedBufferAttribute(batch.posSize, 4);
@@ -889,7 +892,8 @@ export class WorldEffectsLayer {
     batch.aRot = new THREE.InstancedBufferAttribute(batch.rot, 1);
     batch.aFacing = new THREE.InstancedBufferAttribute(batch.facing, 3);
     batch.aFacingMode = new THREE.InstancedBufferAttribute(batch.facingMode, 1);
-    for (const attr of [batch.aPosSize, batch.aColor, batch.aRot, batch.aFacing, batch.aFacingMode]) {
+    batch.aFrame = new THREE.InstancedBufferAttribute(batch.frame, 1);
+    for (const attr of [batch.aPosSize, batch.aColor, batch.aRot, batch.aFacing, batch.aFacingMode, batch.aFrame]) {
       attr.setUsage(THREE.DynamicDrawUsage);
     }
     // replacing attributes re-uploads; dropping the old GL buffers needs the
@@ -899,11 +903,13 @@ export class WorldEffectsLayer {
     batch.geometry.deleteAttribute('aRot');
     batch.geometry.deleteAttribute('aFacing');
     batch.geometry.deleteAttribute('aFacingMode');
+    batch.geometry.deleteAttribute('aFrame');
     batch.geometry.setAttribute('aPosSize', batch.aPosSize);
     batch.geometry.setAttribute('aColor', batch.aColor);
     batch.geometry.setAttribute('aRot', batch.aRot);
     batch.geometry.setAttribute('aFacing', batch.aFacing);
     batch.geometry.setAttribute('aFacingMode', batch.aFacingMode);
+    batch.geometry.setAttribute('aFrame', batch.aFrame);
     // the renderer caches its instance ceiling from the FIRST setup; drop it
     // so a capacity regrowth never silently clamps the draw
     delete (batch.geometry as any)._maxInstanceCount;
@@ -1039,7 +1045,8 @@ export class WorldEffectsLayer {
       rootMatrix = this.root.matrixWorld;
     }
     for (const batch of this._batches.values()) {
-      const { posSize, color, rot, facing, facingMode } = batch;
+      const { posSize, color, rot, facing, facingMode, frame } = batch;
+      const frames = batch.draw.frames;
       const cap = batch.capacity;
       let idx = 0;
       // (a sprite whose picture is on its way: not drawn yet, see _textureReady)
@@ -1066,7 +1073,7 @@ export class WorldEffectsLayer {
         const Tm = this._instanceTime(member.instance);
         const m = anchor.m;
         sim.ensure(Tm);
-        sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode, ox, oy, oz) => {
+        sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode, ox, oy, oz, age, start) => {
           if (idx >= cap) return;
           // Owner frame applied after the sim's birth transforms, inlined (no
           // per-particle tuple): this loop runs thousands of times a frame.
@@ -1085,6 +1092,7 @@ export class WorldEffectsLayer {
           color[at4 + 3] = a;
           rot[idx] = roll;
           facingMode[idx] = mode;
+          frame[idx] = spriteFrame(frames, age, start);
           facing[idx * 3] = m[0] * nx + m[4] * ny + m[8] * nz;
           facing[idx * 3 + 1] = m[1] * nx + m[5] * ny + m[9] * nz;
           facing[idx * 3 + 2] = m[2] * nx + m[6] * ny + m[10] * nz;
@@ -1103,6 +1111,7 @@ export class WorldEffectsLayer {
       batch.aRot.needsUpdate = true;
       batch.aFacing.needsUpdate = true;
       batch.aFacingMode.needsUpdate = true;
+      batch.aFrame.needsUpdate = true;
       batch.mesh.visible = idx > 0;
     }
   }
@@ -1123,12 +1132,14 @@ export class WorldEffectsLayer {
     const rotCopy = batch.rot.slice(0, count);
     const facingCopy = batch.facing.slice(0, count * 3);
     const facingModeCopy = batch.facingMode.slice(0, count);
+    const frameCopy = batch.frame.slice(0, count);
     for (let i = 0; i < count; i++) {
       const src = order[i];
       batch.posSize.set(posCopy.subarray(src * 4, src * 4 + 4), i * 4);
       batch.color.set(colCopy.subarray(src * 4, src * 4 + 4), i * 4);
       batch.rot[i] = rotCopy[src];
       batch.facingMode[i] = facingModeCopy[src];
+      batch.frame[i] = frameCopy[src];
       batch.facing.set(facingCopy.subarray(src * 3, src * 3 + 3), i * 3);
     }
   }

@@ -54,6 +54,22 @@ export interface SegmentOriginBinding {
   uniformClass: number;
 }
 export type EffectOriginBinding = RadialOriginBinding | PointOriginBinding | PositionOriginBinding | SegmentOriginBinding;
+// A cylinder (from 07-Oct-2026: the Halloween teleports' bats and smoke): the game draws a distance from the centre up
+// to the radius (uniform: denser near the axis), an angle all the way round and a height up to the height, scales the
+// across offsets per axis and adds the three to the centre; it aims through the default cone, as a point source does.
+// Kept apart from the origins in the decode data (a viewer that knows only those refuses a kind it does not know).
+export interface CylinderOriginBinding {
+  instance: number;
+  center: number;
+  radius: number;
+  height: number;
+  axisScale: [number, number];
+  axis: number;
+  yaw: [number, number];
+  pitch: [number, number];
+  samples: [number, number];
+  uniformClass: number;
+}
 export interface RadialOrigin {
   center: [number, number, number];
   // A sampled radius is drawn for every particle.
@@ -75,8 +91,23 @@ export interface SegmentOrigin {
   yaw: [number, number];
   pitch: [number, number];
 }
+export interface CylinderOrigin {
+  center: [number, number, number];
+  radius: number;
+  height: number;
+  axisScale: [number, number];
+  axis: [number, number, number];
+  yaw: [number, number];
+  pitch: [number, number];
+}
 export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'point'; point: PointOrigin}
-  | {kind: 'segment'; segment: SegmentOrigin};
+  | {kind: 'segment'; segment: SegmentOrigin} | {kind: 'cylinder'; cylinder: CylinderOrigin};
+
+export function validEffectCylinders(v: any): v is CylinderOriginBinding[] {
+  const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
+  return validBindingList(v, b => [b.center, b.radius, b.height, b.axis, b.uniformClass].every(bindingIndex)
+    && [b.axisScale, b.yaw, b.pitch, b.samples].every(pair));
+}
 
 export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
@@ -88,12 +119,14 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
       : b.kind === 'segment' && [b.start, b.end, b.axis].every(bindingIndex)));
 }
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
-  objects: ConstructorRecord[]) {
+  objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[]) {
   if (bindings !== undefined && !validEffectOrigins(bindings)) throw Error('invalid effect origin bindings');
+  if (cylinders !== undefined && !validEffectCylinders(cylinders)) throw Error('invalid effect cylinder bindings');
   const bindingOf = instanceLookup((bindings || []).map(b => [b.instance, b] as const), objects);
+  const cylinderOf = instanceLookup((cylinders || []).map(b => [b.instance, b] as const), objects);
   return (slot: number, ops: EffectExtra[]): EffectOrigin | null => {
-    const b = bindingOf(slot);
-    if (!b) return null;
+    const b = bindingOf(slot), c = b ? undefined : cylinderOf(slot);
+    if (!b && !c) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
     // A sample field selects a sub-interval of its authored angle range. The
     // game interpolates the endpoints by the sampled fraction.
@@ -102,11 +135,19 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
       const sample = fields.get(sampleOp);
       if (lo === null || hi === null) return null;
       const n = effectScalar(sample);
-      const fraction = effectRange(sample, b.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
+      const fraction = effectRange(sample, (b ?? c)!.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
       if (!fraction) return null;
       const result: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
       return result.every(Number.isFinite) ? result : null;
     };
+    if (c) {
+      const center = effectVec3(fields.get(c.center)), axis = effectVec3(fields.get(c.axis));
+      const [radius, height, sx, sy] = [c.radius, c.height, ...c.axisScale].map(op => effectScalar(fields.get(op)));
+      const yaw = angles(c.yaw, c.samples[0]), pitch = angles(c.pitch, c.samples[1]);
+      return center && axis && yaw && pitch && radius !== null && height !== null && sx !== null && sy !== null
+        ? {kind: 'cylinder', cylinder: {center, radius, height, axisScale: [sx, sy], axis, yaw, pitch}} : null;
+    }
+    if (!b) return null;
     if (b.kind === 'position' || b.kind === 'segment') {
       const axis = effectVec3(fields.get(b.axis));
       const bounds = (ops: [number, number]): [number, number] | null => {

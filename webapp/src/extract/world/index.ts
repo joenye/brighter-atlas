@@ -17,7 +17,7 @@ import {createEffectWindowReader} from './effect-windows.js';
 import {createEffectSpriteReader} from './effect-sprites.js';
 import {createEffectFacingReader} from './effect-facing.js';
 import {createEffectOriginReader} from './effect-origins.js';
-import {createEffectFieldReader} from './effect-fields.js';
+import {createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
 import {readWorldWater, type WorldWater, type WaterDecodeData} from './water-materials.js';
 import {readRenderMaterials, readEnvironmentPreset, archivedValue, archivedFloats, recordField, recordRef, validRenderData, type RenderDecodeData, type RenderEnvironment, type StoryEnvironment} from './render-data.js';
@@ -808,7 +808,8 @@ export async function extractWorld({
       effectWindow: createEffectWindowReader(placementBindings?.effectWindows, objects),
       effectSprites: createEffectSpriteReader(placementBindings?.effectSprites, objects, ab0, profile, pool.values),
       effectFacing: createEffectFacingReader(placementBindings?.effectFacings, objects),
-      effectOrigin: createEffectOriginReader(placementBindings?.effectOrigins, objects),
+      effectOrigin: createEffectOriginReader(placementBindings?.effectOrigins, objects, placementBindings?.effectCylinders),
+      effectSpeed: createEffectSpeedReader(placementBindings?.effectSpeeds, objects),
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
       effectFields: createEffectFieldReader(placementBindings?.effectFields, objects),
       effectWave: createEffectWaveReader(placementBindings?.effectWaves, objects, rowDecoder, pool.values),

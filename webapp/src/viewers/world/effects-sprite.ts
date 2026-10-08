@@ -55,7 +55,18 @@ export function configureSpriteSampling(texture: THREE.Texture): void {
 /** `turned`: the picture is stored a quarter turn from how it is drawn (the game packs tall pictures lying wide). */
 /** `uv`: the stretch of the stored picture the frame spans (u0, v0, u1, v1, v down from the top), where it is not all
  *  of it: the game samples a little past the picture's edge, which is empty. */
-export interface SpriteDraw { sub: number; w: number; h: number; mask: boolean; turned?: boolean; uv?: [number, number, number, number] }
+/** `frames`: an animated picture (the bats of the 07-Oct-2026 Halloween teleports): `count` frames side by side, each
+ *  `step` on from the last (u, v of the stored picture), shown at `rate` frames per tick, round again (`loop`) or held
+ *  on the last; `random`: each particle starts on a frame of its own. */
+export interface SpriteFrames { count: number; step: [number, number]; rate: number; loop: boolean; random: boolean }
+export interface SpriteDraw { sub: number; w: number; h: number; mask: boolean; turned?: boolean; uv?: [number, number, number, number]; frames?: SpriteFrames }
+
+/** The frame a particle shows at `age` ticks, `start` its own draw (0 to 1); 0 for a still picture. */
+export function spriteFrame(frames: SpriteFrames | undefined, age: number, start: number): number {
+  if (!frames || !(frames.count > 1)) return 0;
+  const n = frames.count, at = Math.floor(Math.max(0, age) * frames.rate) + (frames.random ? Math.floor(start * n) : 0);
+  return frames.loop ? at % n : Math.min(at, n - 1);
+}
 
 /** Used when a container carries no readable image metadata, and for the
  *  built-in fallback dot. Square, straight-alpha, first sub-image. */
@@ -72,8 +83,13 @@ export function spriteDrawOf(sprite: { draw?: SpriteDraw | null } | null | undef
     mask: !!draw.mask,
     ...(draw.turned ? { turned: true } : {}),
     ...(Array.isArray(draw.uv) && draw.uv.length === 4 && draw.uv.every(Number.isFinite) ? { uv: draw.uv.map(Number) as [number, number, number, number] } : {}),
+    ...(framesOf(draw.frames) ? { frames: framesOf(draw.frames)! } : {}),
   };
 }
+
+const framesOf = (f: SpriteFrames | undefined): SpriteFrames | null => (f && Number(f.count) > 1 && Number(f.rate) > 0
+  && Array.isArray(f.step) && f.step.length === 2 && f.step.every(Number.isFinite)
+  ? { count: Number(f.count), step: [Number(f.step[0]), Number(f.step[1])], rate: Number(f.rate), loop: !!f.loop, random: !!f.random } : null);
 
 type EmitterSprite = { material: number; images: number[]; draw?: SpriteDraw | null };
 /** The sprite outcomes an emitter draws: its single sprite (choice -1), or
@@ -102,10 +118,12 @@ attribute vec4 aColor;
 attribute float aRot;
 attribute vec3 aFacing;
 attribute float aFacingMode;
+attribute float aFrame;
 uniform vec2 uSpriteSize;
 uniform float uFacingSizeScale;
 uniform float uTurned;
 uniform vec4 uUvRect;
+uniform vec2 uFrameStep;
 varying vec2 vUv;
 varying vec4 vColor;
 #include <common>
@@ -113,8 +131,9 @@ void main() {
   // A picture stored turned is turned back a quarter here (the game's corner pairing: picture across = quad up,
   // picture down = quad across, mirrored as this quad's across is the game's).
   vec2 st = uTurned > 0.5 ? vec2( uv.y, 1.0 - uv.x ) : uv;
-  // The stretch of the stored picture the frame spans (its rows run down, the texture's up).
-  vUv = vec2( mix( uUvRect.x, uUvRect.z, st.x ), 1.0 - mix( uUvRect.y, uUvRect.w, 1.0 - st.y ) );
+  // The stretch of the stored picture the frame spans (its rows run down, the texture's up), an animated picture's
+  // frame that many steps on.
+  vUv = vec2( mix( uUvRect.x, uUvRect.z, st.x ) + aFrame * uFrameStep.x, 1.0 - mix( uUvRect.y, uUvRect.w, 1.0 - st.y ) - aFrame * uFrameStep.y );
   vColor = aColor;
   vec4 mvPosition = modelViewMatrix * vec4( aPosSize.xyz, 1.0 );
   vec2 e = position.xy * uSpriteSize * aPosSize.w;
@@ -186,6 +205,7 @@ export function spriteUniforms(draw: SpriteDraw, facingSizeScale = 1): Record<st
     uMask: { value: draw.mask ? 1 : 0 },
     uTurned: { value: draw.turned ? 1 : 0 },
     uUvRect: { value: new THREE.Vector4(...(draw.uv ?? [0, 0, 1, 1])) },
+    uFrameStep: { value: new THREE.Vector2(...(draw.frames?.step ?? [0, 0])) },
   };
 }
 
