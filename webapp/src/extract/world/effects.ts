@@ -37,7 +37,7 @@ import type {RadialOrigin, createEffectOriginReader} from './effect-origins.js';
 import type {EffectFieldValues, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
-import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader} from './effect-properties.js';
+import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader, type createEffectColourReader} from './effect-properties.js';
 import { PoolDecoder } from './value-pool.js';
 import type { PoolNode } from './value-pool.js';
 import type { WorldProfile, WorldProfileSelector } from './profile.js';
@@ -290,6 +290,7 @@ export interface WorldEffectsShared {
   effectFacing?: ReturnType<typeof createEffectFacingReader>;
   effectOrigin?: ReturnType<typeof createEffectOriginReader>;
   effectProperties?: ReturnType<typeof createEffectPropertyReader>;
+  effectColour?: ReturnType<typeof createEffectColourReader>;
   effectFields?: ReturnType<typeof createEffectFieldReader>;
   effectSpeed?: ReturnType<typeof createEffectSpeedReader>;
   effectWave?: ReturnType<typeof createEffectWaveReader>;
@@ -1454,13 +1455,18 @@ function extractEffects(
         emitters.push(emitter);
         const fields = shared.effectFields?.(ref, ops);
         if (fields) applyEffectFields(emitter, fields);
-        // (a speed the game computes: a uniform draw per particle, per second)
+        // (a speed the game computes: a uniform draw per particle, per second; a start colour it mixes by a draw)
+        const blank = {speed: null, angularSpeed: null, acceleration: null, scale: null, rotation: null, color: null};
         const computed = shared.effectSpeed?.(ref);
         if (computed) {
-          const speed = {value: computed, ticks: TICK_DEN_DEFAULT};
-          emitter.fields = {...(emitter.fields ?? {angularSpeed: null, acceleration: null, scale: null, rotation: null, color: null}),
-            speed: {start: speed, end: 'start'}};
+          emitter.fields = {...(emitter.fields ?? blank), speed: {start: {value: computed, ticks: TICK_DEN_DEFAULT}, end: 'start'}};
           emitter.speed = null; emitter.speed1 = null;
+        }
+        const mix = shared.effectColour?.(ref);
+        if (mix) {
+          emitter.fields = {...(emitter.fields ?? blank), color: {start: {mix: [mix.from, mix.to], premultiplied: mix.premultiplied,
+            ...(mix.scale ? {scale: mix.scale} : {})}, end: 'start'}};
+          emitter.color0 = null; emitter.color1 = null;
         }
         const scales = fields?.scale ?? shared.effectScales?.(ref, ops);
         if (scales) {

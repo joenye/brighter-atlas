@@ -33,7 +33,7 @@ import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape
 import {effectLayout} from './effect-shape.js';
 import {groundPlaneLayout, roomGroundPlane, type GroundPlaneLayout} from './ground-plane.js';
 import {lightCarrier, restingLights, roomPointLights, type ShardSpawnLights} from './point-lights.js';
-import {createEffectPropertyReader} from './effect-properties.js';
+import {createEffectPropertyReader, createEffectColourReader} from './effect-properties.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
 import { SpawnGraph } from './spawns.js';
@@ -811,6 +811,7 @@ export async function extractWorld({
       effectOrigin: createEffectOriginReader(placementBindings?.effectOrigins, objects, placementBindings?.effectCylinders),
       effectSpeed: createEffectSpeedReader(placementBindings?.effectSpeeds, objects),
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
+      effectColour: createEffectColourReader(placementBindings?.effectColours, objects, ab0, profile, pool.values),
       effectFields: createEffectFieldReader(placementBindings?.effectFields, objects),
       effectWave: createEffectWaveReader(placementBindings?.effectWaves, objects, rowDecoder, pool.values),
       effectMotion: (controller,hit,roomId) => {

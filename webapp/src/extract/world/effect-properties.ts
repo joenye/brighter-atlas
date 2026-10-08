@@ -95,3 +95,38 @@ export function effectTimingDurations(ops:EffectExtra[]):number[] {
   while(d.length>3&&d[d.length-1]===d[0])d.pop();
   return d;
 }
+
+// A start colour the game mixes from two colours by a uniform draw (from 07-Oct-2026: the Halloween teleports' smoke),
+// perhaps multiplied by a third; the colours are read from the user's bundle.
+export interface EffectColourMixBinding {
+  instance: number;
+  from: {start: number; end: number};
+  to: {start: number; end: number};
+  premultiplied: boolean;
+  scale?: {start: number; end: number};
+}
+const validSpan = (v: any) => v && Number.isSafeInteger(v.start) && v.start >= 0 && Number.isSafeInteger(v.end)
+  && v.end > v.start && v.end - v.start <= 65536;
+export function validEffectColours(values: any): values is EffectColourMixBinding[] {
+  return validBindingList(values, v => validSpan(v.from) && validSpan(v.to) && typeof v.premultiplied === 'boolean'
+    && (v.scale === undefined || validSpan(v.scale)));
+}
+export type EffectColourMix = {from: [number, number, number, number]; to: [number, number, number, number];
+  premultiplied: boolean; scale?: [number, number, number, number]};
+export function createEffectColourReader(bindings: EffectColourMixBinding[] | undefined,
+  objects: ConstructorRecord[], bytes: Uint8Array, profile: WorldProfile, pool: any[]) {
+  if (bindings !== undefined && !validEffectColours(bindings)) throw Error('invalid effect colour bindings');
+  const arities = (v: Record<string, number>) => new Map(Object.entries(v).map(([k, n]) => [+k, n]));
+  const colour = (span: {start: number; end: number}): [number, number, number, number] => {
+    if (span.end > bytes.length) throw Error('effect colour lies outside source data');
+    const d = new PoolDecoder(bytes.subarray(span.start, span.end), arities(profile.class_fields), arities(profile.tag6_fields));
+    const n = resolveValue(pool, d.value());
+    if (d.pos !== span.end - span.start || n?.tag !== 21 || !Array.isArray(n.value) || n.value.length !== 4
+      || !n.value.every(Number.isFinite)) throw Error('invalid effect colour value');
+    return [...n.value] as [number, number, number, number];
+  };
+  const mixes = new Map<number, EffectColourMix>();
+  for (const b of bindings ?? []) mixes.set(b.instance, {from: colour(b.from), to: colour(b.to), premultiplied: b.premultiplied,
+    ...(b.scale ? {scale: colour(b.scale)} : {})});
+  return instanceLookup(mixes, objects);
+}
