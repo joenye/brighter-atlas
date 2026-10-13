@@ -72,12 +72,12 @@ button { font: inherit; color: inherit; }
 /* each page's layout drawn before its code arrives (pages.tsx placeholders), and the one load card over
    where its content will be: Fashion's view (beside its panel; above it on phones) */
 .ph { min-width: 0; min-height: 0; }
-#fashion > main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 26.25rem; }
+#fashion > main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--panel-w, 26.25rem); }
 .ph-view { background: radial-gradient(ellipse at 50% 40%, #1f2531 0%, #14171d 55%, #0d0f13 100%); }
 .ph-panel { background: var(--bg1); border-left: 1px solid var(--line); }
 .page[data-page=fashion] > .page-load { left: calc((100% - 26.25rem) / 2); }
 @media (max-width: 1280px) {
-  #fashion > main { grid-template-columns: minmax(0, 1fr) 23.75rem; }
+  #fashion > main { grid-template-columns: minmax(0, 1fr) var(--panel-w, 23.75rem); }
   .page[data-page=fashion] > .page-load { left: calc((100% - 23.75rem) / 2); }
 }
 @media (max-width: 860px) {

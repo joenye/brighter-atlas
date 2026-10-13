@@ -16,7 +16,8 @@ import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lo
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
 import {attachTurning} from './turning.js';
-import {el} from '../ui.js';
+import {el, makeResizable} from '../ui.js';
+import {rem} from '../ui-scale.js';
 import {attachScrollbar} from '../scrollbar.js';
 import {FashionPage} from '../app/pages.js';
 import type {ToolProps} from '../app/tool.js';
@@ -63,6 +64,11 @@ let animationsLoad: Promise<void> | null = null;
 const loadAnimations = () => animationsLoad ??= fetch(at('animations.json')).then(r => r.ok ? r.json() : []).then(a => { ANIMATIONS = Array.isArray(a) ? a : []; }).catch(() => { animationsLoad = null; });
 const Icon = ({name}: {name: string}) => <svg viewBox="0 0 24 24" aria-hidden="true" className="ic"><path d={PATHS[name] ?? ''} /></svg>;
 const Ic = ({d, children}: {d?: string; children?: ReactNode}) => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">{d ? <path d={d} /> : children}</svg>;
+// an icon button's tooltip (wider screens, on hover or keyboard focus): its name, its keys, then what it does. The button
+// carries the same words for assistive tech (aria-label, aria-description); phones show neither
+const Tip = ({name, keys, children}: {name: string; keys?: string; children?: ReactNode}) =>
+  <span className="of-tip" aria-hidden="true"><b>{name}{keys && <kbd>{keys}</kbd>}</b>{children}</span>;
+const MOD = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? 'Cmd' : 'Ctrl';
 
 // ---- short links: the site keeps a look under an id of its own (/api/looks), with a picture of it for link
 // previews (titled by a saved look's name). A look is only ever shared by its short link: asked for as it is
@@ -274,7 +280,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? BACKDROPS[0]);
   const [floor, setFloorState] = useState<Floor>(PICTURE ? 'shadow' : (FLOORS.map(f => f[0]).find(m => m === store.get('floor')) ?? 'shadow'));   // (the shadow alone by default)
   const [panelCollapsed, setPanelCollapsedState] = useState(store.get('panel') === '1');
-  const [bgMode, setBgModeState] = useState(false), [bgOpen, setBgOpen] = useState(false), [bgTouched, setBgTouched] = useState(false);
+  const [bgMode, setBgModeState] = useState(false);
   // the Animations drawer, and the animation playing (until stopped; a one-shot then goes back to the pose)
   const [animMode, setAnimModeState] = useState(false), [anim, setAnim] = useState<{clip: number, loop: boolean, ticks: number, name: string, group: string, fx?: AnimItem['fx'],
     parts?: AnimItem['parts'], props?: AnimItem['props'], actors?: AnimItem['actors'], part: number, key: number} | null>(null);
@@ -287,7 +293,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const [animRun, setAnimRun] = useState<{anim: {key: number}, t0: number} | null>(null);
   const [animTab, setAnimTab] = useState<AnimTab>('emotes');
   const [animRepeat, setAnimRepeat] = useState(false), [animPause, setAnimPause] = useState(false), [, setAnimListVersion] = useState(0);
-  const [designing, setDesigningState] = useState(false), [sharedView, setSharedView] = useState(false);
+  const [designing, setDesigningState] = useState(false);
   const [selected, setSelected] = useState('hair');
   const [currentFrame, setCurrentFrame] = useState<string>('full');
   const [opened, setOpened] = useState(false);
@@ -311,29 +317,17 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // the name typed for this look in Your looks (null: untouched), and as it was when typing last paused; both go
   // when the look changes
   const [nameDraft, setNameDraft] = useState<string | null>(null), [nameSettled, setNameSettled] = useState<string | null>(null);
-  const live = useRef({} as {nameDraft: string | null, nameSettled: string | null, state: State, showHeld: boolean, backdrop: Backdrop, designing: boolean, sharedView: boolean, selected: string, panelCollapsed: boolean, bgMode: boolean, animMode: boolean, bgOpen: boolean, looksOpen: boolean, active: boolean, opened: boolean, roomLoading: boolean, parts: {loading: boolean, first: boolean}, currentFrame: string, split: number, looks: SavedLook[], floor: Floor});
-  Object.assign(live.current, {nameDraft, nameSettled, state, showHeld, backdrop, designing, sharedView, selected, panelCollapsed, bgMode, animMode, bgOpen, looksOpen, active, opened, roomLoading, parts, currentFrame, split, looks, floor});
+  const live = useRef({} as {nameDraft: string | null, nameSettled: string | null, state: State, showHeld: boolean, backdrop: Backdrop, designing: boolean, selected: string, panelCollapsed: boolean, bgMode: boolean, animMode: boolean, looksOpen: boolean, active: boolean, opened: boolean, roomLoading: boolean, parts: {loading: boolean, first: boolean}, currentFrame: string, split: number, looks: SavedLook[], floor: Floor});
+  Object.assign(live.current, {nameDraft, nameSettled, state, showHeld, backdrop, designing, selected, panelCollapsed, bgMode, animMode, looksOpen, active, opened, roomLoading, parts, currentFrame, split, looks, floor});
 
   const els = {
     main: useRef<HTMLElement>(null), viewer: useRef<HTMLElement>(null), canvas: useRef<HTMLCanvasElement>(null), right: useRef<HTMLElement>(null),
-    creator: useRef<HTMLDivElement>(null), cCanvas: useRef<HTMLCanvasElement>(null), stage: useRef<HTMLDivElement>(null), body: useRef<HTMLDivElement>(null),
+    creator: useRef<HTMLDivElement>(null), stage: useRef<HTMLDivElement>(null), body: useRef<HTMLDivElement>(null),
     cGrip: useRef<HTMLDivElement>(null), panel: useRef<HTMLDivElement>(null), share: useRef<HTMLButtonElement>(null), bgBtn: useRef<HTMLButtonElement>(null),
     bgPop: useRef<HTMLDivElement>(null), grip: useRef<HTMLDivElement>(null), looks: useRef<HTMLDivElement>(null),
   };
-  // (the designer's own view and the thumbnail maker are made when first needed: a picture never needs them, and
-  // each is a GL context of its own)
-  const engine = useRef<{viewer: Preview, creatorPreview: Preview | null, thumbs: Thumbnailer | null, wardrobe: Wardrobe} | null>(null);
-  const creator = () => {
-    const e = engine.current!;
-    if (!e.creatorPreview) {
-      e.creatorPreview = new Preview(els.cCanvas.current!, {fov: 18, floor: true});
-      e.creatorPreview.running = false; e.creatorPreview.setFloor(live.current.floor);
-      e.creatorPreview.setDesigning(true);   // (the designer's own view: never a shadow on the face)
-      e.creatorPreview.setMasks(pack.masks);   // (the fists' guard, Weapons out there, is two clips as the page's)
-      attachTurning(els.cCanvas.current!, e.creatorPreview);
-    }
-    return e.creatorPreview;
-  };
+  // (the thumbnail maker is made when first needed: a picture never needs it, and it is a GL context of its own)
+  const engine = useRef<{viewer: Preview, thumbs: Thumbnailer | null, wardrobe: Wardrobe} | null>(null);
 
   const toast = useCallback((text: string) => setToastMsg(t => ({text, n: Math.abs(t?.n ?? 0) + 1})), []);
   // "Copied to clipboard", said where the click or tap was (bubble(), below)
@@ -355,13 +349,18 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const edited = changed;   // (any edit of a shared look makes it yours)
   const twoHanded = (w: Worn) => twoHandedItem(index.items.get(w.item));
 
-  // ---- the drawer's three modes (phones: Character, Equipment, Settings; one on at a time) ----
+  // ---- the drawer's modes (Character, Equipment, Settings, Animations, Looks; one on at a time) ----
   const setPanelCollapsed = (on: boolean) => {
+    // (folding the panel puts away the mode it showed: Share, the designer, the looks, the settings or the animations;
+    // the mode buttons then open it again on their own)
+    if (on && sheetOpen.current) closeShare();
+    if (on && live.current.designing) closeCreator();
+    if (on && live.current.looksOpen) closeLooks();
     if (on && live.current.bgMode) setBgMode(false);
     if (on && live.current.animMode) setAnimMode(false);
     live.current.panelCollapsed = on; setPanelCollapsedState(on); store.set('panel', on ? '1' : '0');
   };
-  function setBgMode(on: boolean) { if (live.current.bgMode === on) return; if (on) { setAnimMode(false); closeLooks(); } live.current.bgMode = on; setBgModeState(on); setBgOpen(on); }
+  function setBgMode(on: boolean) { if (live.current.bgMode === on) return; if (on) { setAnimMode(false); closeLooks(); } live.current.bgMode = on; setBgModeState(on); }
   function setAnimMode(on: boolean) {
     if (live.current.animMode === on) return; if (on) { setBgMode(false); closeLooks(); } live.current.animMode = on; setAnimModeState(on);
     if (on) void loadAnimations()?.then(() => setAnimListVersion(v => v + 1));
@@ -372,38 +371,36 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // the animation played last: after a one-off ends it can still be saved, and its timeline stays (resting at its end)
   // till another is played or it is stopped
   const [lastAnim, setLastAnim] = useState<typeof anim>(null);
+  // (Share covers the drawer's other modes: any of their buttons puts it away first, and then opens its own, whatever
+  // was open under Share)
+  const shareGives = () => { if (!sheetOpen.current) return false; closeShare(); return true; };
   const toggleAnimMode = () => {
-    if (live.current.animMode) { setAnimMode(false); return; }
+    const sharing = shareGives();
+    if (live.current.animMode && !sharing) { setAnimMode(false); return; }
     if (live.current.designing) leaveDesigner();
     setPanelCollapsed(false); setAnimMode(true);
   };
   const toggleBgMode = () => {
-    if (live.current.bgMode) { setBgMode(false); setPanelCollapsed(true); return; }
+    const sharing = shareGives();
+    if (live.current.bgMode && !sharing) { setBgMode(false); setPanelCollapsed(true); return; }
     if (live.current.designing) leaveDesigner();
     setPanelCollapsed(false); setBgMode(true);
   };
-  const closeBg = (refocus: boolean) => { if (live.current.bgMode) return; setBgOpen(false); if (refocus) els.bgBtn.current?.focus(); };
 
-  // ---- the designer: face and body (phones: in the drawer, over the page's own view; wider screens: a dialog
-  // with a view of its own) ----
+  // ---- the designer: face and body, in the drawer, the page's own view framing the part being chosen ----
   const creatorSnapshot = useRef('');
-  const creatorReady = useRef<Promise<void> | null>(null);
-  const designView = () => live.current.sharedView ? engine.current!.viewer : creator();
   const frameCreator = (instant = false) => {
-    const v = designView();
-    v.frameTo(PART_FRAME[live.current.selected] ?? FRAMES.full, instant);   // (the part being chosen, framed: always)
-    if (instant && !live.current.sharedView) { v.yaw = 0.3; v.yawVel = 0; }
+    engine.current!.viewer.frameTo(PART_FRAME[live.current.selected] ?? FRAMES.full, instant);   // (the part being chosen, framed: always)
   };
   function openCreator() {
     const e = engine.current!;
     creatorSnapshot.current = JSON.stringify(model.state);
-    const shared = phone();
     // phones: the designer's divider opens where the page's is (measured: the two frames differ by their borders).
     // Only a drawer on screen is measured: straight after no drawer at all (Settings or the designer just
     // closed), the page has not laid its drawer out again yet, the view fills the screen, and measuring it gave
     // the designer's view all the height and its panel none. Then the drawer's own height, as the page's
     // returns to it (none kept: the stylesheet's).
-    if (shared) {
+    if (phone()) {
       const drawerShown = !!els.right.current?.getClientRects().length && !!els.main.current!.clientHeight;
       const clamp = (f: number) => Math.max(0.22, Math.min(0.72, f));
       if (drawerShown) {
@@ -416,19 +413,17 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         if (live.current.split) setCSplit(clamp(live.current.split));
       }
     }
-    live.current.sharedView = shared; setSharedView(shared);
     live.current.designing = true; setDesigningState(true);
     e.viewer.setDesigning(true);   // (no shadows while designing: they fall across the face; back when it closes)
     model.holdUndo = true;
-    if (!shared) { const c = creator(); e.viewer.running = false; c.running = true; creatorReady.current ??= c.init(pack.skeleton, RELAXED); }
     frameCreator(true);
     model.touch();
   }
   function hideCreator() {
     const e = engine.current!;
-    live.current.designing = false; setDesigningState(false); e.viewer.running = true; if (e.creatorPreview) e.creatorPreview.running = false;
+    live.current.designing = false; setDesigningState(false);
     e.viewer.setDesigning(false);
-    if (live.current.sharedView) { e.viewer.frameTo(frameOf(live.current.currentFrame === '' ? 'full' : live.current.currentFrame as FrameKey)); live.current.sharedView = false; setSharedView(false); }
+    e.viewer.frameTo(frameOf(live.current.currentFrame === '' ? 'full' : live.current.currentFrame as FrameKey));
     els.canvas.current?.focus({preventScroll: true});
   }
   function closeCreator() { model.holdUndo = false; model.commit(); hideCreator(); model.touch(); }
@@ -444,11 +439,12 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const openCharacter = () => { setBgMode(false); setAnimMode(false); closeLooks(); stopAnimation(); if (live.current.panelCollapsed) setPanelCollapsed(false); openCreator(); };
   const modeClick = (designingBtn: boolean) => {
     // (Equipment or Character pressed: what plays stops and a pause lets go, the Animations drawer open or folded)
-    const looksWere = live.current.looksOpen;
+    const looksWere = live.current.looksOpen, sharing = shareGives();
     stopAnimation(); closeLooks();
     // (Character with no drawer brings the page's back first: the view and its column sit above the designer's)
-    if (designingBtn) { if (!live.current.designing) openCharacter(); else { closeCreator(); setPanelCollapsed(true); } }
+    if (designingBtn) { if (!live.current.designing) openCharacter(); else if (sharing) setPanelCollapsed(false); else { closeCreator(); setPanelCollapsed(true); } }
     else if (live.current.designing) { leaveDesigner(); setPanelCollapsed(false); }
+    else if (sharing) { setBgMode(false); setAnimMode(false); setPanelCollapsed(false); }   // (Share gave way to the equipment)
     else if (live.current.bgMode) setBgMode(false);
     else if (live.current.animMode) setAnimMode(false);
     else if (looksWere) { /* (the looks drawer gave way to the equipment) */ }
@@ -467,10 +463,10 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     void e.viewer.setRoom(b.room ?? null).then(done, () => { done(); toast(`${b.name} couldn’t be loaded`); setBackdrop(BACKDROPS[0]); });
   }, []);
   const addressOf = (code: string, b: Backdrop = live.current.backdrop) => `#${code}${b.room ? '.' + b.id : ''}`;
-  const setFloor = (mode: Floor) => { store.set('floor', mode); setFloorState(mode); engine.current?.viewer.setFloor(mode); engine.current?.creatorPreview?.setFloor(mode); };
+  const setFloor = (mode: Floor) => { store.set('floor', mode); setFloorState(mode); engine.current?.viewer.setFloor(mode); };
   // (a picture for a short link is always drawn the game's way)
   const [rend, setRendState] = useState<Rendering>(() => PICTURE ? {...RENDERING_DEFAULTS} : loadRendering());
-  const setRend = (next: Rendering) => { setRendState(next); store.set('rendering', JSON.stringify(next)); engine.current?.viewer.setRendering(next); engine.current?.creatorPreview?.setRendering(next); };
+  const setRend = (next: Rendering) => { setRendState(next); store.set('rendering', JSON.stringify(next)); engine.current?.viewer.setRendering(next); };
 
   // ---- the engine: the character's view, the designer's, the item thumbnails and the wardrobe ----
   const slots = useMemo(() => [...pack.slotOrder.filter((s: string) => (EQUIP_SLOTS as readonly string[]).includes(s)), 'cape', 'weapon'] as EquipSlot[], [pack]);
@@ -512,9 +508,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     });
     viewer.onRoomProgress = f => { if (live.current.roomLoading) setPlaceLoad(pl => pl && {...pl, progress: f}); };
     attachTurning(els.canvas.current!, viewer, () => { setCurrentFrame(''); live.current.currentFrame = ''; });
-    // the wardrobe's header: phones lead the slot view with the way into face and body
+    // the wardrobe's header: its title, Random and Unequip all (the way into face and body is the column's Character)
     const wardHeader = el('div', {class: 'of-wardhead'},
-      el('button', {class: 'btn of-designer', title: 'Design your character: face, body and hair', onclick: () => openCreator()}, icon('mask'), 'Character'),
       el('h2', {}, 'Equipment'),
       el('span', {class: 'of-wardactions'},
         el('button', {class: 'btn-mini', title: 'Random equipment: put on something random (its settings: Settings, Random equipment button)', onclick: () => randomOutfit()}, icon('dice'), el('span', {class: 'of-long'}, 'Random equipment'), el('span', {class: 'of-short'}, 'Random')),
@@ -540,12 +535,13 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       preview: (slot, w) => prefetch(compose(pack, index, {...model.state, equip: {...model.state.equip, [slot]: w}})),
       thumb: (slot, w) => (engine.current!.thumbs ??= new Thumbnailer()).thumb(`${w.item}/${w.variant}/${w.colour ?? 0}/${model.state.gender}`, itemParts(pack, index, w, model.state.gender, model.state), pack.skeleton),
     }, wardHeader);
-    engine.current = {viewer, creatorPreview: null, thumbs: null, wardrobe};
-    const gameBuild = document.getElementById('game-build');   // (the top bar's label: none in a picture)
-    if (gameBuild) gameBuild.textContent = `game update ${pack.build.date}${pack.build.version ? ` (v${pack.build.version})` : ''}`;
+    engine.current = {viewer, thumbs: null, wardrobe};
+    // the side panel's inner edge resizes it, as Brighter Data's panels (wider screens; the grid's column, --panel-w)
+    if (!PICTURE) makeResizable(els.right.current, {edge: 'left', key: 'fashion', min: 320, max: 760,
+      apply: px => els.right.current?.closest<HTMLElement>('#fashion')?.style.setProperty('--panel-w', rem(px))});
     // iPhone and iPad Safari (not a home-screen app): its toolbar floats over the bottom of the page
     if (/iP(hone|ad|od)/.test(navigator.userAgent) && !(navigator as any).standalone) document.documentElement.classList.add('ios-browser');
-    (window as any).fashion = {THREE, viewer, pack, get creatorPreview() { return engine.current?.creatorPreview; }, get state() { return model.state; }, compose: () => compose(pack, index, model.state), openCreator, closeCreator, cancelCreator, wardrobe};
+    (window as any).fashion = {THREE, viewer, pack, get state() { return model.state; }, compose: () => compose(pack, index, model.state), openCreator, closeCreator, cancelCreator, wardrobe};
     let gone = false;
     void (async () => {
       viewer.setMasks(pack.masks);
@@ -571,7 +567,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     })();
     return () => {
       gone = true;
-      viewer.dispose(); engine.current?.creatorPreview?.dispose(); engine.current?.thumbs?.dispose();
+      viewer.dispose(); engine.current?.thumbs?.dispose();
       forgetCaches(); forgetWardrobe();
       if ((window as any).fashion?.viewer === viewer) delete (window as any).fashion;
       engine.current = null;
@@ -600,15 +596,15 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     if (!model.holdUndo) store.set('look', code);   // (a design is saved on Done)
     // designing: the body alone (nothing worn, nothing held)
     const designParts = designing ? compose(pack, index, {...st, equip: {}}) : partsNow;
-    partsReady.current = e.viewer.apply(sharedView ? designParts : partsNow);
+    partsReady.current = e.viewer.apply(designParts);
     // worn-item effects: the torso appearance against the pack's worn-effect lists
     const torso = st.equip.torso ? index.items.get(st.equip.torso.item) : null;
     const wornId = torso?.variants[st.equip.torso!.variant]?.[st.gender]?.worn;
     const effects = wornId == null ? [] : pack.wornEffects.filter((w: any) => w[st.gender].includes(wornId)).flatMap((w: any) => w.systems);
     setFx(effects);
     void e.viewer.setEffects(showEffects ? effects : []);
-    if (designing) { warmStyles(); if (!sharedView) void creatorReady.current?.then(() => e.creatorPreview?.apply(designParts)); }
-  }, [model.version, designing, sharedView, showEffects, animProps]);
+    if (designing) warmStyles();
+  }, [model.version, designing, showEffects, animProps]);
   // an animation's other figures (a rod, a rift, a snowball to throw), built as it is picked and drawn from its first
   // frame on (the clip waits for them, as it does for what it holds)
   const animActors = anim && !designing && anim.actors?.length ? anim.actors : null;
@@ -622,7 +618,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const fighting = showHeld && (armed || !PICTURE || picturePose === true);
   useEffect(() => {
     const e = engine.current; if (!e) return;
-    const plain = designing && sharedView;   // designing: nothing held; at rest, or Weapons out the fists' guard
+    const plain = designing;   // designing: nothing held; at rest, or Weapons out the fists' guard
     // (a stance is two clips where the pack says so: the shared lower body and the weapon's own upper body, the
     // fists' guard the same way)
     const weapon = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item) : null;
@@ -650,8 +646,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         () => { if (animStarted.current === playing) { setAnim(a => a === playing ? null : a); toast(`Couldn’t load ${playing.name}. Please try again`); } });
     }
     e.viewer.prefetchClips([lower, upper]);
-    if (designing && !sharedView && e.creatorPreview) { const c = e.creatorPreview; c.showHeld = false; void creatorReady.current?.then(() => { if (c.clipId !== guard[0] || c.upperId !== guard[1]) void c.setClip(guard[0]!, guard[1], false); }); }
-  }, [model.version, showHeld, designing, sharedView, anim, animPause]);
+  }, [model.version, showHeld, designing, anim, animPause]);
   const animStarted = useRef<typeof anim>(null), poseReady = useRef<Promise<unknown>>(Promise.resolve());
   // the fighting moves the drawer offers: in the combat-ready pose only, the weapon's own (with none, the fists')
   const heldWeapon = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item) : null;
@@ -857,12 +852,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const c = els.canvas.current!;
     const onWheel = (e: WheelEvent) => { e.preventDefault(); engine.current?.viewer.zoomBy(Math.exp(e.deltaY * 0.0012)); setCurrentFrame(''); live.current.currentFrame = ''; };
     c.addEventListener('wheel', onWheel, {passive: false});
-    // (and the designer's own view, wider screens': from the part's framing out to the full figure; picking a part
-    // again frames it again)
-    const cc = els.cCanvas.current;
-    const onCreatorWheel = (e: WheelEvent) => { e.preventDefault(); engine.current?.creatorPreview?.zoomBy(Math.exp(e.deltaY * 0.0012)); };
-    cc?.addEventListener('wheel', onCreatorWheel, {passive: false});
-    return () => { c.removeEventListener('wheel', onWheel); cc?.removeEventListener('wheel', onCreatorWheel); };
+    return () => c.removeEventListener('wheel', onWheel);
   }, []);
 
   // ---- looks ----
@@ -899,7 +889,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const closeLooks = () => { live.current.looksOpen = false; setLooksOpen(false); };
   // (the Looks button: the looks in the drawer, in place of the equipment, the animations or the background; again: away)
   const toggleLooks = () => {
-    if (live.current.looksOpen) { closeLooks(); return; }
+    const sharing = shareGives();
+    if (live.current.looksOpen && !sharing) { closeLooks(); return; }
     if (live.current.designing) leaveDesigner();
     setAnimMode(false); setBgMode(false); setPanelCollapsed(false);
     live.current.looksOpen = true; setLooksOpen(true);
@@ -1143,6 +1134,23 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const was = pausedBefore.current;
     void job.current.then(() => { setAnimPause(was); const v = engine.current?.viewer; if (v) v.paused = was; });
   };
+  // the Download button: Share with its download open, the download focused; again (or with it open): Share away
+  const focusDl = useRef(false);
+  const toggleDownload = () => {
+    if (sheetOpen.current && dlOpen) { closeShare(); return; }
+    closeLooks();
+    if (!sheetOpen.current) openShare();
+    if (!dlOpen) toggleDl();
+    focusDl.current = true;
+  };
+  useEffect(() => {
+    if (!focusDl.current || !shareOpen || !dlOpen) return;
+    focusDl.current = false;
+    requestAnimationFrame(() => {
+      const t = document.querySelector<HTMLElement>('#fashion .of-sharedraw .sd-dl-toggle');
+      t?.focus({preventScroll: true}); t?.closest('.sd-dl')?.scrollIntoView({block: 'nearest'});
+    });
+  }, [shareOpen, dlOpen]);
 
   // ---- keys and the address ----
   useEffect(() => {
@@ -1151,13 +1159,6 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       const typing = (e.target as HTMLElement)?.matches?.('input, textarea');
       if (live.current.designing) {
         if (e.key === 'Escape') { cancelCreator(); return; }
-        // keep focus in the dialog
-        if (e.key === 'Tab') {
-          const f = [...els.creator.current!.querySelectorAll<HTMLElement>('button, input, [tabindex="0"]')].filter(x => (x as any).getClientRects().length > 0);
-          const i = f.indexOf(document.activeElement as HTMLElement);
-          if (e.shiftKey ? i <= 0 : i === f.length - 1 || i < 0) { e.preventDefault(); f[e.shiftKey ? f.length - 1 : 0]?.focus(); }
-          return;
-        }
         if (typing) return;
         const st = model.state, cat = SEG_STYLE[live.current.selected], col = SEG_COLOUR[live.current.selected];
         if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && cat) { e.preventDefault(); st.style[cat] += e.key === 'ArrowLeft' ? -1 : 1; edited(); }
@@ -1172,7 +1173,6 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         if (live.current.looksOpen) { closeLooks(); els.share.current?.focus(); }
         else if (live.current.bgMode) setBgMode(false);
         else if (live.current.animMode) setAnimMode(false);
-        else if (live.current.bgOpen) setBgOpen(false);
         else if (w?.root.classList.contains('adjusting')) w.setAdjusting(false, true);
       }
       // ] folds the equipment panel
@@ -1186,21 +1186,17 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       if (s && encode(s) !== encode(model.state)) model.set(s);
       const pose = lookPose(code); if (pose != null) setShowHeld(pose);
     };
-    const onDocClick = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (live.current.bgOpen && !live.current.bgMode && !els.bgPop.current?.contains(t) && !els.bgBtn.current?.contains(t)) setBgOpen(false);
-    };
-    window.addEventListener('keydown', onKey); window.addEventListener('hashchange', onHash); document.addEventListener('click', onDocClick);
-    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('hashchange', onHash); document.removeEventListener('click', onDocClick); };
+    window.addEventListener('keydown', onKey); window.addEventListener('hashchange', onHash);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('hashchange', onHash); };
   }, []);
   // hidden: nothing draws; shown: the view as it was, and a look the address may now name (back and forward)
-  const wasRunning = useRef({page: true, design: false});
+  const wasRunning = useRef(true);
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
     const e = engine.current; if (!e) return;
-    if (!active) { wasRunning.current = {page: e.viewer.running, design: !!e.creatorPreview?.running}; e.viewer.running = false; if (e.creatorPreview) e.creatorPreview.running = false; return; }
-    e.viewer.running = wasRunning.current.page; if (e.creatorPreview) e.creatorPreview.running = wasRunning.current.design;
+    if (!active) { wasRunning.current = e.viewer.running; e.viewer.running = false; return; }
+    e.viewer.running = wasRunning.current;
     const s = decode(addressLook().code); if (s && encode(s) !== encode(model.state)) model.set(s);
     else history.replaceState(null, '', addressOf(encode(model.state)));
   }, [active]);
@@ -1219,36 +1215,34 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
 
   // ---- drawing ----
   const isPhone = phone();
-  const designingShared = designing && sharedView, controlsInStage = designing && !sharedView;
-  const equipOn = !designing && !panelCollapsed && !bgMode && !animMode;
+  // (Equipment shows pressed only while the drawer shows the equipment: not under Share, the looks or another mode)
+  const equipOn = !designing && !panelCollapsed && !bgMode && !animMode && !looksOpen && !shareOpen;
   const viewerHeight = isPhone && !panelCollapsed && split ? `${(Math.max(0.22, Math.min(0.72, split)) * 100).toFixed(3)}%` : undefined;
   const verb = panelCollapsed ? 'Show' : 'Hide';
   const shareField = (l: Shared) => <ShareField key={shortKey(l)} look={l} />;
 
   const bgPop = (
-    <div ref={els.bgPop} className="of-bgpop" hidden={!bgOpen} role="menu"
-      // the menu by keyboard: ↑ ↓ move, Esc closes back to its button
+    <div ref={els.bgPop} className="of-bgpop" role="menu"
+      // the menu by keyboard: ↑ ↓ move, Esc closes the settings back to their button
       onKeyDown={e => {
         const items = ([...els.bgPop.current!.querySelectorAll('summary, button:not(:disabled)')] as HTMLElement[]).filter(n => n.offsetParent !== null), at = items.indexOf(document.activeElement as HTMLElement);
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus(); }
-        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setBgOpen(false); els.bgBtn.current?.focus(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setBgMode(false); els.bgBtn.current?.focus(); }
       }}
-      // keyboard: Tab out of the menu closes it. (Only when focus lands somewhere: a tap on iOS takes focus from the
-      // menu without giving it to anything, and closing then would swallow the tap on the item.)
-      onBlur={e => { const to = e.relatedTarget as Node | null; if (to && !els.bgPop.current!.contains(to) && to !== els.bgBtn.current) closeBg(false); }}>
+      >
       {/* two sections, both folded at first, so their titles show at a glance */}
       <details className="of-bgsec" data-sec="background">
         <summary><Icon name="image" />Background</summary>
         <div className="of-bghead">Colours</div>
-        {BACKDROPS.filter(b => !b.room).map(b => <BgItem key={b.id} b={b} on={backdrop.id === b.id} pick={() => { setBackdrop(b); closeBg(true); }} />)}
+        {BACKDROPS.filter(b => !b.room).map(b => <BgItem key={b.id} b={b} on={backdrop.id === b.id} pick={() => setBackdrop(b)} />)}
         <div className="of-bghead">3D Scenes</div>
-        {BACKDROPS.filter(b => b.room).map(b => <BgItem key={b.id} b={b} on={backdrop.id === b.id} pick={() => { setBackdrop(b); closeBg(true); }} />)}
+        {BACKDROPS.filter(b => b.room).map(b => <BgItem key={b.id} b={b} on={backdrop.id === b.id} pick={() => setBackdrop(b)} />)}
         <div className="of-bghead">Ground</div>
         {FLOORS.map(([id, name]) => (
           // the disc under the character is for the colours: a place's floor takes the character's own shadow
           <button key={id} role="menuitemradio" aria-checked={floor === id} data-floor={id} className={floor === id ? 'on' : undefined}
             disabled={!!backdrop.room} title={backdrop.room ? 'A place shows the character’s own shadow on its ground' : ''}
-            onClick={() => { setFloor(id); closeBg(true); }}><span className={`of-bgdot floor-${id}`} />{name}</button>
+            onClick={() => setFloor(id)}><span className={`of-bgdot floor-${id}`} />{name}</button>
         ))}
       </details>
       <details className="of-bgsec" data-sec="random">
@@ -1291,41 +1285,43 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       </details>
     </div>
   );
-  // the column of round buttons on the view, from the top: what the drawer shows (the character's design, the
-  // equipment), then the outfit's effect (when it has one), weapons out, and the settings (background, ground, random outfit)
+  // the column of buttons on the view, from the top: what the drawer shows (the character's design, the equipment),
+  // then the outfit's effect (when it has one), the combat stance and the animations: icons, each named in its
+  // tooltip (wider screens; a rule parts the two panel modes from the rest)
+  const combatTip = designing || !state.equip.weapon ? (showHeld ? 'Fists up, in the combat-ready stance, as the game does with no weapon. Click to stand at rest' : 'At rest. Click to put your fists up, in the combat-ready stance, as the game does with no weapon')
+    : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance';
+  const TIPS = {character: 'Design your face, body and hair', equipment: 'What your character wears', effect: 'Show or hide the particle effect this outfit gives off',
+    animations: "Play the game's emotes and other animations on your character", settings: 'Background, ground, the random outfit and rendering',
+    looks: 'Save this look, wear a saved one, share a link', download: 'A picture, GIF or video of your look'};
   const controls = (
     <div className="of-controls" style={columnBottom ? {bottom: columnBottom} : undefined}>
-      <button className={`btn of-pose of-mode-btn${designing ? ' active' : ''}`} aria-pressed={designing} title="Design your character: face, body and hair" aria-label="Character" onClick={() => modeClick(true)}><Icon name="mask" /></button>
-      <button className={`btn of-pose of-mode-btn${equipOn ? ' active' : ''}`} aria-pressed={equipOn} title="Equipment: what your character wears" aria-label="Equipment" onClick={() => modeClick(false)}><Icon name="torso" /></button>
-      <button className={`btn of-pose of-fx${showEffects ? ' active' : ''}`} hidden={!fx.length} title="Show or hide the particle effect this outfit gives off" aria-label="Effect" aria-pressed={showEffects}
-        onClick={() => { const on = !showEffects; setShowEffects(on); store.set('fx', on ? '1' : '0'); }}><span className="fx-glyph" aria-hidden="true"><Icon name="sparkles" /></span></button>
-      <button className={`btn of-pose${fighting ? ' active' : ''}`} hidden={(designing || !armed) && UNARMED == null} aria-label="Weapons out" aria-pressed={fighting}
-        title={designing || !state.equip.weapon ? (showHeld ? 'Fists up, in the combat-ready stance, as the game does with no weapon. Click to stand at rest' : 'At rest. Click to put your fists up, in the combat-ready stance, as the game does with no weapon')
-          : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance'}
-        onClick={() => setShowHeld(h => !h)}><Icon name="sword" /></button>
-      <button className={`btn of-pose of-anim-btn${animMode ? ' active' : ''}`} hidden={!pack.animationCount} aria-pressed={animMode} aria-label="Animations"
-        title="Animations: play the game's emotes and other animations on your character" onClick={toggleAnimMode}><Icon name="wave" /></button>
+      <button className={`btn of-pose of-mode-btn${designing ? ' active' : ''}`} aria-pressed={designing} aria-label="Character" aria-description={TIPS.character} onClick={() => modeClick(true)}><Icon name="mask" /><Tip name="Character">{TIPS.character}</Tip></button>
+      <button className={`btn of-pose of-mode-btn${equipOn ? ' active' : ''}`} aria-pressed={equipOn} aria-label="Equipment" aria-description={TIPS.equipment} onClick={() => modeClick(false)}><Icon name="torso" /><Tip name="Equipment">{TIPS.equipment}</Tip></button>
+      <span className="of-sep" aria-hidden="true" />
+      <button className={`btn of-pose of-fx${showEffects ? ' active' : ''}`} hidden={!fx.length} aria-label="Effect" aria-description={TIPS.effect} aria-pressed={showEffects}
+        onClick={() => { const on = !showEffects; setShowEffects(on); store.set('fx', on ? '1' : '0'); }}><span className="fx-glyph" aria-hidden="true"><Icon name="sparkles" /></span><Tip name="Effect">{TIPS.effect}</Tip></button>
+      <button className={`btn of-pose${fighting ? ' active' : ''}`} hidden={(designing || !armed) && UNARMED == null} aria-label="Combat" aria-description={combatTip} aria-pressed={fighting}
+        onClick={() => setShowHeld(h => !h)}><Icon name="sword" /><Tip name="Combat">{combatTip}</Tip></button>
+      <button className={`btn of-pose of-anim-btn${animMode ? ' active' : ''}`} hidden={!pack.animationCount} aria-pressed={animMode} aria-label="Animations" aria-description={TIPS.animations}
+        onClick={toggleAnimMode}><Icon name="wave" /><Tip name="Animations">{TIPS.animations}</Tip></button>
     </div>
   );
-  // the settings: on the view's toolbar, right of redo (phones: the drawer's settings mode; wider screens: a menu below it)
+  // the settings: on the view's toolbar, right of redo; they open in the side panel, one of its modes
   const settingsButton = (
     <div className="of-bg of-bg-top">
-      <button ref={els.bgBtn} className={`btn-mini of-icon of-bgbtn${bgMode ? ' active' : ''}`} aria-haspopup="menu" aria-label="Settings" title="Settings: background, ground, the random outfit and rendering"
-        aria-expanded={bgTouched && !isPhone ? bgOpen : undefined} aria-pressed={isPhone ? bgMode : undefined}
-        onClick={e => {
-          e.stopPropagation();
-          if (phone()) { toggleBgMode(); return; }   // (phones: one of the drawer's modes)
-          setBgTouched(true); setBgOpen(o => !o);
-        }}><Icon name="gear" /></button>
-      {!bgMode && bgPop}
+      <button ref={els.bgBtn} className={`btn-mini of-icon of-bgbtn${bgMode ? ' active' : ''}`} aria-label="Settings" aria-description={TIPS.settings}
+        aria-pressed={bgMode} onClick={e => { e.stopPropagation(); toggleBgMode(); }}><Icon name="gear" /><Tip name="Settings">{TIPS.settings}</Tip></button>
     </div>
   );
-  useEffect(() => { if (bgOpen && !bgMode) (els.bgPop.current?.querySelector('button.on') as HTMLElement ?? els.bgPop.current?.querySelector('button'))?.focus(); }, [bgOpen]);
-  useEffect(() => { if (designing) (els.creator.current?.querySelector('.creator-actions .btn-cta') as HTMLElement)?.focus({preventScroll: true}); }, [designing]);
   const now = wearing(), nowSettled = wearing(true), current = looks.find(l => l.code === encode(state));
+  const designerPanel = designing ? <DesignerPanel state={state} selected={selected} pack={pack} paletteFor={paletteFor} edited={edited}
+    select={id => { const same = live.current.selected === id; live.current.selected = id; setSelected(id); warmStyles(); if (same) frameCreator(); }} randomise={() => { model.state = randomise(pack, model.state); edited(); }}
+    startOver={() => { model.state = {...structuredClone(DEFAULT_LOOK), equip: model.state.equip}; edited(); }} /> : null;
+  // (the first touch or key in the designer starts loading the part's other styles)
+  const designUse = {onPointerDownCapture: () => { if (!designUsed.current) { designUsed.current = true; warmStyles(); } }, onKeyDownCapture: () => { if (!designUsed.current) { designUsed.current = true; warmStyles(); } }};
 
   return (
-    <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${animMode ? ' anim-mode' : ''}${looksOpen ? ' looks-mode' : ''}${recView ? ' record-mode' : ''}${shareOpen ? ' share-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ' designing' : ''}${designingShared ? ' designing-shared' : ''}`}>
+    <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${animMode ? ' anim-mode' : ''}${looksOpen ? ' looks-mode' : ''}${recView ? ' record-mode' : ''}${shareOpen ? ' share-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ` designing${isPhone ? ' design-sheet' : ''}` : ''}`}>
       <main ref={els.main} onScroll={e => { const m = e.currentTarget; if (m.scrollTop) m.scrollTop = 0; }}>
         <section ref={els.viewer} className={`of-viewer${recView ? ' rec' : ''}`} style={{background: viewBg, height: viewerHeight}} data-loading={parts.loading ? '1' : ''}>
           <canvas ref={els.canvas} className={opened ? undefined : 'wait'} tabIndex={0} aria-label="Your character. Drag to turn, scroll or pinch to zoom, arrow keys turn."
@@ -1338,26 +1334,26 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
             data-progress={placeShown && placeLoad!.progress != null ? String(Math.round(placeLoad!.progress * 100)) : undefined}>
             <svg viewBox="0 0 44 44" aria-hidden="true"><circle className="pl-track" cx="22" cy="22" r="19" /><circle className="pl-fill" cx="22" cy="22" r="19" style={placeShown && placeLoad!.progress != null ? {strokeDashoffset: String(119.4 * (1 - placeLoad!.progress))} : undefined} /></svg>
           </div>
-          {/* the one way into face and body (Male/Female and a random look are there, in Body) */}
-          <div className="of-charcard"><button className="btn of-design" aria-label="Character: face, body and hair" title="Design your character: face, body and hair" onClick={() => openCreator()}><Icon name="person" />Character</button></div>
           <div id="toast" role="status" aria-live="polite" className={toastMsg && toastMsg.n > 0 ? 'show' : undefined}>{toastMsg?.text}</div>
           {PICTURE && <Lockup s={lockupSize(innerWidth, innerHeight)} />}
           {/* the view's own toolbar, along its top on the right: undo, redo, the picture, the looks */}
           <div id="of-toolbar" className="of-toolbar">
-            <button id="undo" className="btn-mini of-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /></button>
-            <button id="redo" className="btn-mini of-icon" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={designing || !model.future.length} onClick={() => model.redo()}><Ic d="M15 7h5V2M20 7a9 9 0 1 0 1.5 9" /></button>
+            <button id="undo" className="btn-mini of-icon" aria-label="Undo" aria-keyshortcuts={`${MOD === 'Cmd' ? 'Meta' : 'Control'}+Z`} disabled={designing || !model.past.length} onClick={() => model.undo()}><Ic d="M9 7H4V2M4 7a9 9 0 1 1-1.5 9" /><Tip name="Undo" keys={`${MOD}+Z`} /></button>
+            <button id="redo" className="btn-mini of-icon" aria-label="Redo" aria-keyshortcuts={`${MOD === 'Cmd' ? 'Meta' : 'Control'}+Shift+Z`} disabled={designing || !model.future.length} onClick={() => model.redo()}><Ic d="M15 7h5V2M20 7a9 9 0 1 0 1.5 9" /><Tip name="Redo" keys={`${MOD}+Shift+Z`} /></button>
             {settingsButton}
-            <button ref={els.share} id="share" className={`btn-mini of-share${looksOpen ? ' active' : ''}`} aria-pressed={looksOpen} title="Your looks: save this one, wear a saved one, share a link"
-              onClick={e => { e.stopPropagation(); toggleLooks(); }}><Ic d="M6 3h12v18l-6-4-6 4z" /><span>Looks</span></button>
+            <button ref={els.share} id="share" className={`btn-mini of-share${looksOpen ? ' active' : ''}`} aria-pressed={looksOpen} aria-label="Looks" aria-description={TIPS.looks}
+              onClick={e => { e.stopPropagation(); toggleLooks(); }}><Ic d="M6 3h12v18l-6-4-6 4z" /><Tip name="Looks">{TIPS.looks}</Tip></button>
+            <button id="download-now" className={`btn-mini of-icon${shareOpen && dlOpen ? ' active' : ''}`} aria-pressed={shareOpen && dlOpen} aria-label="Download"
+              aria-description={TIPS.download} onClick={e => { e.stopPropagation(); toggleDownload(); }}><Icon name="download" /><Tip name="Download">{TIPS.download}</Tip></button>
             {/* (the one primary button, at the far right: sharing a look is what the page leads to) */}
             {/* (a toggle: open, it shows pressed in, and puts Share away again) */}
-            <button id="share-now" className={`btn-mini of-icon-sm of-primary${shareOpen ? ' active of-share-open' : ''}`}
+            <button id="share-now" className={`btn-mini of-icon-sm of-primary${shareOpen ? ' active' : ''}`}
               title={shareOpen ? 'Close Share and go back to dressing up' : 'Share this look: a link to it, or a picture, GIF or video of it'} aria-label="Share"
               aria-pressed={shareOpen} onClick={e => { e.stopPropagation(); if (shareOpen) closeShare(); else { closeLooks(); openShare(); } }}>
               <Icon name="share" /><span>Share</span></button>
           </div>
-          {/* (last: over the toast and the toolbar, where the designer's coming and going has always left it) */}
-          {!controlsInStage && controls}
+          {/* (last: over the toast and the toolbar) */}
+          {controls}
         </section>
         <aside ref={els.right} className={`of-right${opened ? '' : ' wait'}`} id="of-right" onScroll={e => { const r = e.currentTarget; if (r.scrollTop) r.scrollTop = 0; }}
           onClickCapture={e => { if (live.current.panelCollapsed && (e.target as HTMLElement).closest('.slot')) setPanelCollapsed(false); }}>
@@ -1387,33 +1383,20 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           {animMode && <AnimationsPanel gender={state.gender} tab={animTab} setTab={setAnimTab} playing={anim} started={!!anim && animRun?.anim.key === anim.key}
             moves={combatMoves} fighting={fighting && !designing} weapon={heldWeapon?.name ?? null} armed={!!state.equip.weapon} takeOut={() => { live.current.showHeld = true; setShowHeld(true); }}
             repeat={animRepeat} setRepeat={setAnimRepeat} pause={animPause} setPause={setAnimPause}
-            play={(a: AnimItem) => { const next = anim && anim.clip === a.clip ? null : playOf(a); setAnimPause(false); setAnim(next); setLastAnim(next); }} timeline={timeline} />}
+            play={(a: AnimItem) => { const next = anim && anim.clip === a.clip && anim.name === a.name ? null : playOf(a); setAnimPause(false); setAnim(next); setLastAnim(next); }} timeline={timeline} />}
+          {designing && !isPhone && <Drawer className="of-design" label="Design your character"><div ref={n => { if (n) attachScrollbar(n); }} className="of-drawer-list cp-list" {...designUse}>{designerPanel}</div></Drawer>}
         </aside>
       </main>
       <div className="of-rotate" role="alert"><Ic><rect x="7" y="2" width="10" height="20" rx="2" /><path d="M11 18h2" /></Ic><b>Turn your phone upright</b><span>Brighter Fashion is made for holding your phone this way up.</span></div>
-      <div ref={els.creator} className="creator" role="dialog" aria-modal="true" aria-label="Design your character" hidden={!designing}
-        onPointerDownCapture={() => { if (!designUsed.current) { designUsed.current = true; warmStyles(); } }} onKeyDownCapture={() => { if (!designUsed.current) { designUsed.current = true; warmStyles(); } }}>
+      {/* phones: the designer is a sheet in the drawer's place, under the page's own view (which frames the part being
+          chosen) with a grab bar of its own; wider screens: a drawer of the side panel, above */}
+      <div ref={els.creator} className="creator" role="region" aria-label="Design your character" hidden={!designing || !isPhone} {...designUse}>
         <div className="creator-box">
-          <div className="creator-bar"><h2>Design your character</h2></div>
           <div ref={els.body} className="creator-body" style={{'--stage-h': stageH ?? (cSplit ? `${(cSplit * 100).toFixed(3)}%` : '')} as CSSProperties}>
-            <div ref={els.stage} className="creator-stage" style={designing ? {background: cssOf(backdrop)} : undefined}>
-              <canvas ref={els.cCanvas} aria-label="Preview: drag to turn, scroll to zoom" /><span className="stage-hint">Drag to turn</span>
-              {controlsInStage && controls}
-            </div>
+            <div ref={els.stage} className="creator-stage" />
             <div ref={els.cGrip} className="of-grip creator-grip" role="separator" aria-orientation="horizontal" aria-label="Drag to resize the character view" onPointerDown={onCGripDown}><span className="of-grip-bar" /></div>
             <div className="creator-drawer">
-              {/* only Cancel and Done stay put; everything else scrolls with the choices below */}
-              <div className="creator-actions"><span className="creator-title">Character Designer</span><span className="creator-gap" />
-                <span className="creator-end">
-                  <button className="btn" title="Discard these changes (Esc)" onClick={() => cancelCreator()}>Cancel</button>
-                  <button className="btn btn-cta" title="Keep these changes" onClick={() => closeCreator()}>Done</button>
-                </span>
-              </div>
-              <div ref={els.panel} className="creator-panel">
-                {designing && <DesignerPanel state={state} selected={selected} pack={pack} paletteFor={paletteFor} edited={edited}
-                  select={id => { const same = live.current.selected === id; live.current.selected = id; setSelected(id); warmStyles(); if (same) frameCreator(); }} randomise={() => { model.state = randomise(pack, model.state); edited(); }}
-                  startOver={() => { model.state = {...structuredClone(DEFAULT_LOOK), equip: model.state.equip}; edited(); }} />}
-              </div>
+              <div ref={els.panel} className="creator-panel">{isPhone && designerPanel}</div>
             </div>
           </div>
         </div>
@@ -1461,7 +1444,8 @@ function AnimationsPanel({gender, tab, setTab, playing, started, moves, fighting
   // the one playing: a wheel while its clip is fetched, then its progress across it (the game's 600 ticks a second;
   // round and round when it repeats, full when it stops on its last frame)
   const tile = (a: AnimItem) => {
-    const on = playing?.clip === a.clip, run = on && started;
+    // (an animation is its clip and its name: two can share a clip, as the Teleport and the Vampire Teleport do)
+    const on = playing?.clip === a.clip && playing?.name === a.name, run = on && started;
     return <button key={`${a.clip}/${a.name}`} type="button" className={`of-tile${a.emote ? ' emote' : ''}${a.group === 'Combat' ? ' combat' : ''}${on ? ' on' : ''}${on ? (run ? ' running' : ' loading') : ''}`}
       aria-pressed={on} aria-busy={on && !started} title={`${a.name}${a.aim != null ? ` · aims ${a.aim ? `${Math.abs(a.aim)}° ${a.aim > 0 ? 'up' : 'down'}` : 'straight ahead'}` : ''} · ${secs(a.ticks)}${on ? ' · tap to stop' : ''}`} onClick={() => play(a)}>
       {run && a.ticks ? <span key={`${repeat || playing!.loop}`} className="of-anim-bar" aria-hidden="true" style={{animationDuration: `${a.ticks / 0.6}ms`, animationIterationCount: repeat || playing!.loop ? 'infinite' : 1, animationPlayState: pause ? 'paused' : 'running'}} /> : null}

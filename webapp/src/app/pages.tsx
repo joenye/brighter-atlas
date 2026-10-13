@@ -94,8 +94,3 @@ export const FashionPage = memo(() => (
     <div id="toast" role="status" aria-live="polite"></div>
   </div>
 ));
-
-/** Brighter Fashion's part of the top bar: the game update its clothes come from. */
-export const FashionTopbar = memo(() => (
-  <span id="game-build" className="of-gamebuild mono of-exp" title="The game update these clothes and faces come from"></span>
-));

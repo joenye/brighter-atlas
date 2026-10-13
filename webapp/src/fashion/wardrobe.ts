@@ -189,7 +189,7 @@ export class Wardrobe {
     // ↓ from the search box goes on into the results (trying the first on)
     this.search.addEventListener('keydown', e => { if (e.key === 'ArrowDown' && this.shown.length) { e.preventDefault(); this.list.focus({preventScroll: true}); this.onKey(e); } });
     this.details = el('div', {class: 'details'});
-    // phones: the slots are the master view; a slot opens its detail under a breadcrumb back to them
+    // the way back: from the worn item's choices to its slot's list, and (phones) from a slot to the slots, the master view
     this.crumbs = el('nav', {class: 'crumbs', 'aria-label': 'Equipment'});
     // (a drawer of the side panel: its insets and scrolling list shared with the others, css `.of-drawer`)
     this.root = el('section', {class: 'wardrobe of-drawer'}, header, this.slotBar, this.crumbs, this.search, this.list, this.details);
@@ -214,13 +214,15 @@ export class Wardrobe {
     ].filter(Boolean);
     return bits.join(' · ') || (e.kind === 'cosmetic' ? 'Cosmetic' : '');
   }
-  /** the worn item's choices, in place of the list (phones: a level of its own) */
-  // (the summary is drawn again: focus stays on it when it had it, or goes to it when asked, as from Escape)
+  /** the worn item's choices, in place of the list, a level of their own (the worn row's Customise opens them, the
+   *  breadcrumb or Escape comes back) */
+  // (focus follows, when it was on the way in or out or is asked for, as from Escape: to the breadcrumb's back, or back
+  // to the row's Customise)
   setAdjusting(on: boolean, focus = false) {
-    const had = focus || this.details.contains(document.activeElement);
+    const had = focus || this.root.contains(document.activeElement) && !this.search.contains(document.activeElement);
     this.root.classList.toggle('adjusting', on); this.renderDetails(); this.renderCrumbs(); this.details.scrollTop = 0;
-    const summary = this.details.querySelector<HTMLElement>('.details-summary');
-    if (had && summary?.getClientRects().length) summary.focus({preventScroll: true});
+    const to = this.root.querySelector<HTMLElement>(on ? '.crumb-back' : '.item-customise');
+    if (had && to?.getClientRects().length) to.focus({preventScroll: true});
   }
   hasChoices(e: Entry) { const it = e.members[0].item; return e.members.length > 1 || dyeable(e) || (e.kind === 'cape' && it.variants.length > 1); }
   private renderCrumbs() {
@@ -373,7 +375,7 @@ export class Wardrobe {
         this.picture(e.slot, first, '', ...this.colourFor(first, this.state.equip[e.slot])),
         el('span', {class: 'item-text'}, el('span', {class: 'item-name'}, e.name, dyeable(e) ? el('span', {class: 'dye-badge', title: 'Can be dyed'}) : null, e.members.some(m => this.hasEffect(m.item, m.variant)) ? el('span', {class: 'fx-badge', title: 'Has a particle effect'}, '✦') : null), el('span', {class: 'item-sub'}, q ? e.group : subtitle(e))),
         e.members.length > 1 ? el('span', {class: 'item-count', title: count}, String(e.members.length)) : null);
-      // phones: the worn row opens its choices (tier, faction, colour, dye), when it has any, as the next level
+      // the worn row opens its choices (tier, faction, colour, dye), when it has any, as the next level
       frag.push(on && this.hasChoices(e) ? el('div', {class: 'item-wrap'}, row, el('button', {class: 'btn-mini item-customise', onclick: () => this.setAdjusting(true)},
         'Customise', icon('turnRight'))) : row);
     }
@@ -451,18 +453,7 @@ export class Wardrobe {
     }
     const it = e.members.find(m => m.item.id === w.item)!.item;
     const v = it.variants[w.variant] ?? it.variants[0];
-    // a one-line summary that opens the full controls in place of the list (on phones the worn row's Customise does)
-    const bits = [e.members.length > 1 ? (colours(e) ? clean(v.name).split(' ')[0] : e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant))?.label) : null,
-      e.kind === 'cape' && it.variants.length > 1 ? v.grade : null,
-      v.colourable && takesDye(it) ? this.pack.dyes.find((d: any) => d.id === (w.colour ?? this.pack.defaultColour))?.name : null].filter(Boolean);
-    const adjusting = this.root.classList.contains('adjusting');
-    // name what's inside: a weapon has tiers but no dye, a cosmetic colours
-    const can = [e.members.length > 1 ? (colours(e) ? 'Colour' : 'Tier') : '', e.kind === 'cape' && it.variants.length > 1 ? 'faction' : '', dyeable(e) ? 'dye' : ''].filter(Boolean);
-    const go = can.length ? `${can.join(' & ').replace(/^./, c => c.toUpperCase())} ›` : 'Details ›';
-    const summary = el('button', {class: 'details-summary', 'aria-expanded': String(adjusting), onclick: () => this.setAdjusting(!this.root.classList.contains('adjusting'))},
-      adjusting ? el('span', {class: 'ds-text'}, '‹ Back to the list') : el('span', {class: 'ds-text'}, el('b', {}, e.name), bits.length ? ` · ${bits.join(' · ')}` : ''),
-      adjusting ? null : el('span', {class: 'ds-go'}, go));
-    const kids: Node[] = [summary, el('div', {class: 'detail-head'},
+    const kids: Node[] = [el('div', {class: 'detail-head'},
       (() => { const mm = e.members.find(m => m.item.id === it.id && (e.kind === 'cape' || m.variant === w.variant)); const m = mm ? {...mm, variant: w.variant} : e.members[0]; return this.picture(e.slot, m, 'thumb-lg', ...this.colourFor(m, w)); })(),
       el('div', {class: 'detail-title'}, el('h3', {}, it.kind === 'cosmetic' ? clean(v.name) : e.kind === 'cape' ? clean(it.name) : e.name), el('div', {class: 'item-sub'}, subtitle(e))),
       el('button', {class: 'btn-mini', onclick: () => this.hooks.equip(this.slot, null)}, 'Take off'))];

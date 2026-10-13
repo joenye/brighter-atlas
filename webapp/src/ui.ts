@@ -298,18 +298,20 @@ export function hashColorRGB(i: number): [number, number, number] {
 // draggable panel resizer: drop a slim handle on one edge of `panel`; dragging
 // adjusts its width (vertical edges) or height (horizontal edges), persisted
 // in localStorage under bs.panel.<key>. The panel must be a flex-none block
-// whose size is its inline width/height style.
+// whose size is its inline width/height style, unless `apply` sizes it some
+// other way (a grid's column: Brighter Fashion's side panel); it is given the
+// size in base px (ui-scale.ts), dragged or restored.
 export function makeResizable(panel: HTMLElement | null | undefined,
-  { edge = 'right', key, min = 160, max = 900 }: { edge?: 'left' | 'right' | 'top' | 'bottom'; key?: string; min?: number; max?: number } = {}): void {
+  { edge = 'right', key, min = 160, max = 900, apply: applyTo }: { edge?: 'left' | 'right' | 'top' | 'bottom'; key?: string; min?: number; max?: number; apply?: (px: number) => void } = {}): void {
   if (!panel || panel.querySelector(':scope > .rz-handle')) return;
   const horizontal = edge === 'left' || edge === 'right';
   const prop = horizontal ? 'width' : 'height';
   const storeKey = key ? `bs.panel.${key}` : null;
   // (sizes in base px, set in rem, so a dragged size grows with the interface: ui-scale.ts)
-  const apply = (px: number) => {
+  const apply = applyTo ?? ((px: number) => {
     panel.style[prop] = rem(px);
     panel.style.flex = '0 0 auto';   // beat any flex-basis the layout set
-  };
+  });
   if (storeKey) {
     const saved = parseInt(localStorage.getItem(storeKey) || '', 10);
     if (saved >= min && saved <= max) apply(saved);

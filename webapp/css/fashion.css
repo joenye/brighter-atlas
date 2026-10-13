@@ -15,7 +15,6 @@ html, body { touch-action: manipulation; overscroll-behavior: none; overflow: hi
 .of-drawer-list { flex: 1 1 0; min-height: 0; overflow: auto; }
 .of-title { font-weight: 650; color: var(--fg0); margin-left: .375rem; padding-left: .625rem; border-left: 1px solid var(--line); }
 .of-exp { margin-left: .25rem; }
-.of-gamebuild { color: var(--fg2); font-size: .6875rem; white-space: nowrap; }
 .fashion svg.ic { width: .875rem; height: .875rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .of-icon, .of-icon-sm, .of-share { display: inline-flex; align-items: center; gap: .375rem; }
 /* the view's toolbar: along its top, on the right, in the view's own glass (as the column of buttons) */
@@ -31,8 +30,11 @@ html, body { touch-action: manipulation; overscroll-behavior: none; overflow: hi
 .btn-mini { display: inline-flex; align-items: center; gap: .3125rem; }
 .btn-mini:disabled { opacity: .35; cursor: default; }
 
-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 26.25rem; overflow: clip; }
-@media (max-width: 1280px) { main { grid-template-columns: minmax(0, 1fr) 23.75rem; } }
+/* the side panel's column: its own width, or as dragged at its inner edge (--panel-w, as Brighter Data's panels) */
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--panel-w, 26.25rem); overflow: clip; }
+@media (max-width: 1280px) { main { grid-template-columns: minmax(0, 1fr) var(--panel-w, 23.75rem); } }
+/* (phones: the drawer is under the view, sized by its grab bar) */
+@media (max-width: 860px) { .of-right > .rz-handle { display: none; } }
 
 .segmented { display: flex; border: 1px solid var(--line); border-radius: .375rem; overflow: hidden; background: var(--bg2); }
 .segmented button { flex: 1; border: 0; background: transparent; color: var(--fg1); padding: .3125rem .625rem; cursor: pointer; white-space: nowrap; font: inherit; }
@@ -47,15 +49,13 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-viewer { position: relative; min-height: 0; overflow: hidden; }
 .of-viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; outline: none; }
 .of-viewer canvas.dragging { cursor: grabbing; }
-.of-charcard { position: absolute; top: .75rem; left: .75rem; }
-.of-design { display: flex; align-items: center; justify-content: center; gap: .4375rem; height: 2.125rem; padding: 0 .75rem; white-space: nowrap; background: rgba(13, 15, 19, .8); backdrop-filter: blur(6px); }
-.of-design svg.ic { width: .875rem; height: .875rem; }
 .of-iconbtn svg.ic { width: 1rem; height: 1rem; }
 .of-link { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; padding: .375rem .5rem; border-radius: .375rem; cursor: pointer; }
 .of-link:hover { background: var(--bg3); }
 .of-bg { position: relative; }
-.of-bgpop { position: absolute; bottom: 0; right: calc(100% + .5rem); min-width: 18.75rem; max-height: calc(100dvh - 8.75rem); overflow: auto; display: flex; flex-direction: column; padding: .25rem; border-radius: .5rem; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 12px 30px rgba(0,0,0,.5); z-index: 5; }
-.of-bgpop[hidden] { display: none; }
+/* the settings: a drawer of the side panel, in the equipment's place while Settings shows pressed */
+.of-bgpop { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: var(--drawer-pad) var(--drawer-pad) var(--drawer-pad-bottom); }
+#fashion.bg-mode .of-right .wardrobe { display: none; }
 .of-bgpop button { display: flex; align-items: center; gap: .625rem; padding: .4375rem .625rem; border: 0; border-radius: .375rem; background: transparent; color: var(--fg0); text-align: left; cursor: pointer; font: inherit; }
 .of-bgpop button:hover { background: var(--bg3); }
 .of-bgpop button.on { background: var(--sel); }
@@ -75,6 +75,31 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-round { width: 1.875rem; height: 1.875rem; border-radius: 50%; padding: 0; display: inline-grid; place-items: center; }
 .of-pose:disabled { opacity: .45; }
 .of-controls [hidden] { display: none; }
+/* wider screens: bigger icon buttons, each named in a tooltip on hover or keyboard focus (its name, its keys, what it
+   does); phones show the icons alone, and neither the tooltips nor the column's rule */
+.of-tip, .of-sep { display: none; }
+@media (min-width: 861px) {
+  .of-controls { align-items: flex-end; }
+  .of-controls .of-pose { width: 3rem; height: 3rem; border-radius: .75rem; position: relative; }
+  .of-controls .of-pose svg.ic { width: 1.375rem; height: 1.375rem; }
+  .of-controls [hidden] { display: none; }
+  .of-sep { display: block; width: 2rem; height: 1px; margin: .125rem .5rem; background: rgba(255, 255, 255, .12); }
+  .of-toolbar .btn-mini { min-height: 2.5rem; border-radius: .625rem; position: relative; }
+  .of-toolbar .of-icon, .of-toolbar .of-share { width: 2.5rem; padding: 0; justify-content: center; }
+  .of-toolbar .btn-mini.of-primary { padding: 0 .875rem; }
+  .of-toolbar .btn-mini svg.ic, .of-toolbar .of-bgbtn svg.ic { width: 1.125rem; height: 1.125rem; }
+  .of-tip { display: block; position: absolute; z-index: 5; pointer-events: none; opacity: 0; width: max-content; max-width: 15rem; padding: .375rem .5625rem;
+    border-radius: .4375rem; background: #f2f5f9; color: #11141a; font-size: .75rem; line-height: 1.35; font-weight: 400; text-align: left; white-space: normal;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .45); transition: opacity .12s, transform .12s; }
+  .of-tip b { display: block; font-weight: 700; font-size: .8125rem; }
+  .of-tip kbd { font: 600 .625rem/1 var(--sans); background: #dde3ea; color: #3a4250; border-radius: .1875rem; padding: .125rem .25rem; margin-left: .375rem; vertical-align: .0625rem; }
+  /* the column's to their left, the toolbar's under them */
+  .of-controls .of-tip { right: calc(100% + .625rem); top: 50%; transform: translate(.25rem, -50%); }
+  .of-toolbar .of-tip { top: calc(100% + .5rem); right: 0; transform: translateY(-.25rem); }
+  .of-controls .of-pose:is(:hover, :focus-visible) > .of-tip { opacity: 1; transform: translate(0, -50%); transition-delay: .3s; }
+  .of-toolbar .btn-mini:is(:hover, :focus-visible) > .of-tip { opacity: 1; transform: translateY(0); transition-delay: .3s; }
+}
+@media (min-width: 861px) and (prefers-reduced-motion: reduce) { .of-tip { transition: none; } }
 .fx-glyph { color: #9fe0b8; }
 
 /* ---- equipment ---- */
@@ -129,11 +154,11 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
 .chips button { padding: .125rem .5rem; font-size: .75rem; border-radius: 62.4375rem; border: 1px solid var(--line); background: var(--bg2); color: var(--fg1); cursor: pointer; font: inherit; }
 .chips button:hover { background: var(--bg3); color: var(--fg0); }
 .chips button.on { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
-.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(1.3125rem, 1fr)); gap: .25rem; }
+/* (one size everywhere: the phones' targets, which a mouse finds easily too) */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.125rem, 1fr)); gap: .4375rem; }
 .swatch { aspect-ratio: 1; padding: 0; border-radius: .3125rem; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); cursor: pointer; }
 .swatch:hover { transform: scale(1.08); }
 .swatch.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.details-summary { display: none; }
 .of-set { margin-top: .625rem; justify-content: center; }
 .of-dyeall { margin: .125rem 0 .375rem; justify-content: center; }
 .fx-badge { color: #9fe0b8; margin-left: .375rem; font-size: .75rem; }
@@ -170,18 +195,13 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
 .of-short { display: none; }
 .of-only-sm { display: none; }
 
-/* ---- desktop: the list keeps the panel's height; the worn item's tier and dye open in its place, as on
-   phones (a one-line summary under the list opens them, its back bar or Escape returns) ---- */
+/* ---- desktop: the list keeps the panel's height; the worn item's tier and dye open in its place, a level of their
+   own as on phones (the worn row's Customise opens them, the breadcrumb or Escape comes back) ---- */
 @media (min-width: 861px) {
   .details { max-height: none; padding-top: 0; flex: none; border-top: 0; }
-  .wardrobe:not(.adjusting) .details > :not(.details-summary):not(.hint) { display: none; }
+  .wardrobe:not(.adjusting) .details > :not(.hint) { display: none; }
   .wardrobe.adjusting .items, .wardrobe.adjusting .search { display: none; }
   .wardrobe.adjusting .details { flex: 1; overflow: auto; }
-  .wardrobe.adjusting .details-summary { position: sticky; top: 0; z-index: 1; margin: 0 0 .625rem; }
-  .details-summary { display: flex; width: 100%; align-items: center; gap: .5rem; justify-content: space-between; padding: .5625rem .75rem; margin-top: .125rem; border-radius: .5rem; border: 1px solid var(--accent-dim); background: var(--sel); color: var(--fg0); font: inherit; text-align: left; cursor: pointer; }
-  .details-summary:hover { border-color: var(--accent); }
-  .ds-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ds-go { color: var(--accent); font-weight: 600; white-space: nowrap; }
 }
 /* ---- short windows: tighter slots ---- */
 @media (max-height: 800px) and (min-width: 861px) {
@@ -194,7 +214,6 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
 /* ---- phones ---- */
 @media (max-width: 860px) {
   .of-controls { right: .5rem; bottom: .5rem; }
-  .of-charcard { top: .5rem; left: .5rem; }
   .of-hide-sm, .of-exp { display: none; }
   .of-title { margin-left: .125rem; padding-left: .5rem; }
   .of-icon-sm span, .of-share span { display: none; }
@@ -216,24 +235,14 @@ img.rendered { background: radial-gradient(circle, #2a3140, #1a1e26); border-rad
   .item { padding: .375rem; }
   .details { max-height: none; padding-top: 0; flex: none; }
   .details .detail-head, .details .examine { display: none; }
-  .wardrobe:not(.adjusting) .details > :not(.details-summary):not(.hint) { display: none; }
+  .wardrobe:not(.adjusting) .details > :not(.hint) { display: none; }
   .wardrobe.adjusting .items, .wardrobe.adjusting .search { display: none; }
   .wardrobe.adjusting .details { flex: 1; overflow: auto; }
-  .details-summary { display: flex; width: 100%; align-items: center; gap: .5rem; justify-content: space-between; padding: .625rem .75rem; margin-top: .375rem; border-radius: .5rem; border: 1px solid var(--accent-dim); background: var(--sel); color: var(--fg0); font: inherit; text-align: left; cursor: pointer; }
-  .ds-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ds-go { color: var(--accent); font-weight: 600; white-space: nowrap; }
-  .swatches { grid-template-columns: repeat(auto-fill, minmax(2.125rem, 1fr)); gap: .4375rem; }
   .chips button { padding: .25rem .6875rem; font-size: .8125rem; }
-  .of-design .of-long { display: none; }
-  .of-design .of-short { display: inline; }
-  /* the background menu as a sheet over the lower half (the viewer is too short to hold it) */
-  .of-bgpop { position: fixed; top: auto; bottom: calc(.625rem + env(safe-area-inset-bottom, 0px)); left: .625rem; right: .625rem; max-height: 62dvh; overflow: auto; z-index: 60; }
-  .of-bgpop button { padding: .6875rem .75rem; }
   .of-wardactions .btn-mini { min-height: 2.125rem; }
   .of-only-sm { display: inline-flex; }
   .details .hint { display: none; }
   .of-viewer { height: 37dvh; }
-  .wardrobe.adjusting .details-summary { position: sticky; top: 0; z-index: 1; }
   .of-wardactions .of-long { display: none; }
   .of-wardactions .of-short { display: inline; }
   .of-wardhead h2 { display: none; }
@@ -266,7 +275,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   #topbar .top-right { gap: .25rem; }
 }
 /* while designing, the page underneath is out of the way (the designer's glass shows only the room) */
-#fashion.designing .of-right, #fashion.designing .of-charcard { visibility: hidden; }   /* (the column of buttons works on: see setDesigning) */
+/* designing (wider screens): the designer is the side panel's drawer, in the equipment's place */
+#fashion.designing:not(.design-sheet) .of-right .wardrobe { display: none; }
+.cp-list { display: flex; flex-direction: column; gap: 1rem; }
+/* phones: the designer's sheet over the page, the drawer under it out of the way (the column of buttons works on) */
+#fashion.design-sheet .of-right { visibility: hidden; }
 /* ---- the wardrobe panel folds away (desktop: a rail on its inner edge, as the Brighter Atlas side panels) ---- */
 .of-right { position: relative; }
 .of-grip { position: absolute; left: -.9375rem; top: 50%; transform: translateY(-50%); z-index: 27; }
@@ -275,6 +288,9 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-panel-toggle:hover { background: var(--bg3); color: var(--fg0); }
 .of-panel-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (min-width: 861px) {
+  /* (the pull-tab straddles the panel's inner edge, outside its box, as Brighter Data's: the panel must not clip it; its
+     own drawers scroll inside it, so nothing scrolls the panel itself) */
+  .of-right { overflow: visible; }
   #fashion.panel-collapsed main { grid-template-columns: minmax(0, 1fr) 2rem; }
   #fashion.panel-collapsed .of-right > :not(.of-grip) { display: none; }
   #fashion.panel-collapsed .of-grip { inset: 0; left: 0; transform: none; }
@@ -357,32 +373,25 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-bgpop .rd-note { margin: .25rem .625rem .375rem; padding: .5rem .625rem; border-radius: .5rem; background: rgba(255, 255, 255, .04); color: var(--fg1); font-size: .75rem; line-height: 1.4; }
 
 
-/* ---- the designer: a dialog in Brighter Atlas's style (the character, and a panel of choices) ---- */
-.creator { position: fixed; inset: 0; z-index: 50; display: flex; background: rgba(6, 8, 11, .72); backdrop-filter: blur(3px);
-  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+/* ---- the designer on phones: a sheet in the drawer's place, under the page's own view, which frames the part being
+   chosen with the page's backdrop, weapons and effect; only its drawer and grab bar take touches, the view above turns
+   and zooms as always (wider screens: a drawer of the side panel, .cp-list) ---- */
+.creator { position: fixed; inset: 0; top: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); z-index: 50; display: flex; pointer-events: none;
+  padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
 .creator[hidden] { display: none; }
-.creator-box { margin: auto; width: min(67.5rem, calc(100% - 2rem)); height: min(47.5rem, calc(100% - 2rem)); display: grid; grid-template-rows: auto minmax(0, 1fr);
-  background: var(--bg1); border: 1px solid var(--line); border-radius: .75rem; box-shadow: 0 24px 60px rgba(0, 0, 0, .6); overflow: hidden; }
-.creator-bar { display: flex; align-items: center; justify-content: space-between; gap: .625rem; padding: .625rem .875rem; border-bottom: 1px solid var(--line); }
-.creator-bar h2 { margin: 0; font-size: .9375rem; font-weight: 650; }
-.creator-drawer { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
+.creator-box { width: 100%; height: 100%; display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.creator-drawer { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); pointer-events: auto; background: var(--bg1); }
 .creator-drawer .creator-panel { flex: 1; border-left: 0; }
-.creator-actions { display: flex; align-items: center; gap: .5rem; padding: .625rem .875rem; border-bottom: 1px solid var(--line-soft); }
-.creator-gap { flex: 1; }
-.creator-end { display: inline-flex; gap: .375rem; margin-left: auto; }
-.creator-title { font-weight: 650; color: var(--fg0); }
 .cp-tools { display: flex; flex-direction: column; gap: .625rem; }
 .cp-tools .cp-random { flex: 1; justify-content: center; }
 .of-sq { width: 2.125rem; height: 2.125rem; padding: 0; display: inline-grid; place-items: center; flex: none; }
 .of-sq svg.ic { width: 1rem; height: 1rem; }
 .of-check { display: inline-flex; align-items: center; gap: .375rem; color: var(--fg1); cursor: pointer; white-space: nowrap; font-size: .8125rem; }
 .of-check input { accent-color: var(--accent); margin: 0; }
-.creator-body { display: grid; grid-template-columns: minmax(0, 1fr) 25rem; min-height: 0; }
-.creator-stage { position: relative; min-height: 0; background: radial-gradient(ellipse at 50% 40%, #1f2531 0%, #14171d 55%, #0d0f13 100%); }
-.creator-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
-.stage-hint { position: absolute; left: 50%; bottom: .75rem; transform: translateX(-50%); color: var(--fg2); font-size: .75rem; pointer-events: none; }
+.creator-body { display: grid; min-height: 0; }
+.creator-stage { position: relative; min-height: 0; }
 .creator-grip { display: none; }
-.creator-panel { border-left: 1px solid var(--line); padding: .875rem; overflow: auto; display: flex; flex-direction: column; gap: 1rem; }
+.creator-panel { padding: var(--drawer-pad) var(--drawer-pad) var(--drawer-pad-bottom); overflow: auto; display: flex; flex-direction: column; gap: 1rem; }   /* (a drawer's insets) */
 .cp-section { display: flex; flex-direction: column; gap: .5rem; }
 .cp-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; font-size: .6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.1px; color: var(--fg2); }
 .cp-head b { text-transform: none; letter-spacing: 0; color: var(--fg1); font-size: .75rem; font-weight: 600; }
@@ -400,20 +409,12 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .creator-note { margin: 0; color: var(--warn); font-size: .78125rem; }
 .creator-keys { margin: auto 0 0; color: var(--fg2); font-size: .75rem; }
 @media (max-width: 860px) {
-  /* phones: the designer sits under the page's own top bar, which stays as always */
-  .creator { top: calc(var(--topbar-h) + env(safe-area-inset-top, 0px)); padding-top: 0; background: var(--bg1); backdrop-filter: none; }
-  .creator-box { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; grid-template-rows: minmax(0, 1fr); }
-  .creator-bar { display: none; }
   .creator-drawer { border-left: 0; }
-  .creator-actions { gap: .25rem; padding: .5rem; flex-wrap: wrap; row-gap: .375rem; }
-  .creator-end { gap: .25rem; }
-  .creator-gap { flex: 1 0 0; min-width: 0; }
-  .creator-actions .btn:not(.of-sq) { padding-left: .625rem; padding-right: .625rem; }
   .of-check { min-height: 2.25rem; font-size: .78125rem; gap: .3125rem; }
   .creator-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--stage-h, 42%) auto minmax(0, 1fr); }
-  .creator-body .creator-grip { display: flex; position: relative; left: auto; top: auto; transform: none; height: 1.8125rem; min-height: 1.8125rem; border-bottom: 1px solid var(--line-soft);   /* (the page's grab bar to the pixel: its drawer's top border, 27px, a soft line) */ box-sizing: border-box; align-items: center; justify-content: center; touch-action: none; cursor: row-resize; border-top: 1px solid var(--line); background: var(--bg1); }
-  .creator-panel { border-left: 0; padding: var(--drawer-pad) var(--drawer-pad) var(--drawer-pad-bottom); gap: .875rem; }   /* (a drawer's insets) */
-  .creator-keys, .stage-hint { display: none; }
+  .creator-body .creator-grip { display: flex; position: relative; left: auto; top: auto; transform: none; height: 1.8125rem; min-height: 1.8125rem; border-bottom: 1px solid var(--line-soft);   /* (the page's grab bar to the pixel: its drawer's top border, 27px, a soft line) */ box-sizing: border-box; align-items: center; justify-content: center; touch-action: none; cursor: row-resize; border-top: 1px solid var(--line); background: var(--bg1); pointer-events: auto; }
+  .creator-panel { gap: .875rem; }
+  .creator-keys { display: none; }
   .cp-parts button { padding: .5625rem .25rem; }
   .cp-step { grid-template-columns: 2.75rem minmax(0, 1fr) 2.75rem; }
   .cp-step .btn { height: 2.5rem; }
@@ -434,8 +435,17 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-bgdot.floor-shadow { background: radial-gradient(circle, rgba(0,0,0,.75) 25%, transparent 70%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
 .of-bgdot.floor-none { background: transparent; box-shadow: inset 0 0 0 1px rgba(255,255,255,.2); }
 
+/* ---- the breadcrumb: back from the worn item's choices to the list (every size), and on phones from a slot's items
+   to the slots (the master view) ---- */
+.crumbs { display: none; align-items: center; gap: .375rem; min-width: 0; font-size: .8125rem; color: var(--fg2); }
+.wardrobe.adjusting .crumbs { display: flex; }
+.crumb-back { display: inline-flex; align-items: center; gap: .125rem; margin-left: -.375rem; padding: .375rem .5rem .375rem .25rem; border: 0; border-radius: .375rem; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+.crumb-back:hover, .crumb-back:active { background: var(--bg2); }
+.fashion .crumb-back svg.ic { width: 1rem; height: 1rem; }
+.crumb-here { color: var(--fg0); font-weight: 600; }
+.crumb-item { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb-item::before { content: '·'; margin-right: .375rem; }
 /* ---- phones: master (the slots) and detail (a slot's items, under a breadcrumb) ---- */
-.crumbs { display: none; }
 .slot-info { display: none; }
 @media (max-width: 860px) and (orientation: portrait) {
   .wardrobe:not(.in-slot) .crumbs, .wardrobe:not(.in-slot) .search, .wardrobe:not(.in-slot) .items, .wardrobe:not(.in-slot) .details { display: none; }
@@ -462,49 +472,26 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .slot-sub { font-size: .71875rem; color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wardrobe:not(.in-slot) .slot.on { border-color: var(--line); background: var(--bg2); }   /* no slot is "open" here */
   /* the breadcrumb */
-  .wardrobe.in-slot .crumbs { display: flex; align-items: center; gap: .375rem; min-width: 0; font-size: .8125rem; color: var(--fg2); }
-  .crumb-back { display: inline-flex; align-items: center; gap: .125rem; margin-left: -.375rem; padding: .375rem .5rem .375rem .25rem; border: 0; border-radius: .375rem; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
-  .crumb-back:hover, .crumb-back:active { background: var(--bg2); }
-  .crumb-back svg.ic { width: 1rem; height: 1rem; }
-  .crumb-here { color: var(--fg0); font-weight: 600; }
-  .crumb-item { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .crumb-item::before { content: '·'; margin-right: .375rem; }
+  .wardrobe.in-slot .crumbs { display: flex; }
 }
-/* the worn row's way into its choices (phones) */
+/* the worn row's way into its choices */
 .item-wrap { position: relative; display: flex; flex-direction: column; }
-.item-customise { display: none; }
+.item-wrap .item { padding-right: 7.25rem; }
+.item-wrap .item-count { display: none; }
+.item-customise { display: inline-flex; align-items: center; gap: .125rem; position: absolute; right: .5rem; top: 50%; transform: translateY(-50%); min-height: 2.125rem; padding: 0 .375rem 0 .75rem; color: var(--accent); font-weight: 600; }
+.fashion .item-customise svg.ic { width: .9375rem; height: .9375rem; }
 @media (max-width: 860px) and (orientation: portrait) {
-  .item-wrap .item { padding-right: 7.25rem; }
-  .item-wrap .item-count { display: none; }
-  .item-customise { display: inline-flex; align-items: center; gap: .125rem; position: absolute; right: .5rem; top: 50%; transform: translateY(-50%); min-height: 2.125rem; padding: 0 .375rem 0 .75rem; color: var(--accent); font-weight: 600; }
-  .item-customise svg.ic { width: .9375rem; height: .9375rem; }
-  /* the detail level has no summary bar: the row's Customise opens the choices, the breadcrumb comes back */
-  .wardrobe.in-slot .details-summary { display: none; }
   .wardrobe.in-slot:not(.adjusting) .details { display: none; }
   .wardrobe.in-slot.adjusting .details { border-top: 0; }
 }
-.of-designer { display: none; }
 @media (max-width: 860px) and (orientation: portrait) {
-  /* one row: Character Designer first, then Random and Unequip all */
-  .wardrobe:not(.in-slot) .of-designer { display: inline-flex; align-items: center; gap: .375rem; min-height: 2.125rem; padding: 0 .625rem; font-size: .78125rem; font-weight: 600; white-space: nowrap; flex: none; }
   .of-wardhead { flex-wrap: nowrap; gap: .375rem; justify-content: flex-start; }
   .of-wardactions { width: auto; }
-  .of-charcard { display: none; }
 }
 @media (max-width: 860px) and (orientation: portrait) {
   .of-wardactions { flex: 1; min-width: 0; }
   .of-wardactions .btn-mini { white-space: nowrap; flex: 1; justify-content: center; gap: .3125rem; padding: 0 .5rem; }
 }
-/* Character: the accent outline marks it out from its grey neighbours without being a primary button */
-.of-designer { border-color: var(--accent-dim); color: var(--accent); background: rgba(120, 183, 255, .08); font-weight: 650; }
-.of-designer:hover { border-color: var(--accent); background: rgba(120, 183, 255, .14); color: #a9d0ff; }
-.of-designer svg.ic, .of-design svg.ic { width: 1.125rem; height: 1.125rem; stroke-width: 1.9; }
-
-@media (max-width: 380px) {
-  .creator-actions .btn:not(.of-sq) { padding-left: .5rem; padding-right: .5rem; font-size: .78125rem; }
-  .creator-actions .of-sq { width: 2rem; }
-}
-@media (min-width: 861px) { .creator-title { visibility: hidden; } }   /* (the dialog's own title says it) */
 
 /* ---- looks: save this one, wear or share a saved one: a drawer of the side panel (.of-drawer), in the equipment's
    place while the Looks button shows pressed ---- */
@@ -550,29 +537,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-nodata p:first-child { color: var(--fg0); font-weight: 600; font-size: .9375rem; }
 .of-nodata .btn { margin-top: .75rem; }
 
-/* phones: what the drawer shows, the character's design or the equipment, as the column's first two buttons
-   (desktop has the Character button and the dialog) */
-.of-controls .of-mode-btn { display: none; }
-@media (max-width: 860px) {
-  .of-controls .of-mode-btn { display: grid; }
-  /* they replace the drawer's own Character button and the designer's Cancel and Done */
-  .wardrobe .of-designer { display: none !important; }
-  .creator-actions { display: none !important; }
-}
 @media (max-width: 860px) {
   /* the drawers' leading rows are one design: Random and Unequip all, Random and Start over */
   .cp-tools .cp-row:first-child { gap: .375rem; }
   .cp-tools .cp-row:first-child .btn, .of-wardactions .btn-mini { min-height: 2.125rem; padding: 0 .5rem; font-size: .78125rem; gap: .3125rem; }
   .cp-tools .cp-row:first-child .btn svg.ic, .of-wardactions .btn-mini svg.ic { width: .875rem; height: .875rem; }
-}
-/* phones designing: the designer's top half is see-through, over the page's own view (which frames the part
-   being designed, with the page's backdrop, weapons and effect); only its grab bar and drawer take touches */
-@media (max-width: 860px) {
-  #fashion.designing-shared .creator { background: none; pointer-events: none; }
-  #fashion.designing-shared .creator-box { background: none; }
-  #fashion.designing-shared .creator-stage { background: none !important; }
-  #fashion.designing-shared .creator-stage canvas { display: none; }
-  #fashion.designing-shared .creator-grip, #fashion.designing-shared .creator-drawer { pointer-events: auto; background: var(--bg1); }
 }
 
 /* the site's lockup in a picture's lower right (the link preview, the download's preview; pictures draw the same):
@@ -586,14 +555,11 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-lockup i { font-style: normal; font-weight: 700; font-size: calc(var(--s) * .74); color: #78b7ff; text-transform: uppercase; letter-spacing: .11em; margin-left: calc(var(--s) * .32); }
 #fashion.picture .of-lockup { z-index: 3; }
 /* ?picture: the look alone for a link's preview picture (the view only, the site's lockup in its corner) */
-#fashion.picture #topbar, #fashion.picture .of-right, #fashion.picture .of-toolbar, #fashion.picture .of-controls, #fashion.picture .of-charcard,
+#fashion.picture #topbar, #fashion.picture .of-right, #fashion.picture .of-toolbar, #fashion.picture .of-controls,
 #fashion.picture .load-card, #fashion.picture #toast { display: none !important; }
 #fashion.picture main { grid-template-columns: minmax(0, 1fr); }
-/* phones: Background, the drawer's third mode: the background menu itself in the equipment's place */
+/* phones: the settings' rows a finger's height */
 @media (max-width: 860px) {
-  #fashion.bg-mode .of-right .wardrobe { display: none; }
-  .of-right > .of-bgpop { position: static; flex: 1 1 auto; min-height: 0; max-height: none; width: auto; min-width: 0; overflow-y: auto;
-    padding: var(--drawer-pad) var(--drawer-pad) var(--drawer-pad-bottom); border: 0; border-radius: 0; box-shadow: none; background: none; z-index: auto; }
   .of-right > .of-bgpop button { padding: .75rem .75rem; font-size: .875rem; }
   .of-right > .of-bgpop .of-bghead { padding: .75rem .25rem .375rem; }
 }
@@ -624,11 +590,10 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 .of-anims-list .group b { color: var(--fg1); font-weight: 600; letter-spacing: .02em; text-transform: none; font-size: .78125rem; }
 .of-anims-list .empty { padding: 1rem .25rem; color: var(--fg2); }
 .of-anims-hint { margin: .625rem .125rem 0; color: var(--fg2); font-size: .8125rem; }
-/* the settings on the view's toolbar: its menu opens below it (wider screens) */
+/* the settings' button on the view's toolbar (pressed while the settings show in the side panel) */
 .of-bg-top { position: relative; }
 .of-toolbar .of-bgbtn svg.ic { width: 1.0625rem; height: 1.0625rem; }
 .of-toolbar .of-bgbtn.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }
-.of-bg-top .of-bgpop { top: calc(100% + .5rem); bottom: auto; right: 0; }
 /* every animation a tile: the game's emote pictures (some stored on their side: turned upright), the rest their kind's icon */
 .of-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.25rem, 1fr)); gap: .375rem; }
 .of-tile { position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: .25rem; padding: .5rem .25rem .4375rem; border: 1px solid var(--line); border-radius: .625rem; background: var(--bg2); color: var(--fg0); font: inherit; font-size: .75rem; line-height: 1.2; text-align: center; cursor: pointer; }
@@ -663,10 +628,14 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 
 /* Share's drawer replaces the others while it is open */
 #fashion.share-mode .of-right > :not(.of-sharedraw):not(.of-grip) { display: none !important; }
-/* the record view (the download open): only turning, zooming and the crop at hand */
-#fashion.record-mode .of-charcard, #fashion.record-mode #undo, #fashion.record-mode #redo, #fashion.record-mode .of-bg-top, #fashion.record-mode #share,
-#fashion.record-mode .of-controls .of-mode-btn, #fashion.record-mode .of-controls .of-anim-btn { display: none !important; }
+/* the record view (the download open): the crop over the view; every button stays, as with any drawer (each mode's
+   button puts Share away), over the crop's shade. Phones: only turning, zooming and the crop at hand (the column would
+   sit on the crop's edge in their small view), Share and Download put it away */
 #fashion.record-mode .of-controls { z-index: 2; }
+@media (max-width: 860px) {
+  #fashion.record-mode #undo, #fashion.record-mode #redo, #fashion.record-mode .of-bg-top, #fashion.record-mode #share,
+  #fashion.record-mode .of-controls .of-mode-btn, #fashion.record-mode .of-controls .of-anim-btn { display: none !important; }
+}
 .of-rec { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
 .of-crop { position: absolute; outline: 1px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 100vmax rgba(4, 6, 9, .5); }
 .of-crop-size { position: absolute; left: .375rem; top: .375rem; padding: .125rem .4375rem; border-radius: .375rem; background: rgba(0, 0, 0, .55); color: #fff; font-size: .6875rem; font-variant-numeric: tabular-nums; }
@@ -725,6 +694,5 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
   .of-sharedraw .sd-row > span { width: auto; font-size: .78125rem; }
 }
 
-/* Share open: the toolbar's button pressed in (pressed again, the drawer goes away) */
-.of-toolbar .btn-mini.of-primary.of-share-open { background: #10213a; border-color: var(--accent); color: #fff; box-shadow: inset 0 2px 6px rgba(0, 0, 0, .55), 0 0 0 2px rgba(120, 183, 255, .35); }
-.of-toolbar .btn-mini.of-primary.of-share-open:hover { background: #15294a; color: #fff; }
+/* Share open: its button pressed as the toolbar's others are (the accent gives way to the lit glass) */
+.of-toolbar .btn-mini.of-primary.active, .of-toolbar .btn-mini.of-primary.active:hover { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }

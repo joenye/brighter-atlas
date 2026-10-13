@@ -8,7 +8,7 @@ import { PATHS, type Tool } from './paths.js';
 import { useTool, navigate } from './router.js';
 import { Topbar, type TopbarSlot } from './Topbar.js';
 import { Landing } from './Landing.js';
-import { DataPage, DataSearch, DataButtons, MapsPage, FashionPage, FashionTopbar } from './pages.js';
+import { DataPage, DataSearch, DataButtons, MapsPage, FashionPage } from './pages.js';
 import type { ToolHandle, ToolProps } from './tool.js';
 
 type ToolModule = { Tool: ComponentType<ToolProps> };
@@ -26,7 +26,7 @@ interface PageDef {
 }
 const PAGES: Record<Tool, PageDef> = {
   home: { title: 'Brighter Atlas', css: '/css/home.css', Page: Landing },
-  fashion: { title: 'Brighter Fashion', css: '/css/fashion.css', Page: FashionPage, load: () => import('../fashion/Fashion.js'), heavy: true, topbar: { left: <FashionTopbar /> } },
+  fashion: { title: 'Brighter Fashion', css: '/css/fashion.css', Page: FashionPage, load: () => import('../fashion/Fashion.js'), heavy: true },
   maps: { title: 'Brighter Maps', css: '/css/world.css', Page: MapsPage, load: () => import('../world-atlas/WorldMap.js'), heavy: true },
   data: { title: 'Brighter Data', css: '/css/data.css', Page: DataPage, load: () => import('../DataTool.js'), topbar: { middle: <DataSearch />, right: <DataButtons /> },
     extras: [{ label: 'Help & FAQs', onClick: () => void import('../help.js').then((m) => m.openHelpModal()) }] },
