@@ -339,13 +339,14 @@ export class SpawnGraph {
     return false;
   }
 
-  // The unique exact mesh/material group before the actor position, or null.
-  private _appearance(ownerSlot: number, positionOp: number): SpawnAppearance | null {
+  // The unique exact mesh/material group before the actor position (or, given startOp, between the two),
+  // or null.
+  private _appearance(ownerSlot: number, positionOp: number, startOp = -1): SpawnAppearance | null {
     const fields = this.assets.fields(ownerSlot);
     const meshFields = new Map<number, [number, number][]>();
     const materialFields = new Map<number, [number, number][]>();
     for (const [operation, field] of fields) {
-      if (operation >= positionOp) continue;
+      if (operation >= positionOp || operation <= startOp) continue;
       const meshes = this._meshField(field);
       if (meshes !== null) meshFields.set(operation, meshes);
       const materials = this._materialField(field);
@@ -501,13 +502,10 @@ export class SpawnGraph {
       this._spawnCache.set(ownerSlot, null);
       return null;
     }
-    const appearance = this._appearance(ownerSlot, location.field_op);
-    const nameBefore = appearance !== null ? appearance.mesh_field_op : location.field_op;
     const decoded = this._decode ? this._decode(ownerSlot) ?? [] : null;
-    const [label, labelOp] = this._label(ownerSlot, nameBefore, decoded);
     // The default-placement group ends with a typed XYZ/direction value,
-    // preceded by its room reference and scalar centre offset. Discover it
-    // relative to the validated location rather than a build-specific index.
+    // preceded by its room reference. Discover it relative to the validated
+    // location rather than a build-specific index.
     const scalar = (op: number): any => {
       if (decoded) {
         const field = decoded.find(f => f.op === op && f.kind === 'G');
@@ -516,10 +514,40 @@ export class SpawnGraph {
       const field = this.assets.fields(ownerSlot).get(op);
       return field?.elements.length === 1 ? this.assets.deref(field.elements[0]) : null;
     };
+    const isScalarFloat = (node: any) => node?.tag === 0x0b && node.value?.length === 1 && Number.isFinite(node.value[0]);
     let roomOp = location.field_op - 1;
     // Some schemas retain an additional integer between room and location.
     if (scalar(roomOp)?.tag === 0x0a) roomOp--;
-    const centreOp = roomOp - 1;
+    // Two record layouts. Until October 2026 the scalar centre offset comes
+    // just before the room, and the actor's name and appearance come before
+    // the group. From the 13-Oct-2026 build room and location lead the record:
+    // the centre is the first scalar float after the location, and the name
+    // and appearance follow it (in the same order as before).
+    let centreOp = roomOp - 1;
+    let leading = false;
+    if (scalar(roomOp)?.tag === 0x26 && !isScalarFloat(scalar(centreOp))) {
+      const ops = (decoded ?? []).filter(f => f.kind === 'G').map(f => f.op).sort((a, b) => a - b)
+        .filter(op => op > location.field_op);
+      const after = ops.find(op => isScalarFloat(scalar(op)));
+      if (after !== undefined) { centreOp = after; leading = true; }
+    }
+    let appearance: SpawnAppearance | null;
+    if (leading) {
+      // The actor's own group is the first mesh field after the location and
+      // the first material field after that; the next field naming an asset
+      // ends it (its colours lie between).
+      const fields = Array.from(this.assets.fields(ownerSlot)).filter(([op]) => op > location.field_op)
+        .sort((a, b) => a[0] - b[0]);
+      const meshAt = fields.findIndex(([, field]) => this._meshField(field) !== null);
+      const materialAt = meshAt < 0 ? -1 : fields.findIndex(([, field], i) => i > meshAt && this._materialField(field) !== null);
+      const end = materialAt < 0 ? undefined : fields.find(([, field], i) => i > materialAt && SpawnGraph._hasAssets(field))?.[0];
+      appearance = materialAt < 0 ? null
+        : this._appearance(ownerSlot, end ?? Number.MAX_SAFE_INTEGER, location.field_op);
+    } else {
+      appearance = this._appearance(ownerSlot, location.field_op);
+    }
+    const nameBefore = appearance !== null ? appearance.mesh_field_op : location.field_op;
+    const [label, labelOp] = this._label(ownerSlot, nameBefore, decoded);
     const room = scalar(roomOp), centre = scalar(centreOp);
     const hasDefault = room?.tag === 0x26 && isInt(room.value)
       && centre?.tag === 0x0b && centre.value?.length === 1 && Number.isFinite(centre.value[0]);
