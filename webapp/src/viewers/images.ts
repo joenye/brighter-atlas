@@ -174,7 +174,7 @@ export function createImageGrid(app: any, initialItems: IndexEntry[]) {
   let items = initialItems;
   let i = 0;
   const CHUNK = 400;
-  const more = el('button', { class: 'btn', style: 'margin:0 14px 20px', text: 'Load more…' });
+  const more = el('button', { class: 'btn', style: 'margin:0 .875rem 1.25rem', text: 'Load more…' });
   // infinite scroll: when the sentinel (the Load more button) nears the
   // viewport, the next chunk renders automatically: the button stays as a
   // no-JS-observer fallback

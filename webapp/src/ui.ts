@@ -4,6 +4,7 @@ import { getVersionName } from './prefs.js';
 import { gameVersion } from './game-build.js';
 import type { VersionRecord } from './storage.js';
 import type { IndexEntry } from './store.js';
+import { rem, uiScale } from './ui-scale.js';
 
 // (false, as `cond && node` gives, is nothing: a child left out)
 export type ElChild = Node | string | null | undefined | false;
@@ -216,7 +217,7 @@ export function platformIcon(platform: string | null | undefined, source?: strin
   span.title = guessed
     ? `${p.label} build, guessed from your browser; drop assetBundle4 or 7 for exact detection`
     : `${p.label} build`;
-  span.innerHTML = `<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">${p.svg}</svg>`;
+  span.innerHTML = `<svg viewBox="0 0 16 16" style="width:.75rem;height:.75rem" fill="currentColor" aria-hidden="true">${p.svg}</svg>`;
   return span;
 }
 
@@ -304,8 +305,9 @@ export function makeResizable(panel: HTMLElement | null | undefined,
   const horizontal = edge === 'left' || edge === 'right';
   const prop = horizontal ? 'width' : 'height';
   const storeKey = key ? `bs.panel.${key}` : null;
+  // (sizes in base px, set in rem, so a dragged size grows with the interface: ui-scale.ts)
   const apply = (px: number) => {
-    panel.style[prop] = `${px}px`;
+    panel.style[prop] = rem(px);
     panel.style.flex = '0 0 auto';   // beat any flex-basis the layout set
   };
   if (storeKey) {
@@ -319,17 +321,17 @@ export function makeResizable(panel: HTMLElement | null | undefined,
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
     const start = horizontal ? e.clientX : e.clientY;
-    const size0 = horizontal ? panel.getBoundingClientRect().width : panel.getBoundingClientRect().height;
+    const size0 = (horizontal ? panel.getBoundingClientRect().width : panel.getBoundingClientRect().height) / uiScale();
     const sign = (edge === 'left' || edge === 'top') ? -1 : 1;
     const move = (ev: PointerEvent) => {
-      const d = ((horizontal ? ev.clientX : ev.clientY) - start) * sign;
+      const d = ((horizontal ? ev.clientX : ev.clientY) - start) * sign / uiScale();
       apply(Math.round(Math.min(max, Math.max(min, size0 + d))));
     };
     const up = () => {
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', up);
       if (storeKey) {
-        try { localStorage.setItem(storeKey, String(Math.round(panel.getBoundingClientRect()[prop === 'width' ? 'width' : 'height']))); } catch { /* */ }
+        try { localStorage.setItem(storeKey, String(Math.round(panel.getBoundingClientRect()[prop === 'width' ? 'width' : 'height'] / uiScale()))); } catch { /* */ }
       }
     };
     handle.addEventListener('pointermove', move);

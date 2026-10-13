@@ -1585,7 +1585,7 @@ export class App {
       ]),
       el('div', { class: 'details-section', text: 'meshes' }),
       manifest,
-      el('div', { class: 'asset-actions', style: 'margin-top:10px' }, del));
+      el('div', { class: 'asset-actions', style: 'margin-top:.625rem' }, del));
     this.setDetails(`Model ${model.name}`, body, model);
   }
 

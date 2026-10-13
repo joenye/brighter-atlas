@@ -3,6 +3,7 @@
 // An IntersectionObserver is provided to row renderers for lazy thumbnails.
 
 import { el, clear } from './ui.js';
+import { uiScale } from './ui-scale.js';
 
 export interface VListOptions<T = any> {
   /** container element (positioned) */
@@ -17,7 +18,9 @@ export interface VListOptions<T = any> {
 
 export class VList<T = any> {
   host: HTMLElement;
+  /** a row's height at the base size (px); this.rh is the height on screen (ui-scale.ts) */
   rowHeight: number;
+  scale: number;
   render: (item: T, rowEl: HTMLElement, lazyObserver: IntersectionObserver) => void;
   onSelect?: (item: T, index: number) => void;
   items: T[];
@@ -32,6 +35,7 @@ export class VList<T = any> {
   constructor({ host, rowHeight = 40, render, onSelect }: VListOptions<T>) {
     this.host = host;
     this.rowHeight = rowHeight;
+    this.scale = uiScale();
     this.render = render;
     this.onSelect = onSelect;
     this.items = [];
@@ -59,14 +63,20 @@ export class VList<T = any> {
     this.root.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); this.move(1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); this.move(-1); }
-      else if (e.key === 'PageDown') { e.preventDefault(); this.move(Math.floor(this.root.clientHeight / this.rowHeight)); }
-      else if (e.key === 'PageUp') { e.preventDefault(); this.move(-Math.floor(this.root.clientHeight / this.rowHeight)); }
+      else if (e.key === 'PageDown') { e.preventDefault(); this.move(Math.floor(this.root.clientHeight / this.rh)); }
+      else if (e.key === 'PageUp') { e.preventDefault(); this.move(-Math.floor(this.root.clientHeight / this.rh)); }
       else if (e.key === 'Home') { e.preventDefault(); this.moveTo(0); }
       else if (e.key === 'End') { e.preventDefault(); this.moveTo(this.items.length - 1); }
     });
-    this._resize = () => this._update();
+    this._resize = () => {
+      // (the interface grew or shrank with the window: every row moves, the list keeps its place)
+      if (uiScale() !== this.scale) { const at = this.root.scrollTop / this.scale; this.scale = uiScale(); this.setItems(this.items, { keepScroll: true }); this.root.scrollTop = at * this.scale; }
+      this._update();
+    };
     window.addEventListener('resize', this._resize);
   }
+
+  private get rh(): number { return this.rowHeight * this.scale; }
 
   destroy(): void {
     window.removeEventListener('resize', this._resize);
@@ -78,7 +88,7 @@ export class VList<T = any> {
     this.items = items;
     this.rows.forEach((r) => r.remove());
     this.rows.clear();
-    this.sizer.style.height = `${items.length * this.rowHeight}px`;
+    this.sizer.style.height = `${items.length * this.rh}px`;
     if (!keepScroll) this.root.scrollTop = 0;
     if (!items.length) {
       this.empty ||= el('div', { class: 'vlist-empty', text: 'No entries match.' });
@@ -100,15 +110,15 @@ export class VList<T = any> {
   // center=true centers the row ONLY when it is currently off-screen (e.g. a
   // deep-link/refresh jump); a row that is already visible stays put.
   revealIndex(i: number, center = false): void {
-    const top = i * this.rowHeight, bottom = top + this.rowHeight;
+    const top = i * this.rh, bottom = top + this.rh;
     const vTop = this.root.scrollTop, vBottom = vTop + this.root.clientHeight;
     const visible = top >= vTop && bottom <= vBottom;
     if (center && !visible) {
-      const target = top - (this.root.clientHeight - this.rowHeight) / 2;
+      const target = top - (this.root.clientHeight - this.rh) / 2;
       const max = this.root.scrollHeight - this.root.clientHeight;
       this.root.scrollTop = Math.max(0, Math.min(target, max));
-    } else if (top < vTop) this.root.scrollTop = top - this.rowHeight;
-    else if (bottom > vBottom) this.root.scrollTop = bottom - this.root.clientHeight + this.rowHeight;
+    } else if (top < vTop) this.root.scrollTop = top - this.rh;
+    else if (bottom > vBottom) this.root.scrollTop = bottom - this.root.clientHeight + this.rh;
     this._update();
   }
 
@@ -130,8 +140,8 @@ export class VList<T = any> {
     const n = this.items.length;
     if (!n) return;
     const overscan = 6;
-    const first = Math.max(0, Math.floor(this.root.scrollTop / this.rowHeight) - overscan);
-    const last = Math.min(n - 1, Math.ceil((this.root.scrollTop + this.root.clientHeight) / this.rowHeight) + overscan);
+    const first = Math.max(0, Math.floor(this.root.scrollTop / this.rh) - overscan);
+    const last = Math.min(n - 1, Math.ceil((this.root.scrollTop + this.root.clientHeight) / this.rh) + overscan);
     for (const [i, row] of this.rows) {
       if (i < first || i > last) {
         this.rows.delete(i);
@@ -142,8 +152,8 @@ export class VList<T = any> {
     for (let i = first; i <= last; i++) {
       if (this.rows.has(i)) continue;
       const row = el('div', { class: 'vrow' });
-      row.style.top = `${i * this.rowHeight}px`;
-      row.style.height = `${this.rowHeight}px`;
+      row.style.top = `${i * this.rh}px`;
+      row.style.height = `${this.rh}px`;
       if (i === this.selectedIndex) row.classList.add('selected');
       row.addEventListener('click', () => this.moveTo(i));
       this.render(this.items[i], row, this.io);

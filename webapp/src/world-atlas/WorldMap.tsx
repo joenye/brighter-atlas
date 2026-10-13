@@ -276,7 +276,7 @@ export function Tool({ active, ready, register }: ToolProps) {
             onClick={openPicker}>{wanted ? releaseText(wanted) : status.error ? 'Unavailable' : ' '}</button>
           <button id="world-next" className="btn" type="button" aria-label="Next update" title="Next update" disabled={i < 0 || i >= releases.length - 1} onClick={() => step(1)}>›</button>
         </div>
-        <div className={`world-slider${dragging ? ' dragging' : ''}`} style={{ '--pos': `calc(9px + (100% - 18px) * ${frac})`, '--frac': String(frac) } as React.CSSProperties}>
+        <div className={`world-slider${dragging ? ' dragging' : ''}`} style={{ '--pos': `calc(.5625rem + (100% - 1.125rem) * ${frac})`, '--frac': String(frac) } as React.CSSProperties}>
           <div id="world-ticks" className="world-ticks" aria-hidden="true">
             {releases.map((r) => <span key={r.id} style={{ left: `${((minutes(r) - lo) / span) * 100}%` }} />)}
             {years.map((y) => <span key={y} className="year" data-year={y} style={{ left: `${((Date.UTC(y, 0, 1) / 60000 - lo) / span) * 100}%` }} />)}

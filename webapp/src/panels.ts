@@ -7,6 +7,7 @@
 // never auto-expands. [ and ] toggle the panels from the keyboard.
 
 import { el } from './ui.js';
+import { rem } from './ui-scale.js';
 
 const KEY = 'bs.panels';
 
@@ -52,7 +53,7 @@ function apply(id: PanelId): void {
   } else {
     const { min, max } = CFG[id];
     const saved = parseInt(localStorage.getItem(`bs.panel.${id}`) || '', 10);   // makeResizable's store
-    if (saved >= min && saved <= max) { panel.style.width = `${saved}px`; panel.style.flex = '0 0 auto'; }
+    if (saved >= min && saved <= max) { panel.style.width = rem(saved); panel.style.flex = '0 0 auto'; }
   }
   const verb = collapsed ? 'Expand' : 'Collapse';
   btn.textContent = GLYPHS[id][collapsed ? 1 : 0];
