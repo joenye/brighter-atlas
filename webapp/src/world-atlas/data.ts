@@ -41,6 +41,9 @@ export interface WorldManifest {
 export interface SealedArea { key: string; name: string; logo: string; cells: number[] }
 interface Piece { room?: any; shingles?: number[]; sealed?: string; cells?: number[] }
 export interface WorldMap { release: WorldRelease; doc: MapDocument; sealed: SealedArea[] }
+/** What a release changed from the one before it, room by room: rooms new to it and gone from it (by name), how many
+ *  are drawn differently, out of how many it has. */
+export interface RoomChanges { added: string[]; removed: string[]; changed: number; rooms: number }
 
 const SHINGLE = 23;   // x, y, base colour, four corner colours, sixteen tiles
 
@@ -91,6 +94,18 @@ export function createWorldData(base = 'world-data/') {
   /** The packs a release needs that are not loaded yet. */
   const missingPacks = (release: WorldRelease) =>
     [...new Set(release.rooms.filter((id) => !pieces.has(id)).map((id) => manifest!.pieces[id]))];
+  // a release's rooms by who they are (the name in its episode, NUL between: names never hold it), each with its
+  // piece: the same room drawn differently is another piece. Sealed rooms are left out (they have no names)
+  const roomsOf = (release: WorldRelease): Map<string, number> | null => {
+    const out = new Map<string, number>();
+    for (const id of release.rooms) {
+      const piece = pieces.get(id);
+      if (!piece) return null;
+      if (!piece.sealed && piece.room?.name) out.set(`${piece.room.name}\u0000${piece.room.episode?.name ?? ''}`, id);
+    }
+    return out;
+  };
+  const changeCache = new Map<string, RoomChanges>();
 
   return {
     async manifest(): Promise<WorldManifest> {
@@ -123,6 +138,24 @@ export function createWorldData(base = 'world-data/') {
     ready(release: WorldRelease): boolean { return !missingPacks(release).length; },
     /** Load every pack (a background fill after the first map). */
     async prefetch(): Promise<void> { for (let i = 0; i < manifest!.packs.length; i++) await loadPack(i).catch(() => {}); },
+    /** What a release changed from the one before it: null for the first, and until both releases' pieces are here
+     *  (prefetch). */
+    changes(release: WorldRelease): RoomChanges | null {
+      const cached = changeCache.get(release.id);
+      if (cached) return cached;
+      const i = manifest?.releases.indexOf(release) ?? -1;
+      if (i <= 0) return null;
+      const now = roomsOf(release), before = roomsOf(manifest!.releases[i - 1]);
+      if (!now || !before) return null;
+      const name = (key: string) => key.slice(0, key.indexOf('\u0000'));
+      const added: string[] = [], removed: string[] = [];
+      let changed = 0;
+      for (const [key, id] of now) { const was = before.get(key); if (was == null) added.push(name(key)); else if (was !== id) changed++; }
+      for (const key of before.keys()) if (!now.has(key)) removed.push(name(key));
+      const out = { added, removed, changed, rooms: now.size };
+      changeCache.set(release.id, out);
+      return out;
+    },
     async map(release: WorldRelease): Promise<WorldMap> {
       const cached = docs.get(release.id);
       if (cached) { docs.delete(release.id); docs.set(release.id, cached); return cached; }

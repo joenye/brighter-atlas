@@ -4,7 +4,7 @@
 // The state lives in the address (#r=<release id or YYYY-MM-DD>&c=<x>,<y>,<scale>&l=0&v=satellite&roofs=0
 // &ui=0) and window.__world drives it from a script (a time-lapse capture). The drawing is engine.ts's.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createWorldData, type WorldMap as WorldMapData, type WorldRelease } from './data.js';
+import { createWorldData, type RoomChanges, type WorldMap as WorldMapData, type WorldRelease } from './data.js';
 import { MapView } from './engine.js';
 import { gameVersion } from '../game-build.js';
 import { LoadCard } from '../app/pages.js';
@@ -21,14 +21,50 @@ const dateText = (r: WorldRelease) => {
 };
 // with the game's own version after the date when the data has it: "21-Sep-2026 15:20 UTC (v0.99.3)"
 const releaseText = (r: WorldRelease) => { const v = gameVersion(r.build); return v ? `${dateText(r)} (v${v})` : dateText(r); };
+/** An update's name as the page shows it everywhere (its button, the list, the slider's card): the date first, the
+ *  version after it, quieter. The same text as releaseText. */
+function ReleaseName({ release }: { release: WorldRelease }) {
+  const v = gameVersion(release.build);
+  return <><span className="rn-date">{dateText(release)}</span>{v && <span className="rn-ver">{` (v${v})`}</span>}</>;
+}
 /** The release in force at a date: the last one on or before it. */
 const nearest = (releases: WorldRelease[], value: number) => { let pick = releases[0]; for (const r of releases) if (minutes(r) <= value) pick = r; return pick; };
+/** The release a point on the slider picks: a release's own tick within `reach` minutes of it (the closest: ticks are
+ *  small targets, bunched ones most of all), else the release in force at its date. */
+const releaseAt = (releases: WorldRelease[], value: number, reach: number) => {
+  let best: WorldRelease | null = null, gap = reach;
+  for (const r of releases) { const d = Math.abs(minutes(r) - value); if (d <= gap) { best = r; gap = d; } }
+  return best ?? nearest(releases, value);
+};
+const TICK_REACH = 6;   // px either side of a tick that picks it
+
+// the card under the slider for the update under the mouse: its date (its version after, smaller), then what it changed: rooms new
+// to it (named), rooms gone, how many drawn differently ("every room" when it redrew the map). A picture for the
+// mouse only (the slider carries the update's name for everyone else)
+function Peek({ release, first, changes, frac }: { release: WorldRelease; first: boolean; changes: RoomChanges | null; frac: number }) {
+  const plural =(n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  const named = changes?.added.slice(0, 4) ?? [], more = (changes?.added.length ?? 0) - named.length;
+  return (
+    <div className="world-peek" aria-hidden="true" style={{ '--frac': String(frac) } as React.CSSProperties}>
+      <div className="wp-head"><ReleaseName release={release} /></div>
+      {first ? <div className="wp-note">The first update on the map</div> : changes && <>
+        <div className="wp-badges">
+          {changes.added.length > 0 && <span className="wp-badge added">+{plural(changes.added.length, 'new room')}</span>}
+          {changes.removed.length > 0 && <span className="wp-badge removed">{changes.removed.length} removed</span>}
+          {changes.changed > 0 && <span className="wp-badge">{changes.changed >= changes.rooms * .9 ? 'every room redrawn' : `${changes.changed} changed`}</span>}
+          {!changes.added.length && !changes.removed.length && !changes.changed && <span className="wp-note">No changes to the map</span>}
+        </div>
+        {named.length > 0 && <div className="wp-rooms">New: {named.join(', ')}{more > 0 ? `, and ${more} more` : ''}</div>}
+      </>}
+    </div>
+  );
+}
 
 export function Tool({ active, ready, register }: ToolProps) {
   const els = {
     host: useRef<HTMLDivElement>(null), canvas: useRef<HTMLCanvasElement>(null), satellite: useRef<HTMLCanvasElement>(null),
     fog: useRef<HTMLCanvasElement>(null), sealed: useRef<HTMLDivElement>(null), thumb: useRef<HTMLCanvasElement>(null),
-    slider: useRef<HTMLInputElement>(null), release: useRef<HTMLButtonElement>(null), search: useRef<HTMLInputElement>(null), list: useRef<HTMLUListElement>(null),
+    slider: useRef<HTMLInputElement>(null), ticks: useRef<HTMLDivElement>(null), release: useRef<HTMLButtonElement>(null), search: useRef<HTMLInputElement>(null), list: useRef<HTMLUListElement>(null),
   };
   const data = useMemo(() => createWorldData(), []);
   const view = useRef<MapView | null>(null);
@@ -43,6 +79,8 @@ export function Tool({ active, ready, register }: ToolProps) {
   const [pictures, setPictures] = useState(false);   // the satellite layer holds the shown release's pictures
   const [known, setKnown] = useState(false);         // the site's updates are known (the corner switch keeps its place until then)
   const [dragging, setDragging] = useState(false), [slider, setSlider] = useState<number | null>(null);
+  const [peek, setPeek] = useState<WorldRelease | null>(null);   // the update under the mouse on the slider
+  const [, setFilled] = useState(0);                              // (the whole history arrived: what each update changed is known)
   // (what the async work and the listeners read: the latest, not the render's)
   const live = useRef({ releases, wanted, labels, roofs, satelliteView, active, shown: null as WorldRelease | null, opened: false, cameraFromUrl: false, refit: false, prefetching: false });
   Object.assign(live.current, { releases, wanted, labels, roofs, satelliteView, active });
@@ -116,6 +154,17 @@ export function Tool({ active, ready, register }: ToolProps) {
       if (live.current.wanted === release) { setLoading(null); setStatus({ text: `This update could not be loaded: ${(e as Error).message}`, error: true }); }
     }
   }, []);
+  // the rest of history, once (scrubbing, or the mouse over the slider): then each update's changes are known
+  const fill = () => {
+    if (live.current.prefetching) return;
+    live.current.prefetching = true;
+    void data.prefetch().then(() => setFilled((n) => n + 1));
+  };
+  // a tick's reach on the slider, in its minutes
+  const reachOf = () => {
+    const all = live.current.releases, w = els.ticks.current?.clientWidth ?? 0;
+    return all.length > 1 && w ? (TICK_REACH * (minutes(all.at(-1)!) - minutes(all[0]))) / w : 0;
+  };
   const step = (by: number) => {
     const all = live.current.releases, i = Math.max(0, Math.min(all.length - 1, all.indexOf(live.current.wanted!) + by));
     void show(all[i]);
@@ -226,16 +275,32 @@ export function Tool({ active, ready, register }: ToolProps) {
     const onInput = () => {
       const all = live.current.releases; if (!all.length) return;
       setSlider(Number(s.value));
-      const r = nearest(all, Number(s.value));
+      const r = releaseAt(all, Number(s.value), reachOf());
       if (r !== live.current.wanted) void show(r);
-      if (!live.current.prefetching) { live.current.prefetching = true; void data.prefetch(); }   // scrubbing: fetch the rest of history once
+      fill();   // scrubbing: fetch the rest of history once
     };
     const onChange = () => { const w = live.current.wanted; if (w) { s.value = String(minutes(w)); setSlider(minutes(w)); } };
     const down = () => setDragging(true), up = () => setDragging(false);
+    // the keys step a whole update, either way (the range's own steps are minutes, and the nearest update at or
+    // before a minute only ever moves back); on the slider, or anywhere on the page that isn't text, a dialog or the
+    // map itself (whose arrows pan it)
+    const STEP: Record<string, number> = { ArrowLeft: -1, ArrowDown: -1, PageDown: -1, ArrowRight: 1, ArrowUp: 1, PageUp: 1 };
+    const onKey = (e: KeyboardEvent) => {
+      const all = live.current.releases, t = e.target as HTMLElement;
+      if (!live.current.active || !all.length || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || t.tagName === 'CANVAS') return;
+      if (t !== s && (t.closest('[role=dialog], dialog, input, textarea, select, [contenteditable]') || (t !== document.body && !t.closest('#world')))) return;
+      if (t !== s && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return;   // (off the slider, up and down are the page's)
+      if (e.key === 'Home' || e.key === 'End') { if (t !== s) return; e.preventDefault(); void show(e.key === 'Home' ? all[0] : all.at(-1)!); }
+      else if (STEP[e.key]) { e.preventDefault(); step(STEP[e.key]); }
+      else return;
+      fill();
+    };
+    document.addEventListener('keydown', onKey);
     s.addEventListener('input', onInput); s.addEventListener('change', onChange);
     for (const e of ['pointerdown', 'touchstart']) s.addEventListener(e, down, { passive: true });
     for (const e of ['pointerup', 'pointercancel', 'touchend', 'blur']) s.addEventListener(e, up);
     return () => {
+      document.removeEventListener('keydown', onKey);
       s.removeEventListener('input', onInput); s.removeEventListener('change', onChange);
       for (const e of ['pointerdown', 'touchstart']) s.removeEventListener(e, down);
       for (const e of ['pointerup', 'pointercancel', 'touchend', 'blur']) s.removeEventListener(e, up);
@@ -246,7 +311,14 @@ export function Tool({ active, ready, register }: ToolProps) {
   // input's first 0..1 range and then to the new min, leaving the thumb at the left on the latest update)
   useLayoutEffect(() => { const s = els.slider.current; if (s && slider != null && Number(s.value) !== slider) s.value = String(slider); }, [lo, hi, slider]);
   const frac = slider != null && hi > lo ? (slider - lo) / (hi - lo) : 1;
-  const bubble = releases.length && slider != null ? releaseText(nearest(releases, slider)) : '';
+  const bubble = releases.length && slider != null ? releaseText(releaseAt(releases, slider, reachOf())) : '';
+  // the mouse over the slider: the update a click there picks, with what it changed (once history is here)
+  const peekAt = (e: React.PointerEvent) => {
+    if (e.pointerType !== 'mouse' || !releases.length || !els.ticks.current) return;
+    const b = els.ticks.current.getBoundingClientRect(), f = Math.max(0, Math.min(1, (e.clientX - b.left) / b.width));
+    setPeek(releaseAt(releases, lo + f * span, reachOf()));
+  };
+  const added = (r: WorldRelease) => !!data.changes(r)?.added.length;
   const years: number[] = [];
   if (releases.length) for (let y = dateOf(releases[0]).getUTCFullYear() + 1; y <= dateOf(releases.at(-1)!).getUTCFullYear(); y++) years.push(y);
 
@@ -273,16 +345,19 @@ export function Tool({ active, ready, register }: ToolProps) {
         <div className="world-pick">
           <button id="world-prev" className="btn" type="button" aria-label="Previous update" title="Previous update" disabled={i <= 0} onClick={() => step(-1)}>‹</button>
           <button ref={els.release} id="world-release" className="btn world-release" type="button" aria-haspopup="dialog" aria-controls="world-picker" title="Choose a game update"
-            onClick={openPicker}>{wanted ? releaseText(wanted) : status.error ? 'Unavailable' : ' '}</button>
+            onClick={openPicker}>{wanted ? <ReleaseName release={wanted} /> : status.error ? 'Unavailable' : ' '}</button>
           <button id="world-next" className="btn" type="button" aria-label="Next update" title="Next update" disabled={i < 0 || i >= releases.length - 1} onClick={() => step(1)}>›</button>
         </div>
-        <div className={`world-slider${dragging ? ' dragging' : ''}`} style={{ '--pos': `calc(.5625rem + (100% - 1.125rem) * ${frac})`, '--frac': String(frac) } as React.CSSProperties}>
-          <div id="world-ticks" className="world-ticks" aria-hidden="true">
-            {releases.map((r) => <span key={r.id} style={{ left: `${((minutes(r) - lo) / span) * 100}%` }} />)}
+        <div className={`world-slider${dragging ? ' dragging' : ''}`} style={{ '--pos': `calc(.5625rem + (100% - 1.125rem) * ${frac})`, '--frac': String(frac) } as React.CSSProperties}
+          onPointerEnter={(e) => { if (e.pointerType === 'mouse') fill(); }} onPointerMove={peekAt} onPointerLeave={() => setPeek(null)}>
+          <div ref={els.ticks} id="world-ticks" className="world-ticks" aria-hidden="true">
+            {releases.map((r) => <span key={r.id} className={added(r) ? 'added' : undefined} style={{ left: `${((minutes(r) - lo) / span) * 100}%` }} />)}
+            {peek && !dragging && <span className="peek" style={{ left: `${((minutes(peek) - lo) / span) * 100}%` }} />}
             {years.map((y) => <span key={y} className="year" data-year={y} style={{ left: `${((Date.UTC(y, 0, 1) / 60000 - lo) / span) * 100}%` }} />)}
           </div>
           <input ref={els.slider} id="world-date" type="range" min={lo} max={hi} step="1" defaultValue="1" aria-label="Game update date" />
           <div id="world-bubble" className="world-bubble" aria-hidden="true">{bubble}</div>
+          {peek && !dragging && <Peek release={peek} first={peek === releases[0]} changes={data.changes(peek)} frac={(minutes(peek) - lo) / span} />}
         </div>
       </div>
       <div ref={els.host} className={`map-canvas-host world-map${loading && current ? ' loading' : ''}`}>
@@ -331,7 +406,7 @@ export function Tool({ active, ready, register }: ToolProps) {
               return (
                 <li key={r.id}>
                   <button type="button" className={r === wanted ? 'current' : undefined} title={version ? r.build! : undefined} onClick={() => pick(r)}>
-                    <span>{dateText(r)}{version && <>{' '}<b>{`(v${version})`}</b></>}</span><span className="when">{r.id.slice(0, 8)}</span>
+                    <span><ReleaseName release={r} /></span><span className="when">{r.id.slice(0, 8)}</span>
                   </button>
                 </li>
               );

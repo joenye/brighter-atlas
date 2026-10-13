@@ -12,6 +12,14 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 .world-toolbar { gap: .5rem .875rem; }
 .world-pick { display: flex; align-items: center; gap: .375rem; }
 .world-release { min-width: 8rem; font-variant-numeric: tabular-nums; }
+/* wider screens (not a phone on its side): the phones' target sizes, the arrows a size you can see, the year marks
+   readable */
+@media (min-width: 641px) and (min-height: 521px) {
+  .world-toolbar .btn { min-height: 2.25rem; }
+  #world-prev, #world-next { width: 2.25rem; padding: 0 0 .125rem; font-size: 1.375rem; line-height: 1; }
+  .world-release { font-size: .875rem; padding-inline: .875rem; }
+  .world-ticks span.year::after { font-size: .6875rem; }
+}
 /* the date slider: a filled track to the handle, a tick per update, year
    marks with their year, and a date bubble over the handle while it moves */
 .world-slider { --pos: 100%; position: relative; flex: 1; min-width: 12.5rem; height: 2.5rem; display: flex; align-items: center; padding-bottom: .625rem; }
@@ -30,6 +38,28 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
 .world-ticks span { position: absolute; top: 0; width: 1px; height: .25rem; background: var(--fg2); opacity: .55; }
 .world-ticks span.year { height: .4375rem; background: var(--fg1); opacity: .9; }
 .world-ticks span.year::after { content: attr(data-year); position: absolute; top: .375rem; left: .1875rem; font-size: .625rem; color: var(--fg2); letter-spacing: .04em; }
+/* the mouse over the slider (wider screens): the update a click picks, its tick lit, and a card under the slider
+   with what it changed (anchored as the bubble is, so it never sticks out of the screen); updates that added rooms
+   keep a taller green tick once history is here */
+@media (min-width: 641px) and (min-height: 521px) {
+  .world-toolbar { position: relative; z-index: 4; }
+  .world-ticks span.added { width: 2px; height: .5rem; background: var(--good); opacity: .95; }
+  .world-ticks span.peek { width: 2px; height: .625rem; margin-left: -.5px; background: #fff; opacity: 1; }
+}
+.world-peek { position: absolute; top: calc(100% + .375rem); left: calc(.5625rem + (100% - 1.125rem) * var(--frac, 1)); transform: translateX(calc(-100% * var(--frac, 1)));
+  width: max-content; max-width: 22rem; padding: .5rem .6875rem; display: grid; gap: .3125rem; pointer-events: none; z-index: 5;
+  background: rgba(20, 23, 29, .97); border: 1px solid var(--line); border-radius: .625rem; box-shadow: 0 10px 28px rgba(0, 0, 0, .55); font-size: .75rem; }
+.world-peek::before { content: ""; position: absolute; top: -.3125rem; left: clamp(.625rem, calc(100% * var(--frac, 1)), calc(100% - .625rem)); width: .5rem; height: .5rem;
+  background: inherit; border: solid var(--line); border-width: 1px 0 0 1px; transform: translateX(-50%) rotate(45deg); }
+/* (as the list of updates writes one: "13-Oct-2026 13:18 UTC (v0.101.8)", the date leading) */
+.wp-head { white-space: nowrap; font-size: .8125rem; font-variant-numeric: tabular-nums; }
+.wp-badges { display: flex; flex-wrap: wrap; gap: .25rem; }
+.wp-badge { display: inline-flex; align-items: center; height: 1.125rem; padding: 0 .375rem; border-radius: .5625rem; font-size: .6875rem; font-weight: 600; white-space: nowrap;
+  background: rgba(255, 255, 255, .07); color: var(--fg1); }
+.wp-badge.added { background: rgba(111, 208, 140, .16); color: var(--good); }
+.wp-badge.removed { background: rgba(232, 112, 112, .14); color: var(--bad); }
+.wp-note { color: var(--fg2); }
+.wp-rooms { color: var(--fg1); line-height: 1.35; }
 /* anchored at the handle, sliding from left-aligned at the start to right-aligned
    at the end, so it never sticks out of the screen; its pointer follows the handle */
 .world-bubble { position: absolute; bottom: 2.125rem; left: calc(.5625rem + (100% - 1.125rem) * var(--frac, 1)); transform: translateX(calc(-100% * var(--frac, 1))); padding: .1875rem .5rem;
@@ -101,7 +131,11 @@ html, body { touch-action: manipulation; overscroll-behavior: none; }
   border-radius: .375rem; padding: .5rem .625rem; cursor: pointer; color: var(--fg1); font-variant-numeric: tabular-nums; }
 .world-list button:hover, .world-list button.current { background: var(--bg3); color: var(--fg0); }
 .world-list .when { color: var(--fg2); font-family: var(--mono); font-size: .6875rem; }
-.world-list b { font-weight: 600; color: var(--fg0); }
+/* an update's name, wherever it shows (its button, this list, the slider's card): the date leads, the version follows, quieter */
+.rn-date { color: var(--fg0); }
+.rn-ver { color: var(--fg2); }
+/* (bold where there is room: on the narrowest phones a bold date wraps the list's rows) */
+@media (min-width: 641px) and (min-height: 521px) { .rn-date { font-weight: 600; } }
 .world-list .empty { color: var(--fg2); padding: .5rem .625rem; }
 
 /* phones: the toolbar stacks (update controls, then the slider), bigger targets */
