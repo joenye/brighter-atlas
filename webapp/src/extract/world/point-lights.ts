@@ -50,9 +50,13 @@ export interface ShardSpawnLights {spawn: number; lights: TimedLight[]}
 type Decode = (slot: number) => {op: number; kind: string; node?: any}[] | null;
 
 /** A style: a colour, five numbers (intensity, falloff, specular, flicker depth and rate), a flicker
- *  colour or none, one number more. */
+ *  colour or none, one number more (and from 13-Oct-2026 another, which the drawn light does not use). */
 function readStyle(pool: PoolNode[], n: PoolNode | null): Pick<Definition, 'colour' | 'intensity' | 'falloff' | 'specular' | 'flicker'> | null {
-  if (n?.tag !== 0x24 || !Array.isArray(n.fields) || n.fields.length !== 8) return null;
+  if (n?.tag !== 0x24 || !Array.isArray(n.fields) || (n.fields.length !== 8 && n.fields.length !== 9)) return null;
+  if (n.fields.length === 9) {
+    const extra = resolveValue(pool, n.fields[8]);
+    if (extra?.tag !== 0x0b || !Array.isArray(extra.value) || !Number.isFinite(extra.value[0])) return null;
+  }
   const f = n.fields.map((x) => resolveValue(pool, x));
   const num = (k: number) => (f[k]?.tag === 0x0b && Array.isArray(f[k]!.value) && Number.isFinite(f[k]!.value[0]) ? Number(f[k]!.value[0]) : null);
   const rgb = (k: number) => (f[k]?.tag === 0x15 && Array.isArray(f[k]!.value) && f[k]!.value.length === 4
