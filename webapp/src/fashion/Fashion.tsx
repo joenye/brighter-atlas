@@ -283,7 +283,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const [bgMode, setBgModeState] = useState(false);
   // the Animations drawer, and the animation playing (until stopped; a one-shot then goes back to the pose)
   const [animMode, setAnimModeState] = useState(false), [anim, setAnim] = useState<{clip: number, loop: boolean, ticks: number, name: string, group: string, fx?: AnimItem['fx'],
-    parts?: AnimItem['parts'], props?: AnimItem['props'], actors?: AnimItem['actors'], part: number, key: number} | null>(null);
+    parts?: AnimItem['parts'], props?: AnimItem['props'], actors?: AnimItem['actors'], inPlace?: boolean, part: number, key: number} | null>(null);
   // (what the animation playing holds, a stable reference while it plays: the look's parts follow it)
   const animProps = anim && anim.group !== 'Combat' && anim.props?.length ? anim.props : null;
   const animKeys = useRef(0);
@@ -608,6 +608,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // an animation's other figures (a rod, a rift, a snowball to throw), built as it is picked and drawn from its first
   // frame on (the clip waits for them, as it does for what it holds)
   const animActors = anim && !designing && anim.actors?.length ? anim.actors : null;
+  useEffect(() => { engine.current?.viewer.setInPlace(anim?.inPlace && !designing ? {clip: anim.parts?.[0]?.clip ?? anim.clip, key: anim.key} : null); }, [anim, designing]);
   useEffect(() => {
     const v = engine.current?.viewer; if (!v) return;
     actorsReady.current = v.setAnimActors(animActors ? animActors.map(a => ({...a, parts: a.parts.some((p: any) => p?.key) ? a.parts : propParts(a.parts)})) : null, anim ? anim.parts?.map(p => p.clip) ?? [anim.clip] : []);
@@ -732,7 +733,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     seekWant.current = null;
     void v.seek(w.local, (anim.fx ?? []).filter(f => !f.gender || f.gender === live.current.state.gender), w.total);
   }, [animRun]);
-  const playOf = (a: AnimItem) => ({clip: a.clip, loop: !!a.loop, ticks: a.ticks ?? 0, name: a.name, group: a.group, fx: a.fx, parts: a.parts, props: a.props, actors: a.actors, part: 0, key: ++animKeys.current});
+  const playOf = (a: AnimItem) => ({clip: a.clip, loop: !!a.loop, ticks: a.ticks ?? 0, name: a.name, group: a.group, fx: a.fx, parts: a.parts, props: a.props, actors: a.actors, inPlace: a.inPlace, part: 0, key: ++animKeys.current});
   // The picture page of a shared moment plays its animation from the start and stops it on the moment's tick (the
   // clock stands there exactly, whatever the frames' pace), and only then says it is drawn.
   const shotFreeze = useRef<{part: number, ms: number, armed: boolean} | null>(null), shotPending = useRef(!!pictureShot?.a);
@@ -748,7 +749,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const rested = new Promise<void>(done => { const until = performance.now() + 3000, wait = () => engine.current?.viewer.restKnown || performance.now() > until ? done() : requestAnimationFrame(wait); wait(); });
     void Promise.all([loadAnimations(), rested]).then(() => {
       const [name, part, tick] = a, g = live.current.state.gender;
-      const item = [...combatMoves, ...(ANIMATIONS as AnimItem[]).filter(x => !x.gender || x.gender === g)].find(x => x.name === name);
+      // (by its name, or a name it had: links made before a rename keep their moment)
+      const item = [...combatMoves, ...(ANIMATIONS as AnimItem[]).filter(x => !x.gender || x.gender === g)].find(x => x.name === name || x.was?.includes(name));
       if (!item) { shotDone(); return; }
       shotFreeze.current = {part: Math.max(0, Math.min(part, (item.parts?.length ?? 1) - 1)), ms: tick / 0.6, armed: false};
       setAnimPause(false); setAnim(playOf(item));
@@ -1411,6 +1413,10 @@ function BgSlot({children}: {children: ReactNode}) { return <>{children}</>; }
 
 /** One animation the drawer offers (the pack's: an emote or another of the player's named clips). */
 interface AnimItem { clip: number; name: string; group: string; loop?: boolean; ticks?: number; gender?: 'male' | 'female'; emote?: boolean; icon?: number; iconRotated?: boolean;
+  /** Names it had before (a tile renamed): what links made then call it. */
+  was?: string[];
+  /** Played where the character stands: the game plays it at a spot of its own (its body would walk off). */
+  inPlace?: boolean;
   /** A three-piece animation's parts (intro, loop and, where it has one, outro), played in turn; `clip` is the first. */
   parts?: {clip: number; ticks?: number}[];
   /** An attack's aim: the angle the game plays it at (degrees above the level, below when negative). */
@@ -1452,7 +1458,8 @@ function AnimationsPanel({gender, tab, setTab, playing, started, moves, fighting
       {/* (loading: the site's own loading ring in the picture's place) */}
       {on && !started ? <span className="of-tile-pic of-tile-load" role="progressbar" aria-label={`Loading ${a.name}`}><span className="load-card spin">
         <svg viewBox="0 0 44 44" aria-hidden="true"><circle className="pl-track" cx="22" cy="22" r="19" /><circle className="pl-fill" cx="22" cy="22" r="19" /></svg></span></span>
-      : a.emote ? (a.icon != null ? <img src={at(`icon/${a.icon}`)} alt="" loading="lazy" className={a.iconRotated ? 'turned' : undefined} /> : <span className="of-tile-pic" />)
+      : a.icon != null ? <img src={at(`icon/${a.icon}`)} alt="" loading="lazy" className={a.iconRotated ? 'turned' : undefined} />
+        : a.emote ? <span className="of-tile-pic" />
         : <span className="of-tile-pic"><Icon name={a.name === 'Defeated' ? 'skull' : KIND_ICON[a.group] ?? 'wave'} /></span>}
       <span className="of-tile-name">{a.name}</span>
     </button>;

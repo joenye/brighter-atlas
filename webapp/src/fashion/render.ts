@@ -564,6 +564,14 @@ export class Preview {
   }
   // the resting clip hides held items by scaling their bones to 0.001; show them in hand instead
   showHeld = false;
+  /** The animation playing is the game's at a spot of its own (its first clip): moved to where the character stands. */
+  private inPlace: {clip: number, key: number} | null = null;
+  private inPlaceShift: THREE.Vector3[] | null = null;
+  private liftOff = 0;
+  setInPlace(p: {clip: number, key: number} | null) {
+    if (p?.key === this.inPlace?.key && p?.clip === this.inPlace?.clip) return;
+    this.inPlace = p; this.inPlaceShift = null;
+  }
   clipId: number | null = null;
 
   private t0 = performance.now();
@@ -1237,6 +1245,23 @@ export class Preview {
         const b = this.rig.bones[i]; if (!b) continue;
         b.scale.setScalar(0.001); b.matrix.compose(b.position, b.quaternion, b.scale); b.matrixWorldNeedsUpdate = true;
       }
+      // an animation the game plays at a spot of its own (a scene's, as standing in a pool): moved by where its first
+      // frame puts the root bones, so it starts where the character stands and keeps its own motion from there, the
+      // body neither walking off, toward the camera, nor sinking into the ground
+      if (this.inPlace && !resting) {
+        if (!this.inPlaceShift && this.clipId === this.inPlace.clip) {
+          this.clip.apply(this.rig, 0);
+          this.inPlaceShift = this.rig.roots.map(r => this.rig!.rest[this.rig!.bones.indexOf(r)].pos.clone().sub(r.position));
+          this.clip.apply(this.rig, !this.clip.duration ? 0 : ((t % this.clip.duration) + this.clip.duration) % this.clip.duration);
+          if (from) this.mixPose(this.rig, blendT / BLEND_TICKS);
+        }
+        // (blending in from the pose before: the shift in the same measure as the clip)
+        const w = from ? Math.min(1, blendT / BLEND_TICKS) : 1;
+        if (this.inPlaceShift) this.rig.roots.forEach((r, k) => {
+          const d = this.inPlaceShift![k], e = r.matrix.elements;
+          r.position.addScaledVector(d, w); e[12] = r.position.x; e[13] = r.position.y; e[14] = r.position.z; r.matrixWorldNeedsUpdate = true;
+        });
+      }
       if (this.actors.length) this.poseActors(t);
     }
     // inertia and eased framing
@@ -1262,6 +1287,9 @@ export class Preview {
       f.set(0, this.target, 0);
       this.focusOff.lerp(want, k);
       f.add(this.focusOff);
+      // (an animation played in place that rises, as gaining magic floats the body up: the view eases up with it)
+      const r0 = this.rig.roots[0], lift = this.inPlaceShift && r0 ? Math.max(0, r0.position.z - this.rig.rest[this.rig.bones.indexOf(r0)].pos.z) * 0.6 : 0;
+      this.liftOff += (lift - this.liftOff) * k; f.y += this.liftOff;
     }
     this.camera.position.set(f.x + Math.sin(a) * d, f.y + lift, f.z + Math.cos(a) * d);
     this.camera.lookAt(f);
