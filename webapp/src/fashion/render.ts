@@ -530,6 +530,8 @@ export interface AnimActor { skel: number; parts: DrawPart[]; clips: (number | n
    *  (`aim`, degrees above the level) sent up or down as its move aims; else
    *  the throw's own pose at the release. */
   thrown?: {release: number; flight: number; distance: number; bone?: number; aim?: number} }
+/** The most the animations' clock moves in one frame (ms). */
+const MAX_FRAME_MS = 100;
 export const FRAMES: Record<string, Framing> = {full: {dist: 5600, target: 760}, upper: {dist: 3000, target: 1060}, face: {dist: 1450, target: 1230}};
 
 export class Preview {
@@ -564,6 +566,8 @@ export class Preview {
   }
   // the resting clip hides held items by scaling their bones to 0.001; show them in hand instead
   showHeld = false;
+  /** Clips played once (an animation's, not looping): each holds its last frame past its end. */
+  holdClips: ReadonlySet<number> = new Set();
   /** The animation playing is the game's at a spot of its own (its first clip): moved to where the character stands. */
   private inPlace: {clip: number, key: number} | null = null;
   private inPlaceShift: THREE.Vector3[] | null = null;
@@ -778,7 +782,7 @@ export class Preview {
   zoomBy(factor: number) {
     // slide between the full-body and face framings along the distance
     const {full, face} = FRAMES;
-    const d = Math.max(face.dist, Math.min(full.dist * (this.roomPlace ? 1.8 : 1.15), this.want.dist * factor));   // in a place, pull back to see more of it
+    const d = Math.max(face.dist, Math.min(full.dist * (this.roomPlace ? 1.8 : 2.2), this.want.dist * factor));   // (back to see a long animation whole; a place no further: past that its edge shows, the sky under the ground)
     const t = (d - face.dist) / (full.dist - face.dist);
     this.want = {dist: d, target: face.target + (full.target - face.target) * Math.max(0, Math.min(1, t))};
   }
@@ -1184,7 +1188,9 @@ export class Preview {
 
   frame() {
     const real = performance.now(), dt = this.step != null ? this.step / 1000 : Math.min(0.1, (real - this.last) / 1000);
-    if (!this.paused) this.clock += this.step ?? real - this.last;
+    // (a frame long in coming, as when a picked animation's first frames upload its textures and build its programs,
+    // moves the animations' clock by MAX_FRAME_MS at most: it plays on from where it was, never leaping ahead)
+    if (!this.paused) this.clock += this.step ?? Math.min(MAX_FRAME_MS, real - this.last);
     const stop = this.stopAt;
     if (stop && this.clock >= stop.at) { this.clock = stop.at; this.paused = true; this.stopAt = null; queueMicrotask(stop.done); }
     this.last = real;
@@ -1231,6 +1237,9 @@ export class Preview {
       if (!from) this.blendFrom = null;
       else { from.pose(now); this.keepPose(this.rig); }
       if (this.flourish) this.flourish.c.apply(this.rig, (now - this.flourish.t0) * TICKS_PER_MS);
+      // (an animation played once holds its last frame past its end, until the next part or the pose comes: never
+      // back to its start)
+      else if (this.holdClips.has(this.clipId!) && !resting) this.clip.apply(this.rig, Math.max(0, t));
       else this.clip.apply(this.rig, !this.clip.duration ? 0 : (((t + (resting ? this.restShift : 0)) % this.clip.duration) + this.clip.duration) % this.clip.duration);
       if (from) this.mixPose(this.rig, blendT / BLEND_TICKS);
       if (this.upper && !this.flourish) this.upper.apply(this.rig, this.upper.duration ? t % this.upper.duration : 0, this.upperBones);
@@ -1252,7 +1261,7 @@ export class Preview {
         if (!this.inPlaceShift && this.clipId === this.inPlace.clip) {
           this.clip.apply(this.rig, 0);
           this.inPlaceShift = this.rig.roots.map(r => this.rig!.rest[this.rig!.bones.indexOf(r)].pos.clone().sub(r.position));
-          this.clip.apply(this.rig, !this.clip.duration ? 0 : ((t % this.clip.duration) + this.clip.duration) % this.clip.duration);
+          this.clip.apply(this.rig, this.holdClips.has(this.clipId!) ? Math.max(0, t) : !this.clip.duration ? 0 : ((t % this.clip.duration) + this.clip.duration) % this.clip.duration);
           if (from) this.mixPose(this.rig, blendT / BLEND_TICKS);
         }
         // (blending in from the pose before: the shift in the same measure as the clip)

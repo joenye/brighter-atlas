@@ -649,6 +649,14 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     e.viewer.prefetchClips([lower, upper]);
   }, [model.version, showHeld, designing, anim, animPause]);
   const animStarted = useRef<typeof anim>(null), poseReady = useRef<Promise<unknown>>(Promise.resolve());
+  // an animation played once holds each clip's last frame until the next part or the pose comes (Repeat of a single
+  // clip plays it round again on its own); its later parts fetched as it starts, so none waits to come in
+  useEffect(() => {
+    const v = engine.current?.viewer; if (!v || !anim) return;
+    const clips = anim.parts?.map(p => p.clip) ?? [anim.clip];
+    v.holdClips = new Set(anim.loop || (animRepeat && !anim.parts) ? [] : clips);
+    if (anim.part === 0) v.prefetchClips(clips.slice(1));
+  }, [anim, animRepeat]);
   // the fighting moves the drawer offers: in the combat-ready pose only, the weapon's own (with none, the fists')
   const heldWeapon = state.equip.weapon ? pack.items.find((i: any) => i.id === state.equip.weapon?.item) : null;
   // (a ranged attack sends its pieces off as the game launches them: each shot's piece as the hand last held it, from
@@ -673,8 +681,15 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     if (shotFreeze.current && anim.part === shotFreeze.current.part) return;   // (a shared moment's picture stops in it)
     const last = !anim.parts || anim.part >= anim.parts.length - 1;
     const ticks = anim.parts ? anim.parts[anim.part].ticks ?? 0 : anim.ticks;
-    const t = setTimeout(() => setAnim(a => a !== anim ? a : !last ? {...a, part: a.part + 1} : animRepeat ? {...a, part: 0, key: ++animKeys.current} : null),
-      Math.max(0, ticks / 0.6 + (last ? 50 : 0) - v.clipElapsed()));
+    // (on the animations' own clock, which a slow frame holds back: the timer looks again until the clip is through)
+    const due = ticks / 0.6 + (last ? 50 : 0);
+    let t: ReturnType<typeof setTimeout>;
+    const check = () => {
+      const left = due - v.clipElapsed();
+      if (left > 4) { t = setTimeout(check, left); return; }
+      setAnim(a => a !== anim ? a : !last ? {...a, part: a.part + 1} : animRepeat ? {...a, part: 0, key: ++animKeys.current} : null);
+    };
+    t = setTimeout(check, Math.max(0, due - v.clipElapsed()));
     return () => clearTimeout(t);
   }, [anim, animRun, animRepeat, animPause]);
   // the animation's particle effects, once it plays (its clip in), the body type's own where the game has one for each
