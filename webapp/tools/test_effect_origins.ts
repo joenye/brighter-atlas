@@ -113,6 +113,13 @@ try {
     assert.deepEqual(readDisc(0, discOps), {kind: 'cylinder', cylinder: {center: [100, 200, 300], radius: 50, height: 0, flat: true,
       axisScale: [1, 1], axis: [0, 0, 1], yaw: [0, 360], pitch: [0, 90]}});
     assert.equal(readDisc(0, discOps.filter(e => e.op !== 61)), null);
+    // the generic route: two across scales and the default cone's sample fractions
+    const genericDisc = {...disc, instance: 17, axisScale: [67, 68], samples: [69, 59]};
+    assert(T.validEffectDiscs([genericDisc]));
+    const readGenericDisc = T.createEffectOriginReader(undefined, [{values: [0, 17]}], undefined, [genericDisc]);
+    const genericOps = [...discOps, scalar(67, 2), scalar(68, .5), {op: 69, kind: 'typed', class: 8, fields: [scalar(69, 0), scalar(69, 1)]}, scalar(59, .5)];
+    assert.deepEqual(readGenericDisc(0, genericOps), {kind: 'cylinder', cylinder: {center: [100, 200, 300], radius: 50, height: 0, flat: true,
+      axisScale: [2, .5], axis: [0, 0, 1], yaw: [0, 360], pitch: [45, 45]}});
     const ranged = readDisc(0, discOps.map(e => e.op === 61 ? {op: 61, kind: 'typed', class: 8, fields: [scalar(61, 20), scalar(61, 40)]} : e));
     assert.deepEqual(ranged.cylinder.radius, [20, 40]);
     for (const [radius, top] of [[50, 50], [[20, 40], 40]] as const) {

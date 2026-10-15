@@ -80,6 +80,9 @@ export interface DiscOriginBinding {
   axis: number;
   yaw: [number, number];
   pitch: [number, number];
+  // the generic route: two across scales, and the default cone's sample fractions
+  axisScale?: [number, number];
+  samples?: [number, number];
   uniformClass: number;
 }
 // A segment on the generic route: a point between two ends by one uniform draw, aimed through the default cone (its
@@ -157,7 +160,7 @@ export function validEffectCylinders(v: any): v is CylinderOriginBinding[] {
 export function validEffectDiscs(v: any): v is DiscOriginBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
   return validBindingList(v, b => [b.center, b.radius, b.axis, b.uniformClass].every(bindingIndex)
-    && [b.yaw, b.pitch].every(pair));
+    && [b.yaw, b.pitch].every(pair) && (b.axisScale === undefined || pair(b.axisScale)) && (b.samples === undefined || pair(b.samples)));
 }
 
 export function validEffectSegments(v: any): v is LineOriginBinding[] {
@@ -200,6 +203,18 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     const x = b || c || d || l ? undefined : boxOf(slot);
     if (!b && !c && !d && !l && !x) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
+    // A sample field selects a sub-interval of its authored angle range. The
+    // game interpolates the endpoints by the sampled fraction.
+    const angles = (bounds: [number, number], sampleOp: number): [number, number] | null => {
+      const lo = effectScalar(fields.get(bounds[0])), hi = effectScalar(fields.get(bounds[1]));
+      const sample = fields.get(sampleOp);
+      if (lo === null || hi === null) return null;
+      const n = effectScalar(sample);
+      const fraction = effectRange(sample, (b ?? c ?? d ?? l ?? x)!.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
+      if (!fraction) return null;
+      const result: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
+      return result.every(Number.isFinite) ? result : null;
+    };
     if (d) {
       const center = effectVec3(fields.get(d.center)), axis = effectVec3(fields.get(d.axis));
       const radiusField = fields.get(d.radius);
@@ -208,22 +223,12 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
         const v = pair.map(op => effectScalar(fields.get(op)));
         return v.every(n => n !== null) ? v as [number, number] : null;
       };
-      const yaw = bounds(d.yaw), pitch = bounds(d.pitch);
-      return center && axis && yaw && pitch && radius !== null
-        ? {kind: 'cylinder', cylinder: {center, radius, height: 0, flat: true, axisScale: [1, 1], axis, yaw, pitch}} : null;
+      const yaw = d.samples ? angles(d.yaw, d.samples[0]) : bounds(d.yaw);
+      const pitch = d.samples ? angles(d.pitch, d.samples[1]) : bounds(d.pitch);
+      const scales = d.axisScale ? d.axisScale.map(op => effectScalar(fields.get(op))) : [1, 1];
+      return center && axis && yaw && pitch && radius !== null && scales.every(n => n !== null)
+        ? {kind: 'cylinder', cylinder: {center, radius, height: 0, flat: true, axisScale: scales as [number, number], axis, yaw, pitch}} : null;
     }
-    // A sample field selects a sub-interval of its authored angle range. The
-    // game interpolates the endpoints by the sampled fraction.
-    const angles = (bounds: [number, number], sampleOp: number): [number, number] | null => {
-      const lo = effectScalar(fields.get(bounds[0])), hi = effectScalar(fields.get(bounds[1]));
-      const sample = fields.get(sampleOp);
-      if (lo === null || hi === null) return null;
-      const n = effectScalar(sample);
-      const fraction = effectRange(sample, (b ?? c ?? l ?? x)!.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
-      if (!fraction) return null;
-      const result: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
-      return result.every(Number.isFinite) ? result : null;
-    };
     if (x) {
       const field = fields.get(x.box), axis = effectVec3(fields.get(x.axis));
       const bounds = (pair: [number, number]): [number, number] | null => {
