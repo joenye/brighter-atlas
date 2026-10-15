@@ -193,6 +193,20 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   that thread (the 2D map's room data). Never read scattered
   bundle objects through the sequential slab reader (a fresh 16 MB slab per
   object); read them individually.
+- **Extraction memory.** Chrome gives a tab ONE JavaScript heap of about
+  3.8 GB, shared by the page and every worker it starts (the ingest, the
+  pool, the 2D map's worker, SharedWorkers too), however much RAM is free;
+  typed arrays live outside it. A thread that runs out takes the whole tab
+  down ("Page crashed", signal 5), and each thread's garbage collector sees
+  only its own heap, so a busy worker's uncollected garbage is room another
+  thread lacks. Keep what the ingest holds small: a local of `extractWorld`
+  lives until the function returns (it is one long async function), so
+  release a large one after its last use (`structuralGraph`, the shard
+  context before the catalog); a graph made for one pass takes a
+  `fieldCacheLimit`. Measure with every isolate's heap over CDP
+  (`Runtime.getHeapUsage` on each worker target) and by extracting with
+  JavaScript ballast held in the page: an extraction that survives only an
+  idle page is one open viewer away from crashing.
 - **Scrollbars (AGENTS.md rule 3).** Every vertical scroller shows the
   persistent themed scrollbar: `src/scrollbar.ts` `autoScrollbars()` (run by
   the site's shell) gives it to each element that scrolls, as it
