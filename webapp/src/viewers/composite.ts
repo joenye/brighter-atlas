@@ -9,6 +9,7 @@
 // them up in its enableMesh()). Call this once, at the point the caller has its
 // scene/viz/rig-bbox ready and its toolbar built up to the shading section.
 
+import { BitmapTextureLoader } from './texture-load.js';
 import { THREE, checkerTexture } from './three-common.js';
 import { drawUVLayout } from './mesh-geometry.js';
 import { el, debounce } from '../ui.js';
@@ -32,7 +33,7 @@ export interface CompositeOpts {
 export interface CompositeControls {
   mats: Record<string, THREE.Material>;
   wireMat: THREE.MeshBasicMaterial;
-  texLoader: THREE.TextureLoader;
+  texLoader: BitmapTextureLoader;
   po: { polygonOffset: boolean; polygonOffsetFactor: number; polygonOffsetUnits: number };
   matFor: (obj: THREE.Mesh) => THREE.Material;
   refit: () => void;
@@ -49,7 +50,7 @@ export function mountComposite({ scene, toolbar, host, viz, active, min, max, is
     bones: new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0, roughness: 0.9, ...po }),
   };
   const wireMat = new THREE.MeshBasicMaterial({ wireframe: true, color: 0x8fd0ff, transparent: true, opacity: 0.28 });
-  const texLoader = new THREE.TextureLoader();
+  const texLoader = new BitmapTextureLoader();
   let mode = 'lit';
   let uvCanvas: HTMLCanvasElement | null = null;
 

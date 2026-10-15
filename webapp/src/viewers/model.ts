@@ -9,6 +9,7 @@
 // each mesh's texture resolves from the model's pinned image hash, not the
 // global override.
 
+import { BitmapTextureLoader } from './texture-load.js';
 import { modelCards } from './model-cards.js';
 import { renderTransparentFrame, SHOT_RES, captureTiledPng } from './capture-common.js';
 import { Scene3D, THREE, getRenderer, makeGridToggle, makeLightToggle, mountImmersiveControls, savedLights } from './three-common.js';
@@ -237,7 +238,7 @@ async function renderVariantThumb(app: any, model: any, v: number): Promise<stri
   scene.add(hemi, key, fill);
   const group = new THREE.Group();
   scene.add(group);
-  const texLoader = new THREE.TextureLoader();
+  const texLoader = new BitmapTextureLoader();
   const own: any[] = [];   // geometries + materials we created (dispose after)
   try {
     for (const part of parts) {
@@ -557,17 +558,36 @@ export function createModelView(app: any, model: ModelRecord) {
     // this model now owns the render queue; its active variant goes first
     prioritizeThumbs(model.id);
     variantThumb(app, model, active);
+    // a cell's thumbnail is drawn once the cell comes into view (or near it): a model with 88 variants drew all
+    // 88 as it opened, most of a second, for the eight or so the strip shows
+    const showThumb = (k: number, cell: HTMLElement, box: HTMLElement) => {
+      variantThumb(app, model, k).then((url) => {
+        if (!url || !cell.isConnected) return;
+        clear(box);
+        box.appendChild(el('img', { src: url, alt: labels[k] }));
+      });
+    };
+    const pending = new Map<Element, () => void>();
+    const seen = typeof IntersectionObserver === 'function'
+      ? new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          seen!.unobserve(entry.target);
+          pending.get(entry.target)?.();
+          pending.delete(entry.target);
+        }
+      }, { root: strip, rootMargin: '0px 400px' })
+      : null;
     const cells = variants.map((_, k) => {
       const box = el('div', { class: 'st-box' }, el('span', { class: 'dim', text: '⋯' }));
       const cell = el('div', { class: 'subthumb' }, box,
         el('div', { class: 'st-label', text: labels[k] }));
       cell.addEventListener('click', () => { _stripFocus.set(model.id, true); selectVariant(k); });
       strip.appendChild(cell);
-      variantThumb(app, model, k).then((url) => {
-        if (!url || !cell.isConnected) return;
-        clear(box);
-        box.appendChild(el('img', { src: url, alt: labels[k] }));
-      });
+      if (seen && k !== active && !_thumbCache.has(`${model.id}:${k}`)) {
+        pending.set(cell, () => showThumb(k, cell, box));
+        seen.observe(cell);
+      } else showThumb(k, cell, box);
       return cell;
     });
     syncStripClasses = () => {
@@ -621,7 +641,7 @@ export function createModelView(app: any, model: ModelRecord) {
     // ---- static model: meshes on a plain scene (no rig, transport or video) --
     if (!skelEntry) {
       scene = new Scene3D(host);
-      const texLoader = new THREE.TextureLoader();
+      const texLoader = new BitmapTextureLoader();
       const bb = new THREE.Box3();
       const prepared = await mapConcurrent(meshRows.filter((m) => m.f), 6, async (m) => {
         try {

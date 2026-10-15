@@ -4,6 +4,7 @@
 // are the images-category PNGs routed by the world index's `textures` table
 // (per texture: kind + albedo/normal/parameter SUB-IMAGE indices + alpha).
 
+import { loadBitmapTexture } from '../texture-load.js';
 import * as THREE from '../../../vendor/three.module.js';
 import {
   createGameWaterShared, createStyleUniforms, updateStyleUniforms, createGameWaterMaterial,
@@ -902,12 +903,15 @@ export class WorldScene {
   }
 
   _loadTexture(textureId: number | string, subImage: number, colorSpace: THREE.ColorSpace): Promise<THREE.Texture> {
-    return this.textureLoader.loadAsync(this._textureUrl(textureId, subImage))
-      .then((texture) => {
-        texture.colorSpace = colorSpace;
-        texture.anisotropy = this.textureAnisotropy;
-        return texture;
-      });
+    const url = this._textureUrl(textureId, subImage);
+    const loaded = typeof createImageBitmap === 'function'
+      ? loadBitmapTexture(url, colorSpace)
+      : this.textureLoader.loadAsync(url);
+    return loaded.then((texture) => {
+      texture.colorSpace = colorSpace;
+      texture.anisotropy = this.textureAnisotropy;
+      return texture;
+    });
   }
 
   _textureSet(textureId: number | string): Promise<WorldTextureSet> {
@@ -1401,7 +1405,19 @@ export class WorldScene {
     const payloads = new Map<number, any>();   // one decode per mesh per room
     room.group.updateMatrix();
     const oc = this.occurrenceColumns, pc = this.placementColumns;
-    for (const batch of this._batchRows(room.shard)) {
+    const rows = this._batchRows(room.shard);
+    // every mesh fetched side by side first (one at a time, a room of a few hundred meshes waited
+    // seconds on the round trips); one that fails is fetched again below, where its error is reported
+    const meshes = [...new Set(rows.map((batch) => Number(batch.mesh)))];
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(meshes.length, this.assetConcurrency) }, async () => {
+      for (let k = next++; k < meshes.length; k = next++) {
+        const mesh = meshes[k];
+        const payload = await this.store.payload(`meshes/${pad5(mesh)}.json`).catch(() => null);
+        if (payload) payloads.set(mesh, payload);
+      }
+    }));
+    for (const batch of rows) {
       if (batch.category === 'spawns') {
         await this._gameSpawnBatch(room, batch, payloads, batches, actors);
         continue;

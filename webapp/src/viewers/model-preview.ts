@@ -6,6 +6,7 @@
 // the modal. Geometries are BORROWED from the skeleton view's loaded meshes and
 // must NOT be disposed here; only the materials we build are ours to dispose.
 
+import { BitmapTextureLoader } from './texture-load.js';
 import { THREE, getRenderer , savedLights } from './three-common.js';
 import { OrbitControls } from '../../vendor/OrbitControls.js';
 import { renderTransparentFrame } from './capture-common.js';
@@ -36,7 +37,7 @@ export function createModelPreview(canvas: HTMLCanvasElement, { app, imagesIdx }
   const group = new THREE.Group();
   scene.add(group);
 
-  const texLoader = new THREE.TextureLoader();
+  const texLoader = new BitmapTextureLoader();
   const po = { polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 };
 
   let raf = 0, destroyed = false, token = 0;

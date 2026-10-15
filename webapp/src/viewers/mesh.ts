@@ -7,6 +7,7 @@
 //  - stored UV v is DirectX-style (origin top) -> v flipped for GL sampling
 //  - vertex bone indices are GLOBAL ab6 bone ids -> map 1:1 onto Rig.bones
 
+import { BitmapTextureLoader } from './texture-load.js';
 import { Scene3D, THREE, checkerTexture, makeGridToggle, makeLightToggle, mountImmersiveControls } from './three-common.js';
 import { Rig, SkeletonViz, PlaybackBar } from './rig.js';
 import { b64f32, b64u16, b64u32, b64u8, entryByOrdinal } from '../store.js';
@@ -201,7 +202,7 @@ export function createMeshView(app: any, entry: IndexEntry): { root: HTMLElement
     // ---- texture assignment (v1 map + persistent user overrides) ----------
     if (texMat) {
       const texBadgeEl = badge('…', 'b-ghost');
-      const texLoader = new THREE.TextureLoader();
+      const texLoader = new BitmapTextureLoader();
       let texToken = 0;
       const setBadge = (text: string, kind: string, title?: string) => {
         texBadgeEl.textContent = text;

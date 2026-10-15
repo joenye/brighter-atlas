@@ -31,6 +31,10 @@ export function getRenderer(): THREE.WebGLRenderer {
     }
     if (!_renderer) throw lastErr || new Error('Error creating WebGL context.');
     _renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Three reads each program's compile log back after linking to report shader errors: a wait on the GPU
+    // process per program (a quarter of a second opening a model). Only a page driven by a test harness keeps the
+    // check, so the tests still fail on a shader error.
+    _renderer.debug.checkShaderErrors = typeof navigator !== 'undefined' && navigator.webdriver === true;
   }
   return _renderer;
 }

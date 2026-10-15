@@ -1,6 +1,7 @@
 // Data service: resolves the data directory, loads + caches manifest/indexes/payloads,
 // decodes base64 little-endian buffers into typed arrays, reports fetch errors.
 
+import { PayloadCache } from './payload-cache.js';
 import type { VersionRecord } from './storage.js';
 import type { WorldEffectsDoc } from './extract/world/effects.js';
 import { b64Bytes } from './extract/b64.js';
@@ -94,8 +95,7 @@ export class Store extends EventTarget implements AppStore {
   manifest: Manifest | null;
   private _indexes: Map<string, Promise<any>>;
   private _json: Map<string, Promise<any>>;
-  private _payloadCache: Map<string, any>;
-  private _payloadCap: number;
+  private _payloadCache: PayloadCache;
 
   constructor() {
     super();
@@ -104,8 +104,7 @@ export class Store extends EventTarget implements AppStore {
     this.manifest = null;
     this._indexes = new Map();     // cat -> Promise<array>
     this._json = new Map();        // path -> Promise<obj>   (small payloads: skeletons)
-    this._payloadCache = new Map();// path -> obj            (bounded LRU for big payloads)
-    this._payloadCap = 24;
+    this._payloadCache = new PayloadCache(64 << 20, 1024);   // path -> obj, by recent use within a byte budget
   }
 
   url(rel: string): string { return `${this.base}/${rel}`; }
@@ -215,20 +214,9 @@ export class Store extends EventTarget implements AppStore {
     return this._json.get(rel)!;
   }
 
-  // large payloads (meshes, anims): bounded LRU cache
-  async payload(rel: string): Promise<any> {
-    if (this._payloadCache.has(rel)) {
-      const v = this._payloadCache.get(rel);
-      this._payloadCache.delete(rel);
-      this._payloadCache.set(rel, v); // refresh LRU position
-      return v;
-    }
-    const obj = await this.fetchJSON(rel);
-    this._payloadCache.set(rel, obj);
-    while (this._payloadCache.size > this._payloadCap) {
-      this._payloadCache.delete(this._payloadCache.keys().next().value!);
-    }
-    return obj;
+  // large payloads (meshes, anims): kept by recent use within a byte budget
+  payload(rel: string): Promise<any> {
+    return this._payloadCache.get(rel, () => this.fetchJSON(rel));
   }
 
   async arrayBuffer(rel: string): Promise<ArrayBuffer> {

@@ -11,6 +11,7 @@
 // createStore() picks the data source for the app: ?data= keeps the classic
 // HTTP tree (tests, exported-tree browsing); otherwise client data when present.
 
+import { PayloadCache } from './payload-cache.js';
 import { Store } from './store.js';
 import type { AppStore, IndexEntry, Manifest } from './store.js';
 import {
@@ -23,6 +24,15 @@ import { decodeAnim } from './extract/anim.js';
 import { decodeSkeleton } from './extract/skeleton.js';
 import { correctAudioRate } from './extract/audio.js';
 
+/** The largest bundle held whole while it is read object by object (the mesh bundle is about 80 MB). */
+const WHOLE_BUNDLE_BYTES = 192 << 20;
+
+// The decoded payload budget: room for every mesh the whole world draws (about 6,000) where memory allows.
+function clientPayloadBudget(): [number, number] {
+  const memory = (navigator as { deviceMemory?: number }).deviceMemory ?? 8;
+  return memory >= 8 ? [192 << 20, 8192] : memory >= 4 ? [96 << 20, 4096] : [32 << 20, 1024];
+}
+
 export class ClientStore extends EventTarget implements AppStore {
   versionId: string;
   version: VersionRecord;
@@ -30,8 +40,7 @@ export class ClientStore extends EventTarget implements AppStore {
   manifest: Manifest | null;
   private _indexes: Map<string, Promise<any>>;
   private _json: Map<string, Promise<any>>;
-  private _payloadCache: Map<string, any>;
-  private _payloadCap: number;
+  private _payloadCache: PayloadCache;
   private _derived: Map<string, any>;
   private _blobs: Map<number, Promise<Blob>>;
 
@@ -43,8 +52,7 @@ export class ClientStore extends EventTarget implements AppStore {
     this.manifest = null;
     this._indexes = new Map();              // cat -> Promise<array>
     this._json = new Map();
-    this._payloadCache = new Map();         // LRU for decoded payloads
-    this._payloadCap = 48;
+    this._payloadCache = new PayloadCache(...clientPayloadBudget());   // decoded payloads, by recent use
     this._derived = new Map();              // small derived blobs (dirs)
     this._blobs = new Map();                // bundle n -> Promise<File> (OPFS)
   }
@@ -298,8 +306,31 @@ export class ClientStore extends EventTarget implements AppStore {
     const frames = await this._dir(`frames:${n}`);
     if (!frames || !frames[i]) throw new Error(`no frame table for ab${n}[${i}]`);
     const [offset, length] = frames[i];
+    const whole = await this._wholeBundle(n);
+    if (whole) return whole.slice(offset, offset + length);
     const blob = await this._bundleBlob(n);
     return new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer());
+  }
+
+  // A bundle read object by object, many times over (all rooms reads every mesh): read whole once and served
+  // from memory, let go after a while unread. Each object read alone costs a quarter of a millisecond of the
+  // page's own time (the file slice), thousands of them seconds; the whole mesh bundle reads in a tenth of one.
+  private readonly _reads = new Map<number, number>();
+  private readonly _whole = new Map<number, { bytes: Promise<Uint8Array | null>; timer: ReturnType<typeof setTimeout> | null }>();
+  private _wholeBundle(n: number): Promise<Uint8Array | null> | null {
+    let whole = this._whole.get(n);
+    if (!whole) {
+      const reads = (this._reads.get(n) ?? 0) + 1;
+      this._reads.set(n, reads);
+      if (reads < 256) return null;
+      // (a bundle too large to hold is never held: its reads stay one by one)
+      const bytes = this._bundleBlob(n).then(async (blob) => (blob.size <= WHOLE_BUNDLE_BYTES ? new Uint8Array(await blob.arrayBuffer()) : null));
+      bytes.catch(() => this._whole.delete(n));
+      this._whole.set(n, whole = { bytes, timer: null });
+    }
+    if (whole.timer) clearTimeout(whole.timer);
+    whole.timer = setTimeout(() => { this._whole.delete(n); this._reads.delete(n); }, 20000);
+    return whole.bytes;
   }
 
   // 'datatable/symbols.json' | 'datatable/strings.json' | payload rels
@@ -327,20 +358,9 @@ export class ClientStore extends EventTarget implements AppStore {
     return this._decodePayload(rel);
   }
 
-  // big payloads with a bounded LRU (mirrors Store.payload)
-  async payload(rel: string): Promise<any> {
-    if (this._payloadCache.has(rel)) {
-      const v = this._payloadCache.get(rel);
-      this._payloadCache.delete(rel);
-      this._payloadCache.set(rel, v);
-      return v;
-    }
-    const obj = await this._decodePayload(rel).catch((e) => this._fail(rel, e));
-    this._payloadCache.set(rel, obj);
-    while (this._payloadCache.size > this._payloadCap) {
-      this._payloadCache.delete(this._payloadCache.keys().next().value!);
-    }
-    return obj;
+  // big payloads, kept by recent use within a byte budget (mirrors Store.payload)
+  payload(rel: string): Promise<any> {
+    return this._payloadCache.get(rel, () => this._decodePayload(rel).catch((e) => this._fail(rel, e)));
   }
 
   private async _decodePayload(rel: string): Promise<any> {
