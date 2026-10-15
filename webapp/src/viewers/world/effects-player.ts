@@ -337,7 +337,7 @@ export class EffectsPlayer {
   private _effectiveT(inst: Instance): number {
     if (inst.timeSource !== 'master') return inst.slavedTick;
     if (inst.startTick == null) return Number.NEGATIVE_INFINITY;   // inert: never spawns
-    if (inst.mode === 'loop' && inst.animation) return inst.animation.time();
+    if (inst.mode === 'loop' && inst.animation) { const t = inst.animation.time(); if (t !== null) return t; }
     return this.clock.t - inst.startTick;
   }
 

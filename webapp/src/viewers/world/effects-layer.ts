@@ -163,6 +163,9 @@ interface InstanceRec {
   // mean emitter spawn centre in the owner's local frame (see positionProxy)
   localCenter?: [number, number, number];
   movingCenter?: boolean;
+  /** Ticks this copy runs ahead of the view's clock (an actor's resting loop began at its own moment); 0 for
+   *  placed scenery. */
+  phase: number;
   // One entry per drawn sprite outcome; a selecting emitter repeats its sim.
   emitters: { sim: EmitterSim; batchKey: string; choice: number }[];
 }
@@ -334,13 +337,14 @@ export class WorldEffectsLayer {
   // a lighting approximation, separate from recovered emitter/owner colours.
   // Omitted or absent leaves particles at their authored colour.
   addRoom(roomId: number, offset: [number, number],
-    opts: { loopOnly?: boolean; modulation?: number[] | null; leftOut?: ReadonlySet<number> | null } = {}): void {
+    opts: { loopOnly?: boolean; modulation?: number[] | null; leftOut?: ReadonlySet<number> | null; extra?: any[] } = {}): void {
     const id = Number(roomId);
     if (this._disposed || this._rooms.has(id)) return;
     const recs: InstanceRec[] = [];
     const seen = new Set<string>();
-    for (const att of this.doc.attachments?.rooms || []) {
-      if (Number(att.room) !== id) continue;
+    // (`extra`: attachments the view adds, such as the effect an actor's resting controller names, `active` since
+    // the controller is playing)
+    for (const att of [...(this.doc.attachments?.rooms || []).filter((a: any) => Number(a.room) === id), ...(opts.extra ?? [])]) {
       // an effect on a part the game leaves out at the room's progress (its individual's conditions say hide)
       if (opts.leftOut?.has(Number(att.occurrence))) continue;
       // A catalogue includes action effects as well as defaults. Keep its
@@ -359,7 +363,7 @@ export class WorldEffectsLayer {
       // sense mid-action: a chest's item-spawn burst a tile out in the room,
       // a forager's debris at the player's chest height. The world views show
       // ambient effects only.
-      if (system.triggered) continue;
+      if (system.triggered && !att.active) continue;
       if (opts.loopOnly && !system.loop) continue;
       const cell = Array.isArray(att.cell) ? att.cell : [0, 0, 0];
       // Static controller root, using the same owner-frame composition as
@@ -391,6 +395,7 @@ export class WorldEffectsLayer {
         : null;
       const rec: InstanceRec = {
         key: recKey, occurrence: Number(att.occurrence), animation: null, configureAnimation: () => {},
+        phase: Number.isFinite(Number(att.phase)) ? Number(att.phase) : 0,
         system, anchor, anchorOriginal, edit, proxy: null,
         modulation: mod, emitters: [],
       };
@@ -483,7 +488,7 @@ export class WorldEffectsLayer {
 
   private _instanceTime(rec: InstanceRec): number {
     return rec.edit.paused ? rec.edit.frozenT
-      : (rec.animation?.time() ?? this.clock.t) + rec.edit.clockOffset;
+      : (rec.animation?.time() ?? this.clock.t) + rec.edit.clockOffset + rec.phase;
   }
 
   removeRoom(roomId: number): void {
@@ -547,7 +552,7 @@ export class WorldEffectsLayer {
   /** Every instance's key and system name, room by room (tests). */
   instances(): { key: string; system: string }[] {
     const out: { key: string; system: string }[] = [];
-    for (const recs of this._rooms.values()) for (const r of recs) out.push({ key: r.key, system: String((r.system as any).name ?? (r.system as any).slot ?? '') });
+    for (const recs of this._rooms.values()) for (const r of recs) out.push({ key: r.key, system: String((r.system as any).slot ?? ''), live: this.instanceInfo(r.key)?.live ?? 0 } as any);
     return out;
   }
 
@@ -695,7 +700,7 @@ export class WorldEffectsLayer {
     const on = !!paused;
     if (on !== edit.paused) {
       if (on) edit.frozenT = this._instanceTime(rec);
-      else edit.clockOffset = edit.frozenT - (rec.animation?.time() ?? this.clock.t);
+      else edit.clockOffset = edit.frozenT - (rec.animation?.time() ?? this.clock.t) - rec.phase;
       edit.paused = on;
     }
     return true;

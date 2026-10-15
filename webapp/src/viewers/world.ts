@@ -47,7 +47,7 @@ import {
   isWaterWallGeometry,
 } from './world/water.js';
 import { updateGameWaterLights } from './world/game-water.js';
-import { EffectsClock } from './world/effects-sim.js';
+import { EffectsClock, hash32 } from './world/effects-sim.js';
 import { GameFrame, clusterSource, type GameScene, type GameRoomSource, type ShadowTile } from './world/game-frame.js';
 import { progressVariables } from './world/individuals.js';
 import { doorNeighbours } from './world/neighbours.js';
@@ -1847,11 +1847,101 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   function effectsRoomUnloaded(roomId: number): void {
     effectsRooms.delete(Number(roomId));
     effectsLayer?.removeRoom(Number(roomId));
+    dropActorEffects(Number(roomId));
     // A pinned effect belonging to this room just went away underneath the
     // pin: release it rather than leave a stale readout (refreshEffectReadout
     // would also catch this reactively, but clearing proactively here avoids
     // a frame of showing knobs for an instance that no longer exists).
     if (effectPinned && Number(effectPinned.key.split('|')[0]) === Number(roomId)) clearEffectInspection(true);
+  }
+  // An actor rests under a controller (its spawn row's idle_controller), and the effect system that controller names
+  // (a system lists the controllers that name it) plays while it rests, as the game plays it with the controller:
+  // in the actor's frame, on its rig posed in the resting clip's first frame. Each room's actor effects are kept
+  // apart from its own (actorEffectsKey), so they come and go with the room.
+  const actorEffectsKey = (roomId: number) => -(roomId + 1);
+  const actorEffectRooms = new Map<number, number>();   // room -> the token of its latest build
+  const actorEffectPoses = new Map<number, { occurrence: number; animation: EffectBoneAnimation }[]>();
+  let actorEffectToken = 0;
+  function dropActorEffects(roomId: number): void {
+    const key = actorEffectsKey(roomId);
+    effectsLayer?.removeRoom(key);
+    for (const { occurrence, animation } of actorEffectPoses.get(roomId) ?? []) {
+      effectsLayer?.setOccurrenceAnimation(key, occurrence, null);
+      animation.dispose();
+    }
+    actorEffectPoses.delete(roomId);
+    actorEffectRooms.delete(roomId);
+  }
+  let controllerSystems: Map<number, number[]> | null = null;
+  let controllerSystemsDoc: any = null;
+  function systemsOfController(controller: number): number[] {
+    if (controllerSystemsDoc !== effectsDoc) {
+      controllerSystemsDoc = effectsDoc;
+      controllerSystems = new Map();
+      for (const system of effectsDoc?.systems ?? []) {
+        for (const c of system.controllers ?? []) {
+          let list = controllerSystems.get(Number(c));
+          if (!list) controllerSystems.set(Number(c), list = []);
+          list.push(Number(system.slot));
+        }
+      }
+    }
+    return controllerSystems!.get(controller) ?? [];
+  }
+  async function addActorEffects(roomId: number): Promise<void> {
+    const layer = effectsLayer;
+    if (!layer || !effectsDoc || allMode) return;
+    const token = ++actorEffectToken;
+    actorEffectRooms.set(roomId, token);
+    const live = () => !destroyed && effectsLayer === layer && actorEffectRooms.get(roomId) === token;
+    const shard = world.rooms.get(roomId)?.shard;
+    const sc = world.spawnColumns;
+    if (!shard?.spawns?.length || !sc || sc.idle_controller === undefined) return;
+    const tickRate = layer.clock.tickRate || Number(effectsDoc.tick_rate?.value) || 600;
+    const num = (v: any): number | null => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
+    const attachments: any[] = [];
+    const poses: { occurrence: number; animation: EffectBoneAnimation }[] = [];
+    for (let index = 0; index < shard.spawns.length; index++) {
+      const spawn = shard.spawns[index];
+      const controller = num(spawn[sc.idle_controller]);
+      const systems = controller !== null && controller >= 0 ? systemsOfController(controller) : [];
+      if (!systems.length) continue;
+      let info: any;
+      try { info = world._describeSpawn({ id: roomId, shard }, index); } catch { continue; }
+      // the rig and the resting clip the actor is posed in (its first frame)
+      let rig: number | null = null;
+      let animation: EffectBoneAnimation | null = null;
+      try {
+        const resolved = await resolveSpawnAnim({ store: app.store, parts: info?.parts ?? [] });
+        if (resolved.kind === 'ready') {
+          rig = Number(resolved.skelOrdinal);
+          const entry = resolved.clips.find((c: any) => c.i === info.defaultClip && c.f);
+          if (entry) {
+            const [skeleton, clip] = await Promise.all([app.store.json(resolved.skelEntry.f), app.store.json(entry.f)]);
+            animation = new EffectBoneAnimation(skeleton, clip, true, tickRate, () => 0, 0);
+          }
+        }
+      } catch { /* no rig: the effect sits on the actor's root */ }
+      if (!live()) { animation?.dispose(); return; }
+      const x = num(spawn[sc.x]) ?? 0, y = num(spawn[sc.y]) ?? 0, centre = num(spawn[sc.centre_offset]) ?? 0.5;
+      const surface = num(spawn[sc.surface_z]);
+      const z = surface !== null ? surface / world.layerUnits : (num(spawn[sc.z]) ?? 0);
+      // (the actor's frame: its tile centre, its height, its own turn plus the half turn actors face by)
+      for (const system of systems) {
+        // (each actor's loop began at its own moment: a fixed phase within the system's cycle, so actors that rest
+        // alike do not puff in lockstep)
+        const cycle = Math.max(1, Number(effectsDoc.systems.find((s: any) => Number(s.slot) === system)?.cycle_ticks) || 600);
+        attachments.push({ occurrence: index, system, cell: [x, y, z], center: [x + centre, y + centre],
+          rot: ((num(spawn[sc.rotation_quarters]) ?? 0) & 3) + 2, packedFlags: 0, matrix: null, rig, active: true,
+          phase: hash32(roomId, index) % cycle });
+      }
+      if (animation) poses.push({ occurrence: index, animation });
+    }
+    if (!live() || !attachments.length) { for (const p of poses) p.animation.dispose(); return; }
+    const key = actorEffectsKey(roomId);
+    for (const { occurrence, animation } of poses) layer.setOccurrenceAnimation(key, occurrence, animation);
+    actorEffectPoses.set(roomId, poses);
+    layer.addRoom(key, spawnRoomOffset(roomId), { extra: attachments });
   }
   function ensureEffectsDoc(): void {
     if (effectsDocRequested || !effectsSupported()) return;
@@ -1869,6 +1959,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       effectsLayer?.dispose();
       effectsLayer = null;
       activeEffectRooms.clear();
+      for (const id of [...actorEffectRooms.keys()]) dropActorEffects(id);
       if (effectPinned) clearEffectInspection(true);   // the pinned instance just got disposed
       return;
     }
@@ -1894,6 +1985,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     } else {
       for (const id of effectsRooms) {
         effectsLayer.addRoom(id, spawnRoomOffset(id), { leftOut: world.roomLeftOut.get(id) });
+        if (!actorEffectRooms.has(id)) addActorEffects(id).catch(() => { /* the room keeps its other effects */ });
       }
     }
   }

@@ -121,7 +121,7 @@ export const SPAWN_COLUMNS = [
   'room_field_op', 'origin', 'centre_offset', 'centre_field_op',
   'default_room_record', 'default_room_field_op', 'authored_label',
   'height_source', 'height_room', 'authored_height',
-  'idle_clip', 'idle_source', 'idle_field_op',
+  'idle_clip', 'idle_source', 'idle_field_op', 'idle_controller',
 ];
 // How a spawn's resting clip was recovered (actor-idle.js); -1 = no clip.
 export const SPAWN_IDLE_SOURCE: Record<string, number> = { animatic: 0, portrait: 1, rig_single: 2 };
@@ -145,8 +145,8 @@ export const COORDINATE_SYSTEM = {
   scenery_trim_revision: 1,
   // 1: occurrences carry `dynamic` and placements a per-tile `part_colour`
   draw_order_revision: 1,
-  // 1: spawns carry their resting clip (idle_clip / idle_source)
-  spawn_idle_revision: 1,
+  // 1: spawns carry their resting clip (idle_clip / idle_source); 2: and the controller it rests under (idle_controller)
+  spawn_idle_revision: 2,
   // 1: shards carry the room's ground plane (ground_plane)
   ground_plane_revision: 1,
   mesh_space: 'game x/y horizontal, z up',
@@ -217,7 +217,7 @@ export const SEMANTICS = {
   spawn_memberships: 'room-row generic/direct references and actor default-room references are retained; repeated memberships of one registry actor slot produce one spawn row',
   spawn_origin: 'new rows use origin=actor and retain authored coordinates; legacy roster and roster_center values are reserved only for reading older extractions',
   spawn_idle_props: 'spawn parts with confidence idle_prop are what the resting animation puts in the actor\'s hands (skinned to the actor\'s rig, drawn with its clip); they are not part of the authored appearance and the model catalog ignores them',
-  spawn_idle: 'idle_clip is the AB1 clip the actor rests in, on the rig of its own meshes, or -1: animatic = the actor\'s own animation reference (a clip, a controller, or a set whose direct reference names the resting controller; an intro/loop/outro triple rests in its longest clip), portrait = the clip of the actor\'s inspection record, rig_single = the only clip on the rig; idle_field_op is the source field (-1 for rig_single)',
+  spawn_idle: 'idle_clip is the AB1 clip the actor rests in, on the rig of its own meshes, or -1: animatic = the actor\'s own animation reference (a clip, a controller, or a set whose direct reference names the resting controller; an intro/loop/outro triple rests in its longest clip), portrait = the clip of the actor\'s inspection record, rig_single = the only clip on the rig; idle_field_op is the source field (-1 for rig_single); idle_controller is the controller row the actor rests under, or -1 (the effect system that controller names plays while the actor rests)',
   spawn_recolors: 'two exact actor tint fields are paired by part index when serialized as series, or applied actor-wide when both fields are scalar; the actor schema has implicit neutral output modulation rather than a fabricated third stored colour',
   placement_recolors: 'three values are tint1/tint2/half-range output modulation; a two-value placement with uniform_luminance_tint stores the compact ground schema\'s exact tint/output-modulation pair because its unused second tint is absent rather than fabricated',
   part_colour: 'index into part_colours: twelve numbers, the colour the game gives the part at its tile (full range RGBA, its vertex colour is half of it) then the two recolour tints its recoloured textures use (half range RGBA each); the colour is two authored colours blended by a per-tile fraction hashed from the room seed and the tile x, y, or for the top faces of varied ground blocks one colour with a per-tile lightness shift; -1 where it is not known',
@@ -939,6 +939,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       actor.default_room_record, actor.default_room_field_op, actor.authored_label,
       authoredHeight?'room_tiles':'surface_estimate',authoredHeight?.room??null,authoredHeight?.height??null,
       actor.idle_clip ?? -1, actor.idle_source ? SPAWN_IDLE_SOURCE[actor.idle_source] : -1, actor.idle_field_op,
+      actor.idle_controller ?? -1,
     ]);
     for (const membership of actor.memberships) {
       spawnMembershipRows.push([

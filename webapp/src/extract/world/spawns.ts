@@ -77,6 +77,9 @@ export interface SpawnRecord {
   idle_clip: number | null;
   idle_source: ActorIdle['source'] | null;
   idle_field_op: number;
+  // The controller the actor rests under (its effect system, when it names one, plays while it rests); null for a
+  // clip with no controller.
+  idle_controller: number | null;
   // Props the resting controller hands the actor (a book, a tankard): extra
   // parts on the actor's own rig, confidence 'idle_prop', never part of the
   // authored appearance.
@@ -575,6 +578,7 @@ export class SpawnGraph {
       idle_clip: null,
       idle_source: null,
       idle_field_op: -1,
+      idle_controller: null,
       idle_props: [],
     };
     // The resting clip must belong to the rig of the actor's own meshes.
@@ -587,6 +591,7 @@ export class SpawnGraph {
         result.idle_clip = idle.clip;
         result.idle_source = idle.source;
         result.idle_field_op = idle.field_op;
+        result.idle_controller = idle.controller;
         result.idle_props = this._idle.props(idle.controller, rigs, meshRig).map((prop, index) => ({
           mesh_def_slot: prop.mesh_def_slot,
           mesh: prop.mesh,
