@@ -59,6 +59,23 @@ try{
   for(const bindings of [[{runtime:17,fields:[]}],[{runtime:17,fields:[0,0]}],[{runtime:17,fields:[-1]}],
     [{runtime:17,fields:[0]},{runtime:17,fields:[1]}]])
     assert.throws(()=>validatePlacementData({...data,appearanceCandidates:bindings},hash),/candidate bindings/);
+  // a class answering from per-build values: each span's controllers, none for $none, joined with its fields
+  const globalData={...data,appearanceCandidates:[{runtime:17,fields:[0]}],
+    appearanceGlobals:[{runtime:18,spans:[[0,2],[2,4],[4,6]]},{runtime:17,spans:[[2,4]]}]};
+  const globalRead=createAppearanceCandidateReader(globalData,candidateRows,candidateBytes,candidateProfile,[],['$none']);
+  assert.deepEqual(globalRead(1),[3,4]);
+  assert.deepEqual(globalRead(0).sort(),[3,4],'fields and values together');
+  assert.deepEqual(createAppearanceCandidateReader({...data,appearanceGlobals:[{runtime:18,spans:[[4,6]]}]},
+    candidateRows,candidateBytes,candidateProfile,[],['$none'])(1),[],'a value naming no controller');
+  assert.deepEqual(createAppearanceCandidateReader({...data,appearanceGlobals:[{runtime:18,spans:[]}]},
+    candidateRows,candidateBytes,candidateProfile,[],['$none'])(1),[]);
+  assert.throws(()=>createAppearanceCandidateReader({...data,appearanceGlobals:[{runtime:18,spans:[[0,3]]}]},
+    candidateRows,candidateBytes,candidateProfile,[],['$none'])(1),/source value/,'a span must hold exactly one value');
+  assert.throws(()=>createAppearanceCandidateReader({...data,appearanceGlobals:[{runtime:18,spans:[[4,9]]}]},
+    candidateRows,candidateBytes,candidateProfile,[],['$none'])(1),/outside source data/);
+  for(const bindings of [[{runtime:18,spans:[[2,2]]}],[{runtime:18,spans:[[0]]}],[{runtime:18,spans:[[-1,2]]}],
+    [{runtime:18,spans:[]},{runtime:18,spans:[]}],[{runtime:18}]])
+    assert.throws(()=>validatePlacementData({...data,appearanceGlobals:bindings},hash),/global bindings/);
   const options={data,rooms,roomRows,rows,bytes,profile,pool:[]};
   const read=createActorHeightReader(options);
   const actor={record:3,default_room_record:0,position:[1,0,0]};

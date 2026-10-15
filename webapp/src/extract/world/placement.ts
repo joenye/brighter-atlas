@@ -33,6 +33,7 @@ export interface PlacementDecodeData {
   actors?: {parent:number};
   defaultAppearances?: {runtime:number; start:number; end:number}[];
   appearanceCandidates?: {runtime:number; fields:number[]}[];
+  appearanceGlobals?: {runtime:number; spans:[number,number][]}[];
   effectScales?: EffectScaleBinding[];
   effectWindows?: EffectWindowBinding[];
   effectSprites?: EffectSpriteBinding[];
@@ -85,6 +86,14 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
       ||!v.fields.every(integer)||new Set(v.fields).size!==v.fields.length)
       ||new Set(values.map(v=>v.runtime)).size!==values.length)
       throw Error('invalid appearance candidate bindings');
+  }
+  if(data.appearanceGlobals!==undefined){
+    const values=data.appearanceGlobals;
+    if(!Array.isArray(values)||values.length>65536||values.some(v=>!v||!integer(v.runtime)
+      ||!Array.isArray(v.spans)||v.spans.length>256||v.spans.some((span:any)=>!Array.isArray(span)||span.length!==2
+        ||!Number.isSafeInteger(span[0])||!Number.isSafeInteger(span[1])||span[0]<0||span[1]<=span[0]||span[1]-span[0]>65536))
+      ||new Set(values.map(v=>v.runtime)).size!==values.length)
+      throw Error('invalid appearance global bindings');
   }
   if(data.effectMotion!==undefined){
     const {controllers,settings}=data.effectMotion??{};
@@ -146,19 +155,38 @@ export function createEffectMotionReader(data:PlacementDecodeData|null,rows:Regi
 }
 
 // A bound on possible selections can exclude unrelated actions without
-// declaring which conditional state is active.
+// declaring which conditional state is active. A class names its candidates
+// either in its records' fields or, when it answers from per-build values
+// (one of several, by a state), in those values: the controllers each names.
 export function createAppearanceCandidateReader(data:PlacementDecodeData|null,rows:RegistryRow[],
   bytes:Uint8Array,profile:WorldProfile,pool:any[],symbols:string[]):(slot:number)=>number[]|null {
   if(!data)return ()=>null;
   validatePlacementData(data,profile.bundle0?.raw_sha256??'');
   const bindings=new Map((data.appearanceCandidates??[]).map(v=>[v.runtime,v.fields]));
+  const globalSpans=new Map((data.appearanceGlobals??[]).map(v=>[v.runtime,v.spans]));
+  const globalControllers=new Map<number,number[]>();
+  const fromGlobals=(runtime:number):number[]=>{
+    let got=globalControllers.get(runtime);
+    if(got)return got;
+    const controllers=new Set<number>();
+    for(const [start,end] of globalSpans.get(runtime)!){
+      if(end>bytes.length)throw Error('appearance global lies outside source data');
+      const decoder=new PoolDecoder(bytes.subarray(start,end),...profileArities(profile));
+      const values=readAppearanceControllers(decoder.value(),n=>resolveValue(pool,n),i=>symbols[i]);
+      if(decoder.pos!==end-start||!values||values.some(id=>id>=rows.length))throw Error('invalid appearance global source value');
+      for(const id of values)controllers.add(id);
+    }
+    got=[...controllers];globalControllers.set(runtime,got);return got;
+  };
   const decode=makeRegistryRowDecoder(rows as FillRow[],bytes,profile);
   const cache=new Map<number,number[]>();
   return slot=>{
-    const fields=bindings.get(rows[slot]?.runtime);
-    if(!fields)return null;
+    const runtime=rows[slot]?.runtime;
+    const fields=bindings.get(runtime);
+    if(!fields&&!globalSpans.has(runtime))return null;
     if(cache.has(slot))return cache.get(slot)!;
-    const source=decode(slot),controllers=new Set<number>();
+    if(!fields){const result=fromGlobals(runtime);cache.set(slot,result);return result;}
+    const source=decode(slot),controllers=new Set<number>(globalSpans.has(runtime)?fromGlobals(runtime):[]);
     for(const op of fields){
       const field=source?.find(f=>f.op===op);
       const values=field?.kind==='G'
