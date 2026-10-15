@@ -100,7 +100,9 @@ const CATEGORY_LABELS: Record<string, [string, string]> = {
   spawns: ['NPC / enemy spawns', '#dc8268'],
   components: ['Components', '#a4aeba'],
 };
-const RENDER_SCALES: (number | 'native')[] = [0.5, 0.75, 1, 'native', 1.5, 2];
+// all rooms' drawing resolution, as a share of the screen's own pixels (100%: as sharp as the screen, on a 2x
+// display too)
+const RENDER_SCALES = [0.25, 0.5, 0.75, 1];
 const TEXTURE_ANISOTROPY = 8;   // fixed: the user-facing control was removed
 
 // Merged all-rooms ambient-effects activation policy (design 4.4): a hard cap
@@ -149,7 +151,7 @@ const DEFAULT_STATE = Object.freeze({
   shadows: false,
   flatten: false,
   merged: true,
-  scale: 2,       // RENDER_SCALES index (1x)
+  rscale: 3,      // RENDER_SCALES index (the screen's own pixels)
   cull: false,
   culld: 160,
   shotRes: '8k',    // high-res screenshot long-edge target (see SHOT_RES)
@@ -171,7 +173,7 @@ interface WorldState {
   inspect: boolean; water: boolean; game: boolean; gamefar: boolean; gamesteady: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
   shadows: boolean; flatten: boolean; merged: boolean;
-  scale: number; cull: boolean; culld: number;
+  rscale: number; cull: boolean; culld: number;
   shotRes: string;
   z: string;
   [key: string]: any;
@@ -341,7 +343,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   if (gpu?.tier === 'software') state.water = false;
   if (gpu && !hasSavedWorldState()) {
     if (gpu.tier === 'software') {
-      state.scale = RENDER_SCALES.indexOf(0.5);
+      state.rscale = RENDER_SCALES.indexOf(0.5);
       // Weak-GPU default (design 4.4, judge-decided): merged first-run on a
       // software adapter starts with effects off too, alongside water.
       // Single-room keeps effects ON unconditionally (see DEFAULT_STATE) and
@@ -351,7 +353,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       // the game's frame over many rooms is far too slow in software
       state.game = false;
     } else if (gpu.tier === 'integrated') {
-      state.scale = RENDER_SCALES.indexOf(0.75);
+      state.rscale = RENDER_SCALES.indexOf(0.5);
       state.gamefar = false;   // (the whole world in the game's shading holds every room on the GPU)
     }
   }
@@ -2146,13 +2148,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // performance (all-rooms only) ----------------------------------------------
   let perfSection: HTMLElement | null = null;
   function applyRenderScale(): void {
-    const mode = RENDER_SCALES[state.scale] ?? 1;
-    renderer.setPixelRatio(mode === 'native' ? (devicePixelRatio || 1) : Number(mode));
+    renderer.setPixelRatio((devicePixelRatio || 1) * (RENDER_SCALES[state.rscale] ?? 1));
     (scene3d as any)._resize();
   }
-  const scaleLabel = (v: number) => (RENDER_SCALES[v] === 'native'
-    ? `Native ${Math.round((devicePixelRatio || 1) * 100)}%`
-    : `${Math.round(Number(RENDER_SCALES[v]) * 100)}%`);
+  const scaleLabel = (v: number) => `${Math.round((RENDER_SCALES[v] ?? 1) * 100)}%`;
   function applyCull(): void {
     merged?.setSmallCullDistance(state.cull ? state.culld : Infinity);
   }
@@ -2333,7 +2332,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
   if (allMode) {
     perfSection = section('Drawing',
-      range('scale', 'Render scale', 0, RENDER_SCALES.length - 1, 1, scaleLabel, applyRenderScale),
+      Object.assign(range('rscale', 'Render scale', 0, RENDER_SCALES.length - 1, 1, scaleLabel, applyRenderScale),
+        { title: "How many of your screen's pixels the world is drawn at: 100% is as sharp as your screen; less is faster" }),
       // escape hatch: merged is the invisible default; the raw per-room
       // graph remains reachable here for debugging/inspection workflows.
       // Session edits are undone first: the other path's display data
