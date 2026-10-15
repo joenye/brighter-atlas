@@ -102,6 +102,8 @@ const CATEGORY_LABELS: Record<string, [string, string]> = {
 // all rooms' drawing resolution, as a share of the screen's own pixels (100%: as sharp as the screen, on a 2x
 // display too)
 const RENDER_SCALES = [0.25, 0.5, 0.75, 1];
+// all rooms' game shading distance (tiles across the ground from the camera; the last: no limit, the whole world)
+const GAME_REACHES = [50, 100, 200, 400, 800, Infinity];
 const TEXTURE_ANISOTROPY = 8;   // fixed: the user-facing control was removed
 
 // Merged all-rooms ambient-effects activation policy (design 4.4): a hard cap
@@ -136,7 +138,7 @@ const DEFAULT_STATE = Object.freeze({
   inspect: false,
   water: true,
   game: true,
-  gamefar: true,                    // all rooms: the whole world with the game's shading (else the rooms near the camera)
+  gamereach: GAME_REACHES.length - 1, // all rooms: how far rooms are drawn in the game's shading (GAME_REACHES index: no limit)
   gamesteady: false,
   variants: false,                  // debug: every stage and state of a room's parts at once                // ... every room kept the same wherever the camera is (lamps, detail, shadows: more GPU memory)
   glights: true,                    // game shading: lamps, torches and fires
@@ -169,7 +171,7 @@ interface WorldState {
   untextured: boolean; collision: boolean; empty: boolean; names: boolean; ground: boolean;
   groundd: number; groundw: number; neighbours: boolean; neighbourfade: boolean;
   spawnnames: boolean;
-  inspect: boolean; water: boolean; game: boolean; gamefar: boolean; gamesteady: boolean; effects: boolean; idle: boolean;
+  inspect: boolean; water: boolean; game: boolean; gamereach: number; gamesteady: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
   shadows: boolean; flatten: boolean; merged: boolean;
   rscale: number; cull: boolean; culld: number;
@@ -351,7 +353,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       state.game = false;
     } else if (gpu.tier === 'integrated') {
       state.rscale = RENDER_SCALES.indexOf(0.5);
-      state.gamefar = false;   // (the whole world in the game's shading holds every room on the GPU)
+      state.gamereach = GAME_REACHES.indexOf(100);   // (the whole world in the game's shading holds every room on the GPU)
     }
   }
   // The world root converts game Z-up into three Y-up (see world/scene.js),
@@ -1078,7 +1080,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const WORLD_SHADOW_TEXELS = 24;       // a cell's shadow map: pixels per tile...
   const WORLD_SHADOW_MAX = 4096;        // ...within this size
   const WORLD_SHADOW_REACH_TILES = 24;  // clusters this near a cell's cast into its map
-  const worldSteady = () => !!state.gamefar && !!state.gamesteady;
+  /** How far rooms are drawn in the game's shading (native units across the ground; Infinity: the whole world). */
+  const worldGameReach = () => (GAME_REACHES[state.gamereach] ?? Infinity) * world.tileUnits;
+  const worldWhole = () => worldGameReach() === Infinity;
+  const worldSteady = () => worldWhole() && !!state.gamesteady;
   interface WorldGameRoom {
     id: number;
     /** Its slot in the game frame's room mask (from 1). */
@@ -1093,6 +1098,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     cell: WorldGameCell;
     /** What draws it now: the game's frame (on its own or in its cluster), or the merged batches. */
     drawnByGame: boolean;
+    /** Its plain drawing (the merged batches, the room graph) hidden. */
+    classicHidden: boolean;
   }
   interface WorldGameCell {
     key: string;
@@ -1157,7 +1164,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           clusterBuilding: false, clusterFailed: false, frame: new THREE.Vector3(), lit: false, shadow: null, shadowKey: '' });
       }
       const room: WorldGameRoom = { id, slot: worldGameRooms.size + 1, origin: new THREE.Vector3(x, y, 0),
-        box: [x, y, 0, x + f.w * T, y + f.h * T, 16 * world.layerUnits], scene: null, building: false, failed: false, cell, drawnByGame: false };
+        box: [x, y, 0, x + f.w * T, y + f.h * T, 16 * world.layerUnits], scene: null, building: false, failed: false, cell, drawnByGame: false, classicHidden: false };
       cell.rooms.push(room);
       worldGameRooms.set(id, room);
       growBox(cell.box, room.box);
@@ -1278,12 +1285,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     let all = on;
     for (const room of worldGameRooms.values()) {
       worldGame?.setRoomHidden(room.slot, !!room.scene);
-      const game = on && (!!room.scene || (!!state.gamefar && !!room.cell.clusters));
-      if (game !== room.drawnByGame) {
-        room.drawnByGame = game;
-        setClassicRoomHidden(room.id, game);
+      room.drawnByGame = on && (!!room.scene || !!room.cell.clusters);
+      // with the game's shading a room shows once drawn in it, never in the plain shading first (beyond the
+      // shading distance, not at all); one the game's frame could not build keeps the plain shading
+      const plain = !on || room.failed || (room.cell.clusterFailed && !room.scene);
+      if (plain === room.classicHidden) {
+        room.classicHidden = !plain;
+        setClassicRoomHidden(room.id, !plain);
       }
-      if (!game) all = false;
+      if (plain) all = false;
     }
     if (all !== worldAllGame) {
       worldAllGame = all;
@@ -1333,6 +1343,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     worldClusterBuilding++;
     cell.clusterBuilding = true;
     const scenes: GameScene[] = [];
+    // (left behind: the camera moved on and the cell is now well past the shading distance)
+    const behind = () => {
+      const far = worldGameReach();
+      if (far === Infinity) return false;
+      syncNativeFrame();
+      return groundDistance2(cell.box, scene3d.camera.position.clone().applyMatrix4(nativeFromWorld)) > far * 1.25;
+    };
     try {
       const lit = worldSteady();
       const gathered: ({ source: GameRoomSource; offset: THREE.Vector3; slot: number; key: string } | null)[] = new Array(cell.rooms.length).fill(null);
@@ -1340,7 +1357,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       await Promise.all(Array.from({ length: WORLD_GATHER_AT_ONCE }, async () => {
         for (let k = next++; k < cell.rooms.length; k = next++) {
           const room = cell.rooms[k];
-          if (room.failed || !worldGameOn()) continue;
+          if (room.failed || !worldGameOn() || behind()) continue;
           try {
             const parts = await worldGameSource(room.id);
             await backgroundTurn('rest actors');
@@ -1361,7 +1378,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       const size: [number, number] = [Math.ceil((cell.box[3] - cell.frame.x) / T), Math.ceil((cell.box[4] - cell.frame.y) / T)];
       for (const list of groups.values()) {
         await backgroundTurn('join');
-        if (!worldGameOn()) return;
+        if (!worldGameOn() || behind()) return;
         const source = clusterSource(list, size, list[0].source.roomId, T, lit);
         await worldGame!.prepare(source, 8, false, true);
         if (!worldGameOn()) return;
@@ -1455,7 +1472,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       .sort((a, b) => a.distance - b.distance);
     // (by distance in 3D, which turning does not change either: from high above, rooms whose cell is joined
     // are left to the cell, each too small on screen to be worth its own draws)
-    const reach = WORLD_GAME_NEAR_TILES * world.tileUnits;
+    const reach = WORLD_GAME_NEAR_TILES * world.tileUnits, far = worldGameReach();
     // the nearest rooms within the count and the draw budget (a room not built yet counts as the built
     // ones' average); a room built is kept a little past both, so one at the edge does not come and go
     const built = ranked.filter((r) => r.room.scene);
@@ -1466,23 +1483,35 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       const cost = room.scene?.drawCount ?? average;
       const joined = !!room.cell.clusters;
       // (everything kept: none, its cluster draws it the same from near and far)
-      const want = !steady && rank < WORLD_GAME_MAX_ROOMS && draws + cost <= worldGameBudget && (!joined || distance <= reach);
+      // (the shading distance across the ground, as the cells': the camera's height does not count)
+      const ground = far === Infinity ? 0 : groundDistance2(room.box, eye);
+      const want = !steady && rank < WORLD_GAME_MAX_ROOMS && draws + cost <= worldGameBudget && (!joined || distance <= reach)
+        && ground <= far;
       const keep = !steady && !!room.scene && rank < WORLD_GAME_MAX_ROOMS * 1.5 && draws + cost <= worldGameBudget * 1.5
-        && (!joined || distance <= reach * 1.25);
+        && (!joined || distance <= reach * 1.25) && ground <= far * 1.25;
       if (want || keep) draws += cost;
       if (want) wanted.push(room);
       if (room.scene && !want && !keep) dropWorldGameRoom(room);
       // (the room graph, when it draws instead of the merged batches, may have loaded the room again since)
-      if (room.drawnByGame) { const graph = world.rooms.get(room.id); if (graph?.group.visible) graph.group.visible = false; }
+      if (room.classicHidden) { const graph = world.rooms.get(room.id); if (graph?.group.visible) graph.group.visible = false; }
     });
     syncRooms();
     for (const room of wanted) {
       if (worldGameBuilding >= WORLD_GAME_IN_FLIGHT) break;
       if (!room.scene && !room.building) buildWorldGameRoom(room).catch(() => { /* reported above */ });
     }
-    // the whole world: the nearest cell not yet joined, while no room is building
-    if (state.gamefar && !worldGameBuilding && !worldClusterBuilding) {
-      const cells = [...worldGameCells.values()].filter((c) => !c.clusters && !c.clusterBuilding && !c.clusterFailed)
+    // the cells within the shading distance joined, the nearest first (asked again every time, so the camera's
+    // moves reorder what is left), while no room is building; a cell well past the distance gives its clusters back
+    if (far !== Infinity) {
+      let dropped = false;
+      for (const cell of worldGameCells.values()) {
+        if (cell.clusters && groundDistance2(cell.box, eye) > far * 1.25) { dropWorldCluster(cell); dropped = true; }
+      }
+      if (dropped) syncRooms();
+    }
+    if (!worldGameBuilding && !worldClusterBuilding) {
+      const cells = [...worldGameCells.values()]
+        .filter((c) => !c.clusters && !c.clusterBuilding && !c.clusterFailed && groundDistance2(c.box, eye) <= far)
         .sort((a, b) => groundDistance2(a.box, eye) - groundDistance2(b.box, eye));
       if (cells.length) buildWorldCluster(cells[0]).catch(() => { /* reported above */ });
     }
@@ -1535,7 +1564,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     for (const room of worldGameRooms.values()) {
       if (room.scene && inView(room.box)) visible.push({ scene: room.scene, box: room.box, room: true, distance: boxDistance(room.box, eye) });
     }
-    if (state.gamefar) {
+    {
       for (const cell of worldGameCells.values()) {
         cell.clusters?.forEach((scene, k) => {
           const box = cell.clusterBoxes[k];
@@ -2083,14 +2112,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }).catch((error) => console.warn('room not drawn again', error));
   }
 
-  // all rooms: the whole world with the game's shading, or only the rooms near the camera (as many as
-  // the frame holds at its pace either way: the nearest room by room, the rest joined)
-  const gameReachRange = allMode ? check('gamefar', 'Whole world', () => {
-    if (!state.gamefar) { for (const cell of worldGameCells.values()) dropWorldCluster(cell); syncRooms(); }
-    applyWorldGameSettings();
-    if (inputs.gamesteady) inputs.gamesteady.disabled = !state.gamefar;
-    worldGameRanked = 0;
-  }, { title: "Draw every room with the game's shading (the nearest exactly, the rest a little simplified: no lamps or edge fade). Off: only the rooms near the camera; the rest keep the plain shading." }) : null;
+  // all rooms: how far from the camera rooms are drawn in the game's shading (the nearest room by room, the rest
+  // joined); past it nothing is drawn, so a slower graphics card can keep to what is near
+  const gameReachRange = allMode ? Object.assign(range('gamereach', 'Shading distance', 0, GAME_REACHES.length - 1, 1,
+    (v) => (GAME_REACHES[Number(v)] === Infinity ? '\u221e whole world' : `${GAME_REACHES[Number(v)]} tiles`), () => {
+      if (!worldWhole()) for (const cell of worldGameCells.values()) if (cell.lit) dropWorldCluster(cell);
+      applyWorldGameSettings();
+      if (inputs.gamesteady) inputs.gamesteady.disabled = !worldWhole();
+      worldGameRanked = 0;
+    }), { title: "How far from the camera rooms are drawn with the game's shading, nearest first (the nearest exactly, the rest a little simplified: no lamps or edge fade). Rooms further away are not drawn: a shorter distance is lighter for slower graphics cards." }) : null;
   gameReachRange?.classList.add('wp-sub');
   // everything kept: the clusters built again with their lamps, in full detail, each cell's shadows its own
   const gameSteadyCheck = allMode ? check('gamesteady', 'Keep everything loaded', () => {
@@ -2099,9 +2129,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     applyWorldGameSettings();
     syncRooms();
     worldGameRanked = 0;
-  }, { title: "With Whole world: every room drawn the same wherever the camera is, so nothing changes as you move (full detail, lamps and shadows everywhere; effects still start near the camera). Uses more GPU memory." }) : null;
+  }, { title: "With the whole world shaded: every room drawn the same wherever the camera is, so nothing changes as you move (full detail, lamps and shadows everywhere; effects still start near the camera). Uses more GPU memory." }) : null;
   gameSteadyCheck?.classList.add('wp-sub');
-  if (inputs.gamesteady) inputs.gamesteady.disabled = !state.gamefar;
+  if (inputs.gamesteady) inputs.gamesteady.disabled = !worldWhole();
 
   // the views of the data rather than the room (Debug)
   const debugChecks = [
@@ -5849,6 +5879,22 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     },
     /** All rooms (tests): the game's frame drawing the world. */
     get worldGameFrame() { return worldGame; },
+    /** All rooms (tests): what the game's shading has built and how far each is from the camera (tiles), and
+     *  the rooms drawn in the plain shading. */
+    worldGameState() {
+      syncNativeFrame();
+      const eye = scene3d.camera.position.clone().applyMatrix4(nativeFromWorld), T = world.tileUnits;
+      return {
+        reach: worldGameReach() / T,
+        rooms: [...worldGameRooms.values()].filter((r) => r.scene || r.building)
+          .map((r) => ({ id: r.id, built: !!r.scene, distance: Math.round(groundDistance2(r.box, eye) / T) })),
+        cells: [...worldGameCells.values()].filter((c) => c.clusters || c.clusterBuilding)
+          .map((c) => ({ key: c.key, built: !!c.clusters, distance: Math.round(groundDistance2(c.box, eye) / T) })),
+        plain: [...worldGameRooms.values()].filter((r) => !r.classicHidden).length,
+        mergedVisible: !!merged && !worldAllGame && mergedActive(),
+        order: worldGameTimes.map((t) => t[0]),
+      };
+    },
     /** All rooms (tests): hold the game shading's draw budget at `draws` (null: follow the frame again). */
     setGameBudget(draws: number | null) {
       worldGameBudgetFixed = draws !== null;
