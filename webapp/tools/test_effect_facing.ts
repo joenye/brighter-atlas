@@ -55,10 +55,10 @@ try {
   }
  }
  for(const renderer of [T.EffectsPlayer,T.WorldEffectsLayer]){
-  const batch={order:[],depth:new Float32Array([2,1,3]),posSize:new Float32Array([1,2,3,4,5,6,7,8,9,10,11,12]),color:new Float32Array(12),rot:new Float32Array([1,2,3]),facing:new Float32Array([1,2,3,4,5,6,7,8,9]),facingMode:new Float32Array([0,1,0])};
+  const batch={order:[],depth:new Float32Array([2,1,3]),posSize:new Float32Array([1,2,3,4,5,6,7,8,9,10,11,12]),color:new Float32Array(12),rot:new Float32Array([1,2,3]),facing:new Float32Array([1,2,3,4,5,6,7,8,9]),facingMode:new Float32Array([0,1,0]),frame:new Float32Array([4,5,6])};
   renderer.prototype._sortBatch(batch,3);
   assert.deepEqual([...batch.facing],[7,8,9,1,2,3,4,5,6],'depth sorting keeps planes attached to particles');
-  assert.deepEqual([...batch.rot],[3,1,2]);assert.deepEqual([...batch.facingMode],[0,0,1]);
+  assert.deepEqual([...batch.rot],[3,1,2]);assert.deepEqual([...batch.facingMode],[0,0,1]);assert.deepEqual([...batch.frame],[6,4,5]);
  }
  console.log('Facing fields: all six modes, relocated layouts, unresolved and computed axes and validation passed');
 } finally {await rm(tmp,{recursive:true,force:true});}
