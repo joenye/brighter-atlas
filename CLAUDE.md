@@ -146,14 +146,17 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   game frame draws it first with its own vignette, the default view fades
   it into the background, and the all-rooms view gives each tile to the
   room whose floor reaches it first, so floors change where episodes meet.
-  A distance setting (1 to 40 tiles, then endless) stretches the reach and
+  A distance setting (1 to 40 tiles one by one, then 60 to 500 in steps of
+  twenty, then endless: `planeDistance`) stretches the reach and
   the fade: rooms and all rooms both open at the game's ten tiles
   (at ten both renderers draw exactly the game's tiles). The field holds
   each tile's shortest distance and pieces are drawn nearest first, so a
   distance is a draw count (all rooms lays its floor in ten-tile steps,
   rebuilding only to grow); the game frame's endless far pieces stay within
-  one texture repeat (its coordinates are 16-bit). With no limit the game
-  frame's floor runs a thousand tiles out: past forty tiles its pieces join
+  one texture repeat (its coordinates are 16-bit). Past the field's forty
+  tiles (`PLANE_FIELD_REACH`) the game frame's floor runs a thousand tiles
+  out, each far piece carrying its own distance, so a distance past forty
+  draws those within it and no limit draws them all: past forty its pieces join
   to a texture repeat each, and beyond the field each repeat takes the floor
   of the room that reaches it first (`ground-plane.ts` `farBlocks`); All
   rooms lays that far floor as floor-only scenes (`world.ts`
