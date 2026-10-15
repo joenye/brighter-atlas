@@ -152,7 +152,15 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   each tile's shortest distance and pieces are drawn nearest first, so a
   distance is a draw count (all rooms lays its floor in ten-tile steps,
   rebuilding only to grow); the game frame's endless far pieces stay within
-  one texture repeat (its coordinates are 16-bit).
+  one texture repeat (its coordinates are 16-bit). With no limit the game
+  frame's floor runs a thousand tiles out: past forty tiles its pieces join
+  to a texture repeat each, and beyond the field each repeat takes the floor
+  of the room that reaches it first (`ground-plane.ts` `farBlocks`); All
+  rooms lays that far floor as floor-only scenes (`world.ts`
+  `buildWorldFarFloor`), and the room view's camera reaches it. In the room
+  view (`GameFrame.viewerReach`) the room's fade stretches with the floor's
+  distance and is gone with the neighbouring rooms shown; at the game's ten
+  tiles and alone it is the game's.
 - **Neighbouring rooms.** A room can show the rooms directly through its
   doors (the world index's door links), as the game loads them, at their
   stitched places (`world.ts` `wantedNeighbours`, `WorldScene.setNeighbours`,

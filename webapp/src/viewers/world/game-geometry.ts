@@ -42,6 +42,8 @@ export interface BakeInstance {
   layer?: number;
   specular?: [number, number, number];
   opacity?: number;
+  /** Its tie rank (draw-order.ts tieRanks): drawn this many depth steps nearer. */
+  tie?: number;
 }
 
 export interface BakeInputs {
@@ -164,6 +166,7 @@ export interface BakedArrays {
   spec: Uint8Array; col: Uint8Array; sty: Uint8Array; tints0: Uint8Array; tints1: Uint8Array; win: Uint16Array;
   centre: Float32Array | null; slots: Float32Array | null; bones: Uint8Array | null; weights: Uint8Array | null;
   layers?: Float32Array | null;
+  ties?: Float32Array | null;
   bounds: number[]; largest: number;
 }
 /** A bake's options less its instances and layouts (what a worker is told). */
@@ -190,6 +193,7 @@ export function* bakeArraysSteps(meshes: DecodedMesh[], instances: BakePlacement
   const centre = input.ringCentre ? new Float32Array(total * 2) : null;
   const slots = instances.some((i) => i.slot) ? new Float32Array(total) : null;
   const layers = instances.some((i) => i.layer !== undefined) ? new Float32Array(total) : null;
+  const ties = instances.some((i) => i.tie) ? new Float32Array(total) : null;
   const bones = input.skinned ? new Uint8Array(total * 4) : null;
   const weights = input.skinned ? new Uint8Array(total * 4) : null;
   const neutral = packColour([127 / 255, 127 / 255, 127 / 255, 1]);   // neutral recolour tint (half range)
@@ -206,6 +210,7 @@ export function* bakeArraysSteps(meshes: DecodedMesh[], instances: BakePlacement
     if (slots && slot) slots.fill(slot, first, first + meshes[i].count);
     const own = instances[i];
     if (layers) layers.fill(own.layer ?? 0, first, first + meshes[i].count);
+    if (ties && own.tie) ties.fill(own.tie, first, first + meshes[i].count);
     const specular = own.specular ?? input.specular;
     const opacityByte = own.opacity === undefined ? sharedOpacityByte : opacityByteOf(own.opacity);
     const { positions, normals, uvs, tangents, source, count: nv, boneIndices, boneWeights } = meshes[i];
@@ -263,7 +268,7 @@ export function* bakeArraysSteps(meshes: DecodedMesh[], instances: BakePlacement
     first += nv; at += source.length;
     yield;
   }
-  return { index, pos, nrm, tan, uv, spec, col, sty, tints0, tints1, win, centre, slots, bones, weights, layers, bounds: [...lo, ...hi], largest };
+  return { index, pos, nrm, tan, uv, spec, col, sty, tints0, tints1, win, centre, slots, bones, weights, layers, ties, bounds: [...lo, ...hi], largest };
 }
 
 /** A bake's arrays laid out for each program that draws the batch. */
@@ -305,6 +310,7 @@ export function assembleBakedGeometry(a: BakedArrays, input: Pick<BakeInputs, 'l
     geometry.userData.largest = largest;
     if (slots) geometry.setAttribute('a_room', new THREE.BufferAttribute(slots, 1));
     if (a.layers) geometry.setAttribute('a_layer', new THREE.BufferAttribute(a.layers, 1));
+    if (a.ties) geometry.setAttribute('a_tie', new THREE.BufferAttribute(a.ties, 1));
     byElement.forEach(({ name }, k) => {
       if (!name) return;
       const role = roles[k];
@@ -380,7 +386,7 @@ export class GameBakeWorker {
       } else { ref = once.length; once.push(mesh); }
       return { mesh: ref, once: !keep, matrix: instance.matrix.elements, tint: instance.tint, recolours: instance.recolours,
         uvAffine: instance.uvAffine, vertexTints: instance.vertexTints, slot: instance.slot,
-        layer: instance.layer, specular: instance.specular, opacity: instance.opacity };
+        layer: instance.layer, specular: instance.specular, opacity: instance.opacity, tie: instance.tie };
     });
     const { instances: _i, layouts: _l, ...options } = input;
     try {

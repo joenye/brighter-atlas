@@ -18,14 +18,14 @@ self.onmessage = (event: MessageEvent) => {
     if (decoded.some((m) => !m)) throw new Error('game bake: a mesh the worker was never sent');
     const placements = instances.map((i: any) => ({
       matrix: new THREE.Matrix4().fromArray(i.matrix), tint: i.tint, recolours: i.recolours,
-      uvAffine: i.uvAffine, vertexTints: i.vertexTints, slot: i.slot, layer: i.layer, specular: i.specular, opacity: i.opacity,
+      uvAffine: i.uvAffine, vertexTints: i.vertexTints, slot: i.slot, layer: i.layer, specular: i.specular, opacity: i.opacity, tie: i.tie,
     }));
     const steps = bakeArraysSteps(decoded, placements, options);
     let step = steps.next();
     while (!step.done) step = steps.next();
     const arrays: BakedArrays = step.value;
     const buffers = [arrays.index, arrays.pos, arrays.nrm, arrays.tan, arrays.uv, arrays.spec, arrays.col, arrays.sty,
-      arrays.tints0, arrays.tints1, arrays.win, arrays.centre, arrays.slots, arrays.bones, arrays.weights, arrays.layers]
+      arrays.tints0, arrays.tints1, arrays.win, arrays.centre, arrays.slots, arrays.bones, arrays.weights, arrays.layers, arrays.ties]
       .filter((a): a is NonNullable<typeof a> => !!a).map((a) => a.buffer);
     (self as any).postMessage({ id, ok: true, arrays }, buffers);
   } catch (error: any) {

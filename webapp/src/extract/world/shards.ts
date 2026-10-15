@@ -16,7 +16,7 @@
 // (the worldtex INDEX_JOBS kind carries kind/alpha today; spreadMax and the
 // last-plane channel ranges are the two additions the orchestrator needs).
 
-import { roomOccupancy, roomIndividualAnchors, groupFields } from './room.js';
+import { roomOccupancy, roomIndividualAnchors, groupFields, deref, signed32 } from './room.js';
 import { AssetGraph, type OccurrenceHit, type PartRecord, type PoolNode, type RegistryRow } from './graph.js';
 import { SpawnGraph, type RoomRowRef } from './spawns.js';
 import {createActorHeightReader, type PlacementDecodeData} from './placement.js';
@@ -224,6 +224,8 @@ export const SEMANTICS = {
   skinned_is_not_spawn: 'AB5 skeleton metadata remains a placement flag only and is never used to identify gameplay actors',
   components: 'appearance parts on parent-linked class-351 occurrences',
   individual_anchors: 'class-447/448 room-space polygons and explicit centers, parallel to the class-189 individuals array',
+  individual_conditions: 'present where any individual has conditions: per individual, parallel to individuals, its programs (lists of integers) the game runs to decide whether it is drawn (viewers/world/individuals.ts)',
+  room_number: 'the room\'s number among the game\'s rooms (its owner\'s seed pair), the number the conditions name rooms by',
   individual_light: 'present only where a build marks lighting (from 1-Oct-2026): per individual, parallel to individuals, the op1 of the mode record its trailing field references (0 the room\'s own light, dimmed with a neighbouring room; 1 its own at full; 2 a frontage, lit with the room the viewer stands in)',
   root_dimension_anchor: 'generated visual-owner operations 4/5/6 are exact positive XYZ cell dimensions; the root cell is the lower-left corner, odd occurrence quarter-turns swap width/height, and Z remains the root layer',
   class_127_topology: 'all resolved parent/child links remain serialized as independent component provenance; their transitive XY extent validates owner dimensions but does not replace the direct owner anchor when sparse or decorative members change that extent',
@@ -730,6 +732,20 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     const v = ctx.graph.rows[ref.value as number]?.v?.find((x: any[]) => x[0] === 1)?.[2];
     return v === 1 || v === 2 ? v : 0;
   });
+  // each individual's conditions: its third field, rows of an id and a program (a list of integers) the game runs to
+  // decide whether the individual is drawn
+  const individualConditions = individuals.map((row: any) => {
+    const list = groupFields(row.node, room.table)?.[2];
+    const rows = list ? deref(list, room.table) : null;
+    if (rows?.kind !== 'array' || !rows.elems) return [];
+    return rows.elems.flatMap((item: any) => {
+      const program = groupFields(deref(item, room.table), room.table)?.[1];
+      const words = program ? deref(program, room.table) : null;
+      if (words?.kind !== 'array' || !words.elems) return [];
+      const values = words.elems.map((w: any) => signed32(deref(w, room.table)?.value));
+      return values.every((v: any) => Number.isInteger(v)) ? [values] : [];
+    });
+  });
   const counts: Record<string, number> = { occurrences: occurrences.length };
   const [occurrenceRowsOut, links] = occurrenceRows(ctx, occurrences, counts);
   counts.links = links.length;
@@ -992,6 +1008,8 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     individuals: individuals.map((row: any) => row.uuid),
     individual_anchors: individualAnchors,
     ...(individualLight.some((m: number) => m) ? { individual_light: individualLight } : {}),
+    ...(individualConditions.some((c: number[][]) => c.length) ? { individual_conditions: individualConditions } : {}),
+    ...(seed !== null ? { room_number: seed } : {}),
     occurrences: occurrenceRowsOut,
     links,
     placements: placementRows,
@@ -1022,6 +1040,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     terrain_z_levels: Array.from(terrainZ.keys()).sort((a, b) => a - b),
     meshes: Array.from(roomMeshes).sort((a, b) => a - b),
     textures: Array.from(roomTextures).sort((a, b) => a - b),
+    ...(seed !== null ? { room_number: seed } : {}),
   };
   return { shard, entry };
 }

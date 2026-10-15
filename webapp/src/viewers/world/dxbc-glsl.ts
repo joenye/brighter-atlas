@@ -915,6 +915,9 @@ export function translate(
     vertex = [
       '#version 300 es',
       w.precision(),
+      // (every program computes its position alike: the source draws coplanar parts at equal depth, LESS_EQUAL
+      // deciding by draw order, and without this a compiler may round one program's transform differently)
+      'invariant gl_Position;',
       w.helperSource(),
       ...w.declarations(),
       ...inputs,

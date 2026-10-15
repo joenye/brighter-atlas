@@ -2,6 +2,7 @@
 // service worker and translated to GLSL (dxbc-glsl.ts), cached per
 // (program, y convention); game-frame.ts draws them through game-gl.ts.
 import { LAYER_VARYING, translate, type TranslatedProgram, type YConvention } from './dxbc-glsl.js';
+import { TIE_DEPTH_STEP } from './draw-order.js';
 
 /** The world index's render tables (see extract/world/render-data.ts). */
 export interface GameRenderTables {
@@ -83,6 +84,25 @@ function withRoomMask(t: TranslatedProgram): TranslatedProgram {
   };
 }
 
+/** Ties (draw-order.ts tieRanks): the attribute holding a vertex's tie rank and its register. */
+export const TIE_ATTRIBUTE = 'a_tie';
+export const TIE_REGISTER = 13;
+
+/** A program's vertex stage that draws a part `a_tie` depth steps nearer (none where the attribute is not fed, which
+ *  reads 0). `step`: one step in clip depth per unit of w (the depth range's own, doubled for -1..1). Programs whose
+ *  inputs reach the register are left as they are. */
+function withTies(t: TranslatedProgram, step: number): TranslatedProgram {
+  if (t.attributes.some((a) => a.register === TIE_REGISTER)) return t;
+  const lines = t.vertex.split('\n');
+  const version = lines.findIndex((l) => l.startsWith('#version'));
+  lines.splice(version + 1, 0, `in float ${TIE_ATTRIBUTE};`);
+  lines.splice(lines.lastIndexOf('}'), 0, `  gl_Position.z -= ${TIE_ATTRIBUTE} * ${step.toExponential()} * gl_Position.w;`);
+  return {
+    ...t, vertex: lines.join('\n'),
+    attributes: [...t.attributes, { name: TIE_ATTRIBUTE, semantic: 'TIE', semanticIndex: 0, register: TIE_REGISTER, componentType: 'float', mask: 1 }],
+  };
+}
+
 export class GameShaderLibrary {
   private readonly blobs = new Map<string, Promise<Uint8Array>>();
   private readonly programs = new Map<string, Promise<GameProgram>>();
@@ -127,7 +147,7 @@ export class GameShaderLibrary {
     const layers = layered ? layeredProgram(plain, (textures) => translate(vs, ps, { ...options, layered: textures })) : null;
     if (layered && !layers) throw new Error(`program ${index} has no layered form`);
     const base = layers ?? plain;
-    const translated = this.roomMask ? withRoomMask(base) : base;
+    const translated = withTies(this.roomMask ? withRoomMask(base) : base, this.zeroToOne ? TIE_DEPTH_STEP : 2 * TIE_DEPTH_STEP);
     const samplers = (this.tables.pixelShaders[pixel] ?? []).map((s) => (s >= 0 ? this.tables.samplers[s] : null));
     return {
       index, vertex, pixel, y, translated,

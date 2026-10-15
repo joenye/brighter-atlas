@@ -340,16 +340,56 @@ function tileTints(field: PlaneField, i: number, record: GroundPlaneRecord, out:
 /** Every floor tile the field reaches within `extent` tiles and, endless,
  *  the far pieces out to `far` tiles past it: those carry the field edge's
  *  floor and colours outwards, one strip per edge tile (`split`: cut where
- *  the texture repeats, so a piece spans one repeat at most). */
-function eachTile(field: PlaneField, extent: number, far: number, split: boolean, emit: Emit, detail = true): void {
+ *  the texture repeats, so a piece spans one repeat at most). `blocks`
+ *  (split only): tiles floored from further than this many tiles, sharing a
+ *  floor and an owner across a whole texture repeat, go as one piece, and
+ *  the far strips join along the edge to a repeat wide (an endless floor out
+ *  to hundreds of tiles in a few tens of thousands of pieces). */
+function eachTile(field: PlaneField, extent: number, far: number, split: boolean, emit: Emit, detail = true, blocks = Infinity): void {
   settle(field, extent);
   const { width, height, x0, y0, frac, anchor } = field;
   const tints = new Float32Array(12), beyond = new Float32Array(4);
+  const join = split && blocks < extent;
+  // whole texture repeats of one floor and owner, far from every room: one piece each
+  const joined = join ? new Uint8Array(width * height) : null;
+  if (joined) {
+    const corner = new Float32Array(12);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (joined[i] || !(field.cover[i] > blocks && field.cover[i] <= extent)) continue;
+        const record = tileRecord(field, i);
+        if (!record) continue;
+        const n = record.repeat;
+        const bx = x - floorMod(anchor[0] + x0 + x, n), by = y - floorMod(anchor[1] + y0 + y, n);
+        if (bx !== x || by !== y || bx + n > width || by + n > height) continue;
+        let whole = true, cover = Infinity;
+        for (let yy = by; whole && yy < by + n; yy++) {
+          for (let xx = bx; xx < bx + n; xx++) {
+            const j = yy * width + xx;
+            if (joined[j] || !(field.cover[j] > blocks && field.cover[j] <= extent) || field.claim[j] !== field.claim[i] || tileRecord(field, j) !== record) { whole = false; break; }
+            cover = Math.min(cover, field.cover[j]);
+          }
+        }
+        if (!whole) continue;
+        for (let yy = by; yy < by + n; yy++) joined.fill(1, yy * width + bx, yy * width + bx + n);
+        if (detail) {
+          for (let v = 0; v < 4; v++) {
+            const tx = bx + CORNERS[v][0] * (n - 1), ty = by + CORNERS[v][1] * (n - 1);
+            tileTints(field, ty * width + tx, record, corner);
+            tints.set(corner.subarray(v * 3, v * 3 + 3), v * 3);
+            beyond[v] = field.beyond[(by + CORNERS[v][1] * n) * (width + 1) + bx + CORNERS[v][0] * n];
+          }
+        }
+        emit(x0 + frac[0] + bx, y0 + frac[1] + by, n, n, record, 0, 0, tints, beyond, cover, field.claim[i]);
+      }
+    }
+  }
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = y * width + x;
       const cover = field.cover[i];
-      if (!(cover <= extent)) continue;
+      if (!(cover <= extent) || joined?.[i]) continue;
       const record = tileRecord(field, i);
       if (!record) continue;
       if (detail) {
@@ -362,10 +402,11 @@ function eachTile(field: PlaneField, extent: number, far: number, split: boolean
     }
   }
   if (extent !== Infinity || !(far > 0)) return;
-  // the far pieces: side strips per edge tile, corner blocks; their corners
-  // take the edge tile's outer corner colours (the area colours clamp)
+  if (join) { farBlocks(field, far, emit, detail); return; }
+  // the far pieces: side strips per edge tile (joined: runs of edge tiles of one floor and owner, a repeat wide at
+  // most), corner blocks; their corners take the edge tiles' outer corner colours (the area colours clamp)
   beyond.fill(0);
-  const edge = new Float32Array(12);
+  const edge = new Float32Array(12), edgeHigh = new Float32Array(12);
   const spans = (lo: number, hi: number, world: number, n: number) => {
     if (!split) return [[lo, hi]];
     const out: number[][] = [];
@@ -380,28 +421,100 @@ function eachTile(field: PlaneField, extent: number, far: number, split: boolean
   for (const sideY of [-1, 0, 1]) {
     for (const sideX of [-1, 0, 1]) {
       if (!sideX && !sideY) continue;
-      const columns = sideX ? [sideX < 0 ? 0 : width - 1] : Array.from({ length: width }, (_, k) => k);
-      const rows = sideY ? [sideY < 0 ? 0 : height - 1] : Array.from({ length: height }, (_, k) => k);
-      for (const ty of rows) {
-        for (const tx of columns) {
-          const i = ty * width + tx;
-          const record = tileRecord(field, i);
-          if (!record) continue;
-          tileTints(field, i, record, edge);
-          for (let v = 0; v < 4; v++) {
-            const cx = sideX ? (sideX < 0 ? 0 : 1) : CORNERS[v][0], cy = sideY ? (sideY < 0 ? 0 : 1) : CORNERS[v][1];
-            const from = (cx * 2 + cy) * 3;
-            tints[v * 3] = edge[from]; tints[v * 3 + 1] = edge[from + 1]; tints[v * 3 + 2] = edge[from + 2];
+      // the edge tiles this side carries outwards, in runs (one tile each unless joined)
+      const along = sideX && sideY ? 1 : sideX ? height : width;
+      const tileAt = (k: number) => (sideX && sideY ? (sideY < 0 ? 0 : height - 1) * width + (sideX < 0 ? 0 : width - 1)
+        : sideX ? k * width + (sideX < 0 ? 0 : width - 1) : (sideY < 0 ? 0 : height - 1) * width + k);
+      for (let k = 0; k < along;) {
+        const i = tileAt(k);
+        const record = tileRecord(field, i);
+        if (!record) { k++; continue; }
+        const n = record.repeat;
+        let end = k + 1;
+        if (join && !(sideX && sideY)) {
+          const worldAlong = sideX ? anchor[1] + y0 : anchor[0] + x0;
+          while (end < along && floorMod(worldAlong + end, n) !== 0 && tileRecord(field, tileAt(end)) === record
+            && field.claim[tileAt(end)] === field.claim[i]) end++;
+        }
+        tileTints(field, i, record, edge);
+        tileTints(field, tileAt(end - 1), record, edgeHigh);
+        for (let v = 0; v < 4; v++) {
+          const cx = sideX ? (sideX < 0 ? 0 : 1) : CORNERS[v][0], cy = sideY ? (sideY < 0 ? 0 : 1) : CORNERS[v][1];
+          // (the run's far end takes the last tile's colour)
+          const high = sideX ? CORNERS[v][1] === 1 : CORNERS[v][0] === 1;
+          const from = (cx * 2 + cy) * 3, src = high && !(sideX && sideY) ? edgeHigh : edge;
+          tints[v * 3] = src[from]; tints[v * 3 + 1] = src[from + 1]; tints[v * 3 + 2] = src[from + 2];
+        }
+        const xr = sideX ? (sideX < 0 ? [-far, 0] : [width, width + far]) : [k, end];
+        const yr = sideY ? (sideY < 0 ? [-far, 0] : [height, height + far]) : [k, end];
+        for (const [xa, xb] of spans(xr[0], xr[1], anchor[0] + x0, n)) {
+          for (const [ya, yb] of spans(yr[0], yr[1], anchor[1] + y0, n)) {
+            emit(x0 + frac[0] + xa, y0 + frac[1] + ya, xb - xa, yb - ya, record,
+              floorMod(anchor[0] + x0 + xa, n), floorMod(anchor[1] + y0 + ya, n), tints, beyond, FAR, field.claim[i]);
           }
-          const n = record.repeat;
-          const xr = sideX ? (sideX < 0 ? [-far, 0] : [width, width + far]) : [tx, tx + 1];
-          const yr = sideY ? (sideY < 0 ? [-far, 0] : [height, height + far]) : [ty, ty + 1];
-          for (const [xa, xb] of spans(xr[0], xr[1], anchor[0] + x0, n)) {
-            for (const [ya, yb] of spans(yr[0], yr[1], anchor[1] + y0, n)) {
-              emit(x0 + frac[0] + xa, y0 + frac[1] + ya, xb - xa, yb - ya, record,
-                floorMod(anchor[0] + x0 + xa, n), floorMod(anchor[1] + y0 + ya, n), tints, beyond, FAR, field.claim[i]);
-            }
+        }
+        k = end;
+      }
+    }
+  }
+}
+
+/** The joined endless floor past the field, out to `far` tiles: blocks a texture repeat on a side (the floors'
+ *  shared repeat), each the floor of the room that reaches it first (the room shown, with neighbours) in that room's
+ *  area colour nearest it, cut where the field begins. */
+function farBlocks(field: PlaneField, far: number, emit: Emit, detail: boolean): void {
+  const { width, height, x0, y0, frac, anchor, rooms } = field;
+  const owners = field.primary ? [0] : rooms.map((_, k) => k);
+  const repeats = owners.map((k) => rooms[k].records[0]?.repeat ?? 0).filter((n) => n > 0);
+  if (!repeats.length) return;
+  const S = Math.max(...repeats);
+  const tints = new Float32Array(12), beyond = new Float32Array(4);
+  const startX = -far - floorMod(anchor[0] + x0 - far, S), startY = -far - floorMod(anchor[1] + y0 - far, S);
+  for (let by = startY; by < height + far; by += S) {
+    for (let bx = startX; bx < width + far; bx += S) {
+      // wholly inside the field: its tiles have it
+      if (bx >= 0 && by >= 0 && bx + S <= width && by + S <= height) continue;
+      // the room whose floor reaches the block's centre first (its ellipse, as the field's tiles are claimed)
+      const cx = bx + S / 2, cy = by + S / 2;
+      let best = -1, bestCover = Infinity, bestBeyond = Infinity;
+      for (const k of owners) {
+        const r = rooms[k], T = field.tileUnits;
+        const lx = cx + x0 - r.ox, ly = cy + y0 - r.oy;
+        const d = reachOf(r, lx, ly, T);
+        const cover = coverOf(r, d, lx, ly, T), e = (d - 1) * r.m / T;
+        if (cover < bestCover || (cover === bestCover && e < bestBeyond)) { best = k; bestCover = cover; bestBeyond = e; }
+      }
+      const r = rooms[best];
+      const record = r?.records[0];
+      if (!record || !(record.repeat > 0)) continue;
+      // one colour a block: the room's area colour nearest the block's centre (clamped to its grid)
+      if (detail) {
+        if (record.tint && r.grid) {
+          gridColour(r, cx + x0 - r.ox - r.grid.x0 - 0.5, cy + y0 - r.oy - r.grid.y0 - 0.5, tints, 0);
+          for (let v = 1; v < 4; v++) tints.copyWithin(v * 3, 0, 3);
+        } else tints.fill(1);
+      }
+      // the parts of the block outside the field (pieces within one repeat of the room's floor)
+      const parts: number[][] = [];
+      const ix0 = Math.max(bx, 0), ix1 = Math.min(bx + S, width), iy0 = Math.max(by, 0), iy1 = Math.min(by + S, height);
+      if (ix0 >= ix1 || iy0 >= iy1) parts.push([bx, by, bx + S, by + S]);
+      else {
+        if (by < iy0) parts.push([bx, by, bx + S, iy0]);
+        if (iy1 < by + S) parts.push([bx, iy1, bx + S, by + S]);
+        if (bx < ix0) parts.push([bx, iy0, ix0, iy1]);
+        if (ix1 < bx + S) parts.push([ix1, iy0, bx + S, iy1]);
+      }
+      const n = record.repeat;
+      for (const [xa0, ya0, xb0, yb0] of parts) {
+        for (let ya = ya0; ya < yb0;) {
+          const yb = Math.min(yb0, ya + n - floorMod(anchor[1] + y0 + ya, n));
+          for (let xa = xa0; xa < xb0;) {
+            const xb = Math.min(xb0, xa + n - floorMod(anchor[0] + x0 + xa, n));
+            emit(x0 + frac[0] + xa, y0 + frac[1] + ya, xb - xa, yb - ya, record,
+              floorMod(anchor[0] + x0 + xa, n), floorMod(anchor[1] + y0 + ya, n), tints, beyond, FAR, best);
+            xa = xb;
           }
+          ya = yb;
         }
       }
     }
@@ -411,7 +524,7 @@ function eachTile(field: PlaneField, extent: number, far: number, split: boolean
 /** The floor pieces within `extent` tiles (endless: with the far pieces out
  *  to `far` tiles, each within one texture repeat), nearest first, so a
  *  shorter distance draws a prefix. */
-export function planeTiles(field: PlaneField, extent = Infinity, far = 0): PlaneTile[] {
+export function planeTiles(field: PlaneField, extent = Infinity, far = 0, blocks = Infinity): PlaneTile[] {
   const out: PlaneTile[] = [];
   eachTile(field, extent, far, true, (x, y, sx, sy, record, cellX, cellY, tints, beyond, cover, room) => {
     out.push({
@@ -419,7 +532,7 @@ export function planeTiles(field: PlaneField, extent = Infinity, far = 0): Plane
       tints: [0, 1, 2, 3].map((v) => [tints[v * 3], tints[v * 3 + 1], tints[v * 3 + 2]]),
       beyond: Array.from(beyond), cover, room,
     });
-  });
+  }, true, blocks);
   return out.sort((a, b) => a.cover - b.cover);
 }
 

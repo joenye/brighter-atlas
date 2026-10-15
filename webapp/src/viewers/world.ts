@@ -48,7 +48,8 @@ import {
 } from './world/water.js';
 import { updateGameWaterLights } from './world/game-water.js';
 import { EffectsClock } from './world/effects-sim.js';
-import { GameFrame, clusterSource, type GameScene, type GameRoomSource } from './world/game-frame.js';
+import { GameFrame, clusterSource, type GameScene, type GameRoomSource, type ShadowTile } from './world/game-frame.js';
+import { progressVariables } from './world/individuals.js';
 import { doorNeighbours } from './world/neighbours.js';
 import {
   PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_GAME_DISTANCE, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
@@ -135,6 +136,8 @@ const DEFAULT_STATE = Object.freeze({
   water: true,
   game: true,
   gamefar: true,                    // all rooms: the whole world with the game's shading (else the rooms near the camera)
+  gamesteady: false,
+  variants: false,                  // debug: every stage and state of a room's parts at once                // ... every room kept the same wherever the camera is (lamps, detail, shadows: more GPU memory)
   glights: true,                    // game shading: lamps, torches and fires
   gfog: true,                       // game shading: the fog of the rooms that have one
   effects: true,
@@ -165,7 +168,7 @@ interface WorldState {
   untextured: boolean; collision: boolean; empty: boolean; names: boolean; ground: boolean;
   groundd: number; groundw: number; neighbours: boolean; neighbourfade: boolean;
   spawnnames: boolean;
-  inspect: boolean; water: boolean; game: boolean; gamefar: boolean; effects: boolean; idle: boolean;
+  inspect: boolean; water: boolean; game: boolean; gamefar: boolean; gamesteady: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
   shadows: boolean; flatten: boolean; merged: boolean;
   scale: number; cull: boolean; culld: number;
@@ -853,12 +856,36 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     applyWorldGameSettings();
     applyWorldGroundPlane();
   };
+  /** Rebuilds of the room shown, one after another (its progress, its floor). */
+  let homeReload: Promise<void> = Promise.resolve();
   const applyGroundDistance = () => {
     world.setGroundPlaneDistance(groundDistance());
     if (gameFrame) gameFrame.planeDistance = groundDistance();
     applyWorldGameSettings();
     applyWorldGroundPlane();
+    // no limit: the game frame's floor runs on for hundreds of tiles, and the camera sees it
+    const endless = !Number.isFinite(groundDistance());
+    if (world.endlessFloor !== endless) {
+      world.endlessFloor = endless;
+      if (!allMode) refreshGameFloor();
+    }
+    if (!allMode && savedCamera) { scene3d.camera.far = gameCameraFar(); scene3d.camera.updateProjectionMatrix(); }
   };
+  /** The single room's camera range with game shading: the game's, or far enough for an endless floor. */
+  function gameCameraFar(): number {
+    const far = (world.index?.render?.camera?.far ?? 102400) / world.tileUnits;
+    return world.endlessFloor ? Math.max(far, 3000) : far;
+  }
+  /** The room's game frame given its floor again (the endless one, or the game's). */
+  function refreshGameFloor(): void {
+    homeReload = homeReload.then(async () => {
+      await gameSetup;
+      const home = entry ? world.rooms.get(Number(entry.i)) : null;
+      if (!gameFrame || !home || destroyed) return;
+      await gameFrame.setRoom(await world.gameRoomSource(home, world.neighbourRooms()));
+      renderer.resetState();
+    }).catch((error) => console.warn('floor not laid again', error));
+  }
   const groundRange = range(groundKey, 'Ground plane distance', 1, PLANE_ENDLESS, 1,
     (v) => (Number(v) >= PLANE_ENDLESS ? '\u221e no limit' : Number(v) === 1 ? '1 tile' : `${v} tiles`), applyGroundDistance);
   groundRange.title = `How far the floor reaches past each room. The game's is ${PLANE_GAME_DISTANCE} tiles; `
@@ -984,7 +1011,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       savedCamera ??= { fov: cam.fov, near: cam.near, far: cam.far };
       cam.fov = render.camera.fov;
       cam.near = render.camera.near / world.tileUnits;
-      cam.far = render.camera.far / world.tileUnits;
+      cam.far = gameCameraFar();
     } else if (savedCamera) {
       Object.assign(cam, savedCamera);
       savedCamera = null;
@@ -1010,6 +1037,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       frame.neighbourFade = !!state.neighbourfade;
       frame.pointLightStrength = state.glights ? 1 : 0;
       frame.showFog = !!state.gfog;
+      frame.viewerReach = true;
       gameFrame = frame;
       applyGameShading();
       setupStory(room.id);
@@ -1045,6 +1073,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const WORLD_GAME_CASTERS = 16;        // ...the nearest so many of them
   const WORLD_GAME_OCCLUDERS = 4;       // the nearest rooms in view in the ambient occlusion (beyond: too small to tell)
   const WORLD_GATHER_AT_ONCE = 4;       // rooms gathered side by side for a cluster
+  // Everything kept ("Keep everything loaded"): no room drawn on its own, every cluster in full detail with its
+  // lamps, the occlusion of everything in view, and a shadow map per cell drawn once (its own cell's clusters and
+  // those within reach casting), so nothing changes as the camera moves.
+  const WORLD_SHADOW_TEXELS = 24;       // a cell's shadow map: pixels per tile...
+  const WORLD_SHADOW_MAX = 4096;        // ...within this size
+  const WORLD_SHADOW_REACH_TILES = 24;  // clusters this near a cell's cast into its map
+  const worldSteady = () => !!state.gamefar && !!state.gamesteady;
   interface WorldGameRoom {
     id: number;
     /** Its slot in the game frame's room mask (from 1). */
@@ -1072,6 +1107,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     clusterBoxes: number[][];
     clusterBuilding: boolean;
     clusterFailed: boolean;
+    /** The frame its clusters are built in (native): its rooms' corner. */
+    frame: THREE.Vector3;
+    /** Everything kept: whether its clusters carry their lamps, and its own shadow map (with the cells cast from). */
+    lit: boolean;
+    shadow: ShadowTile | null;
+    shadowKey: string;
   }
   let worldGame: GameFrame | null = null;
   const worldGameRooms = new Map<number, WorldGameRoom>();
@@ -1114,7 +1155,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (!cell) {
         worldGameCells.set(key, cell = { key, origin: new THREE.Vector3(cx * C * T, cy * C * T, 0), rooms: [],
           box: [Infinity, Infinity, 0, -Infinity, -Infinity, -Infinity], clusters: null, clusterBoxes: [],
-          clusterBuilding: false, clusterFailed: false });
+          clusterBuilding: false, clusterFailed: false, frame: new THREE.Vector3(), lit: false, shadow: null, shadowKey: '' });
       }
       const room: WorldGameRoom = { id, slot: worldGameRooms.size + 1, origin: new THREE.Vector3(x, y, 0),
         box: [x, y, 0, x + f.w * T, y + f.h * T, 16 * world.layerUnits], scene: null, building: false, failed: false, cell, drawnByGame: false };
@@ -1122,6 +1163,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       worldGameRooms.set(id, room);
       growBox(cell.box, room.box);
     }
+    for (const cell of worldGameCells.values()) cell.frame.set(cell.box[0], cell.box[1], 0);
   }
   const growBox = (box: number[], by: number[]) => {
     for (let k = 0; k < 3; k++) { box[k] = Math.min(box[k], by[k]); box[k + 3] = Math.max(box[k + 3], by[k + 3]); }
@@ -1132,6 +1174,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     worldGame.planeDistance = groundDistance();
     worldGame.pointLightStrength = state.glights ? 1 : 0;
     worldGame.showFog = !!state.gfog;
+    worldGame.clusterDetailPixels = worldSteady() ? 0 : 10;
+    worldGame.clusterDepth = worldSteady();
   }
 
   /** The room's share of the world's floor (the tiles whose floor it is), in its own frame. */
@@ -1151,6 +1195,65 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (!f) return [];
     const ox = f.x + worldFrame.ox, oy = f.y + worldFrame.oz;
     return (worldPlaneByRoom.get(id) ?? []).map((tile) => ({ ...tile, x: tile.x - ox, y: tile.y - oy }));
+  }
+
+  // The endless floor (no limit): past the rooms' own floors (the 40 tiles the rooms and clusters carry), the floor
+  // runs on for a thousand tiles in pieces a texture repeat each, one scene per lighting environment of the rooms
+  // whose floor it carries on (a floor-only cluster: no vignette, never masked, always in view).
+  const WORLD_FLOOR_FAR = 1000;
+  let worldFarFloor: { scene: GameScene; box: number[] }[] = [];
+  let worldFarFloorState: 'none' | 'building' | 'built' = 'none';
+  function dropWorldFarFloor(): void {
+    for (const { scene } of worldFarFloor) worldGame?.disposeScene(scene);
+    worldFarFloor = [];
+    worldFarFloorState = 'none';
+  }
+  async function buildWorldFarFloor(): Promise<void> {
+    if (!worldPlaneField || !worldFrame) return;
+    worldFarFloorState = 'building';
+    const scenes: { scene: GameScene; box: number[] }[] = [];
+    try {
+      const far = (window as any).__bs?.floorFar ?? WORLD_FLOOR_FAR;   // (tests: how far past the world)
+      const tiles = planeTiles(worldPlaneField, Infinity, far, PLANE_DISTANCE_MAX).filter((t) => t.cover > PLANE_DISTANCE_MAX);
+      const groups = new Map<string, { owner: number; tiles: PlaneTile[] }>();
+      for (const tile of tiles) {
+        const owner = worldPlaneSourceIds[tile.room];
+        if (owner === undefined || !worldGameRooms.has(owner)) continue;
+        const key = worldGame!.environmentKey(owner);
+        let group = groups.get(key);
+        if (!group) groups.set(key, group = { owner, tiles: [] });
+        group.tiles.push(tile);
+      }
+      const T = world.tileUnits;
+      for (const { owner, tiles: list } of groups.values()) {
+        await backgroundTurn('floor');
+        if (!worldGameOn() || worldFarFloorState !== 'building') return;
+        const room = worldGameRooms.get(owner)!;
+        const f = worldFrame.frames.get(owner)!;
+        const ox = f.x + worldFrame.ox, oy = f.y + worldFrame.oz;
+        const base = await worldGameSource(owner);
+        const source: GameRoomSource = { ...base, batches: [], actors: [], lights: undefined, others: [],
+          plane: list.map((t) => ({ ...t, x: t.x - ox, y: t.y - oy })) };
+        const scene = await worldGame!.buildScene(source, room.origin, { cluster: true });
+        renderer.resetState();
+        const o = room.origin, b = scene.bounds;
+        scenes.push({ scene, box: b ? [o.x + b[0], o.y + b[1], o.z + b[2], o.x + b[3], o.y + b[4], o.z + b[5] + T] : room.box });
+      }
+      if (!worldGameOn() || worldFarFloorState !== 'building') return;
+      worldFarFloor = scenes.splice(0);
+      worldFarFloorState = 'built';
+    } catch (error) {
+      console.warn('game shading: endless floor not laid', error);
+    } finally {
+      for (const { scene } of scenes) worldGame?.disposeScene(scene);   // (left unfinished)
+      if (worldFarFloorState === 'building') worldFarFloorState = 'none';
+    }
+  }
+  /** The endless floor wanted (no limit, the floor shown, the world in the game's shading) built, else dropped. */
+  function syncWorldFarFloor(): void {
+    const wanted = worldGameOn() && !!state.ground && !Number.isFinite(groundDistance()) && !!worldPlaneField;
+    if (wanted && worldFarFloorState === 'none' && !worldClusterBuilding) buildWorldFarFloor().catch(() => { /* reported */ });
+    if (!wanted && worldFarFloorState !== 'none') dropWorldFarFloor();
   }
 
   async function worldGameSource(id: number): Promise<GameRoomSource> {
@@ -1232,6 +1335,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     cell.clusterBuilding = true;
     const scenes: GameScene[] = [];
     try {
+      const lit = worldSteady();
       const gathered: ({ source: GameRoomSource; offset: THREE.Vector3; slot: number; key: string } | null)[] = new Array(cell.rooms.length).fill(null);
       let next = 0;
       await Promise.all(Array.from({ length: WORLD_GATHER_AT_ONCE }, async () => {
@@ -1242,7 +1346,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             const parts = await worldGameSource(room.id);
             await backgroundTurn('rest actors');
             const source = worldGame!.restActors(parts);
-            gathered[k] = { source, offset: room.origin.clone().sub(cell.origin), slot: room.slot, key: worldGame!.environmentKey(room.id) };
+            gathered[k] = { source, offset: room.origin.clone().sub(cell.frame), slot: room.slot, key: worldGame!.environmentKey(room.id) };
           } catch { /* left to the merged batches */ }
         }
       }));
@@ -1255,19 +1359,20 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         list.push(g);
       }
       const T = world.tileUnits;
-      const size: [number, number] = [Math.ceil((cell.box[3] - cell.origin.x) / T), Math.ceil((cell.box[4] - cell.origin.y) / T)];
+      const size: [number, number] = [Math.ceil((cell.box[3] - cell.frame.x) / T), Math.ceil((cell.box[4] - cell.frame.y) / T)];
       for (const list of groups.values()) {
         await backgroundTurn('join');
         if (!worldGameOn()) return;
-        const source = clusterSource(list, size, list[0].source.roomId, T);
+        const source = clusterSource(list, size, list[0].source.roomId, T, lit);
         await worldGame!.prepare(source, 8, false, true);
         if (!worldGameOn()) return;
-        scenes.push(await worldGame!.buildScene(source, cell.origin, { shareDepth: true, cluster: true }));
+        scenes.push(await worldGame!.buildScene(source, cell.frame, { shareDepth: true, cluster: true }));
         renderer.resetState();
       }
       if (!worldGameOn() || !worldGame) return;
       cell.clusters = scenes.splice(0);
-      const o = cell.origin;
+      cell.lit = lit;
+      const o = cell.frame;
       cell.clusterBoxes = cell.clusters.map((s) => (s.bounds
         ? [o.x + s.bounds[0], o.y + s.bounds[1], o.z + s.bounds[2], o.x + s.bounds[3], o.y + s.bounds[4], o.z + s.bounds[5]] : cell.box));
     } catch (error) {
@@ -1292,12 +1397,16 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     for (const scene of cell.clusters ?? []) worldGame?.disposeScene(scene);
     cell.clusters = null;
     cell.clusterBoxes = [];
+    if (cell.shadow) worldGame?.freeShadowTile(cell.shadow);
+    cell.shadow = null;
+    cell.shadowKey = '';
   }
 
   /** Every room back to the merged batches (game shading off, or the view going). */
   function stopWorldGame(): void {
     for (const room of worldGameRooms.values()) dropWorldGameRoom(room);
     for (const cell of worldGameCells.values()) dropWorldCluster(cell);
+    dropWorldFarFloor();
     syncRooms();
     applyRenderMode();
   }
@@ -1319,7 +1428,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
    *  within the budget are drawn on their own, built nearest first; with "Whole world" the cells build
    *  their clusters, nearest first, while no room is building. */
   function updateWorldGame(now: number): void {
-    if (!worldGameOn() || now - worldGameRanked < 200) return;
+    if (!worldGameOn() || worldGameHeld || now - worldGameRanked < 200) return;
     // the draw budget follows the frame's cost (while rooms build, their uploads cost frames too: held)
     if (worldGameDrawn && !worldGameBuilding && !worldClusterBuilding && !worldGameBudgetFixed && now - worldGameBudgetAt > 1000) {
       worldGameBudgetAt = now;
@@ -1339,6 +1448,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       }
     }
     worldGameRanked = now;
+    const steady = worldSteady();
     syncNativeFrame();
     const eye = scene3d.camera.position.clone().applyMatrix4(nativeFromWorld);
     const ranked = [...worldGameRooms.values()].filter((r) => !r.failed)
@@ -1356,8 +1466,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     ranked.forEach(({ room, distance }, rank) => {
       const cost = room.scene?.drawCount ?? average;
       const joined = !!room.cell.clusters;
-      const want = rank < WORLD_GAME_MAX_ROOMS && draws + cost <= worldGameBudget && (!joined || distance <= reach);
-      const keep = !!room.scene && rank < WORLD_GAME_MAX_ROOMS * 1.5 && draws + cost <= worldGameBudget * 1.5
+      // (everything kept: none, its cluster draws it the same from near and far)
+      const want = !steady && rank < WORLD_GAME_MAX_ROOMS && draws + cost <= worldGameBudget && (!joined || distance <= reach);
+      const keep = !steady && !!room.scene && rank < WORLD_GAME_MAX_ROOMS * 1.5 && draws + cost <= worldGameBudget * 1.5
         && (!joined || distance <= reach * 1.25);
       if (want || keep) draws += cost;
       if (want) wanted.push(room);
@@ -1376,6 +1487,37 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         .sort((a, b) => groundDistance2(a.box, eye) - groundDistance2(b.box, eye));
       if (cells.length) buildWorldCluster(cells[0]).catch(() => { /* reported above */ });
     }
+    if (steady) bakeWorldShadows(eye);
+    syncWorldFarFloor();
+  }
+
+  /** Everything kept: the shadow maps of the cells whose casters changed (a cell joined within reach), nearest
+   *  first, a few each time. */
+  let worldShadowBakes = 0;   // (tests)
+  function bakeWorldShadows(eye: THREE.Vector3): void {
+    const T = world.tileUnits, reach = WORLD_SHADOW_REACH_TILES * T;
+    const joined = [...worldGameCells.values()].filter((c) => c.clusters?.length);
+    const todo: { cell: WorldGameCell; box: number[]; casters: GameScene[]; key: string }[] = [];
+    for (const cell of joined) {
+      const box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+      for (const b of cell.clusterBoxes) growBox(box, b);
+      const near = (b: number[]) => b[0] < box[3] + reach && b[3] > box[0] - reach && b[1] < box[4] + reach && b[4] > box[1] - reach;
+      const from = joined.filter((c) => c.clusterBoxes.some(near));
+      const key = from.map((c) => c.key).sort().join(';');
+      if (key === cell.shadowKey) continue;
+      todo.push({ cell, box, key, casters: from.flatMap((c) => c.clusters!.filter((_, k) => near(c.clusterBoxes[k]))) });
+    }
+    todo.sort((a, b) => groundDistance2(a.box, eye) - groundDistance2(b.box, eye));
+    const t0 = performance.now();
+    for (const { cell, box, casters, key } of todo) {
+      if (performance.now() - t0 > 6) break;
+      const extent = Math.max(box[3] - box[0], box[4] - box[1]) / T;
+      const size = Math.min(WORLD_SHADOW_MAX, 2 ** Math.ceil(Math.log2(Math.max(256, extent * WORLD_SHADOW_TEXELS))));
+      cell.shadow = worldGame!.bakeShadowTile(box, casters, size, cell.shadow);
+      cell.shadowKey = key;
+      worldShadowBakes++;
+    }
+    if (todo.length) renderer.resetState();
   }
 
   /** The scenes the camera sees, nearest first: the rooms drawn on their own and the clusters (less those
@@ -1403,10 +1545,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       }
     }
     visible.sort((a, b) => a.distance - b.distance);
+    // the endless floor, behind everything (in view wherever the camera looks down)
+    for (const { scene, box } of worldFarFloor) visible.push({ scene, box, room: false, distance: Infinity });
     const shadowReach = WORLD_GAME_SHADOW_TILES * world.tileUnits;
     return {
       visible,
-      casters: visible.filter((v) => v.room && v.distance <= shadowReach).slice(0, WORLD_GAME_CASTERS),
+      // (everything kept: each cell's own shadow map, drawn once)
+      casters: worldSteady() ? [] : visible.filter((v) => v.room && v.distance <= shadowReach).slice(0, WORLD_GAME_CASTERS),
     };
   }
 
@@ -1435,7 +1580,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const target = camera.position.clone().add(forward).applyMatrix4(nativeFromWorld);
     const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).transformDirection(nativeFromWorld);
     const units = nativeFromWorld.getMaxScaleOnAxis();
-    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const size = worldStillSize ?? renderer.getDrawingBufferSize(new THREE.Vector2());
     // the shadow map over the casters (or, with none near, the nearest scenes in view)
     const box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
     for (const v of casters.length ? casters : visible.slice(0, 1)) growBox(box, v.box);
@@ -1448,9 +1593,16 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     renderer.setRenderTarget(null);
     renderer.clear();
     const t0 = performance.now();
+    // (everything kept: every scene in view in the occlusion, and each cluster its cell's shadow map)
+    const steady = worldSteady();
+    let tiles: Map<GameScene, ShadowTile> | null = null;
+    if (steady && !(window as any).__bs?.noShadowTiles) {   // (tests: without them, to compare)
+      tiles = new Map();
+      for (const cell of worldGameCells.values()) if (cell.shadow) for (const scene of cell.clusters ?? []) tiles.set(scene, cell.shadow);
+    }
     worldGame!.renderWorld({ eye, target, up, fov: camera.fov, width: size.x, height: size.y, near: camera.near * units, far: camera.far * units },
       frozenTicks ?? waterTicks, 0, visible.map((v) => v.scene), casters.map((v) => v.scene), box,
-      visible.filter((v) => v.room).slice(0, WORLD_GAME_OCCLUDERS).map((v) => v.scene));
+      (steady ? visible : visible.filter((v) => v.room).slice(0, WORLD_GAME_OCCLUDERS)).map((v) => v.scene), tiles);
     worldGameCost = worldGameCost * 0.9 + (performance.now() - t0) * 0.1;
     worldGameDrawn = visible.length;
     renderer.resetState();
@@ -1464,8 +1616,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     scene.background = background;
   }
   let worldThreeCost = 0;
+  let worldStillSize: THREE.Vector2 | null = null;   // (tests: a still's own size)
   let worldGameBudgetAt = 0;
   let worldGameBudgetFixed = false;   // (tests: a budget that does not follow the frame)
+  let worldGameHeld = false;   // (tests: what is drawn left as it is wherever the camera goes)
   let worldGameSlow = 0;
   let worldGameCeiling = Infinity, worldGameCeilingAt = 0;   // the budget that last made frames late
 
@@ -1520,7 +1674,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const eye = gameCamera?.eye ?? scene3d.camera.position.clone().applyMatrix4(nativeFromWorld);
     const target = gameCamera?.target ?? scene3d.controls.target.clone().applyMatrix4(nativeFromWorld);
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-    return { eye, target, fov: scene3d.camera.fov, width: size.x, height: size.y };
+    // (the camera's range: the game's, or out to an endless floor)
+    const T = world.tileUnits;
+    return { eye, target, fov: scene3d.camera.fov, width: size.x, height: size.y, near: scene3d.camera.near * T, far: scene3d.camera.far * T };
   }
   if (!allMode) {
     (scene3d as any)._loop = function gameLoop(this: any, t: number) {
@@ -1863,13 +2019,88 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     storyBox.hidden = false;
   }
 
+  // Room progress: rooms whose parts change as their story moves on (a monument rebuilt in stages) get a slider per
+  // progress value, starting at the latest; the game draws one stage, and so does the view (individuals.ts). The
+  // choice is kept per build and room, and All rooms draws each room at it.
+  const progressBox = el('div', { class: 'wp-range', hidden: true });
+  const progressKey = () => `bs.roomProgress.${app.store.versionId ?? ''}`;
+  function loadRoomProgress(): void {
+    world.allIndividuals = !allMode && !!state.variants;
+    world.individualProgress.clear();
+    try {
+      const saved = JSON.parse(localStorage.getItem(progressKey()) || '{}');
+      for (const [key, value] of Object.entries(saved)) if (Number.isInteger(value)) world.individualProgress.set(key, value as number);
+    } catch { /* no saved progress */ }
+  }
+  function saveRoomProgress(): void {
+    try { localStorage.setItem(progressKey(), JSON.stringify(Object.fromEntries(world.individualProgress))); } catch { /* not kept */ }
+  }
+  function setupProgress(roomId: number): void {
+    clear(progressBox);
+    progressBox.hidden = true;
+    const shard = world.rooms.get(roomId)?.shard;
+    const own = shard?.room_number;
+    const variables = [...progressVariables(shard).values()].filter((v) => v.room === own);
+    if (!variables.length) return;
+    for (const v of variables) {
+      const key = `${v.room}/${v.variable}`;
+      const out = el('span', { class: 'dim small' });
+      const value = world.individualProgress.get(key) ?? v.latest;
+      const input = el('input', { type: 'range', min: '0', max: String(v.latest), step: '1', value: String(Math.min(value, v.latest)),
+        'aria-label': 'Room progress' }) as HTMLInputElement;
+      const label = () => { out.textContent = Number(input.value) >= v.latest ? 'latest' : `stage ${Number(input.value) + 1} of ${v.latest + 1}`; };
+      input.addEventListener('input', label);
+      input.addEventListener('change', () => {
+        const chosen = Number(input.value);
+        if (chosen >= v.latest) world.individualProgress.delete(key); else world.individualProgress.set(key, chosen);
+        saveRoomProgress();
+        reloadHomeRoom();
+      });
+      label();
+      append(progressBox,
+        el('div', { class: 'wp-range-head' }, el('span', { text: 'Room progress', title: "Parts of this room change as its story moves on; the game draws one stage at a time" }), out),
+        input);
+    }
+    progressBox.hidden = false;
+  }
+  /** The room drawn again as its individuals now are (progress, every variant), its game frame with it. */
+  function reloadHomeRoom(): void {
+    homeReload = homeReload.then(async () => {
+      if (allMode || !entry || destroyed) return;
+      const id = Number(entry.i);
+      world.unloadRoom(id);
+      const room = await world.loadRoom(id);
+      if (!room || destroyed) return;
+      applyCategories();
+      applyToggles();
+      await world.refreshGroundPlane(id);
+      await gameSetup;
+      if (gameFrame && !destroyed) {
+        await gameFrame.setRoom(await world.gameRoomSource(room, world.neighbourRooms()));
+        renderer.resetState();
+      }
+    }).catch((error) => console.warn('room not drawn again', error));
+  }
+
   // all rooms: the whole world with the game's shading, or only the rooms near the camera (as many as
   // the frame holds at its pace either way: the nearest room by room, the rest joined)
   const gameReachRange = allMode ? check('gamefar', 'Whole world', () => {
     if (!state.gamefar) { for (const cell of worldGameCells.values()) dropWorldCluster(cell); syncRooms(); }
+    applyWorldGameSettings();
+    if (inputs.gamesteady) inputs.gamesteady.disabled = !state.gamefar;
     worldGameRanked = 0;
   }, { title: "Draw every room with the game's shading (the nearest exactly, the rest a little simplified: no lamps or edge fade). Off: only the rooms near the camera; the rest keep the plain shading." }) : null;
   gameReachRange?.classList.add('wp-sub');
+  // everything kept: the clusters built again with their lamps, in full detail, each cell's shadows its own
+  const gameSteadyCheck = allMode ? check('gamesteady', 'Keep everything loaded', () => {
+    for (const cell of worldGameCells.values()) dropWorldCluster(cell);
+    for (const room of worldGameRooms.values()) dropWorldGameRoom(room);
+    applyWorldGameSettings();
+    syncRooms();
+    worldGameRanked = 0;
+  }, { title: "With Whole world: every room drawn the same wherever the camera is, so nothing changes as you move (full detail, lamps and shadows everywhere; effects still start near the camera). Uses more GPU memory." }) : null;
+  gameSteadyCheck?.classList.add('wp-sub');
+  if (inputs.gamesteady) inputs.gamesteady.disabled = !state.gamefar;
 
   // the views of the data rather than the room (Debug)
   const debugChecks = [
@@ -1877,6 +2108,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     check('untextured', 'Untextured fills', applyToggles,
       { swatch: '#6a7d55', title: 'Placements with no decodable texture, drawn in flat category colours' }),
     check('collision', 'Collision extents', applyToggles, { swatch: '#79a9c9' }),
+    allMode ? null : check('variants', 'Every variant', () => { world.allIndividuals = !!state.variants; reloadHomeRoom(); },
+      { swatch: '#b48ead', title: "Draw every stage and state of the room's parts at once (the game draws one: the room's progress picks it)" }),
     check('empty', 'Editor gizmos', applyToggles,
       { swatch: GIZMO_SWATCH, title: 'Untextured markers placed for the game\'s editor (effect direction arrows, sound, dig and combat markers). The game does not show them.' }),
   ];
@@ -1897,8 +2130,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       { swatch: '#c9a86a', title: allMode
         ? "Draw the rooms near the camera with the game's own lights, shadows, shading and water"
         : "Draw the room with the game's own lights, shadows, shading and water" }),
-    gameReachRange, gameLightsCheck, gameFogCheck,
-    storyBox,
+    gameReachRange, gameSteadyCheck, gameLightsCheck, gameFogCheck,
+    storyBox, progressBox,
     check('ground', 'Ground plane', applyGround,
       { swatch: '#8c7b5e', title: 'The textured floor the game lays under and around each room. Each episode has its own; sea and river beds show through the water.' }),
     groundRange,
@@ -3910,7 +4143,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
     const promise = Promise.resolve(app.store.worldRoom(id)).then((shard) => {
       if (!shard) throw new Error(`room ${id} shard is not stored`);
-      return shard;
+      // (as the game draws it: its individuals' conditions at each room's chosen progress)
+      return world.drawnShard(shard);
     }).catch((error) => {
       shardCache.delete(id);
       throw error;
@@ -5395,6 +5629,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     applyFlatten();
     applyWater();
     if (allMode) applyRenderScale();
+    // each room's chosen progress (its parts at a stage of its story), kept per build
+    loadRoomProgress();
+    world.endlessFloor = !Number.isFinite(groundDistance());
 
     if (entry) {
       const meta = world.roomMeta(entry.i);
@@ -5406,6 +5643,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       world.getWorldRoom = (roomId: any) => ({ id: Number(roomId), ...(neighbourOffsets.get(Number(roomId)) ?? { x: 0, y: 0 }) });
       const room = await world.loadRoom(entry.i);
       if (destroyed || !room) return;
+      setupProgress(room.id);
       hud.setStage(`ready · ${room.meshes.length} batches`, { steady: true });
       gameSetup = setupGameShading(room);
       if (state.neighbours) applyNeighbours();
@@ -5648,6 +5886,69 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
      *  frame, three's view over it, and three's view alone. */
     /** All rooms (tests): hold the game frame's clock at `ticks` (null: run again). */
     freezeClock(ticks: number | null) { frozenTicks = ticks; },
+    /** Tests: the rooms and clusters drawn kept as they are while the camera moves (what a view shows from
+     *  where another view left them). */
+    holdWorldGame(on: boolean) { worldGameHeld = on; },
+    /** Tests: every surface a ray (native frame) meets in the loaded rooms, nearest first: its distance (native
+     *  units), part and face normal (what overlaps where two parts draw at one depth). */
+    rayHits(origin: number[], direction: number[]) {
+      world.root.updateMatrixWorld(true);
+      const R = world.root.matrixWorld, Ri = R.clone().invert();
+      const o = new THREE.Vector3(origin[0], origin[1], origin[2]).applyMatrix4(R);
+      const d = new THREE.Vector3(origin[0] + direction[0], origin[1] + direction[1], origin[2] + direction[2]).applyMatrix4(R).sub(o).normalize();
+      const ray = new THREE.Raycaster(o, d, 0, Infinity);
+      ray.layers.enableAll();
+      const meshes = [...world.rooms.values()].flatMap((room: any) => room.meshes);
+      return ray.intersectObjects(meshes, false).map((hit: any) => {
+        const at = hit.point.clone().applyMatrix4(Ri);
+        const e = hit.object.userData.exact ?? {};
+        return { at: [at.x, at.y, at.z], distance: at.distanceTo(new THREE.Vector3(origin[0], origin[1], origin[2])),
+          room: e.room, mesh: e.mesh, material: e.material, renderTexture: e.renderTexture, category: e.category, instance: hit.instanceId,
+          face: hit.face ? [hit.face.a, hit.face.b, hit.face.c] : null, normal: hit.face ? [hit.face.normal.x, hit.face.normal.y, hit.face.normal.z].map((v: number) => +v.toFixed(3)) : null };
+      });
+    },
+    /** All rooms (tests): a room's parts as the game's frame draws them in this view (world native frame), and the
+     *  rooms whose rects meet its own. */
+    async gameParts(id: number, meshes: number[] | null = null) {
+      const entry = worldGameRooms.get(id);
+      if (!entry || !worldFrame) return null;
+      const source = await worldGameSource(id);
+      const parts = source.batches.flatMap((b) => (meshes && !meshes.includes(b.mesh) ? [] : b.matrices.map((m, k) => {
+        const p = new THREE.Vector3().setFromMatrixPosition(m).add(entry.origin);
+        return { mesh: b.mesh, material: b.material, renderTexture: b.renderTexture, category: b.category, k, at: [p.x, p.y, p.z].map(Math.round),
+          basis: [0, 1, 2, 4, 5, 6, 8, 9, 10].map((i) => +m.elements[i].toFixed(4)), order: b.order?.[k] ?? null };
+      })));
+      const f = worldFrame.frames.get(id)!;
+      const near = [...worldFrame.frames].filter(([other, g]) => other !== id && g.x < f.x + f.w && g.x + g.w > f.x && g.y < f.y + f.h && g.y + g.h > f.y).map(([other]) => other);
+      return { origin: [entry.origin.x, entry.origin.y], parts, overlapping: near };
+    },
+    /** All rooms (tests): the game's frame from a camera (native eye and target, fov 40) at `width` x `height`,
+     *  what is drawn left as it is: RGBA rows as the frame's main target holds them. */
+    worldStill(eye: number[], target: number[], width: number, height: number, frames = 4) {
+      if (!worldGame) return null;
+      syncNativeFrame();
+      const cam = scene3d.camera;
+      const saved = { position: cam.position.clone(), quaternion: cam.quaternion.clone(), fov: cam.fov, aspect: cam.aspect, up: cam.up.clone() };
+      const held = worldGameHeld;
+      worldGameHeld = true;
+      try {
+        cam.position.copy(new THREE.Vector3(eye[0], eye[1], eye[2]).applyMatrix4(worldFromNative));
+        cam.up.set(0, 1, 0);
+        cam.lookAt(new THREE.Vector3(target[0], target[1], target[2]).applyMatrix4(worldFromNative));
+        cam.fov = 40; cam.aspect = width / height;
+        cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+        worldStillSize = new THREE.Vector2(width, height);
+        for (let k = 0; k < frames; k++) renderAllRooms();
+        const out = worldGame.readMain();
+        return out ? Array.from(out.data) : null;
+      } finally {
+        worldStillSize = null;
+        worldGameHeld = held;
+        cam.position.copy(saved.position); cam.quaternion.copy(saved.quaternion); cam.up.copy(saved.up);
+        cam.fov = saved.fov; cam.aspect = saved.aspect; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+        renderer.resetState();
+      }
+    },
     /** All rooms (tests): the joined cells' scenes. */
     worldGameClusters() { return [...worldGameCells.values()].flatMap((c) => c.clusters ?? []); },
     worldGameProfile() {
@@ -5676,7 +5977,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         times: worldGameTimes.slice(-20), cost: +worldGameCost.toFixed(2), three: +worldThreeCost.toFixed(2), drawn: worldGameDrawn,
         budget: worldGameBudget, frame: +worldLoopCost.toFixed(2), dropped: worldGameDropped,
         cells: worldGameCells.size, joined: [...worldGameCells.values()].filter((c) => c.clusters).length,
-        joining: worldClusterBuilding, allGame: worldAllGame,
+        joining: worldClusterBuilding, allGame: worldAllGame, steady: worldSteady(), shadowBakes: worldShadowBakes,
+        farFloor: { state: worldFarFloorState, scenes: worldFarFloor.length, plainVisible: !!worldPlane?.visible },
+        shadows: [...worldGameCells.values()].filter((c) => c.shadow).map((c) => c.shadow!.size),
         clusterBytes: [...worldGameCells.values()].reduce((n, c) => n + (c.clusters ?? []).reduce((m, s) => m + s.bytes, 0), 0), draws: worldGame?.lastDraws ?? null,
       };
     },

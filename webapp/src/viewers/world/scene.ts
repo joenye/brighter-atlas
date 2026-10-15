@@ -19,8 +19,9 @@ import type { GameRoomSource, GameBatchSource, GameActorSource, GameActorLight }
 import { placedLight, type ListedLight } from './point-lights.js';
 import { restWorldMatrices } from '../../extract/skeleton.js';
 import { emissionKey } from './draw-order.js';
+import { drawnShard, hiddenIndividuals } from './individuals.js';
 import {
-  planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh,
+  planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh, PLANE_DISTANCE_MAX,
   type PlaneUniforms,
 } from './ground-plane.js';
 
@@ -359,6 +360,9 @@ function authoredMips<T extends THREE.Texture>(texture: T, mipmaps: any[], color
 /** How far past its field the game frame's endless floor runs (tiles): the
  *  game's camera sees 100 tiles, and it orbits the room from further off. */
 const GAME_PLANE_FAR = 160;
+/** The endless floor's far reach (tiles) when the view asks for no limit, and the distance past which its pieces
+ *  join to a texture repeat each. */
+const ENDLESS_PLANE_FAR = 1000;
 /** A neighbouring room's lights against the room's (the game's scale at rest). */
 const NEIGHBOUR_LIGHT = 0.1;
 
@@ -749,7 +753,27 @@ export class WorldScene {
     )) {
       throw new Error(`room ${meta.id} shard has no gameplay spawn tables`);
     }
-    return shard;
+    if (Number.isInteger(shard.room_number)) this.shardsByNumber.set(shard.room_number, shard);
+    return this.drawnShard(shard);
+  }
+
+  /** Individuals: the progress chosen per room (by room number and variable; none: the latest), and whether every
+   *  individual is drawn whatever its conditions (debug). */
+  readonly individualProgress = new Map<string, number>();
+  /** The game frame's floor runs on for hundreds of tiles (the view's "no limit"), not the game's few. */
+  endlessFloor = false;
+  allIndividuals = false;
+  /** Loaded shards by room number (conditions that name another room's individuals). */
+  private readonly shardsByNumber = new Map<number, any>();
+
+  /** A stored shard as the game draws it: its individuals' conditions evaluated (individuals.ts). */
+  drawnShard(shard: any): any {
+    if (!shard || this.allIndividuals) return shard;
+    const hidden = hiddenIndividuals(shard, {
+      progress: (room, variable) => this.individualProgress.get(`${room}/${variable}`),
+      room: (number) => this.shardsByNumber.get(number) ?? null,
+    });
+    return drawnShard(shard, hidden, this.index?.columns?.occurrence);
   }
 
   async _resolveWorldRoom(roomId: number, meta: any, shard: any): Promise<any> {
@@ -1392,7 +1416,8 @@ export class WorldScene {
       }
       bounds = { ...bounds, loaded, loadedLayers };
     }
-    return { ...source, bounds, plane: field ? planeTiles(field, Infinity, GAME_PLANE_FAR) : [], others };
+    const far = this.endlessFloor ? ENDLESS_PLANE_FAR : GAME_PLANE_FAR;
+    return { ...source, bounds, plane: field ? planeTiles(field, Infinity, far, this.endlessFloor ? PLANE_DISTANCE_MAX : Infinity) : [], others };
   }
 
   /** One room's parts and actors for the game's frame, with its bounds. */
@@ -1672,6 +1697,8 @@ export class WorldScene {
         const row = rows[placementIndex];
         const occurrence = shard.occurrences[row[pc.occurrence]];
         if (!occurrence) throw new Error(`${category} placement ${placementIndex} has no occurrence`);
+        // (an individual the game leaves out)
+        if (shard.left_out?.has(Number(row[pc.occurrence]))) continue;
         add({
           category, sourceKind: 'occurrence', row, placementIndex,
           columns: pc, z: occurrence[oc.z],

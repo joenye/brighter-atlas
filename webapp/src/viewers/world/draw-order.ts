@@ -46,6 +46,51 @@ const compare = (a: EmissionKey, b: EmissionKey) => {
   return 0;
 };
 
+/** A step in the depth of a part that the game draws after another in its cell (the tie rank's unit, in the
+ *  depth range: a few steps of a 32-bit depth near its far end, where coplanar parts' depths part by one or two). */
+export const TIE_DEPTH_STEP = 2 ** -22;
+/** The most tie steps a part is moved by. */
+export const TIE_RANK_MAX = 15;
+
+/** Each part's tie rank: where several parts sit in one cell, their place in the order the game draws them (the
+ *  first 0), so that a part drawn later is drawn a few depth steps nearer and wins where they lie in one plane,
+ *  as the game's draw order makes it win (its depth test passes ties; two different triangles in one plane
+ *  give depths a step or two apart either way, so the parts flickered as the camera moved, and the joined world's
+ *  draws do not keep each room's order). Per batch, per instance; null where no part ties. Water is left out. */
+export function tieRanks<B extends OrderedBatch>(batches: B[]): Map<B, number[]> | null {
+  const sequence = new Map<B, number[]>();
+  let next = 0;
+  for (const group of drawGroups(batches.filter((b) => !b.water && b.order))) {
+    for (const { batch, index } of group.parts) {
+      let list = sequence.get(batch);
+      if (!list) sequence.set(batch, list = new Array(batch.matrices.length).fill(0));
+      list[index] = next++;
+    }
+  }
+  const cells = new Map<string, { batch: B; index: number; at: number }[]>();
+  for (const [batch, list] of sequence) {
+    batch.order!.forEach((key, index) => {
+      const cell = `${key[2]},${key[3]},${key[4]}`;
+      let parts = cells.get(cell);
+      if (!parts) cells.set(cell, parts = []);
+      parts.push({ batch, index, at: list[index] });
+    });
+  }
+  let out: Map<B, number[]> | null = null;
+  for (const parts of cells.values()) {
+    if (parts.length < 2) continue;
+    parts.sort((a, b) => a.at - b.at);
+    parts.forEach(({ batch, index }, rank) => {
+      if (!rank) return;
+      out ??= new Map();
+      let ranks = out.get(batch);
+      if (!ranks) out.set(batch, ranks = new Array(batch.matrices.length).fill(0));
+      ranks[index] = Math.min(rank, TIE_RANK_MAX);
+    });
+  }
+  return out;
+}
+
 /** Group batches' placements into the game's draws. Without emission keys
  *  every comparison ties, so batches keep their own order. */
 export function drawGroups<B extends OrderedBatch>(batches: B[]): DrawGroup<B>[] {

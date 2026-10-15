@@ -17,7 +17,7 @@ import { fogMarchConstants } from './game-fog.js';
 import { GameShaderLibrary, putFloats, ROOM_MASK_UNIFORM, ROOM_MASK_WIDTH, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
 import { bakeGameGeometry, bakeGameGeometryAsync, posePayload, type BakeInputs, type BakeInstance, type GameBakeWorker } from './game-geometry.js';
-import { drawGroups, type DrawGroup, type EmissionKey } from './draw-order.js';
+import { drawGroups, tieRanks, type DrawGroup, type EmissionKey } from './draw-order.js';
 import { styleColourBytes } from './game-water.js';
 import { detectChains } from '../../texture-roles.js';
 import { PLANE_GAME_DISTANCE, planeCount, planeGroups, TILE_QUAD, type PlaneTile } from './ground-plane.js';
@@ -48,13 +48,22 @@ export interface GameRenderIndex extends GameRenderTables {
  *  offset (native) into the cluster's frame, its resting actors posed as parts, no lights; the cluster's
  *  bounds span `size` tiles. Its environment is `roomId`'s (the rooms joined share one). */
 export function clusterSource(rooms: { source: GameRoomSource; offset: THREE.Vector3; slot: number }[], size: [number, number],
-  roomId: number, tileUnits: number): GameRoomSource {
+  roomId: number, tileUnits: number, lit = false): GameRoomSource {
   const batches: GameBatchSource[] = [];
   const plane: (PlaneTile & { slot: number })[] = [];
+  const lights: ListedLight[] = [];
   for (const { source, offset, slot } of rooms) {
+    withTies(source.batches);
     const move = new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z);
     for (const batch of source.batches) {
       batches.push({ ...batch, matrices: batch.matrices.map((m) => move.clone().multiply(m)), slots: batch.matrices.map(() => slot) });
+    }
+    // (with its lamps: each room's own lights, moved with it; the neighbours' are their own rooms' here)
+    for (const l of lit ? source.lights ?? [] : []) {
+      if (l.group === 'neighbour') continue;
+      const p = l.light.position;
+      lights.push({ ...l, light: { ...l.light, position: [p[0] + offset.x, p[1] + offset.y, p[2] + offset.z] },
+        centre: l.centre ? [l.centre[0] + offset.x, l.centre[1] + offset.y] : l.centre });
     }
     const dx = offset.x / tileUnits, dy = offset.y / tileUnits;
     for (const tile of source.plane ?? []) plane.push({ ...tile, x: tile.x + dx, y: tile.y + dy, slot });
@@ -63,10 +72,35 @@ export function clusterSource(rooms: { source: GameRoomSource; offset: THREE.Vec
   const first = rooms[0].source;
   return {
     roomId, batches, actors: [], plane, water: first.water, textureMeta: first.textureMeta, grid: null,
+    ...(lights.length ? { lights } : {}),
     bounds: { inner: [0, 0, size[0], size[1]], outer: [0, 0, size[0], size[1]],
       layers: Math.max(1, ...rooms.map((r) => r.source.bounds.layers)) },
   };
 }
+
+/** Each batch's tie ranks in its room (draw-order.ts tieRanks), set on the batches (kept: a room's batches are ranked
+ *  once, and a cluster's copies carry their room's ranks). */
+function withTies(batches: GameBatchSource[]): void {
+  if (batches.some((b) => b.ties)) return;
+  const ranks = tieRanks(batches);
+  for (const [batch, list] of ranks ?? []) batch.ties = list;
+}
+
+/** All rooms with everything kept: a shadow map of its own for a part of the world (a cell's clusters), drawn
+ *  once from the scenes that cast into it (they do not move), so its shadows never change as the camera moves. */
+export interface ShadowTile {
+  depth: GameTexture;
+  fb: WebGLFramebuffer;
+  size: number;
+  /** Its fit (light space to the map's pixels), receiver (native to the map's texture space) and normal offset. */
+  fit: THREE.Matrix4;
+  receiver: THREE.Matrix4;
+  offset: number;
+}
+
+/** A joined draw's own depth program (its depth reads its textures): the layered form, and which of the joined draw's
+ *  arrays each of its textures is (its slot to the main program's). */
+interface LayeredDepth { program: GameProgram; from: Record<number, number> }
 
 /** One placed batch: a mesh drawn with one material at many placements. */
 export interface GameBatchSource {
@@ -87,6 +121,8 @@ export interface GameBatchSource {
   lit?: boolean;
   /** Per instance (all rooms, a cluster): its room's slot in the room mask. */
   slots?: number[];
+  /** Per instance: its tie rank in its room (draw-order.ts tieRanks), set as a room's draws are built. */
+  ties?: number[];
 }
 
 /** One skinned part of an actor: its mesh in its own space, posed each frame
@@ -219,7 +255,7 @@ export interface Draw {
   depthState?: DrawState;
   cbs?: Record<string, Uint32Array>;
   /** The main pass's textures with their sampler objects, and the frame targets and lights they were made with. */
-  mainBound?: { targets: unknown; lights: unknown; textures: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> };
+  mainBound?: { targets: unknown; lights: unknown; shadow: unknown; textures: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> };
   water: GameBatchSource['water'];
   /** Actors: the bone palette texture (3 texels per bone) and its source. */
   bones?: { texture: GameTexture; actor: GameActorSource; data: Float32Array; live: boolean; sent?: Float32Array };
@@ -237,6 +273,16 @@ const f32 = Math.fround;
 const pad5 = (n: number) => String(n).padStart(5, '0');
 
 // Rows of a 4x4 (clip = M p) as the constant buffer stores them.
+/** A depth draw's vertex constants: its matrix, the neutral vignette (as renderFrame's depth passes have them). */
+function neutralWords(wvp: THREE.Matrix4): Uint32Array {
+  const words = new Uint32Array(72);
+  putFloats(words, 0, rows(wvp));
+  putFloats(words, 64, rows(wvp));
+  putFloats(words, 128, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]);
+  putFloats(words, 240, [0, 0, 0, 0, 0, 0, 0, 10000, 0, 0, 0, 1]);
+  return words;
+}
+
 function rows(m: THREE.Matrix4): number[] {
   const e = m.elements;
   return [e[0], e[4], e[8], e[12], e[1], e[5], e[9], e[13], e[2], e[6], e[10], e[14], e[3], e[7], e[11], e[15]];
@@ -379,6 +425,9 @@ export class GameFrame {
   showPlane = true;
   /** How far the ground plane reaches (tiles, Infinity: endless); the game's is ten. */
   planeDistance = Infinity;
+  /** The interactive view: the room's fade follows the floor's reach and the neighbours shown (sceneLook); off,
+   *  the game's own (stills, parity). */
+  viewerReach = false;
   /** Shade neighbouring rooms as the game does: their lights at a tenth,
    *  their water under the room's vignette. Off: lit like the room. */
   neighbourFade = true;
@@ -774,6 +823,7 @@ export class GameFrame {
       // (six built at once, their textures and shaders fetched side by side: one after another, a phone's slow
       // connection paid a round trip per draw, 20 s of a Beach; each step of a build makes its GL calls in one go,
       // and textures are shared through their promises, so builds may interleave; the draws keep their order)
+      if (!this.buildingCluster) withTies(scene.batches);
       const groups = drawGroups(scene.batches), built: (Draw | null)[] = new Array(groups.length);
       // all rooms: a cluster's parts drawn by the same program from textures of the same shape are joined into one
       // draw, their textures layers of arrays (the groups so joined are built here, the rest as before)
@@ -930,6 +980,10 @@ export class GameFrame {
   readonly arrayLog: { at: number; ms: number; bytes: number; layers: number; size: number; format: number }[] = [];
   /** All rooms: join a cluster's parts drawn alike (a texture array per layered slot). */
   joinLayers = false;
+  /** All rooms: clusters built from now on cast shadows and occlude as a room does (their joined parts in their
+   *  shared depth draws, joined only where that depth needs no texture). Off, a cluster has no depth of its
+   *  own beyond its parts left unjoined (seen from afar, it casts into no shadow map). */
+  clusterDepth = false;
   private buildingCluster = false;
 
   /** A cluster's groups joined where they can be: drawn by one program with a layered form, their textures planes
@@ -938,17 +992,20 @@ export class GameFrame {
    *  from one page become one draw in `built` (at its first group's place). Returns the groups it took. */
   private async joinGroups(groups: DrawGroup<GameBatchSource>[], built: (Draw | null)[], _next: SceneDraws): Promise<Set<number>> {
     const sets = new Map<string, { at: number[]; layers: number[]; program: GameProgram; page: LayerPage;
-      depth: GameProgram | null; depthIndex: number | null }>();
+      depth: GameProgram | null; depthIndex: number | null; depthLayered: LayeredDepth | null }>();
     for (let i = 0; i < groups.length; i++) {
       const batch = groups[i].batch;
       if (batch.water || batch.renderTexture < 0 || batch.mesh < 0) continue;
       const [programIndex, depthIndex] = this.batchPrograms(batch);
       if (programIndex === null) continue;
-      // a room drawn on its own casts and occludes: its parts join only where their depth needs no texture
-      let depth: GameProgram | null = null;
-      if (!this.buildingCluster && depthIndex !== null) {
+      // a room drawn on its own casts and occludes: its parts' depth joins the shared depth draw where it needs no
+      // texture, else the joined draw has a depth draw of its own reading the same layers
+      let depth: GameProgram | null = null, textured = false;
+      if ((!this.buildingCluster || this.clusterDepth) && depthIndex !== null) {
         depth = await this.shaders.program(depthIndex, 'clip').catch(() => null);
-        if (!depth || depth.translated.samplers.length || !this.sharedDepth) continue;
+        if (!depth) continue;
+        textured = depth.translated.samplers.length > 0;
+        if (!textured && !this.sharedDepth) continue;
       }
       const program = await this.shaders.program(programIndex, 'clip', true).catch(() => null);
       if (!program?.layered?.length) continue;
@@ -961,21 +1018,23 @@ export class GameFrame {
       const slots = plain.translated.samplers.filter((s) => s.stage === 'ps').map((s) => s.texture);
       if (slots.some((slot) => specs[slot] && !program.layered!.includes(slot))) continue;
       if (program.layered.some((slot) => !specs[slot])) continue;
+      const depthLayered = textured ? await this.layeredDepth(depth!, batch, specs, program.layered) : null;
+      if (textured && !depthLayered) continue;
       const placed = await this.materialLayer(program.layered, specs).catch(() => null);
       if (!placed) continue;
-      const key = `${programIndex}|${depthIndex ?? -1}|${batch.lit ? 'l' : ''}|${batch.category === 'terrain' ? 't' : 'p'}|${placed.shape}#${placed.pageIndex}`;
+      const key = `${programIndex}|${depthIndex ?? -1}|${depthLayered ? JSON.stringify(depthLayered.from) : ''}|${batch.lit ? 'l' : ''}|${batch.category === 'terrain' ? 't' : 'p'}|${placed.shape}#${placed.pageIndex}`;
       let set = sets.get(key);
-      if (!set) sets.set(key, set = { at: [], layers: [], program, page: placed.page, depth, depthIndex });
+      if (!set) sets.set(key, set = { at: [], layers: [], program, page: placed.page, depth: textured ? null : depth, depthIndex, depthLayered });
       set.at.push(i);
       set.layers.push(placed.layer);
     }
     // (their programs compiled off the page beforehand, as warmPrograms does the plain ones)
-    await Promise.all([...new Set([...sets.values()].filter((set) => set.at.length > 1).map((set) => set.program))]
+    await Promise.all([...new Set([...sets.values()].filter((set) => set.at.length > 1).flatMap((set) => [set.program, ...(set.depthLayered ? [set.depthLayered.program] : [])]))]
       .map((program) => this.gl.compileAsync(program.translated).catch(() => { /* the draw reports it */ })));
     const taken = new Set<number>();
     for (const set of sets.values()) {
       if (set.at.length < 2) continue;
-      const draw = await this.buildJoinedDraw(set.at.map((i) => groups[i]), set.layers, set.program, set.page, set.depth, set.depthIndex).catch((error) => {
+      const draw = await this.buildJoinedDraw(set.at.map((i) => groups[i]), set.layers, set.program, set.page, set.depth, set.depthIndex, set.depthLayered).catch((error) => {
         console.warn('game shading: joined draw skipped', set.program.index, error);
         return null;
       });
@@ -1022,19 +1081,37 @@ export class GameFrame {
     return { shape, page, pageIndex, layer };
   }
 
+  /** A depth program that reads the part's textures (an alpha test) in its layered form: each of its textures one of
+   *  the joined draw's own planes (`from`: its slot to the main program's), else null. */
+  private async layeredDepth(depth: GameProgram, batch: GameBatchSource, mainSpecs: Record<number, PlaneSpec>, mainLayered: number[]): Promise<LayeredDepth | null> {
+    const program = await this.shaders.program(depth.index, 'clip', true).catch(() => null);
+    if (!program?.layered?.length) return null;
+    const specs = this.planeSpecsFor(depth, batch);
+    if (!specs) return null;
+    if (depth.translated.samplers.some((s) => !specs[s.texture] || !program.layered!.includes(s.texture))) return null;
+    const same = (a: PlaneSpec, b: PlaneSpec) => a.image === b.image && a.srgb === b.srgb && a.subs.join(',') === b.subs.join(',');
+    const from: Record<number, number> = {};
+    for (const slot of program.layered) {
+      const main = mainLayered.find((m) => mainSpecs[m] && same(mainSpecs[m], specs[slot]));
+      if (main === undefined) return null;
+      from[slot] = main;
+    }
+    return { program, from };
+  }
+
   private async buildJoinedDraw(members: DrawGroup<GameBatchSource>[], layers: number[], program: GameProgram, page: LayerPage,
-    depth: GameProgram | null, depthIndex: number | null): Promise<Draw | null> {
+    depth: GameProgram | null, depthIndex: number | null, depthLayered: LayeredDepth | null = null): Promise<Draw | null> {
     const instances: BakeInstance[] = [];
     members.forEach((group, k) => {
       const material = this.index.materials[String(group.batch.material)];
       for (const { batch: b, index: i } of group.parts) {
-        instances.push({ payload: b.payload, matrix: b.matrices[i], tint: b.tints[i], recolours: b.recolours?.[i] ?? null, slot: b.slots?.[i],
+        instances.push({ payload: b.payload, matrix: b.matrices[i], tint: b.tints[i], recolours: b.recolours?.[i] ?? null, slot: b.slots?.[i], tie: b.ties?.[i],
           layer: layers[k], specular: material?.specular ?? [0, 0, 0], opacity: material?.opacity ?? 1 });
       }
     });
-    const [geometry] = await this.bakeBatch({
-      instances, layouts: [{ elements: program.elements, attributes: program.translated.attributes }], specular: [0, 0, 0], opacity: 1,
-    });
+    const layouts = [{ elements: program.elements, attributes: program.translated.attributes }];
+    if (depthLayered) layouts.push({ elements: depthLayered.program.elements, attributes: depthLayered.program.translated.attributes });
+    const [geometry, depthGeometry] = await this.bakeBatch({ instances, layouts, specular: [0, 0, 0], opacity: 1 });
     // (a room's joined parts in its shared depth draw, as each part alone would be)
     if (depth && depthIndex !== null && this.sharedDepth) {
       let entry = this.sharedDepth.get(depthIndex);
@@ -1044,6 +1121,12 @@ export class GameFrame {
     const glProgram = this.gl.compile(program.translated);
     const vao = await this.vertexArray(glProgram, geometry);
     const index = geometry.getIndex()!;
+    let ownDepth: Draw['depth'] = null;
+    if (depthLayered && depthGeometry) {
+      const depthGl = this.gl.compile(depthLayered.program.translated);
+      ownDepth = { program: depthLayered.program, gl: depthGl, vao: await this.vertexArray(depthGl, depthGeometry),
+        textures: Object.fromEntries(Object.entries(depthLayered.from).map(([slot, main]) => [slot, page.arrays[main]])) };
+    }
     const span: number[] | undefined = geometry.userData.bounds;
     if (this.buildingBounds && span) {
       for (let k = 0; k < 3; k++) {
@@ -1054,14 +1137,14 @@ export class GameFrame {
     return {
       program, gl: glProgram, vao, count: index.count,
       indexType: index.array instanceof Uint32Array ? this.context.UNSIGNED_INT : this.context.UNSIGNED_SHORT,
-      textures: page.arrays, depth: null, water: null,
+      textures: page.arrays, depth: ownDepth, water: null,
       largest: members.some((g) => g.batch.category === 'terrain') ? Infinity : geometry.userData.largest,
     };
   }
 
   private async buildDraw(group: DrawGroup<GameBatchSource>): Promise<Draw | null> {
     const instances = group.parts.map(({ batch: b, index: k }) => ({
-      payload: b.payload, matrix: b.matrices[k], tint: b.tints[k], recolours: b.recolours?.[k] ?? null, slot: b.slots?.[k],
+      payload: b.payload, matrix: b.matrices[k], tint: b.tints[k], recolours: b.recolours?.[k] ?? null, slot: b.slots?.[k], tie: b.ties?.[k],
     }));
     return this.buildPartDraw(group.batch, instances);
   }
@@ -1381,9 +1464,11 @@ export class GameFrame {
     if (!this.joinLayers || batch.water || batch.renderTexture < 0 || batch.mesh < 0) return false;
     const [programIndex, depthIndex] = this.batchPrograms(batch);
     if (programIndex === null) return false;
-    if (!cluster && depthIndex !== null) {
+    if ((!cluster || this.clusterDepth) && depthIndex !== null) {
       const depth = await this.shaders.program(depthIndex, 'clip').catch(() => null);
-      if (!depth || depth.translated.samplers.length) return false;
+      if (!depth) return false;
+      // (one reading a texture: in its layered form)
+      if (depth.translated.samplers.length && !(await this.shaders.program(depthIndex, 'clip', true).catch(() => null))?.layered?.length) return false;
     }
     const program = await this.shaders.program(programIndex, 'clip', true).catch(() => null);
     if (!program?.layered?.length) return false;
@@ -1523,9 +1608,58 @@ export class GameFrame {
    *  `occluders` (default: every scene), then copy the frame to the canvas where it drew (the canvas
    *  keeps what it holds elsewhere: the view beyond the rooms drawn). */
   renderWorld(camera: GameCamera, ticks: number, avatarZ: number, scenes: GameScene[], casters: GameScene[], box: number[],
-    occluders: GameScene[] = scenes): void {
+    occluders: GameScene[] = scenes, shadowTiles: Map<GameScene, ShadowTile> | null = null): void {
     if (!scenes.length) return;
-    this.withClipControl(() => this.renderFrame(camera, ticks, avatarZ, false, scenes, casters, box, occluders));
+    this.withClipControl(() => this.renderFrame(camera, ticks, avatarZ, false, scenes, casters, box, occluders, shadowTiles));
+  }
+
+  /** All rooms with everything kept: a shadow map over `box` (native: min x, y, z, max x, y, z) of `size`
+   *  pixels, drawn once from `casters` (into `reuse`'s texture when it is the same size). */
+  bakeShadowTile(box: number[], casters: GameScene[], size: number, reuse: ShadowTile | null = null): ShadowTile {
+    const gl = this.context, idx = this.index;
+    const { fit, receiver, offset } = shadowFitBox(box, idx.shadow.lightView, size);
+    let tile = reuse && reuse.size === size ? reuse : null;
+    if (reuse && !tile) this.freeShadowTile(reuse);
+    if (!tile) {
+      const depth = this.gl.texture2D(size, size, gl.DEPTH_COMPONENT32F);
+      tile = { depth, fb: this.gl.framebuffer(null, depth), size, fit, receiver, offset };
+    }
+    Object.assign(tile, { fit, receiver, offset });
+    const L = lightViewMatrix(idx.shadow.lightView);
+    const clip = new THREE.Matrix4().set(2 / size, 0, 0, -1, 0, -2 / size, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1).multiply(fit).multiply(L);
+    this.withClipControl(() => {
+      this.bindRoomMask();
+      this.gl.forgetState();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, tile!.fb);
+      gl.viewport(0, 0, size, size);
+      gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
+      this.gl.forgetState();
+      for (const scene of casters) {
+        const place = scene.origin ? new THREE.Matrix4().makeTranslation(scene.origin.x, scene.origin.y, scene.origin.z) : null;
+        const words = neutralWords(place ? clip.clone().multiply(place) : clip);
+        for (const d of [...scene.depthDraws, ...this.solidDraws(scene)]) if (d.depth) this.drawDepth(d, words, size);
+      }
+      gl.bindVertexArray(null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    });
+    return tile;
+  }
+
+  freeShadowTile(tile: ShadowTile): void {
+    this.context.deleteFramebuffer(tile.fb);
+    this.context.deleteTexture(tile.depth.texture);
+  }
+
+  /** One depth draw (a shadow caster, the occlusion prepass) with its vertex constants. */
+  private drawDepth(d: Draw, words: Uint32Array, targetHeight: number): void {
+    const gl = this.context;
+    this.gl.applyState(d.depthState ??= this.state(d.depth!.program, { colourWrite: false }));
+    d.depth!.bound ??= this.bound(d.depth!.program, d.depth!.textures);
+    const cbs = d.depth!.cbs ??= {};
+    cbs[d.depth!.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs'] = words;
+    this.gl.bindResources(d.depth!.gl, cbs, d.depth!.bound, 'ps', targetHeight, boneBindings(d.depth!.program, d.bones?.texture));
+    gl.bindVertexArray(d.depth!.vao);
+    gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
   }
 
   private withClipControl(draw: () => void): void {
@@ -1567,12 +1701,20 @@ export class GameFrame {
     const place = scene.origin ? new THREE.Matrix4().makeTranslation(scene.origin.x, scene.origin.y, scene.origin.z) : null;
     // (a cluster of rooms has no room's vignette: nothing fades)
     const far = 1e12;
-    return { env, height, floorValue, rect, hx, hy, vignetteColour, k: reachK(scene.cluster ? far : idx.vignette.radius),
+    // the view's reach (viewerReach): the room's fade stretches with the floor as the floor's does, gone with an
+    // endless floor or with the neighbouring rooms shown (a free camera sees well past the game's)
+    let radius = idx.vignette.radius;
+    if (this.viewerReach) {
+      const stretch = Number.isFinite(this.planeDistance) ? Math.max(1, this.planeDistance / PLANE_GAME_DISTANCE) : Infinity;
+      radius = room.others?.length || stretch === Infinity ? far : radius * stretch;
+    }
+    return { env, height, floorValue, rect, hx, hy, vignetteColour, k: reachK(scene.cluster ? far : radius),
       kPlane: reachK(scene.cluster ? far : planeRadius), place };
   }
 
   private renderFrame(camera: GameCamera, ticks: number, avatarZ: number, offscreen: boolean,
-    scenes: GameScene[], casters: GameScene[], worldBox: number[] | null, occluders: GameScene[] = scenes): void {
+    scenes: GameScene[], casters: GameScene[], worldBox: number[] | null, occluders: GameScene[] = scenes,
+    shadowTiles: Map<GameScene, ShadowTile> | null = null): void {
     if (!scenes.length || !this.passPrograms.size) return;
     for (const scene of scenes) this.updateLights(scene, ticks);
     const gl = this.context;
@@ -1669,13 +1811,7 @@ export class GameFrame {
       for (const d of card ? [] : draws) {
         if (!d.depth) continue;
         counts[pass]++;
-        this.gl.applyState(d.depthState ??= this.state(d.depth.program, { colourWrite: false }));
-        d.depth.bound ??= this.bound(d.depth.program, d.depth.textures);
-        const cbs = d.depth.cbs ??= {};
-        cbs[d.depth.program.translated.constantBuffers.vs[0]?.uniform ?? 'cb0_vs'] = words;
-        this.gl.bindResources(d.depth.gl, cbs, d.depth.bound, 'ps', targetHeight, boneBindings(d.depth.program, d.bones?.texture));
-        gl.bindVertexArray(d.depth.vao);
-        gl.drawElements(gl.TRIANGLES, d.count, d.indexType, 0);
+        this.drawDepth(d, words, targetHeight);
       }
     };
 
@@ -1825,11 +1961,14 @@ export class GameFrame {
       psWords: Map<number, Uint32Array> }>();
     for (const scene of scenes) {
       const look = looks.get(scene)!;
-      const wvp = placed(viewProjection, look), receiver = placed(shadow.receiver, look);
+      // (its own shadow map's, where it has one)
+      const tile = shadowTiles?.get(scene);
+      const wvp = placed(viewProjection, look), receiver = placed(tile?.receiver ?? shadow.receiver, look);
+      const offset = tile?.offset ?? shadow.offset;
       sceneWords.set(scene, {
-        main: vsWords(look, wvp, receiver, shadow.offset, !!card),
-        plane: vsWords(look, wvp, receiver, shadow.offset, !!card, true),
-        water: vsWords(look, wvp, receiver, shadow.offset, true),
+        main: vsWords(look, wvp, receiver, offset, !!card),
+        plane: vsWords(look, wvp, receiver, offset, !!card, true),
+        water: vsWords(look, wvp, receiver, offset, true),
         ps: lighting(scene, look, idx.lighting.fade),
         psNeighbour: lighting(scene, look, f32(idx.lighting.fade * NEIGHBOUR_LIGHT)),
         psWords: new Map(),
@@ -1856,18 +1995,19 @@ export class GameFrame {
         if (!words) { words = new Uint32Array(b.sizeVec4 * 4); putFloats(words, 0, neighbour ? sw.psNeighbour : sw.ps); sw.psWords.set(key, words); }
         cbs[b.uniform] = words;
       }
-      // its textures (the frame's targets and the scene's lights among them), made again when those change
-      if (!d.mainBound || d.mainBound.targets !== t || d.mainBound.lights !== scene.lights) {
+      // its textures (the frame's targets, its shadow map and the scene's lights among them), made again when those change
+      const shadowDepth = shadowTiles?.get(scene)?.depth ?? t.shadowDepth;
+      if (!d.mainBound || d.mainBound.targets !== t || d.mainBound.lights !== scene.lights || d.mainBound.shadow !== shadowDepth) {
         const textures: Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> = {};
         d.program.translated.samplers.forEach((s) => {
           const desc = d.program.samplers[s.sampler ?? -1] ?? null;
-          if (s.textureName === 'v_texture_shadow_map') textures[s.texture] = { texture: t.shadowDepth, sampler: shadowSampler };
+          if (s.textureName === 'v_texture_shadow_map') textures[s.texture] = { texture: shadowDepth, sampler: shadowSampler };
           else if (s.textureName === 'v_cbo_f1' && scene.lights) textures[s.texture] = { texture: scene.lights.data, sampler: null };
           else if (s.textureName === 'v_cbo_f2' && scene.lights) textures[s.texture] = { texture: scene.lights.cells, sampler: null };
           else if (s.textureName === 'v_texture_ssao') textures[s.texture] = { texture: t.blur3, sampler: this.gl.sampler(desc) };
           else if (d.textures[s.texture]) textures[s.texture] = { texture: d.textures[s.texture], sampler: this.gl.sampler(desc) };
         });
-        d.mainBound = { targets: t, lights: scene.lights, textures };
+        d.mainBound = { targets: t, lights: scene.lights, shadow: shadowDepth, textures };
       }
       this.gl.bindResources(d.gl, cbs, d.mainBound.textures, 'ps', camera.height, boneBindings(d.program, d.bones?.texture));
       gl.bindVertexArray(d.vao);
