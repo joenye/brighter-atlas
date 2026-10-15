@@ -41,6 +41,20 @@ export interface DecodedField {
   series: boolean;
 }
 
+// A decoded field's leaves are worked out on first use: most fields of a row are never asked for them, and
+// building them for every decoded field was much of the extraction's garbage. leaves() is pure, so when they
+// are built changes nothing.
+class LazyLeavesField implements DecodedField {
+  private _leaves: [number, any][][] | null = null;
+  constructor(
+    private readonly _graph: AssetGraph,
+    public poolIndices: number[], public elements: any[], public series: boolean,
+  ) {}
+  get leaves(): [number, any][][] {
+    return this._leaves ??= this.elements.map((element: any) => this._graph.leaves(element));
+  }
+}
+
 // Resolved mesh/material part record (snake_case keys flow into shard rows).
 export interface PartRecord {
   kind: string;
@@ -183,7 +197,7 @@ export class AssetGraph {
     // face-base learning) stays per-graph, preserving the fresh-graph
     // requirement of the structural-binding stage.
     shared?: { meshBySlot: Map<number, number>; texturesByMaterial: Map<number, number[]> },
-    source?: { bytes?: Uint8Array; profile?: WorldProfile | null; symbols?: string[]; defaultGround?: number | null },
+    source?: { bytes?: Uint8Array; profile?: WorldProfile | null; symbols?: string[]; defaultGround?: number | null; fieldCacheLimit?: number },
   ) {
     this.rows = rows;
     this.pool = pool;
@@ -191,6 +205,7 @@ export class AssetGraph {
       ? makeRegistryRowDecoder(rows as FillRow[], source.bytes, source.profile) : null;
     this._symbols = source?.symbols ?? [];
     this._defaultGround = source?.defaultGround ?? null;
+    this._fieldCacheLimit = source?.fieldCacheLimit ?? 0;
     if (shared) {
       this.meshBySlot = shared.meshBySlot;
       this.texturesByMaterial = shared.texturesByMaterial;
@@ -300,9 +315,15 @@ export class AssetGraph {
       // a registry-wide learning pass: kept only while its own work may ask again
       if (this._scanCache.size >= 512) this._scanCache.clear();
       this._scanCache.set(ownerSlot, decoded);
-    } else this._fieldCache.set(ownerSlot, decoded);
+    } else {
+      // a graph made for one pass keeps only its recent rows (decoding is pure: a row read again decodes the same)
+      if (this._fieldCacheLimit && this._fieldCache.size >= this._fieldCacheLimit) this._fieldCache.clear();
+      this._fieldCache.set(ownerSlot, decoded);
+    }
     return decoded;
   }
+
+  private _fieldCacheLimit: number;
 
   // While a registry-wide learning pass runs (the face bases), what it decodes is kept briefly, not for good.
   private _scanCache: Map<number, Map<number, DecodedField>> | null = null;
@@ -326,10 +347,7 @@ export class AssetGraph {
         const node = this.deref(field.node);
         const series = node?.tag === 0x20;
         const elements = series ? node.values || [] : [node];
-        decoded.set(field.op, {
-          poolIndices: field.node.tag === 0 ? [field.node.value] : [],
-          elements, leaves: elements.map((element: any) => this.leaves(element)), series,
-        });
+        decoded.set(field.op, new LazyLeavesField(this, field.node.tag === 0 ? [field.node.value] : [], elements, series));
       }
       return decoded;
     }
@@ -349,12 +367,7 @@ export class AssetGraph {
         elements.push(...part);
         explicitSeries = explicitSeries || isSeries;
       }
-      decoded.set(op, {
-        poolIndices: indices,
-        elements,
-        leaves: elements.map((element) => this.leaves(element)),
-        series: explicitSeries || elements.length > 1,
-      });
+      decoded.set(op, new LazyLeavesField(this, indices, elements, explicitSeries || elements.length > 1));
     }
     return decoded;
   }

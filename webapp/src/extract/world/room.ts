@@ -162,11 +162,18 @@ export function roomWorldPosition(top: RoomNode[], mapPosition?: readonly number
 export function parse(u8: Uint8Array): ParsedRoom {
   const { nTable, tokens } = tokenize(u8);
   let pos = 0;
+  // One node per table reference: refs are most of a room's values (about 4.5 million across a current build's
+  // rooms), each only a table index, never changed and never told apart by identity (what reads one derefs it).
+  const refs = new Map<any, RoomNode>();
   const value = (): RoomNode => {
     if (pos >= tokens.length) throw new Error('truncated AB2 counted container');
     const [t, v] = tokens[pos++];
     if (MARKER_TAGS.has(t)) return node('marker', t, v);
-    if (t === 0x00) return node('ref', t, v);
+    if (t === 0x00) {
+      let ref = refs.get(v);
+      if (ref === undefined) refs.set(v, ref = node('ref', t, v));
+      return ref;
+    }
     if (t === 0x20) {
       const raw = [];
       for (let k = 0; k < v; k++) raw.push(value());

@@ -417,11 +417,11 @@ export async function extractWorld({
   const imageHashByOrdinal = new Map((indexes?.images || []).map((e: any) => [e.i, e.h]));
   // Spawn grounding samples ab5 top faces synchronously: hold the raw meshes
   // bundle in memory for the duration of this stage (decode stays per-object).
-  const ab5 = new Uint8Array(await files[5].arrayBuffer());
+  let ab5: Uint8Array | null = new Uint8Array(await files[5].arrayBuffer());
   const loadMeshBytes = (meshId: number) => {
     const e = frames[5].entries[meshId];
     if (!e) throw new Error(`mesh ${meshId} is outside assetBundle5`);
-    return decodeObject(5, ab5.subarray(e.offset, e.offset + e.length));
+    return decodeObject(5, ab5!.subarray(e.offset, e.offset + e.length));
   };
   // Record names (names.ts): the name the game shows for each record. They
   // override the enemy names and internal-id table the naming passes use, and
@@ -446,7 +446,7 @@ export async function extractWorld({
     return hit ? hit.name : label;
   };
   await breathe();
-  const ctx = createShardContext({
+  let ctx = createShardContext({
     displayLabel,
     rows,
     symbols: dt.symbols,
@@ -476,9 +476,10 @@ export async function extractWorld({
     const clipRig = (clip: number) => { const skel = (dt.animDir as any)?.[clip]?.skel; return Number.isInteger(skel) ? skel : null; };
     const clipDuration = (clip: number) => { const d = (dt.animDir as any)?.[clip]?.dur; return Number.isFinite(d) && d > 0 ? d : 0; };
     // Graphs of its own: the shard loop's must not be warmed out of room order.
-    const graph = new graphMod.AssetGraph(rows, pool.values, {
+    // (made for this one pass: its caches stay small and go with it, as the structural graph's below)
+    let graph: graphMod.AssetGraph | null = new graphMod.AssetGraph(rows, pool.values, {
       meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
-    }, { bytes: ab0, profile, symbols: dt.symbols, defaultGround: placementBindings?.tiles?.defaultGround ?? null });
+    }, { bytes: ab0, profile, symbols: dt.symbols, defaultGround: placementBindings?.tiles?.defaultGround ?? null, fieldCacheLimit: 4096 });
     await breathe();
     cards = readCards({
       rows, pool: pool.values, symbols: dt.symbols, charset: dt.charset, decode: rowDecoder,
@@ -487,6 +488,7 @@ export async function extractWorld({
       spawnGraph: new SpawnGraph(rows, pool.values, graph, { bytes: ab0, profile, charset: dt.charset, enemyDefs, animDir: dt.animDir, meshDir: dt.meshDir }),
       nameOf: (slot: number) => { const n = recNames.nameOf(slot); return n ? n.singular ?? n.name : null; },
     });
+    graph = null;
   }
   await breathe();
 
@@ -511,15 +513,19 @@ export async function extractWorld({
   // constructor's pure row scan is shared (the maps are frozen at
   // construction and never written afterwards); every lazy cache, including
   // the order-sensitive face-base learning, starts empty here.
-  const structuralGraph = new graphMod.AssetGraph(rows, pool.values, {
+  // It keeps only its recent rows' fields and goes once read: a local of this long async function otherwise
+  // lives to its end, and this graph's caches held about 600 MB through the shard loop.
+  let structuralGraph: graphMod.AssetGraph | null = new graphMod.AssetGraph(rows, pool.values, {
     meshBySlot: ctx.graph.meshBySlot, texturesByMaterial: ctx.graph.texturesByMaterial,
-  }, { bytes: ab0, profile });
+  }, { bytes: ab0, profile, fieldCacheLimit: 4096 });
   const occurrenceGroups: [number, any][] = [];
   for (const roomId of layersById.keys()) {
     // the deterministic occupancy the shard loop reuses (read-only)
     occurrenceGroups.push([roomId, ctx.occupancy(roomId).occurrences]);
   }
   const structuralRecords = structuralGraph.structuralBindingRecords(occurrenceGroups);
+  structuralGraph = null;
+  occurrenceGroups.length = 0;
   poolQueueDepth(1);
 
   // ---- (e, results) worldtex verdicts, started right after replay above.
@@ -969,6 +975,13 @@ export async function extractWorld({
     }
   } catch { /* unreadable render data: no render bindings */ }
   bail();
+
+  // Nothing below reads the rooms' parsed trees, the shard context (its graph, spawn graph and occupancy
+  // caches) or the meshes bundle: let them go before the catalog pass, the extraction's last big one. Every
+  // thread of the page shares one JavaScript heap, so what this one keeps is room another one lacks.
+  layersById.clear();
+  ctx = null!;
+  ab5 = null;
 
   // ---- (g) portable system catalog through the existing validation seam -----
   const bundleSignatures: Record<string, { size: number; sha256: string }> = {};

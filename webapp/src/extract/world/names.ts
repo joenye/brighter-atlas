@@ -85,7 +85,12 @@ export function recordNames(src: {
   const cache = new Map<number, ReparsedOp[]>();
   const fields = (slot: number): ReparsedOp[] => {
     let f = cache.get(slot);
-    if (!f) { try { f = src.decode(slot) ?? []; } catch { f = []; } cache.set(slot, f); }
+    if (!f) {
+      try { f = src.decode(slot) ?? []; } catch { f = []; }
+      // recent rows only: keeping every row's fields held hundreds of MB at once (a row read again decodes the same)
+      if (cache.size >= 4096) cache.clear();
+      cache.set(slot, f);
+    }
     return f;
   };
 
