@@ -2071,6 +2071,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       world.unloadRoom(id);
       const room = await world.loadRoom(id);
       if (!room || destroyed) return;
+      // loading a room lets every other room go: the neighbours come back with their floor and frame
+      if (state.neighbours) { await syncNeighbours(); return; }
       applyCategories();
       applyToggles();
       await world.refreshGroundPlane(id);
