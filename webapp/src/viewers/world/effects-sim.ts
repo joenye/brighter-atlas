@@ -656,7 +656,7 @@ export class EmitterSim {
     // (a cylinder's three draws: distance, angle in degrees, height; the across pair scaled per axis)
     const cyl = this.shape.cylinder;
     const cylinder = cyl ? (() => {
-      const r = draw([0, cyl.radius]), a = draw([0, 360]) * DEG, h = draw([0, cyl.height]);
+      const r = draw([0, draw(cyl.radius)]), a = draw([0, 360]) * DEG, h = cyl.flat ? 0 : draw([0, cyl.height]);
       return [r * Math.cos(a) * cyl.axisScale[0], r * Math.sin(a) * cyl.axisScale[1], h];
     })() : null;
     let speed = this.speed; let speedSlope = this.speedSlope;

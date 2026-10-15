@@ -106,7 +106,8 @@ export interface EffectConfig {
   wave?: EffectWave;
   radial?: RadialOrigin;
   // A cylinder about `center` (a point source's cone aims it): radius, height and the two across scales.
-  cylinder?: { radius: number; height: number; axisScale: [number, number] };
+  // (a disc: the radius may be ranged, drawn first; flat: no height drawn)
+  cylinder?: { radius: number | [number, number]; height: number; axisScale: [number, number]; flat?: boolean };
   // 'bound': origin and direction come from verified per-build decode
   // data rather than the structural shape guess.
   origin?: 'bound';
@@ -1588,9 +1589,9 @@ function extractEffects(
       cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
       cfg.origin = 'bound';
     } else if (origin?.kind === 'cylinder') {
-      const {center, radius, height, axisScale, axis, yaw, pitch} = origin.cylinder;
+      const {center, radius, height, axisScale, axis, yaw, pitch, flat} = origin.cylinder;
       cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = center; cfg.axis = axis;
-      cfg.cylinder = {radius, height, axisScale};
+      cfg.cylinder = {radius, height, axisScale, ...(flat ? {flat: true} : {})};
       cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
       cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
       cfg.origin = 'bound';

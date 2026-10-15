@@ -7,7 +7,7 @@ import {validEffectSprites, type EffectSpriteBinding} from './effect-sprites.js'
 import {validEffectSpeeds, type EffectSpeedBinding} from './effect-fields.js';
 import {validEffectColours, type EffectColourMixBinding} from './effect-properties.js';
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
-import {validEffectOrigins, validEffectCylinders, type EffectOriginBinding, type CylinderOriginBinding} from './effect-origins.js';
+import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
 import {validEffectFields, type EffectFieldData} from './effect-fields.js';
 import {validEffectWaves, type EffectWaveData} from './effect-waves.js';
@@ -39,6 +39,8 @@ export interface PlacementDecodeData {
   effectFacings?: EffectFacingBinding[];
   effectOrigins?: EffectOriginBinding[];
   effectCylinders?: CylinderOriginBinding[];
+  effectDiscs?: DiscOriginBinding[];
+  effectSegments?: LineOriginBinding[];
   effectSpeeds?: EffectSpeedBinding[];
   effectColours?: EffectColourMixBinding[];
   effectProperties?: EffectPropertyBinding[];
@@ -97,6 +99,8 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectFacings!==undefined&&!validEffectFacings(data.effectFacings))throw Error('invalid effect facing bindings');
   if(data.effectOrigins!==undefined&&!validEffectOrigins(data.effectOrigins))throw Error('invalid effect origin bindings');
   if(data.effectCylinders!==undefined&&!validEffectCylinders(data.effectCylinders))throw Error('invalid effect cylinder bindings');
+  if(data.effectDiscs!==undefined&&!validEffectDiscs(data.effectDiscs))throw Error('invalid effect disc bindings');
+  if(data.effectSegments!==undefined&&!validEffectSegments(data.effectSegments))throw Error('invalid effect segment bindings');
   if(data.effectSpeeds!==undefined&&!validEffectSpeeds(data.effectSpeeds))throw Error('invalid effect speed bindings');
   if(data.effectColours!==undefined&&!validEffectColours(data.effectColours))throw Error('invalid effect colour bindings');
   if(data.effectProperties!==undefined&&!validEffectProperties(data.effectProperties))throw Error('invalid effect property bindings');

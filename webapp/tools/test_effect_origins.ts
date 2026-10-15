@@ -101,5 +101,49 @@ try {
       assert(Math.abs(d[0]) < 1e-6 && d[1] > 0.98 && d[2] <= 1e-6 && d[2] >= -0.18, JSON.stringify(d));
     }
   }
-  console.log('effect origin extraction, sampled radius, point, position and segment sources, elliptical geometry, direction and seek checks passed');
+  {
+    // A disc (compact): a distance up to the radius (uniform, so its mean is half the radius) and an angle all the
+    // way round, flat about the centre; a ranged radius is drawn first.
+    const disc = {instance: 16, center: 60, radius: 61, axis: 62, yaw: [63, 64], pitch: [65, 66], uniformClass: 8};
+    assert(T.validEffectDiscs([disc]));
+    assert(!T.validEffectDiscs([{...disc, yaw: [63]}]));
+    const discOps = [{op: 60, kind: 'vec3', v: [100, 200, 300]}, scalar(61, 50), {op: 62, kind: 'vec3', v: [0, 0, 1]},
+      scalar(63, 0), scalar(64, 360), scalar(65, 0), scalar(66, 90)];
+    const readDisc = T.createEffectOriginReader(undefined, [{values: [0, 16]}], undefined, [disc]);
+    assert.deepEqual(readDisc(0, discOps), {kind: 'cylinder', cylinder: {center: [100, 200, 300], radius: 50, height: 0, flat: true,
+      axisScale: [1, 1], axis: [0, 0, 1], yaw: [0, 360], pitch: [0, 90]}});
+    assert.equal(readDisc(0, discOps.filter(e => e.op !== 61)), null);
+    const ranged = readDisc(0, discOps.map(e => e.op === 61 ? {op: 61, kind: 'typed', class: 8, fields: [scalar(61, 20), scalar(61, 40)]} : e));
+    assert.deepEqual(ranged.cylinder.radius, [20, 40]);
+    for (const [radius, top] of [[50, 50], [[20, 40], 40]] as const) {
+      const sim = new T.EmitterSim({slot: 5, loop: true}, 0, {life: {ticks: 6000}, burst: 1, shape: 2, speed: {value: 0}},
+        {1: {kind: 'burst_continuous', per_second: 600}, 2: {kind: 'shape', shape_kind: 'point', center: [100, 200, 300], axis: [0, 0, 1],
+          cone: {yaw: [0, 360], pitch: [0, 90]}, cylinder: {radius, height: 0, axisScale: [1, 1], flat: true}, origin: 'bound'}}, 600);
+      sim.ensure(3000);
+      const distances: number[] = [];
+      sim.evaluate(3000, (x: number, y: number, z: number) => {
+        assert(Math.abs(z - 300) < 1e-3, 'flat');
+        distances.push(Math.hypot(x - 100, y - 200));
+      });
+      assert(distances.length > 1000 && Math.max(...distances) <= top + 1e-3, `within the radius (${Math.max(...distances)})`);
+      if (radius === 50) {
+        const mean = distances.reduce((a, b) => a + b, 0) / distances.length;
+        assert(Math.abs(mean - 25) < 1.5, `uniform in distance, not area (mean ${mean})`);
+      }
+    }
+  }
+  {
+    // A segment on the generic route: its two ends, the default cone's angles interpolated by their sample fractions.
+    const line = {instance: 18, start: 70, end: 71, axis: 72, yaw: [73, 74], pitch: [75, 76], samples: [77, 78], uniformClass: 8};
+    assert(T.validEffectSegments([line]));
+    assert(!T.validEffectSegments([{...line, samples: [77]}]));
+    const lineOps = [{op: 70, kind: 'vec3', v: [0, 0, 0]}, {op: 71, kind: 'vec3', v: [0, 0, 1000]}, {op: 72, kind: 'vec3', v: [0, 0, 1]},
+      scalar(73, 0), scalar(74, 360), scalar(75, 0), scalar(76, 90),
+      {op: 77, kind: 'typed', class: 8, fields: [scalar(77, 0), scalar(77, 1)]}, scalar(78, .5)];
+    const readLine = T.createEffectOriginReader(undefined, [{values: [0, 18]}], undefined, undefined, [line]);
+    assert.deepEqual(readLine(0, lineOps), {kind: 'segment', segment: {from: [0, 0, 0], to: [0, 0, 1000], axis: [0, 0, 1],
+      yaw: [0, 360], pitch: [45, 45]}});
+    assert.equal(readLine(0, lineOps.filter(e => e.op !== 71)), null);
+  }
+  console.log('effect origin extraction, sampled radius, point, position, segment (both routes) and disc sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }
