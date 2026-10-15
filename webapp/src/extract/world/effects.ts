@@ -252,12 +252,19 @@ export interface WorldEffectsDoc {
              default_active?: boolean;
              color_override?: [number, number, number, number];
              rig?: number | 'transform' | null;
-             motion?: EffectAttachmentMotion }[]; // sorted (room, occurrence, system, controller)
+             motion?: EffectAttachmentMotion;
+             // A flourish of the resting set this owner rests in: played now and then, not continuously (kept
+             // default_active false, so a viewer that does not schedule flourishes leaves it off).
+             flourish?: EffectFlourish }[]; // sorted (room, occurrence, system, controller)
     actors: { actor: number; label: string | null; system: number;
               controller: number | null }[];                // sorted (actor, system)
     owners: { owner: number; system: number; controller: number | null }[]; // sorted (owner, system)
   };
 }
+
+/** A resting set's flourishes: after a wait drawn as whole ticks between `wait`'s two bounds, one of `flourishes`
+ *  (controllers, the set's order) is picked evenly and played once; `set` names the set (one schedule per placement). */
+export interface EffectFlourish { set: number; flourishes: number[]; wait: [number, number] }
 
 export interface WorldEffectsShared {
   charset: ArrayLike<string>; symbols: string[];
@@ -1629,6 +1636,29 @@ function extractEffects(
     if (count) audit.config_kinds[kind] = count;
   }
 
+  // ---- resting sets: a controller owned by a set that rests in one loop and now and then plays one of its
+  // flourishes (the set: one series of flourishes holding the controller, one other direct reference, its rest
+  // loop, and two durations, the wait's bounds) -------------------------------------------------------------------
+  const setRows = makeRowDecoder(rows, pool, ab0, profile, shared.charset, shared.symbols);
+  const restingSets = new Map<number, { set: number; flourishes: number[]; wait: [number, number] } | null>();
+  const restingSetOf = (controller: number): { set: number; flourishes: number[]; wait: [number, number] } | null => {
+    const set = ownerOf(rows[controller]);
+    if (set === null) return null;
+    if (!restingSets.has(set)) {
+      const row = rows[set];
+      const series = row.s.filter(([, refs]) => refs.length > 0 && refs.every(isInt));
+      const flourishes = series.length === 1 ? series[0][1] : null;
+      const rest = row.r.filter(([, target]) => isInt(target) && !flourishes?.includes(target));
+      const waits = (setRows(set) ?? []).filter((e) => e.kind === 'duration') as { ticks: number }[];
+      restingSets.set(set, flourishes && rest.length === 1 && waits.length === 2
+        && waits.every((w) => isInt(w.ticks) && w.ticks > 0 && w.ticks <= 600000)
+        ? { set, flourishes: [...flourishes], wait: [Math.min(waits[0].ticks, waits[1].ticks), Math.max(waits[0].ticks, waits[1].ticks)] }
+        : null);
+    }
+    const found = restingSets.get(set)!;
+    return found && found.flourishes.includes(controller) ? found : null;
+  };
+
   // ---- attachments (inverted ref maps, never per-occurrence walks) ----------
   const pairsCache = new Map<number, { system: number; controller: number | null }[]>();
   const pairsFor = (slot: number): { system: number; controller: number | null }[] => {
@@ -1726,6 +1756,10 @@ function extractEffects(
           if (emitted.has(key)) continue;
           emitted.add(key);
           const motion = controller === null ? null : shared.effectMotion?.(controller, hit, roomId);
+          // (a flourish of the set the owner rests in: its candidates name the set, not the flourish)
+          const resting = selected?.controllers ?? candidates;
+          const set = controller !== null && resting && !resting.includes(controller) ? restingSetOf(controller) : null;
+          const flourish = set && resting!.includes(set.set) ? set : null;
           roomAtt.push({
             room: roomId,
             cell: [hit.cell[0], hit.cell[1], hit.cell[2]],
@@ -1739,6 +1773,7 @@ function extractEffects(
               ? {color_override: selected.effectColor} : {}),
             ...(selected ? { default_active: selected.controllers.includes(controller ?? system) }
               : candidates && !candidates.includes(controller ?? system) ? { default_active: false } : {}),
+            ...(flourish ? { flourish } : {}),
           });
         }
       };

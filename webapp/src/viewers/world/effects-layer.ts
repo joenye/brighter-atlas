@@ -46,6 +46,7 @@ import * as THREE from '../../../vendor/three.module.js';
 import { bindRigBirthFrames } from './effects-frames.js';
 import type { EffectBoneAnimation } from './effects-animation.js';
 import { proceduralEffectFrame } from './effects-motion.js';
+import { FlourishSchedule } from './effects-flourish.js';
 import {
   EmitterSim, EffectsClock, hash32,
 } from './effects-sim.js';
@@ -166,6 +167,9 @@ interface InstanceRec {
   /** Ticks this copy runs ahead of the view's clock (an actor's resting loop began at its own moment); 0 for
    *  placed scenery. */
   phase: number;
+  /** A resting set's flourish: drawn only while one of its plays is out (time counts from that play's start),
+   *  nothing born after `duration`. */
+  flourish?: { schedule: FlourishSchedule; pick: number; duration: number; span: number };
   // One entry per drawn sprite outcome; a selecting emitter repeats its sim.
   emitters: { sim: EmitterSim; batchKey: string; choice: number }[];
 }
@@ -350,8 +354,10 @@ export class WorldEffectsLayer {
       // A catalogue includes action effects as well as defaults. Keep its
       // records inspectable, but do not instantiate known inactive entries.
       // Check before deduplication so an inactive variant cannot shadow an
-      // active attachment of the same system.
-      if (att.default_active === false) continue;
+      // active attachment of the same system. (A flourish of the owner's
+      // resting set is off as a loop but plays on its schedule.)
+      const flourish = this._flourishFor(id, att);
+      if (att.default_active === false && !flourish) continue;
       // controller variants repeat (occurrence, system) pairs: one instance each
       const key = `${att.occurrence}|${att.system}`;
       if (seen.has(key)) continue;
@@ -396,6 +402,7 @@ export class WorldEffectsLayer {
       const rec: InstanceRec = {
         key: recKey, occurrence: Number(att.occurrence), animation: null, configureAnimation: () => {},
         phase: Number.isFinite(Number(att.phase)) ? Number(att.phase) : 0,
+        ...(flourish ? { flourish } : {}),
         system, anchor, anchorOriginal, edit, proxy: null,
         modulation: mod, emitters: [],
       };
@@ -487,8 +494,41 @@ export class WorldEffectsLayer {
   }
 
   private _instanceTime(rec: InstanceRec): number {
-    return rec.edit.paused ? rec.edit.frozenT
-      : (rec.animation?.time() ?? this.clock.t) + rec.edit.clockOffset + rec.phase;
+    if (rec.edit.paused) return rec.edit.frozenT;
+    const t = (rec.animation?.time() ?? this.clock.t) + rec.edit.clockOffset + rec.phase;
+    if (!rec.flourish) return t;
+    // (a flourish: ticks since its latest play began, -1 while none is out)
+    const start = rec.flourish.schedule.lastStart(rec.flourish.pick, t, rec.flourish.span);
+    return start === null ? -1 : t - start;
+  }
+
+  // One schedule per placement and resting set, shared by the set's flourishes there.
+  private readonly _flourishSchedules = new Map<string, FlourishSchedule>();
+  private _flourishFor(roomId: number, att: any): InstanceRec['flourish'] | null {
+    const f = att?.flourish;
+    if (!f || !Array.isArray(f.flourishes) || !Array.isArray(f.wait) || f.wait.length !== 2) return null;
+    const pick = f.flourishes.indexOf(Number(att.controller));
+    if (pick < 0) return null;
+    // each flourish's length: the longest cycle among the systems it names (a flourish naming none: the mean of
+    // the others)
+    const lengths = f.flourishes.map((c: number) => {
+      let best = 0;
+      for (const sys of this.doc.systems ?? []) if ((sys.controllers ?? []).includes(c)) best = Math.max(best, Number(sys.cycle_ticks) || 0);
+      return best;
+    });
+    const known = lengths.filter((n: number) => n > 0);
+    const fallback = known.length ? known.reduce((a: number, b: number) => a + b, 0) / known.length : 600;
+    const durations = lengths.map((n: number) => n > 0 ? n : fallback);
+    const key = `${roomId}|${att.occurrence}|${f.set}`;
+    let schedule = this._flourishSchedules.get(key);
+    if (!schedule) {
+      schedule = new FlourishSchedule(hash32(hash32(roomId, Number(att.occurrence)), Number(f.set)),
+        [Number(f.wait[0]), Number(f.wait[1])], durations);
+      this._flourishSchedules.set(key, schedule);
+    }
+    const system = this._systemsBySlot.get(Number(att.system));
+    const life = Math.max(0, ...(system?.emitters ?? []).map((e: any) => Number(e.life?.ticks) || 0));
+    return { schedule, pick, duration: durations[pick], span: durations[pick] + life };
   }
 
   removeRoom(roomId: number): void {
@@ -1091,6 +1131,8 @@ export class WorldEffectsLayer {
         // touched.
         if (edit.hidden) continue;
         const Tm = this._instanceTime(member.instance);
+        const flourish = member.instance.flourish;
+        if (flourish && !(Tm >= 0)) continue;
         const m = anchor.m;
         sim.ensure(Tm);
         sim.evaluate(Tm, (x, y, z, scale, r, g, b, a, roll, nx, ny, nz, mode, ox, oy, oz, age, start) => {
@@ -1121,7 +1163,7 @@ export class WorldEffectsLayer {
             batch.depth[idx] = this._scratch.sub(this._camPos).dot(this._camFwd);
           }
           idx++;
-        }, member.choice);
+        }, member.choice, flourish ? flourish.duration : Infinity);
       }
       if (sortable && idx > 1 && idx <= MIX_SORT_CAP) this._sortBatch(batch, idx);
       batch.count = idx;
