@@ -21,7 +21,7 @@ import { restWorldMatrices } from '../../extract/skeleton.js';
 import { emissionKey } from './draw-order.js';
 import { drawnShard, hiddenIndividuals } from './individuals.js';
 import {
-  planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh, PLANE_DISTANCE_MAX,
+  planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh, PLANE_FIELD_REACH,
   type PlaneUniforms,
 } from './ground-plane.js';
 
@@ -766,7 +766,8 @@ export class WorldScene {
   /** Individuals: the progress chosen per room (by room number and variable; none: the latest), and whether every
    *  individual is drawn whatever its conditions (debug). */
   readonly individualProgress = new Map<string, number>();
-  /** The game frame's floor runs on for hundreds of tiles (the view's "no limit"), not the game's few. */
+  /** The game frame's floor runs on past its field, for hundreds of tiles (a distance past the field, or no
+   *  limit), not the game's few. */
   endlessFloor = false;
   allIndividuals = false;
   /** Loaded shards by room number (conditions that name another room's individuals). */
@@ -1423,7 +1424,7 @@ export class WorldScene {
       bounds = { ...bounds, loaded, loadedLayers };
     }
     const far = this.endlessFloor ? ENDLESS_PLANE_FAR : GAME_PLANE_FAR;
-    return { ...source, bounds, plane: field ? planeTiles(field, Infinity, far, this.endlessFloor ? PLANE_DISTANCE_MAX : Infinity) : [], others };
+    return { ...source, bounds, plane: field ? planeTiles(field, Infinity, far, this.endlessFloor ? PLANE_FIELD_REACH : Infinity) : [], others };
   }
 
   /** One room's parts and actors for the game's frame, with its bounds. */

@@ -18,6 +18,8 @@ import { existsSync, promises as fs } from 'node:fs';
 import { serve } from './serve.ts';
 import { CHROME, GL_ARGS } from './chrome.ts';
 import { WEBAPP, bundlePath, requireBundles, requireBuild, shimWebroot } from './env.ts';
+// the ground plane distance setting that means no limit (src/viewers/world/ground-plane.ts PLANE_ENDLESS)
+const PLANE_ENDLESS = 64;
 
 requireBundles('e2e.ts');
 requireBuild('e2e.ts');
@@ -740,7 +742,7 @@ if (process.env.BS_E2E_ALL_ROOMS === '1') {
   // one floor for the world: the game's ten tiles by default; endless fills
   // every gap and runs out past the fog
   const world10 = await page.evaluate(() => window.__bs.worldView.gameApi.groundPlane());
-  await setGroundDistance(41);
+  await setGroundDistance(PLANE_ENDLESS);
   await page.waitForFunction(() => window.__bs.worldView.gameApi.groundPlane()?.distance === null
     && window.__bs.worldView.gameApi.groundPlane()?.extent === null, { timeout: 30000 }).catch(() => null);
   const worldEndless = await page.evaluate(() => window.__bs.worldView.gameApi.groundPlane());
@@ -1200,7 +1202,7 @@ else {
   ok(shown10 === '10 tiles' && at10.frame?.distance === 10 && at10.frame.tiles > 500 && at10.frame.tiles < at10.frame.pieces
     && at10.own?.tiles === at10.frame.tiles,
   `the ground plane distance slider draws the game's ten tiles in both renderers (${JSON.stringify(at10)})`);
-  ok(await setGroundDistance(41) === '\u221e no limit', 'the far end of the ground plane distance is endless');
+  ok(await setGroundDistance(PLANE_ENDLESS) === '\u221e no limit', 'the far end of the ground plane distance is endless');
   // neighbouring rooms: the rooms through its doors load in place around it
   // (in the game's frame too) and unload again
   const toggleNeighbours = () => page.evaluate(() => {

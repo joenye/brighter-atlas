@@ -25,10 +25,16 @@ import type { GroundPlaneRecord } from '../../extract/world/ground-plane.js';
 export const PLANE_REACH = 10240;
 /** The game's distance, in tiles. */
 export const PLANE_GAME_DISTANCE = 10;
+/** How far the floor's field reaches past the rooms, tile by tile (tiles); past it the floor is laid in pieces a
+ *  texture repeat each, the far floor. */
+export const PLANE_FIELD_REACH = 40;
 /** The longest finite distance the viewer offers (tiles). */
-export const PLANE_DISTANCE_MAX = 40;
-/** The distance setting past the longest: an endless floor. */
-export const PLANE_ENDLESS = PLANE_DISTANCE_MAX + 1;
+export const PLANE_DISTANCE_MAX = 500;
+/** The setting's steps past the field: so many tiles each. */
+const PLANE_FAR_STEP = 20;
+/** The distance setting past the longest: an endless floor. Settings 1 to PLANE_FIELD_REACH are as many tiles, then
+ *  one step a PLANE_FAR_STEP tiles up to PLANE_DISTANCE_MAX. */
+export const PLANE_ENDLESS = PLANE_FIELD_REACH + (PLANE_DISTANCE_MAX - PLANE_FIELD_REACH) / PLANE_FAR_STEP + 1;
 /** The cover of the endless floor's far pieces: drawn only when endless. */
 const FAR = 1e6;
 /** The fade reach an endless floor uses (tiles): no fade at all. */
@@ -38,7 +44,8 @@ const ENDLESS_REACH = 1e9;
 export function planeDistance(setting: unknown): number {
   const d = Math.round(Number(setting));
   if (!(d >= 1)) return PLANE_GAME_DISTANCE;
-  return d > PLANE_DISTANCE_MAX ? Infinity : d;
+  if (d >= PLANE_ENDLESS) return Infinity;
+  return d <= PLANE_FIELD_REACH ? d : PLANE_FIELD_REACH + (d - PLANE_FIELD_REACH) * PLANE_FAR_STEP;
 }
 
 /** The game's floor tile: a 1024 x 1024 quad centred on its origin. */
@@ -192,7 +199,7 @@ function gridColour(r: FieldRoom, gx: number, gy: number, out: Float32Array, at:
 /** The floor field of one room, or of several placed together, over their
  *  bounds grown by `margin` tiles. `primary`: the first source is the room
  *  shown and the rest its neighbours (the game's floor). */
-export function planeField(sources: PlaneSource[], { tileUnits = 1024, margin = PLANE_DISTANCE_MAX, primary = false } = {}): PlaneField | null {
+export function planeField(sources: PlaneSource[], { tileUnits = 1024, margin = PLANE_FIELD_REACH, primary = false } = {}): PlaneField | null {
   const first = sources.find((s) => s.shard?.ground_plane);
   if (!first) return null;
   const frac: [number, number] = [first.offset[0] - Math.round(first.offset[0]), first.offset[1] - Math.round(first.offset[1])];
@@ -461,7 +468,8 @@ function eachTile(field: PlaneField, extent: number, far: number, split: boolean
 
 /** The joined endless floor past the field, out to `far` tiles: blocks a texture repeat on a side (the floors'
  *  shared repeat), each the floor of the room that reaches it first (the room shown, with neighbours) in that room's
- *  area colour nearest it, cut where the field begins. */
+ *  area colour nearest it, cut where the field begins. Each carries its centre's distance, so a distance past the
+ *  field floors the blocks within it. */
 function farBlocks(field: PlaneField, far: number, emit: Emit, detail: boolean): void {
   const { width, height, x0, y0, frac, anchor, rooms } = field;
   const owners = field.primary ? [0] : rooms.map((_, k) => k);
@@ -511,7 +519,7 @@ function farBlocks(field: PlaneField, far: number, emit: Emit, detail: boolean):
           for (let xa = xa0; xa < xb0;) {
             const xb = Math.min(xb0, xa + n - floorMod(anchor[0] + x0 + xa, n));
             emit(x0 + frac[0] + xa, y0 + frac[1] + ya, xb - xa, yb - ya, record,
-              floorMod(anchor[0] + x0 + xa, n), floorMod(anchor[1] + y0 + ya, n), tints, beyond, FAR, best);
+              floorMod(anchor[0] + x0 + xa, n), floorMod(anchor[1] + y0 + ya, n), tints, beyond, bestCover, best);
             xa = xb;
           }
           ya = yb;

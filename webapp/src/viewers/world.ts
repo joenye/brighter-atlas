@@ -52,7 +52,7 @@ import { GameFrame, clusterSource, type GameScene, type GameRoomSource, type Sha
 import { progressVariables } from './world/individuals.js';
 import { doorNeighbours } from './world/neighbours.js';
 import {
-  PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_GAME_DISTANCE, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
+  PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_FIELD_REACH, PLANE_GAME_DISTANCE, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
   planeUniforms, setPlaneReach, showPlaneMesh, planeTiles, type PlaneField, type PlaneSource, type PlaneTile,
 } from './world/ground-plane.js';
 import { renderCard, type CardSubject, type CardView } from './world/card.js';
@@ -863,8 +863,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (gameFrame) gameFrame.planeDistance = groundDistance();
     applyWorldGameSettings();
     applyWorldGroundPlane();
-    // no limit: the game frame's floor runs on for hundreds of tiles, and the camera sees it
-    const endless = !Number.isFinite(groundDistance());
+    // past the field (or no limit): the game frame's floor runs on for hundreds of tiles, and the camera sees it
+    const endless = groundDistance() > PLANE_FIELD_REACH;
     if (world.endlessFloor !== endless) {
       world.endlessFloor = endless;
       if (!allMode) refreshGameFloor();
@@ -887,7 +887,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }).catch((error) => console.warn('floor not laid again', error));
   }
   const groundRange = range(groundKey, 'Ground plane distance', 1, PLANE_ENDLESS, 1,
-    (v) => (Number(v) >= PLANE_ENDLESS ? '\u221e no limit' : Number(v) === 1 ? '1 tile' : `${v} tiles`), applyGroundDistance);
+    (v) => { const d = planeDistance(v); return d === Infinity ? '\u221e no limit' : d === 1 ? '1 tile' : `${d} tiles`; }, applyGroundDistance);
   groundRange.title = `How far the floor reaches past each room. The game's is ${PLANE_GAME_DISTANCE} tiles; `
     + `past ${PLANE_DISTANCE_MAX} (the far end) it never ends.`;
   groundRange.hidden = !state.ground;
@@ -1183,7 +1183,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (!worldPlaneField || !worldFrame) return [];
     if (!worldPlaneByRoom) {
       worldPlaneByRoom = new Map();
-      for (const tile of planeTiles(worldPlaneField, PLANE_DISTANCE_MAX)) {
+      for (const tile of planeTiles(worldPlaneField, PLANE_FIELD_REACH)) {
         const owner = worldPlaneSourceIds[tile.room];
         if (owner === undefined) continue;
         let list = worldPlaneByRoom.get(owner);
@@ -1214,7 +1214,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const scenes: { scene: GameScene; box: number[] }[] = [];
     try {
       const far = (window as any).__bs?.floorFar ?? WORLD_FLOOR_FAR;   // (tests: how far past the world)
-      const tiles = planeTiles(worldPlaneField, Infinity, far, PLANE_DISTANCE_MAX).filter((t) => t.cover > PLANE_DISTANCE_MAX);
+      const tiles = planeTiles(worldPlaneField, Infinity, far, PLANE_FIELD_REACH).filter((t) => t.cover > PLANE_FIELD_REACH);
       const groups = new Map<string, { owner: number; tiles: PlaneTile[] }>();
       for (const tile of tiles) {
         const owner = worldPlaneSourceIds[tile.room];
@@ -1251,7 +1251,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
   /** The endless floor wanted (no limit, the floor shown, the world in the game's shading) built, else dropped. */
   function syncWorldFarFloor(): void {
-    const wanted = worldGameOn() && !!state.ground && !Number.isFinite(groundDistance()) && !!worldPlaneField;
+    const wanted = worldGameOn() && !!state.ground && groundDistance() > PLANE_FIELD_REACH && !!worldPlaneField;
     if (wanted && worldFarFloorState === 'none' && !worldClusterBuilding) buildWorldFarFloor().catch(() => { /* reported */ });
     if (!wanted && worldFarFloorState !== 'none') dropWorldFarFloor();
   }
@@ -5183,7 +5183,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   const worldPlaneMaterials = new Map<string, THREE.MeshStandardMaterial>();
   const worldPlaneUniforms = planeUniforms(new THREE.Color(0, 0, 0));
   const planeStep = (distance: number) => (distance === Infinity ? Infinity
-    : Math.min(PLANE_DISTANCE_MAX, Math.max(PLANE_GAME_DISTANCE, Math.ceil(distance / 10) * 10)));
+    : Math.min(PLANE_FIELD_REACH, Math.max(PLANE_GAME_DISTANCE, Math.ceil(distance / 10) * 10)));
   async function buildWorldGroundPlane(): Promise<void> {
     if (!allMode || !worldFrame || worldPlaneField || destroyed) return;
     const sources: PlaneSource[] = [];
@@ -5633,7 +5633,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (allMode) applyRenderScale();
     // each room's chosen progress (its parts at a stage of its story), kept per build
     loadRoomProgress();
-    world.endlessFloor = !Number.isFinite(groundDistance());
+    world.endlessFloor = groundDistance() > PLANE_FIELD_REACH;
 
     if (entry) {
       const meta = world.roomMeta(entry.i);
