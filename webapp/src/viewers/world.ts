@@ -791,6 +791,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     inspectBtn.classList.toggle('active', state.inspect);
     inspectBtn.setAttribute('aria-pressed', state.inspect ? 'true' : 'false');
     if (!state.inspect) { clearInspection(true); clearEffectInspection(true); }
+    effectsLayer?.setMarkersShown(state.inspect);
   }
   inspectBtn.addEventListener('click', () => {
     if (!inspectBtn.disabled) setInspect(!state.inspect);
@@ -1886,6 +1887,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         // ever holds at once, and the alive budget must thin proportionally
         // across all of them, not per room.
       });
+      effectsLayer.setMarkersShown(state.inspect);
     }
     if (allMode) {
       updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick

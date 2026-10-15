@@ -29,10 +29,11 @@
 // this layer's objects are part of), and it is only ever pickable while the
 // Effects layer itself exists, i.e. exactly while the Effects toggle is on
 // (world.ts disposes the whole layer, proxies included, when it is off).
-// The proxy is small and translucent rather than fully invisible: a fully
-// invisible target would be undiscoverable, so it reads as a faint marker
-// (see the material colours below) that brightens on hover/pin, the same
-// affordance a pinned placement's yellow wireframe outline gives.
+// The proxy is a small translucent marker in Inspect mode (a fully invisible
+// target would be undiscoverable) that brightens on hover/pin, the same
+// affordance a pinned placement's yellow wireframe outline gives; outside
+// Inspect it is not drawn (setMarkersShown), so the view shows only what the
+// game draws.
 //
 // Session edits (position/scale/hide/pause/scrub) live on the LAYER, keyed
 // by effectInstanceKey(), rather than on the transient InstanceRec: both
@@ -787,6 +788,12 @@ export class WorldEffectsLayer {
       this._instanceEdits.set(key, edit);
     }
     return edit;
+  }
+
+  /** The pick markers drawn (Inspect mode) or not (the view as the game draws it): picking works either way, and a
+   *  hovered or pinned instance's highlight always shows. */
+  setMarkersShown(on: boolean): void {
+    this._proxyMaterial.visible = !!on;
   }
 
   private _createProxy(rec: InstanceRec): THREE.Mesh {

@@ -935,10 +935,9 @@ async function worldSuite(browser: any, base: string) {
   }));
   const callsOn = await lastFrameCalls();
   const memFxOn = await page.evaluate(() => ({ ...window.__bs.worldView.scene3d.renderer.info.memory }));
-  // Effects contribute one draw per sprite x blend batch (3) PLUS one draw
-  // per pickable proxy (2: the room's torch + fountain instances) -- the
-  // tiny pickable marker (world/effects-layer.ts) each instance gets is its
-  // own Mesh, not folded into the instanced batches.
+  // Effects contribute one draw per sprite x blend batch (3); each instance's
+  // pickable marker (world/effects-layer.ts, 2: the room's torch + fountain)
+  // is drawn only in Inspect mode, off here.
   const pickableCount = await page.evaluate(() => window.__bs.worldView.effectsApi.pickableCount());
   await panelCheck('Effects');
   await sleep(150);
@@ -947,8 +946,8 @@ async function worldSuite(browser: any, base: string) {
     `unticking Effects disposes the layer (${JSON.stringify(fxOff)})`);
   const callsOff = await lastFrameCalls();
   const memFxOff = await page.evaluate(() => ({ ...window.__bs.worldView.scene3d.renderer.info.memory }));
-  ok(pickableCount === 2 && Number(callsOn) - Number(callsOff) === 3 + pickableCount,
-    `effects contribute their 3 batch draws + ${pickableCount} pickable-proxy draws (${callsOn} -> ${callsOff})`);
+  ok(pickableCount === 2 && Number(callsOn) - Number(callsOff) === 3,
+    `effects contribute their 3 batch draws, their ${pickableCount} pick markers hidden outside Inspect (${callsOn} -> ${callsOff})`);
   ok(memFxOff.geometries < memFxOn.geometries && memFxOff.textures <= memFxOn.textures,
     `effects GL objects release on toggle-off (geometries ${memFxOn.geometries} -> ${memFxOff.geometries}, `
     + `textures ${memFxOn.textures} -> ${memFxOff.textures})`);
