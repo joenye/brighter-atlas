@@ -100,6 +100,8 @@ interface ShapeSpec {
   radial: EffectConfig['radial'] | null;
   // a point source's cylinder: each particle born a drawn distance (up to the radius), angle and height from the centre
   cylinder: EffectConfig['cylinder'] | null;
+  // a box source: each particle born at a point drawn between its corners (in place of the centre)
+  box: EffectConfig['box'] | null;
   cone: EffectConfig['cone'] | null;
   // orthonormal frame: w = emission axis, u/v span its perpendicular plane
   w: Vec3; u: Vec3; v: Vec3;
@@ -225,6 +227,7 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
     center,
     radial: config?.radial ?? null,
     cylinder: config?.cylinder ?? null,
+    box: config?.box ?? null,
     cone: config?.cone ?? null,
     ...frame,
     yaw: clamp(finite(config?.spread_yaw, 360), 0, 360) * DEG,
@@ -435,7 +438,7 @@ export class EmitterSim {
     this.shape = resolveShape(shapeCfg, fallbackAxis, tickRate);
     this._random = !!this._scales || this._perParticle || this.spriteChoices > 1
       || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number') || !!this.shape.spiral?.range || !!this.shape.spiral?.axisRange
-      || !!this.shape.cylinder;
+      || !!this.shape.cylinder || !!this.shape.box;
 
     // Burst schedule. A missing/degenerate burst leaves the emitter inert
     // (alive stays zero); siblings are unaffected.
@@ -659,6 +662,8 @@ export class EmitterSim {
       const r = draw([0, draw(cyl.radius)]), a = draw([0, 360]) * DEG, h = cyl.flat ? 0 : draw([0, cyl.height]);
       return [r * Math.cos(a) * cyl.axisScale[0], r * Math.sin(a) * cyl.axisScale[1], h];
     })() : null;
+    const bx = this.shape.box;
+    const box = bx ? [0, 1, 2].map(i => draw([bx.a[i], bx.b[i]])) : null;
     let speed = this.speed; let speedSlope = this.speedSlope;
     const f = this._fields;
     if (f) {
@@ -713,6 +718,7 @@ export class EmitterSim {
     const s = this.shape;
     let x = s.center[0]; let y = s.center[1]; let z = s.center[2];
     if (cylinder) { x += cylinder[0]; y += cylinder[1]; z += cylinder[2]; }
+    if (box) { x = box[0]; y = box[1]; z = box[2]; }
     let dx = s.w[0]; let dy = s.w[1]; let dz = s.w[2];
     if (s.kind === 'radial' && s.radial) {
       const radial = s.radial;

@@ -145,5 +145,31 @@ try {
       yaw: [0, 360], pitch: [45, 45]}});
     assert.equal(readLine(0, lineOps.filter(e => e.op !== 71)), null);
   }
-  console.log('effect origin extraction, sampled radius, point, position, segment (both routes) and disc sources, elliptical geometry, direction and seek checks passed');
+  {
+    // A box: a point drawn between its corners, x, y then z, in place of the centre; compact (cone bounds as they are)
+    // and generic (angles interpolated by their sample fractions).
+    const compactBox = {instance: 20, box: 80, axis: 81, yaw: [82, 83], pitch: [84, 85], uniformClass: 8};
+    const genericBox = {instance: 21, box: 80, axis: 81, yaw: [82, 83], pitch: [84, 85], samples: [86, 87], uniformClass: 8};
+    assert(T.validEffectBoxes([compactBox, genericBox]));
+    assert(!T.validEffectBoxes([{...compactBox, samples: [86]}]));
+    const boxOps = [{op: 80, kind: 'box', a: [-100, 50, 0], b: [100, -50, 20]}, {op: 81, kind: 'vec3', v: [0, 0, 1]},
+      scalar(82, 0), scalar(83, 360), scalar(84, 0), scalar(85, 90),
+      {op: 86, kind: 'typed', class: 8, fields: [scalar(86, 0), scalar(86, 1)]}, scalar(87, .5)];
+    const readBox = T.createEffectOriginReader(undefined, [{values: [0, 20]}, {values: [0, 21]}], undefined, undefined, undefined,
+      [compactBox, genericBox]);
+    assert.deepEqual(readBox(0, boxOps), {kind: 'box', box: {a: [-100, 50, 0], b: [100, -50, 20], axis: [0, 0, 1], yaw: [0, 360], pitch: [0, 90]}});
+    assert.deepEqual(readBox(1, boxOps).box.pitch, [45, 45]);
+    assert.equal(readBox(0, boxOps.map(e => e.op === 80 ? {op: 80, kind: 'other', tag: 37} : e)), null);
+    const sim = new T.EmitterSim({slot: 6, loop: true}, 0, {life: {ticks: 6000}, burst: 1, shape: 2, speed: {value: 0}},
+      {1: {kind: 'burst_continuous', per_second: 600}, 2: {kind: 'shape', shape_kind: 'point', center: [0, 0, 10], axis: [0, 0, 1],
+        cone: {yaw: [0, 360], pitch: [0, 90]}, box: {a: [-100, 50, 0], b: [100, -50, 20]}, origin: 'bound'}}, 600);
+    sim.ensure(3000);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    sim.evaluate(3000, (x: number, y: number, z: number) => {
+      [x, y, z].forEach((v, i) => { lo[i] = Math.min(lo[i], v); hi[i] = Math.max(hi[i], v); });
+    });
+    assert(lo[0] >= -100 && hi[0] <= 100 && lo[1] >= -50 && hi[1] <= 50 && lo[2] >= 0 && hi[2] <= 20, `inside the box (${lo} ${hi})`);
+    assert(hi[0] - lo[0] > 180 && hi[1] - lo[1] > 90 && hi[2] - lo[2] > 18, `spread over the box (${lo} ${hi})`);
+  }
+  console.log('effect origin extraction, sampled radius, point, position, segment (both routes), disc and box sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

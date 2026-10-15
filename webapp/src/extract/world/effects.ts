@@ -96,6 +96,7 @@ export type EffectExtra =        // unknown/unclassified ops ONLY
   | { op: number; kind: 'typed'; class: number; fields: EffectExtra[] }  // depth <= 6
   | { op: number; kind: 'list'; tag: number; values: EffectExtra[] }
   | { op: number; kind: 'fixed'; floats: number[] | null }
+  | { op: number; kind: 'box'; a: [number, number, number]; b: [number, number, number] }
   | { op: number; kind: 'other'; tag: number };
 
 export interface EffectConfig {
@@ -106,6 +107,8 @@ export interface EffectConfig {
   wave?: EffectWave;
   radial?: RadialOrigin;
   // A cylinder about `center` (a point source's cone aims it): radius, height and the two across scales.
+  // A box: each particle born at a point drawn between the two corners, x, y then z (the centre is not added).
+  box?: { a: [number, number, number]; b: [number, number, number] };
   // (a disc: the radius may be ranged, drawn first; flat: no height drawn)
   cylinder?: { radius: number | [number, number]; height: number; axisScale: [number, number]; flat?: boolean };
   // 'bound': origin and direction come from verified per-build decode
@@ -498,6 +501,8 @@ function nodeExtra(b: ExtraBuilder, op: number, node: PoolNode, pooled: boolean,
       return { op, kind: 'color', rgba: [n.value[0], n.value[1], n.value[2], n.value[3]] };
     case 0x22:
       return { op, kind: 'vec3', v: [n.value[0], n.value[1], n.value[2]] };
+    case 0x25: // a box: two corners, x, y, z each
+      return { op, kind: 'box', a: [n.value[0], n.value[1], n.value[2]], b: [n.value[3], n.value[4], n.value[5]] };
     case 0x0b:
       return { op, kind: 'float', value: n.value[0] };
     case 0x0a:
@@ -1592,6 +1597,13 @@ function extractEffects(
       const {center, radius, height, axisScale, axis, yaw, pitch, flat} = origin.cylinder;
       cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = center; cfg.axis = axis;
       cfg.cylinder = {radius, height, axisScale, ...(flat ? {flat: true} : {})};
+      cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
+      cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
+      cfg.origin = 'bound';
+    } else if (origin?.kind === 'box') {
+      const {a, b, axis, yaw, pitch} = origin.box;
+      cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = [0, 1, 2].map(i => (a[i] + b[i]) / 2) as [number, number, number];
+      cfg.axis = axis; cfg.box = {a, b};
       cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
       cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
       cfg.origin = 'bound';

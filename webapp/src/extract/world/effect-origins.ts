@@ -94,6 +94,24 @@ export interface LineOriginBinding {
   samples: [number, number];
   uniformClass: number;
 }
+// A box (either route): a point drawn between the box's two corners, x, y then z; aimed through the route's cone (the
+// default cone's angles interpolated by their sample fractions on the generic route). Kept apart from the origins too.
+export interface BoxOriginBinding {
+  instance: number;
+  box: number;
+  axis: number;
+  yaw: [number, number];
+  pitch: [number, number];
+  samples?: [number, number];
+  uniformClass: number;
+}
+export interface BoxOrigin {
+  a: [number, number, number];
+  b: [number, number, number];
+  axis: [number, number, number];
+  yaw: [number, number];
+  pitch: [number, number];
+}
 export interface RadialOrigin {
   center: [number, number, number];
   // A sampled radius is drawn for every particle.
@@ -128,7 +146,7 @@ export interface CylinderOrigin {
   pitch: [number, number];
 }
 export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'point'; point: PointOrigin}
-  | {kind: 'segment'; segment: SegmentOrigin} | {kind: 'cylinder'; cylinder: CylinderOrigin};
+  | {kind: 'segment'; segment: SegmentOrigin} | {kind: 'cylinder'; cylinder: CylinderOrigin} | {kind: 'box'; box: BoxOrigin};
 
 export function validEffectCylinders(v: any): v is CylinderOriginBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
@@ -148,6 +166,12 @@ export function validEffectSegments(v: any): v is LineOriginBinding[] {
     && [b.yaw, b.pitch, b.samples].every(pair));
 }
 
+export function validEffectBoxes(v: any): v is BoxOriginBinding[] {
+  const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
+  return validBindingList(v, b => [b.box, b.axis, b.uniformClass].every(bindingIndex)
+    && [b.yaw, b.pitch].every(pair) && (b.samples === undefined || pair(b.samples)));
+}
+
 export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
   return validBindingList(v, b => bindingIndex(b.uniformClass)
@@ -158,19 +182,23 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
       : b.kind === 'segment' && [b.start, b.end, b.axis].every(bindingIndex)));
 }
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
-  objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[]) {
+  objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
+  boxes?: BoxOriginBinding[]) {
   if (bindings !== undefined && !validEffectOrigins(bindings)) throw Error('invalid effect origin bindings');
   if (cylinders !== undefined && !validEffectCylinders(cylinders)) throw Error('invalid effect cylinder bindings');
   if (discs !== undefined && !validEffectDiscs(discs)) throw Error('invalid effect disc bindings');
   if (lines !== undefined && !validEffectSegments(lines)) throw Error('invalid effect segment bindings');
+  if (boxes !== undefined && !validEffectBoxes(boxes)) throw Error('invalid effect box bindings');
   const bindingOf = instanceLookup((bindings || []).map(b => [b.instance, b] as const), objects);
   const cylinderOf = instanceLookup((cylinders || []).map(b => [b.instance, b] as const), objects);
   const discOf = instanceLookup((discs || []).map(b => [b.instance, b] as const), objects);
   const lineOf = instanceLookup((lines || []).map(b => [b.instance, b] as const), objects);
+  const boxOf = instanceLookup((boxes || []).map(b => [b.instance, b] as const), objects);
   return (slot: number, ops: EffectExtra[]): EffectOrigin | null => {
     const b = bindingOf(slot), c = b ? undefined : cylinderOf(slot), d = b || c ? undefined : discOf(slot);
     const l = b || c || d ? undefined : lineOf(slot);
-    if (!b && !c && !d && !l) return null;
+    const x = b || c || d || l ? undefined : boxOf(slot);
+    if (!b && !c && !d && !l && !x) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
     if (d) {
       const center = effectVec3(fields.get(d.center)), axis = effectVec3(fields.get(d.axis));
@@ -191,11 +219,21 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
       const sample = fields.get(sampleOp);
       if (lo === null || hi === null) return null;
       const n = effectScalar(sample);
-      const fraction = effectRange(sample, (b ?? c ?? l)!.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
+      const fraction = effectRange(sample, (b ?? c ?? l ?? x)!.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
       if (!fraction) return null;
       const result: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
       return result.every(Number.isFinite) ? result : null;
     };
+    if (x) {
+      const field = fields.get(x.box), axis = effectVec3(fields.get(x.axis));
+      const bounds = (pair: [number, number]): [number, number] | null => {
+        const v = pair.map(op => effectScalar(fields.get(op)));
+        return v.every(n => n !== null) ? v as [number, number] : null;
+      };
+      const yaw = x.samples ? angles(x.yaw, x.samples[0]) : bounds(x.yaw);
+      const pitch = x.samples ? angles(x.pitch, x.samples[1]) : bounds(x.pitch);
+      return field?.kind === 'box' && axis && yaw && pitch ? {kind: 'box', box: {a: field.a, b: field.b, axis, yaw, pitch}} : null;
+    }
     if (l) {
       const from = effectVec3(fields.get(l.start)), to = effectVec3(fields.get(l.end)), axis = effectVec3(fields.get(l.axis));
       const yaw = angles(l.yaw, l.samples[0]), pitch = angles(l.pitch, l.samples[1]);
