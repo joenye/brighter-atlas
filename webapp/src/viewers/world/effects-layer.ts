@@ -333,13 +333,15 @@ export class WorldEffectsLayer {
   // a lighting approximation, separate from recovered emitter/owner colours.
   // Omitted or absent leaves particles at their authored colour.
   addRoom(roomId: number, offset: [number, number],
-    opts: { loopOnly?: boolean; modulation?: number[] | null } = {}): void {
+    opts: { loopOnly?: boolean; modulation?: number[] | null; leftOut?: ReadonlySet<number> | null } = {}): void {
     const id = Number(roomId);
     if (this._disposed || this._rooms.has(id)) return;
     const recs: InstanceRec[] = [];
     const seen = new Set<string>();
     for (const att of this.doc.attachments?.rooms || []) {
       if (Number(att.room) !== id) continue;
+      // an effect on a part the game leaves out at the room's progress (its individual's conditions say hide)
+      if (opts.leftOut?.has(Number(att.occurrence))) continue;
       // A catalogue includes action effects as well as defaults. Keep its
       // records inspectable, but do not instantiate known inactive entries.
       // Check before deduplication so an inactive variant cannot shadow an
@@ -540,6 +542,13 @@ export class WorldEffectsLayer {
     let n = 0;
     for (const recs of this._rooms.values()) for (const rec of recs) n += new Set(rec.emitters.map(e => e.sim)).size;
     return n;
+  }
+
+  /** Every instance's key and system name, room by room (tests). */
+  instances(): { key: string; system: string }[] {
+    const out: { key: string; system: string }[] = [];
+    for (const recs of this._rooms.values()) for (const r of recs) out.push({ key: r.key, system: String((r.system as any).name ?? (r.system as any).slot ?? '') });
+    return out;
   }
 
   liveCount(): number {

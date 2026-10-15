@@ -754,8 +754,14 @@ export class WorldScene {
       throw new Error(`room ${meta.id} shard has no gameplay spawn tables`);
     }
     if (Number.isInteger(shard.room_number)) this.shardsByNumber.set(shard.room_number, shard);
-    return this.drawnShard(shard);
+    const drawn = this.drawnShard(shard);
+    this.roomLeftOut.set(Number(meta.id), drawn.left_out ?? null);
+    return drawn;
   }
+
+  /** Per room, the occurrences its individuals' conditions leave out as it was last drawn (its effects follow them),
+   *  kept after its shard is let go. */
+  readonly roomLeftOut = new Map<number, ReadonlySet<number> | null>();
 
   /** Individuals: the progress chosen per room (by room number and variable; none: the latest), and whether every
    *  individual is drawn whatever its conditions (debug). */

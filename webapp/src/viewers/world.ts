@@ -1863,7 +1863,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick
     } else {
       for (const id of effectsRooms) {
-        effectsLayer.addRoom(id, spawnRoomOffset(id));
+        effectsLayer.addRoom(id, spawnRoomOffset(id), { leftOut: world.roomLeftOut.get(id) });
       }
     }
   }
@@ -1927,7 +1927,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (activeEffectRooms.has(id)) continue;
       activeEffectRooms.add(id);
       effectsLayer!.addRoom(id, spawnRoomOffset(id),
-        { loopOnly: true });
+        { loopOnly: true, leftOut: world.roomLeftOut.get(id) });
     }
   }
 
@@ -6214,6 +6214,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         // single-room view, where every wanted room is simply always on)
         active: activeEffectRooms.size,
       }),
+      instances: () => (effectsLayer ? effectsLayer.instances() : []),
       setClock(ticks: number) { effectsLayer?.setClock(Number(ticks) || 0, scene3d.camera); },
       setRunning(on: boolean) { effectsLayer?.setRunning(!!on); },
       focus(nameOrSlot: any, extent = 10) {
