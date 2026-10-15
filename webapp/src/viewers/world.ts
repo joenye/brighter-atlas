@@ -1890,13 +1890,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
   async function addActorEffects(roomId: number): Promise<void> {
     const layer = effectsLayer;
-    if (!layer || !effectsDoc || allMode) return;
+    if (!layer || !effectsDoc) return;
     const token = ++actorEffectToken;
     actorEffectRooms.set(roomId, token);
     const live = () => !destroyed && effectsLayer === layer && actorEffectRooms.get(roomId) === token;
-    const shard = world.rooms.get(roomId)?.shard;
+    // (the room view's loaded room, else the stored shard: All rooms bakes its rooms without keeping them)
+    const shard = world.rooms.get(roomId)?.shard ?? await world.roomShard(roomId).catch(() => null);
+    if (!live()) return;
     const sc = world.spawnColumns;
-    if (!shard?.spawns?.length || !sc || sc.idle_controller === undefined) return;
+    if (!shard.spawns?.length || !sc || sc.idle_controller === undefined) return;
     const tickRate = layer.clock.tickRate || Number(effectsDoc.tick_rate?.value) || 600;
     const num = (v: any): number | null => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
     const attachments: any[] = [];
@@ -1990,28 +1992,42 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
   }
 
-  // Merged all-rooms candidate rooms: every distinct room the doc attaches
-  // ANY system to, with its stitched tile-space center (same frame the fly
-  // camera and focusExtent() operate in). Built once the doc and worldFrame
-  // are both ready; a room without a system that survives the loopOnly
-  // filter simply activates to nothing (harmless, not worth a second join
-  // here just to keep it out of the candidate list).
-  let effectsCandidates: { id: number; x: number; z: number }[] | null = null;
-  function ensureEffectsCandidates(): { id: number; x: number; z: number }[] {
+  // Merged all-rooms candidate rooms: every placed room with its stitched
+  // tile-space center (same frame the fly camera and focusExtent() operate
+  // in), marked when the doc attaches ANY system to it. Built once the doc and
+  // worldFrame are both ready. A room the doc attaches nothing to is a
+  // candidate only once its loaded shard shows an actor resting under a
+  // controller that names an effect (hasActorEffects), so empty rooms never
+  // take the nearest slots; a room without a system that survives the
+  // loopOnly filter simply activates to nothing.
+  let effectsCandidates: { id: number; x: number; z: number; attached: boolean }[] | null = null;
+  function ensureEffectsCandidates(): { id: number; x: number; z: number; attached: boolean }[] {
     if (effectsCandidates) return effectsCandidates;
     if (!effectsDoc || !worldFrame) return [];
-    const seen = new Set<number>();
-    const list: { id: number; x: number; z: number }[] = [];
-    for (const att of effectsDoc.attachments?.rooms || []) {
-      const id = Number(att.room);
-      if (seen.has(id)) continue;
-      const frame = worldFrame.frames.get(id);
-      if (!frame) continue;
-      seen.add(id);
-      list.push({ id, x: frame.x + worldFrame.ox + frame.w / 2, z: frame.y + worldFrame.oz + frame.h / 2 });
+    const attached = new Set<number>((effectsDoc.attachments?.rooms || []).map((att: any) => Number(att.room)));
+    const list: { id: number; x: number; z: number; attached: boolean }[] = [];
+    for (const [id, frame] of worldFrame.frames) {
+      list.push({ id: Number(id), x: frame.x + worldFrame.ox + frame.w / 2, z: frame.y + worldFrame.oz + frame.h / 2,
+        attached: attached.has(Number(id)) });
     }
     effectsCandidates = list;
     return list;
+  }
+  const actorEffectsIn = new Map<number, boolean | null>();   // room -> whether its actors rest with an effect (null: asking)
+  function hasActorEffects(roomId: number): boolean {
+    const known = actorEffectsIn.get(roomId);
+    if (known !== undefined) return !!known;
+    const sc = world.spawnColumns;
+    if (!effectsDoc || !sc || sc.idle_controller === undefined) return false;
+    // (the stored shard is read once, in the background: the answer counts from the next re-rank)
+    actorEffectsIn.set(roomId, null);
+    Promise.resolve(world.rooms.get(roomId)?.shard ?? world.roomShard(roomId)).then((shard: any) => {
+      actorEffectsIn.set(roomId, (shard?.spawns ?? []).some((spawn: any) => {
+        const controller = Number(spawn[sc.idle_controller]);
+        return Number.isInteger(controller) && controller >= 0 && systemsOfController(controller).length > 0;
+      }));
+    }).catch(() => actorEffectsIn.set(roomId, false));
+    return false;
   }
   // Re-rank candidate rooms by fly-camera distance and reconcile the active
   // set against MAX_ACTIVE_MERGED, honouring the +-hysteresis band so a room
@@ -2032,7 +2048,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       // (the camera's height counts: from high above, effects too small to see stay off)
       const d = Math.hypot(dx, dz, cam.y);
       const wasActive = activeEffectRooms.has(room.id);
-      if (d <= (wasActive ? keepRadius : enterRadius)) eligible.push({ id: room.id, d });
+      // (a room without scenery effects is asked about its actors only once it is within reach)
+      if (d <= (wasActive ? keepRadius : enterRadius) && (room.attached || hasActorEffects(room.id))) eligible.push({ id: room.id, d });
     }
     eligible.sort((a, b) => a.d - b.d);
     const nextActive = new Set(eligible.slice(0, MAX_ACTIVE_MERGED).map((r) => r.id));
@@ -2040,16 +2057,22 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (nextActive.has(id)) continue;
       activeEffectRooms.delete(id);
       effectsLayer!.removeRoom(id);
+      dropActorEffects(id);
       // proximity deactivated the pinned instance's room: release the pin
       // (merged mode cycles rooms in/out every re-rank, unlike single-room
       // unload which only happens on navigation).
       if (effectPinned && Number(effectPinned.key.split('|')[0]) === id) clearEffectInspection(true);
     }
     for (const id of nextActive) {
-      if (activeEffectRooms.has(id)) continue;
+      // (an active room's actors: added once its shard is in, which may be a later re-rank)
+      if (activeEffectRooms.has(id)) {
+        if (!actorEffectRooms.has(id)) addActorEffects(id).catch(() => { /* the room keeps its other effects */ });
+        continue;
+      }
       activeEffectRooms.add(id);
       effectsLayer!.addRoom(id, spawnRoomOffset(id),
         { loopOnly: true, leftOut: world.roomLeftOut.get(id) });
+      addActorEffects(id).catch(() => { /* the room keeps its other effects */ });
     }
   }
 
