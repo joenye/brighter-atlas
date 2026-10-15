@@ -89,6 +89,7 @@ function estimateSystemRadius(system: EffectSystem, configs: Record<string, Effe
       if (Array.isArray(center)) reach += Math.hypot(Number(center[0]) || 0, Number(center[1]) || 0, Number(center[2]) || 0);
       if (Number.isFinite(cfg.radius)) reach += Math.abs(Number(cfg.radius));
       if (cfg.radial) reach += extent(cfg.radial.radius);
+      if (cfg.arc) reach += Math.abs(Number(cfg.arc.radius) || 0);
       if (cfg.spiral) reach += Math.abs(Number(cfg.spiral.start_radius) || 0) + Math.abs(Number(cfg.spiral.radius_rate) || 0) * life;
     }
     maxReach = Math.max(maxReach, reach);

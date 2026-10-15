@@ -112,7 +112,7 @@ export interface EffectConfig {
   origin?: 'bound';
   per_second?: number | null;                  // burst kinds
   windows?: [number, number][] | null;         // tick ranges, burst_windowed
-  shape_kind?: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'other';
+  shape_kind?: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'arc' | 'other';
   center?: [number, number, number] | null;    // first vec3
   axis?: [number, number, number] | null;
   radius?: number | null; sweep?: number | null;
@@ -133,6 +133,9 @@ export interface EffectConfig {
   // 'segment': spawn spread evenly along a line, given as its two endpoints in
   // the owner's local frame. A shoreline wave uses one a full tile wide.
   segment?: { from: [number, number, number]; to: [number, number, number] } | null;
+  // 'arc': each particle is born on a level circle about `center` (radius, at an angle drawn between the two angles,
+  // degrees from +x towards +y) and aimed straight out from it, raised by an angle drawn up to `tilt` (degrees).
+  arc?: { radius: number; angles: [number, number]; tilt: number } | null;
   extra: EffectExtra[];
 }
 
@@ -897,7 +900,7 @@ function extractEffects(
     kind: EffectConfig['kind'];
     perSecond: number | null;
     windows: [number, number][] | null;
-    shapeKind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'other' | null;
+    shapeKind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'arc' | 'other' | null;
     center: [number, number, number] | null;
     axis: [number, number, number] | null;
     radius: number | null; sweep: number | null;
@@ -905,6 +908,7 @@ function extractEffects(
     cone?: EffectConfig['cone'];
     spiral: EffectConfig['spiral'];
     segment: EffectConfig['segment'];
+    arc?: EffectConfig['arc'];
     extra: EffectExtra[];
   }
   const configInfo = new Map<number, ConfigInfo | null>();
@@ -979,6 +983,24 @@ function extractEffects(
       consumed.add(topInts[0].i);
     } else if (vec3Count >= 1 || floatCount >= 2) {
       info.kind = 'shape';
+      // AN ARC: a centre and nothing after it but six plain numbers, the radius, the two angles a particle's angle
+      // is drawn between, the most it is raised by and two the spawn does not read. The game puts each particle on
+      // the level circle at its angle and aims it straight out, raised by its draw; the portal stones' rings are
+      // eight of these, 45 degrees each. Read as anything else the circle is lost: four of the numbers made a cone
+      // at the centre and the circle a single point.
+      const arcCentre = topVec3.length === 1 && !topVec3[0].fixed && topRates.length === 0 ? ops[topVec3[0].i] : null;
+      if (arcCentre && topFloats.length === 6 && ops.length === topVec3[0].i + 7
+        && topFloats.every((f, k) => f.i === topVec3[0].i + 1 + k && ops[f.i].kind === 'float' && ops[f.i].op === arcCentre.op + 1 + k)
+        && Math.abs(Math.hypot(...topVec3[0].v) - 1) > 0.01 && topFloats[0].value >= 0) {
+        info.shapeKind = 'arc';
+        info.center = topVec3[0].v;
+        info.arc = { radius: topFloats[0].value, angles: [topFloats[1].value, topFloats[2].value], tilt: topFloats[3].value };
+        consumed.add(topVec3[0].i);
+        for (const f of topFloats.slice(0, 4)) consumed.add(f.i);
+        for (let i = 0; i < ops.length; i++) if (!consumed.has(i)) info.extra.push(ops[i]);
+        configInfo.set(slot, info);
+        return info;
+      }
       // A RING THAT TURNS WITH TIME: a start radius and its rate, then a start
       // angle (degrees) and its rate, after the centre and the ring's axis;
       // before the centre, the cone that aims each particle (its axis, then
@@ -1546,6 +1568,7 @@ function extractEffects(
       if (info.cone) cfg.cone = info.cone;
       cfg.spiral = info.spiral;
       cfg.segment = info.segment;
+      if (info.arc) cfg.arc = info.arc;
     }
     const emissionWindow = shared.effectWindow?.(slot, decoded.get(slot) || []);
     if (emissionWindow) {

@@ -95,7 +95,7 @@ export function mulberry32(seed: number): () => number {
 type Vec3 = [number, number, number];
 
 interface ShapeSpec {
-  kind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'other';
+  kind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'arc' | 'other';
   center: Vec3;
   radial: EffectConfig['radial'] | null;
   // a point source's cylinder: each particle born a drawn distance (up to the radius), angle and height from the centre
@@ -113,6 +113,8 @@ interface ShapeSpec {
     range: [EffectSample, EffectSample, EffectSample] | null; axisRange: [EffectSample, EffectSample, EffectSample] | null } | null;
   // 'segment': spawn spread evenly between these two local-frame endpoints
   segment: { from: Vec3; to: Vec3 } | null;
+  // 'arc': a level circle about the centre, angles and the most a particle is raised by in radians
+  arc: { radius: number; from: number; to: number; tilt: number } | null;
 }
 
 // Sample polar cosine, giving uniform solid angle within the cone. The
@@ -218,7 +220,7 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
   const axis = vec3Of(config?.shape_kind !== 'spiral' && config?.spiral?.axis ? config.spiral.axis : config?.axis, fallbackAxis);
   const frame = axisFrame(axis);
   const spec: ShapeSpec = {
-    kind: kind === 'point' || kind === 'ring' || kind === 'spiral' || kind === 'segment' || kind === 'radial'
+    kind: kind === 'point' || kind === 'ring' || kind === 'spiral' || kind === 'segment' || kind === 'radial' || kind === 'arc'
       ? kind : 'other',
     center,
     radial: config?.radial ?? null,
@@ -231,12 +233,19 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
     sweep: clamp(finite(config?.sweep, 360), 0, 360) * DEG,
     spiral: null,
     segment: null,
+    arc: null,
   };
   if (spec.kind === 'segment') {
     const from = vec3Of(config?.segment?.from, null as any);
     const to = vec3Of(config?.segment?.to, null as any);
     if (from && to) spec.segment = { from, to };
     else { spec.kind = 'other'; spec.yaw = TWO_PI; spec.pitch = 30 * DEG; }
+  }
+  if (spec.kind === 'arc') {
+    const arc = config?.arc;
+    if (arc) spec.arc = { radius: finite(arc.radius, 0), from: finite(arc.angles[0], 0) * DEG,
+      to: finite(arc.angles[1], 0) * DEG, tilt: finite(arc.tilt, 0) * DEG };
+    else spec.kind = 'other';
   }
   if (spec.kind === 'other') {
     spec.yaw = TWO_PI;
@@ -733,6 +742,12 @@ export class EmitterSim {
         dy = cp * s.w[1] + sp * (cy * s.u[1] + sy * s.v[1]);
         dz = cp * s.w[2] + sp * (cy * s.u[2] + sy * s.v[2]);
       }
+    } else if (s.kind === 'arc' && s.arc) {
+      // the game's order: the angle's draw, then the raise's (drawn down from the most), at the angle on the circle
+      const a = s.arc, theta = a.from + (a.to - a.from) * r0, raise = a.tilt * (1 - r1);
+      const ct = Math.cos(theta), st = Math.sin(theta), cr = Math.cos(raise);
+      x += a.radius * ct; y += a.radius * st;
+      dx = cr * ct; dy = cr * st; dz = Math.sin(raise);
     } else if (s.kind === 'ring') {
       const theta = r0 * s.sweep;
       const ct = Math.cos(theta); const st = Math.sin(theta);
