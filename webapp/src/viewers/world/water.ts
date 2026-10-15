@@ -27,6 +27,8 @@ export interface WaterTile {
   tileUnits: number;
   originX?: number;
   originY?: number;
+  /** All rooms: the room's slot in the merged world's room mask (0: none). */
+  room?: number;
 }
 
 export interface WaterUniforms {
@@ -37,7 +39,12 @@ export interface WaterUniforms {
   sheetGroundColor: { value: THREE.Color };
   sheetSunColor: { value: THREE.Color };
   sheetSunDirection: { value: THREE.Vector3 };
+  /** All rooms: the rooms another renderer draws (red > 0.5 at a room's slot: its sheets are not drawn). */
+  roomMask: { value: THREE.Texture | null };
 }
+
+/** Width in texels of a room mask (the merged world's and the sheets'). */
+export const ROOM_MASK_WIDTH = 1024;
 
 /** Water verdicts straight from the world index's texture routing table. */
 export class WorldWaterRegistry {
@@ -204,6 +211,7 @@ export function buildWaterSheetGeometry(tiles: WaterTile[], {
 }: { offsetX?: number; offsetY?: number } = {}): THREE.BufferGeometry {
   const positions = new Float32Array(tiles.length * 4 * 3);
   const tints = new Float32Array(tiles.length * 4 * 4);
+  const rooms = new Float32Array(tiles.length * 4);
   const indices = new Uint32Array(tiles.length * 6);
   tiles.forEach((entry, index) => {
     const x0 = entry.x * entry.tileUnits + (entry.originX ?? offsetX);
@@ -214,6 +222,7 @@ export function buildWaterSheetGeometry(tiles: WaterTile[], {
     positions.set([x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z], index * 12);
     for (let corner = 0; corner < 4; corner++) {
       tints.set([...entry.tint, entry.solid ?? 0], (index * 4 + corner) * 4);
+      rooms[index * 4 + corner] = entry.room ?? 0;
     }
     // CCW from +z in game space, like decoded meshes after their winding fix.
     indices.set([0, 1, 2, 0, 2, 3].map((i) => index * 4 + i), index * 6);
@@ -221,6 +230,7 @@ export function buildWaterSheetGeometry(tiles: WaterTile[], {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('waterTint', new THREE.BufferAttribute(tints, 4));
+  geometry.setAttribute('waterRoom', new THREE.BufferAttribute(rooms, 1));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   geometry.computeBoundingBox();
   geometry.boundingSphere = new THREE.Sphere();
@@ -241,7 +251,18 @@ export function createWaterUniforms(): WaterUniforms {
     sheetGroundColor: { value: new THREE.Color(0x55584d) },
     sheetSunColor: { value: new THREE.Color(0xfff4e0) },
     sheetSunDirection: { value: new THREE.Vector3(0.5, 0.75, 0.35) },
+    roomMask: { value: emptyRoomMask() },
   };
+}
+
+let sharedEmptyMask: THREE.DataTexture | null = null;
+/** A room mask that hides no room. */
+export function emptyRoomMask(): THREE.DataTexture {
+  if (!sharedEmptyMask) {
+    sharedEmptyMask = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat);
+    sharedEmptyMask.needsUpdate = true;
+  }
+  return sharedEmptyMask;
 }
 
 /** Mirror the view's hemisphere + directional light into the sheet shader. */
@@ -261,6 +282,8 @@ export function updateWaterSheetLights(
 
 const SHEET_VERTEX = `
 attribute vec4 waterTint;
+attribute float waterRoom;
+uniform sampler2D roomMask;
 varying vec3 vSheetWorld;
 varying vec4 vSheetTint;
 #include <common>
@@ -271,6 +294,8 @@ void main() {
   vSheetTint = waterTint;
   vec4 mvPosition = viewMatrix * world;
   gl_Position = projectionMatrix * mvPosition;
+  int room = int( waterRoom + 0.5 );
+  if ( room > 0 && texelFetch( roomMask, ivec2( room % ${ROOM_MASK_WIDTH}, room / ${ROOM_MASK_WIDTH} ), 0 ).r > 0.5 ) gl_Position = vec4( 0.0, 0.0, 2.0, 1.0 );
   #include <fog_vertex>
 }`;
 

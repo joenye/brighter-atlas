@@ -838,7 +838,7 @@ async function worldSuite(browser: any, base: string) {
   ok((await visibleCount()) === 8, `authored-empty toggle shows the wireframe (${await visibleCount()})`);
   await panelCheck('Editor gizmos');
 
-  // ---- Advanced accordion: closed by default, hosts the tuning sections ------
+  // ---- Debug accordion: closed by default, hosts the views of the data ------
   const advRoom = await page.evaluate(() => {
     const d = document.querySelector('.world-panel details.wp-advanced');
     return d && {
@@ -846,9 +846,11 @@ async function worldSuite(browser: any, base: string) {
       titles: [...d.querySelectorAll('.wp-title')].map((n) => n.textContent).join(','),
     };
   });
-  ok(!!advRoom && advRoom.open === false, 'Advanced accordion present, collapsed by default');
-  ok(advRoom.titles === 'Water,Lighting & effects,Height levels',
-    `room-view Advanced hosts Water/Lighting/Height levels (${advRoom.titles})`);
+  ok(!!advRoom && advRoom.open === false, 'Debug accordion present, collapsed by default');
+  ok(advRoom.titles === 'Data,Height levels',
+    `room-view Debug hosts Data/Height levels (${advRoom.titles})`);
+  ok(await page.evaluate(() => [...document.querySelectorAll('.world-panel > .wp-section > .wp-title')].map((n) => n.textContent).join(',')) === 'Show,Game shading',
+    'room view shows Show and Game shading at the top level');
   ok(await page.$$eval('.viewer-toolbar .btn', (b) => b.some((x) => /Screenshot/.test(x.textContent))),
     'room view offers the standard toolbar Screenshot button');
   await page.$$eval('.viewer-toolbar .btn', (b) => b.find((x) => /Screenshot/.test(x.textContent))?.click());
@@ -875,24 +877,21 @@ async function worldSuite(browser: any, base: string) {
   await page.evaluate(() => { document.querySelector('.wp-advanced').open = true; });
   await sleep(200);   // details toggle event -> pref write
   ok(await page.evaluate(() => JSON.parse(localStorage.getItem('bs.prefs') || '{}').worldadv === true),
-    'Advanced open state persists in prefs');
+    'Debug open state persists in prefs');
 
-  // ---- water: sheet replaces the curtain; toggle restores the authored view --
+  // ---- water: the animated sheet replaces the curtain (the plain view's water, no longer a setting) --
   const waterOn = await page.evaluate(() => window.__bs.worldView.waterInfo());
   ok(waterOn.sheets === 1 && waterOn.sheetsVisible === 1 && waterOn.curtainsHidden === 1,
-    `water on: 1 animated sheet, curtain hidden (${JSON.stringify(waterOn)})`);
-  await panelCheck('Animated water');
-  const waterOff = await page.evaluate(() => window.__bs.worldView.waterInfo());
-  ok(waterOff.sheetsVisible === 0 && waterOff.curtainsHidden === 0,
-    `water off: authored curtain returns (${JSON.stringify(waterOff)})`);
+    `water: 1 animated sheet, curtain hidden (${JSON.stringify(waterOn)})`);
+  ok(!(await page.evaluate(() => [...document.querySelectorAll('.world-panel label')].some((l) => /Animated water/.test(l.textContent)))),
+    'the panel offers no water setting');
   await sleep(300);
   ok(!page.url().includes('?water') && !/#\/world\/1\?/.test(page.url()),
     'view state stays out of the URL (no hash-query mirroring)');
   ok(await page.evaluate(() => {
     const p = JSON.parse(localStorage.getItem('bs.prefs') || '{}').world;
-    return !!p && p.v === 2 && p.water === false;
-  }), 'water toggle persists in the versioned prefs record');
-  await panelCheck('Animated water');
+    return !!p && p.v === 2 && !('water' in p) && !('ambient' in p);
+  }), 'the settings the panel does not offer stay out of the versioned prefs record');
 
   // ---- ambient effects layer: exact frozen-clock counts + determinism --------
   // Room 1 hosts the torch + fountain fixture systems (3 emitters over 3
@@ -1438,7 +1437,7 @@ async function worldSuite(browser: any, base: string) {
   ok(await page.evaluate(() => window.__bs.worldView.namesInfo().visible) === true,
     'Room names toggle restores them');
 
-  // ---- all-rooms Advanced: Performance joins, Merged is the escape hatch ------
+  // ---- all-rooms Debug: Drawing joins, Merged is the escape hatch ------
   const advAll = await page.evaluate(() => {
     const d = document.querySelector('.world-panel details.wp-advanced');
     return {
@@ -1449,11 +1448,11 @@ async function worldSuite(browser: any, base: string) {
         .some((n) => /Merged rendering/.test(n.textContent)),
     };
   });
-  ok(advAll.titles === 'Water,Lighting & effects,Performance,Height levels,Surface',
-    `all-rooms Advanced hosts Water/Lighting/Performance/Height/Surface (${advAll.titles})`);
+  ok(advAll.titles === 'Data,Drawing,Height levels',
+    `all-rooms Debug hosts Data/Drawing/Height levels (${advAll.titles})`);
   ok(advAll.mergedInAdvanced && !advAll.mergedTopLevel,
-    'Merged rendering lives in Advanced only (invisible default, escape hatch)');
-  ok(advAll.open === true, 'Advanced open state persisted from the room view');
+    'Merged rendering lives in Debug only (invisible default, escape hatch)');
+  ok(advAll.open === true, 'Debug open state persisted from the room view');
   const mergedInfo = await page.evaluate(() => ({
     webgl2: window.__bs.worldView.scene3d.renderer.capabilities.isWebGL2,
     ready: window.__bs.worldView.merged?.ready || false,

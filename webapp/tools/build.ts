@@ -41,6 +41,7 @@ const jobs: BuildOptions[] = [
       'js/extract/maps-worker': 'src/extract/maps/worker.ts',
       'js/viewers/fit-worker': 'src/viewers/fit-worker.ts',
       'js/viewers/world/bake-worker': 'src/viewers/world/bake-worker.ts',
+      'js/viewers/world/game-bake-worker': 'src/viewers/world/game-bake-worker.ts',
       'js/fashion/levels-worker': 'src/fashion/levels-worker.ts',
       'js/fashion/save-worker': 'src/fashion/save-worker.ts',
     },

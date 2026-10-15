@@ -13,7 +13,7 @@
 //   { type:'job', id, generation, tangent, originX, originY, vertexCount,
 //     indexCount, evict:[meshId…], meshes:[{id, positions, normals, uvs,
 //     tangents, index}…], items:[{mesh, count, instanceArray, roomX, roomY,
-//     metaZ, metaBits, palette}…] }
+//     metaZ, metaBits, palette, room}…] }
 // (worker -> main):
 //   { type:'result', id, generation, ok:true, arrays }   (buffers transferred)
 //   { type:'result', id, generation, ok:false, error }
@@ -31,6 +31,8 @@ export interface BakeBucketArrays {
   tangents: Int8Array | null;
   metas: Uint8Array;
   recolors: Uint16Array;
+  /** Per vertex: its room's slot in the room mask (0: none). */
+  rooms: Uint16Array;
   indices: Uint32Array;
   bounds: Float64Array;   // [minX, minY, minZ, maxX, maxY, maxZ]
 }
@@ -53,6 +55,7 @@ export interface BakeJobItem {
   metaZ: number;
   metaBits: number;
   palette: number;
+  room: number;
 }
 
 export interface BakeJobMessage {
@@ -90,6 +93,7 @@ function bakeBucket(msg: BakeJobMessage): BakeBucketArrays {
   const tangents = msg.tangent ? new Int8Array(vertexCount * 4) : null;
   const metas = new Uint8Array(vertexCount * 2);
   const recolors = new Uint16Array(vertexCount);
+  const rooms = new Uint16Array(vertexCount);
   const indices = new Uint32Array(msg.indexCount);
   const originX = msg.originX;
   const originY = msg.originY;
@@ -194,6 +198,7 @@ function bakeBucket(msg: BakeJobMessage): BakeBucketArrays {
         metas[(vertexBase + v) * 2 + 1] = item.metaBits;
       }
       recolors.fill(item.palette, vertexBase, vertexBase + vertsPerInstance);
+      rooms.fill(item.room, vertexBase, vertexBase + vertsPerInstance);
 
       // Winding is copied verbatim: total placement reflection is already
       // baked into the source geometry by the shared room batching path.
@@ -206,7 +211,7 @@ function bakeBucket(msg: BakeJobMessage): BakeBucketArrays {
   }
 
   return {
-    positions, normals, uvs, tangents, metas, recolors, indices,
+    positions, normals, uvs, tangents, metas, recolors, rooms, indices,
     bounds: Float64Array.of(minX, minY, minZ, maxX, maxY, maxZ),
   };
 }
@@ -221,7 +226,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     const arrays = bakeBucket(msg);
     const transfers: Transferable[] = [
       arrays.positions.buffer, arrays.normals.buffer, arrays.uvs.buffer,
-      arrays.metas.buffer, arrays.recolors.buffer, arrays.indices.buffer,
+      arrays.metas.buffer, arrays.recolors.buffer, arrays.rooms.buffer, arrays.indices.buffer,
       arrays.bounds.buffer,
     ];
     if (arrays.tangents) transfers.push(arrays.tangents.buffer);

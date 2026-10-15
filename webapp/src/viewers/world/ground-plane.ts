@@ -74,6 +74,8 @@ export interface PlaneTile {
   beyond: number[];
   /** The shortest distance that floors it (whole tiles). */
   cover: number;
+  /** The source (its index) whose floor it is. */
+  room: number;
 }
 
 interface FieldRoom {
@@ -305,7 +307,7 @@ function settle(field: PlaneField, extent: number): void {
 }
 
 type Emit = (x: number, y: number, sx: number, sy: number, record: GroundPlaneRecord,
-  cellX: number, cellY: number, tints: Float32Array, beyond: Float32Array, cover: number) => void;
+  cellX: number, cellY: number, tints: Float32Array, beyond: Float32Array, cover: number, room: number) => void;
 
 /** The floor's record at a field tile, or null where it has none: a floor
  *  of the tile's own (a neighbour's darker alternate), else the floor of the
@@ -356,7 +358,7 @@ function eachTile(field: PlaneField, extent: number, far: number, split: boolean
       }
       const n = record.repeat;
       emit(x0 + frac[0] + x, y0 + frac[1] + y, 1, 1, record,
-        floorMod(anchor[0] + x0 + x, n), floorMod(anchor[1] + y0 + y, n), tints, beyond, cover);
+        floorMod(anchor[0] + x0 + x, n), floorMod(anchor[1] + y0 + y, n), tints, beyond, cover, field.claim[i]);
     }
   }
   if (extent !== Infinity || !(far > 0)) return;
@@ -397,7 +399,7 @@ function eachTile(field: PlaneField, extent: number, far: number, split: boolean
           for (const [xa, xb] of spans(xr[0], xr[1], anchor[0] + x0, n)) {
             for (const [ya, yb] of spans(yr[0], yr[1], anchor[1] + y0, n)) {
               emit(x0 + frac[0] + xa, y0 + frac[1] + ya, xb - xa, yb - ya, record,
-                floorMod(anchor[0] + x0 + xa, n), floorMod(anchor[1] + y0 + ya, n), tints, beyond, FAR);
+                floorMod(anchor[0] + x0 + xa, n), floorMod(anchor[1] + y0 + ya, n), tints, beyond, FAR, field.claim[i]);
             }
           }
         }
@@ -411,11 +413,11 @@ function eachTile(field: PlaneField, extent: number, far: number, split: boolean
  *  shorter distance draws a prefix. */
 export function planeTiles(field: PlaneField, extent = Infinity, far = 0): PlaneTile[] {
   const out: PlaneTile[] = [];
-  eachTile(field, extent, far, true, (x, y, sx, sy, record, cellX, cellY, tints, beyond, cover) => {
+  eachTile(field, extent, far, true, (x, y, sx, sy, record, cellX, cellY, tints, beyond, cover, room) => {
     out.push({
       x, y, size: [sx, sy], record, cell: [cellX, cellY],
       tints: [0, 1, 2, 3].map((v) => [tints[v * 3], tints[v * 3 + 1], tints[v * 3 + 2]]),
-      beyond: Array.from(beyond), cover,
+      beyond: Array.from(beyond), cover, room,
     });
   });
   return out.sort((a, b) => a.cover - b.cover);

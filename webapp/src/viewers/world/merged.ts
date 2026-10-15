@@ -9,10 +9,10 @@
 // longer needed so it can be released mid-bake.
 
 import * as THREE from '../../../vendor/three.module.js';
-import { WORLD_CATEGORIES, CATEGORY_COLOURS, yieldToBrowser } from './scene.js';
+import { WORLD_CATEGORIES, CATEGORY_COLOURS, GAME_DRAWN_LAYER, yieldToBrowser } from './scene.js';
 import {
   isWaterWallGeometry,
-  collectRoomWaterTiles, buildWaterSheetGeometry, waterSheetMaterialFor,
+  collectRoomWaterTiles, buildWaterSheetGeometry, waterSheetMaterialFor, ROOM_MASK_WIDTH,
 } from './water.js';
 import { isIdentityRecolor } from '../../recolor.js';
 import { MergedBakePool } from './bake-pool.js';
@@ -22,7 +22,11 @@ import type { WorldScene, WorldTextureSet } from './scene.js';
 import type { WorldWaterRegistry, WaterUniforms, WaterTile } from './water.js';
 import type { WorldPickIndex } from './pick-index.js';
 
-export const MERGED_SHADER_VERSION = 'brighter-merged-v1';
+export const MERGED_SHADER_VERSION = 'brighter-merged-v2';
+
+const _cellFrustum = new THREE.Frustum();
+const _cellMatrix = new THREE.Matrix4();
+const _cellBox = new THREE.Box3();
 
 const CELL_TILES = 160;            // world cell edge for frustum-culling groups
 const SMALL_DIAMETER_TILES = 2.5;  // props smaller than this join the cull tier
@@ -62,8 +66,10 @@ function nextFrameOrTimeout(ms = 150): Promise<void> {
 
 const MERGED_VERTEX_DECL = `
 attribute vec2 brighterMeta;
+attribute float brighterRoom;
 uniform vec3 brighterVisMask;
-uniform float brighterCullDist;`;
+uniform float brighterCullDist;
+uniform sampler2D brighterRoomMask;`;
 
 const MERGED_VERTEX_COLOR_DECL = `
 attribute float brighterRecolor;
@@ -85,6 +91,12 @@ const MERGED_VERTEX_BODY = `
   float brighterZBit = mod( floor( brighterZMask / exp2( mod( brighterZ, 24.0 ) ) ), 2.0 );
   float brighterCatBit = mod( floor( brighterVisMask.z / exp2( brighterCategory ) ), 2.0 );
   bool brighterHidden = brighterZBit < 0.5 || brighterCatBit < 0.5;
+  // a room another renderer draws (the game's frame, all rooms): its slot in the room mask
+  int brighterRoomSlot = int( brighterRoom + 0.5 );
+  if ( !brighterHidden && brighterRoomSlot > 0 ) {
+    brighterHidden = texelFetch( brighterRoomMask,
+      ivec2( brighterRoomSlot % ${ROOM_MASK_WIDTH}, brighterRoomSlot / ${ROOM_MASK_WIDTH} ), 0 ).r > 0.5;
+  }
   if ( !brighterHidden && mod( floor( brighterBits / 4.0 ), 2.0 ) > 0.5 ) {
     vec4 brighterWorld = modelMatrix * vec4( transformed, 1.0 );
     brighterHidden = distance( brighterWorld.xyz, cameraPosition ) > brighterCullDist;
@@ -166,6 +178,8 @@ export interface MergedBucketItem {
   metaZ: number;
   metaBits: number;
   palette: number;
+  /** The room's slot in the room mask (0: none). */
+  room?: number;
   recolors?: any;
   fullTint?: boolean;
 }
@@ -217,7 +231,7 @@ function sameBytes(a: ArrayBufferView | null, b: ArrayBufferView | null): boolea
 function sameBakeArrays(a: BakeBucketArrays, b: BakeBucketArrays): boolean {
   return sameBytes(a.positions, b.positions) && sameBytes(a.normals, b.normals)
     && sameBytes(a.uvs, b.uvs) && sameBytes(a.tangents, b.tangents)
-    && sameBytes(a.metas, b.metas) && sameBytes(a.recolors, b.recolors)
+    && sameBytes(a.metas, b.metas) && sameBytes(a.recolors, b.recolors) && sameBytes(a.rooms, b.rooms)
     && sameBytes(a.indices, b.indices) && sameBytes(a.bounds, b.bounds);
 }
 
@@ -276,6 +290,19 @@ export class MergedWorld {
   _blackParameterMap: THREE.DataTexture | null;
   _visMask: { value: THREE.Vector3 };
   _cullDist: { value: number };
+  /** Room id -> its slot in the room mask (from 1; slot 0 is no room). */
+  _roomSlots: Map<number, number>;
+  /** Per slot, red 255: the room is drawn by another renderer, so its batches are not. */
+  _roomMaskData: Uint8Array<ArrayBuffer>;
+  _roomMask: { value: THREE.DataTexture };
+  _hiddenRooms: Set<number>;
+  /** Per world cell, a group of its meshes and their bounds (the root's frame): a cell out of view is
+   *  skipped whole, so three neither walks nor tests its meshes (cullCells). */
+  _cells: Map<string, { group: THREE.Group; box: THREE.Box3 }>;
+  /** Skip cells out of the camera's view (off while something else renders the root, e.g. sun shadows). */
+  cellCulling: boolean;
+  /** Per room slot, the meshes (batches, water sheets) holding its parts. */
+  _slotMeshes: Map<number, THREE.Mesh[]>;
   _categoryVisible: Record<string, boolean>;
 
   /**
@@ -347,6 +374,15 @@ export class MergedWorld {
     this._blackParameterMap = null;
     this._visMask = { value: new THREE.Vector3(0xffffff, 0xffffff, 15) };
     this._cullDist = { value: 1e9 };
+    this._roomSlots = new Map();
+    this._roomMaskData = new Uint8Array(ROOM_MASK_WIDTH * 4);
+    // the water sheets' uniform, shared: every sheet material reads the same mask
+    this._roomMask = this.waterUniforms.roomMask as { value: THREE.DataTexture };
+    this._roomMask.value = this._makeRoomMask(1);
+    this._hiddenRooms = new Set();
+    this._slotMeshes = new Map();
+    this._cells = new Map();
+    this.cellCulling = true;
     this._categoryVisible = Object.fromEntries(
       WORLD_CATEGORIES.map((category) => [category, true]),
     );
@@ -372,6 +408,7 @@ export class MergedWorld {
     material.onBeforeCompile = (shader: any) => {
       shader.uniforms.brighterVisMask = visMask;
       shader.uniforms.brighterCullDist = cullDist;
+      shader.uniforms.brighterRoomMask = this._roomMask;
       let vertexDecl = MERGED_VERTEX_DECL;
       let vertexBody = MERGED_VERTEX_BODY;
       if (colors) {
@@ -546,6 +583,122 @@ export class MergedWorld {
   }
 
   /** The world cell a room was harvested into (rooms map to exactly one). */
+  /** A room's slot in the room mask, given on first ask (from 1; 0 is no room). */
+  roomSlot(roomId: number | string): number {
+    const id = Number(roomId);
+    let slot = this._roomSlots.get(id);
+    if (slot === undefined) {
+      slot = this._roomSlots.size + 1;
+      this._roomSlots.set(id, slot);
+      if (slot >= this._roomMask.value.image.height * ROOM_MASK_WIDTH) this._growRoomMask();
+      if (this._hiddenRooms.has(id)) this._writeRoomMask(slot, true);
+    }
+    return slot;
+  }
+
+  /** Leave out (or put back) the rooms another renderer draws: their batches and water sheets. */
+  setRoomsHidden(roomIds: Iterable<number>, hidden: boolean): void {
+    let changed = false;
+    for (const raw of roomIds) {
+      const id = Number(raw);
+      if (hidden === this._hiddenRooms.has(id)) continue;
+      if (hidden) this._hiddenRooms.add(id); else this._hiddenRooms.delete(id);
+      const slot = this._roomSlots.get(id);
+      if (slot !== undefined) { this._writeRoomMask(slot, hidden); changed = true; }
+    }
+    if (changed) this._roomMask.value.needsUpdate = true;
+    // a mesh all of whose rooms are left out is not drawn at all (the mask alone still costs its draw)
+    const meshes = new Set<THREE.Mesh>();
+    for (const raw of roomIds) {
+      const slot = this._roomSlots.get(Number(raw));
+      for (const mesh of slot === undefined ? [] : this._slotMeshes.get(slot) ?? []) meshes.add(mesh);
+    }
+    for (const mesh of meshes) this._applyRoomLayer(mesh);
+  }
+
+  /** Put a mesh under its cell's group, the cell's bounds grown over it. */
+  _cellAdd(cellX: number, cellY: number, mesh: THREE.Mesh): void {
+    const key = `${cellX},${cellY}`;
+    let cell = this._cells.get(key);
+    if (!cell) {
+      const group = new THREE.Group();
+      group.name = `merged-cell-${key}`;
+      group.matrixAutoUpdate = false;
+      this.root.add(group);
+      this._cells.set(key, cell = { group, box: new THREE.Box3() });
+    }
+    const geometry = mesh.geometry;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    mesh.updateMatrix();
+    cell.box.union(geometry.boundingBox!.clone().applyMatrix4(mesh.matrix));
+    cell.group.add(mesh);
+  }
+
+  /** Show only the cells the camera can see (a whole cell's meshes skipped at once). */
+  cullCells(camera: THREE.Camera): void {
+    // (not while baking: a cell's first upload needs a frame that draws it)
+    const cull = this.cellCulling && this.root.visible && this.ready && !this.building;
+    if (!cull) { for (const cell of this._cells.values()) cell.group.visible = true; return; }
+    camera.updateMatrixWorld();
+    _cellMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _cellFrustum.setFromProjectionMatrix(_cellMatrix);
+    this.root.updateMatrixWorld();
+    for (const cell of this._cells.values()) {
+      _cellBox.copy(cell.box).applyMatrix4(this.root.matrixWorld);
+      cell.group.visible = cell.box.isEmpty() || _cellFrustum.intersectsBox(_cellBox);
+    }
+  }
+
+  /** Note which rooms a mesh holds parts of, and draw it only while one of them is not left out. */
+  _trackRooms(mesh: THREE.Mesh, slots: Iterable<number>): void {
+    const unique = [...new Set(slots)];
+    mesh.userData.roomSlots = unique;
+    for (const slot of unique) {
+      let list = this._slotMeshes.get(slot);
+      if (!list) this._slotMeshes.set(slot, list = []);
+      list.push(mesh);
+    }
+    this._applyRoomLayer(mesh);
+  }
+
+  _applyRoomLayer(mesh: THREE.Mesh): void {
+    const slots: number[] = mesh.userData.roomSlots ?? [];
+    const allHidden = slots.length > 0 && slots.every((slot) => slot > 0 && this._roomMaskData[slot * 4] === 255);
+    mesh.layers.set(allHidden ? GAME_DRAWN_LAYER : 0);
+  }
+
+  _untrackRooms(mesh: THREE.Mesh): void {
+    for (const slot of mesh.userData.roomSlots ?? []) {
+      const list = this._slotMeshes.get(slot);
+      if (!list) continue;
+      const k = list.indexOf(mesh);
+      if (k >= 0) list.splice(k, 1);
+    }
+  }
+
+  /** The rooms left out (setRoomsHidden). */
+  get hiddenRooms(): ReadonlySet<number> { return this._hiddenRooms; }
+
+  _makeRoomMask(rows: number): THREE.DataTexture {
+    const texture = new THREE.DataTexture(this._roomMaskData, ROOM_MASK_WIDTH, rows, THREE.RGBAFormat);
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  _growRoomMask(): void {
+    const rows = this._roomMask.value.image.height * 2;
+    const data = new Uint8Array(ROOM_MASK_WIDTH * rows * 4);
+    data.set(this._roomMaskData);
+    this._roomMaskData = data;
+    this._roomMask.value.dispose();
+    this._roomMask.value = this._makeRoomMask(rows);
+  }
+
+  _writeRoomMask(slot: number, hidden: boolean): void {
+    this._roomMaskData[slot * 4] = hidden ? 255 : 0;
+    this._roomMask.value.needsUpdate = true;
+  }
+
   cellOfRoom(roomId: number | string): { cellX: number; cellY: number } | null {
     return this._roomCells.get(Number(roomId)) || null;
   }
@@ -638,6 +791,7 @@ export class MergedWorld {
       const cellX = Math.floor(roomX / cellUnits);
       const cellY = Math.floor(roomY / cellUnits);
       this._roomCells.set(Number(room.id), { cellX, cellY });
+      const roomSlot = this.roomSlot(room.id);
       const cellRoomsKey = `${cellX},${cellY}`;
       const cellRooms = this._cellRooms.get(cellRoomsKey) || [];
       cellRooms.push(Number(room.id));
@@ -676,6 +830,7 @@ export class MergedWorld {
           roomY,
           metaZ: classified.metaZ,
           metaBits: classified.metaBits,
+          room: roomSlot,
           palette: classified.hasRecolor
             ? this._internTuple(mergedPaletteTuple(exact.recolors, classified.fullTint))
             : 0,
@@ -712,6 +867,7 @@ export class MergedWorld {
           ...tile,
           originX: roomX - cellX * cellUnits,
           originY: roomY - cellY * cellUnits,
+          room: roomSlot,
         });
       }
       if (onRoomHarvested) {
@@ -753,6 +909,7 @@ export class MergedWorld {
     const tangents = bucket.tangent ? new Int8Array(vertexCount * 4) : null;
     const metas = new Uint8Array(vertexCount * 2);
     const recolors = new Uint16Array(vertexCount);
+    const rooms = new Uint16Array(vertexCount);
     const indices = new Uint32Array(bucket.indices);
     const originX = bucket.cellX * cellUnits;
     const originY = bucket.cellY * cellUnits;
@@ -833,6 +990,7 @@ export class MergedWorld {
           metas[(vertexBase + v) * 2 + 1] = item.metaBits;
         }
         recolors.fill(item.palette, vertexBase, vertexBase + vertsPerInstance);
+        rooms.fill(item.room ?? 0, vertexBase, vertexBase + vertsPerInstance);
 
         // Winding is copied verbatim: total placement reflection is already
         // baked into the source geometry by the shared room batching path.
@@ -852,14 +1010,14 @@ export class MergedWorld {
     }
 
     return {
-      positions, normals, uvs, tangents, metas, recolors, indices,
+      positions, normals, uvs, tangents, metas, recolors, rooms, indices,
       bounds: Float64Array.of(minX, minY, minZ, maxX, maxY, maxZ),
     };
   }
 
   /** Wrap baked bucket arrays (main-thread or worker) into the display geometry. */
   _assembleBucketGeometry(arrays: BakeBucketArrays): THREE.BufferGeometry {
-    const { positions, normals, uvs, tangents, metas, recolors, indices, bounds } = arrays;
+    const { positions, normals, uvs, tangents, metas, recolors, rooms, indices, bounds } = arrays;
     const geometry = new THREE.BufferGeometry();
     const releasable: THREE.BufferAttribute[] = [];
     const attach = (name: string, attribute: THREE.BufferAttribute) => {
@@ -872,6 +1030,7 @@ export class MergedWorld {
     if (tangents) attach('tangent', new THREE.BufferAttribute(tangents, 4, true));
     attach('brighterMeta', new THREE.BufferAttribute(metas, 2));
     attach('brighterRecolor', new THREE.BufferAttribute(recolors, 1));
+    attach('brighterRoom', new THREE.BufferAttribute(rooms, 1));
     const index = new THREE.BufferAttribute(indices, 1);
     releasable.push(index);
     geometry.setIndex(index);
@@ -1003,7 +1162,8 @@ export class MergedWorld {
     mesh.customDepthMaterial = this._depthMaterial(bucket, textures);
     if (bucket.water) mesh.visible = this._curtainsVisible;
     mesh.userData.mergedBucket = { key: bucket.key, water: bucket.water };
-    this.root.add(mesh);
+    this._trackRooms(mesh, (bucket.items ?? []).map((item) => item.room ?? 0));
+    this._cellAdd(bucket.cellX, bucket.cellY, mesh);
     // Track output immediately so a cancelled build's meshes are still swept
     // by disposeMeshes (they used to orphan in this.root).
     this._buckets.push({ mesh, water: bucket.water });
@@ -1232,6 +1392,7 @@ export class MergedWorld {
     this._buckets = kept;
     this._pendingUploads = this._pendingUploads.filter((mesh) => !removed.includes(mesh));
     for (const mesh of removed) {
+      this._untrackRooms(mesh);
       mesh.removeFromParent();
       mesh.geometry.dispose();
     }
@@ -1290,7 +1451,8 @@ export class MergedWorld {
       mesh.matrixAutoUpdate = false;   // static once placed at its cell origin
       mesh.updateMatrix();
       mesh.visible = this._sheetsVisible;
-      this.root.add(mesh);
+      this._trackRooms(mesh, group.tiles.map((tile) => tile.room ?? 0));
+      this._cellAdd(group.cellX, group.cellY, mesh);
       this._sheetMeshes.push(mesh);
       built++;
       if (onProgress) {
@@ -1361,6 +1523,9 @@ export class MergedWorld {
       mesh.geometry.dispose();
     }
     this._sheetMeshes = [];
+    this._slotMeshes.clear();
+    for (const cell of this._cells.values()) cell.group.removeFromParent();
+    this._cells.clear();
     this.ready = false;
     this.stats = null;
   }
@@ -1378,6 +1543,7 @@ export class MergedWorld {
     this._paletteUniform.value = null;
     this._blackParameterMap?.dispose();
     this._blackParameterMap = null;
+    this._roomMask.value.dispose();
     this.root.removeFromParent();
     this.building = false;
   }

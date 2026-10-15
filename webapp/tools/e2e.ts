@@ -92,6 +92,7 @@ const browser = await puppeteer.launch({
 const page: any = await browser.newPage();
 await page.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
 const errs: string[] = [];
+const glErrs: string[] = [];
 const perfLines: string[] = [];
 page.on('error', (e) => errs.push(`CRASH ${e?.message || 'page crashed'}`));   // renderer death (OOM etc.)
 page.on('pageerror', (e) => errs.push(`PAGE ${e.message}`));
@@ -101,6 +102,9 @@ page.on('console', (m) => {
   const text = `${m.text()} ${m.location()?.url || ''}`;
   if (m.text().startsWith('[perf]')) perfLines.push(m.text());
   if (m.type() === 'error' && !/favicon|404 \(Not Found\)|decode failed/.test(text)) errs.push(`CONSOLE ${m.text()}`);
+  // a GL error is a warning, not an error: a draw the driver refused (a vertex array left without its index
+  // buffer drew nothing in all rooms and showed only here)
+  if (/GL_INVALID|WebGL: too many errors/.test(m.text())) glErrs.push(m.text());
 });
 
 // ---- 1. onboarding: upload the real bundles, select everything --------------
@@ -874,7 +878,9 @@ const fx = await page.evaluate(async () => {
   const isAddCont = (sys) => sys.emitters.some((e) => blendOf(sys, e) === 'add'
     && e.burst != null && doc.configs[String(e.burst)]?.kind === 'burst_continuous');
   const lantern = doc.systems.find((s) => s.names.some((n) => n.name.includes('hanging_street_lantern_idle'))) || null;
+  const portal = doc.systems.find((s) => s.names.some((n) => n.name.includes('portal_stone_block_idle'))) || null;
   return {
+    portalArcs: portal ? portal.emitters.map((e) => doc.configs[String(e.shape)]).filter((c) => c?.shape_kind === 'arc' && c.arc?.radius > 0).length : null,
     systems: doc.systems.length,
     named: doc.systems.filter((s) => s.names.length > 0).length,
     roomAtt: doc.attachments.rooms.length,
@@ -908,6 +914,8 @@ if (!fx) {
   // Its looping additive-continuous behavior is the invariant.
   ok(fx.lantern != null && fx.lantern.loop === true && fx.lantern.emitters >= 1 && fx.lantern.addContinuous,
     `hanging street lantern system: looping additive continuous emitter (${JSON.stringify(fx.lantern)})`);
+  // the portal stones' idle ring: the game puts each particle on a circle, eight 45 degree arcs of it (from 2026)
+  ok(fx.portalArcs === null || fx.portalArcs >= 8, `portal stone ring spawns on arcs (${fx.portalArcs})`);
   // the room named Town Square hosts a dense looping system; resolved by NAME
   // (room names partly come from the cross-build fill, so a rename skips with
   // a warning instead of failing the suite)
@@ -1077,7 +1085,7 @@ for (const probe of [
     s.camera.position.set(a.x / t + offset[0], a.z / t + offset[1], a.y / t + offset[2]);
     s.controls.update();
   }, Number(focused.slice(5)), probe.viewOffset);
-  await clickWorldCheck('Animated water');
+  await page.evaluate(() => window.__bs.worldView.setPlainWater(false));
   await waitWorldFrame();
   await page.evaluate(() => { window.__fxPixels = null; });
   await grabDiff(probe.channelMin);            // effects-ON capture
@@ -1107,7 +1115,7 @@ for (const probe of [
     fx.setRunning(false);
     fx.setClock(t);
   }, probe.clock);
-  await clickWorldCheck('Animated water');
+  await page.evaluate(() => window.__bs.worldView.setPlainWater(true));
   await waitWorldFrame();
   await sleep(400);
   const fxCov = await paintCoverage(page);
@@ -1715,6 +1723,8 @@ ok(await page.$('.notice-modal') === null, 'acknowledged notice stays dismissed'
 // ---- zero console errors throughout -------------------------------------------
 ok(errs.length === 0, `zero page/console errors (${errs.length})`);
 errs.slice(0, 10).forEach((e) => console.log('   ', e));
+ok(glErrs.length === 0, `zero GL errors (${glErrs.length})`);
+glErrs.slice(0, 5).forEach((e) => console.log('   ', e));
 
 await browser.close();
 server.close();

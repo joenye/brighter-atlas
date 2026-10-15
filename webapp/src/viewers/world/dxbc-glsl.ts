@@ -46,7 +46,13 @@ export interface TranslateOptions {
   y?: YConvention;
   /** The GL clip depth range the program draws under (default 'negativeOneToOne'). */
   depth?: 'zeroToOne' | 'negativeOneToOne';
+  /** Pixel-stage 2D textures (by register) read from a layer of a 2D array instead: the layer in `LAYER_VARYING`,
+   *  a flat float the caller declares and feeds (all rooms: many parts' textures in one array, one draw). */
+  layered?: number[];
 }
+
+/** The pixel stage's layer for `TranslateOptions.layered` textures. */
+export const LAYER_VARYING = 'v_layer';
 
 export interface AttributeBinding {
   /** GLSL attribute name. */
@@ -227,7 +233,13 @@ class StageWriter {
     readonly stage: 'vs' | 'ps',
     readonly y: YConvention,
     readonly notes: string[],
+    readonly layered: ReadonlySet<number> = new Set(),
   ) {}
+
+  /** A texture read from a layer of an array (TranslateOptions.layered): a 2D one, in the pixel stage. */
+  isLayered(texture: number): boolean {
+    return this.stage === 'ps' && this.layered.has(texture) && this.resource(texture).dim === '2d';
+  }
 
   line(s: string) {
     this.body.push('  '.repeat(this.depth) + s);
@@ -416,6 +428,8 @@ class StageWriter {
 
   samplerUniform(texture: number, sampler: number | null, comparison: boolean): { name: string; info: ResourceInfo } {
     const info = this.resource(texture);
+    // (a layered texture is declared an array; its reads keep the 2D shape, the layer added to their coordinates)
+    const declared: SamplerBinding['dim'] = !comparison && this.isLayered(texture) ? '2darray' : info.dim;
     const name = sampler === null
       ? `${info.dim === 'buffer' ? 'b' : 't'}${texture}_${this.stage}`
       : `${comparison ? 'c' : 's'}${texture}_${sampler}_${this.stage}`;
@@ -423,7 +437,7 @@ class StageWriter {
       this.samplers.set(name, {
         uniform: name, stage: this.stage, texture, textureName: this.bindingName(INPUT_TYPE.TEXTURE, texture),
         sampler, samplerName: sampler === null ? '' : this.bindingName(INPUT_TYPE.SAMPLER, sampler),
-        dim: info.dim, comparison, returnType: info.returnType,
+        dim: declared, comparison, returnType: info.returnType,
         widthUniform: info.dim === 'buffer' ? `u_width_${name}` : null,
       });
     }
@@ -475,7 +489,8 @@ class StageWriter {
     const comparison = op === OP.SAMPLE_C || op === OP.SAMPLE_C_LZ;
     const { name, info } = this.samplerUniform(texture, sampler, comparison);
     if (info.dim === 'buffer') throw new Error('sampling a buffer');
-    const uv = this.address(addr, info.dim);
+    const layered = !comparison && this.isLayered(texture);
+    const uv = layered ? `vec3(${this.address(addr, info.dim)}, ${LAYER_VARYING})` : this.address(addr, info.dim);
     const off = this.offsetArg(ins, info.dim);
     let call: string;
     if (comparison) {
@@ -532,7 +547,8 @@ class StageWriter {
       const off = this.offsetArg(ins, info.dim);
       let coord: string;
       if (info.dim === '1d') coord = `ivec2(${this.src(addr, [0], 'i')}, 0)`;
-      else if (info.dim === '2d') coord = this.src(addr, [0, 1], 'i');
+      else if (info.dim === '2d') coord = this.isLayered(texture)
+        ? `ivec3(${this.src(addr, [0, 1], 'i')}, int(${LAYER_VARYING}))` : this.src(addr, [0, 1], 'i');
       else if (info.dim === 'cube') throw new Error('ld on a cube');
       else coord = this.src(addr, [0, 1, 2], 'i');
       call = off ? `texelFetchOffset(${name}, ${coord}, ${lod}, ${off})` : `texelFetch(${name}, ${coord}, ${lod})`;
@@ -548,8 +564,9 @@ class StageWriter {
     const { name, info } = this.samplerUniform(texture, null, false);
     if (info.dim === 'buffer') throw new Error('resinfo on a buffer');
     const lod = this.src(mip, [0], 'i');
-    const size = info.dim === '2d' || info.dim === 'cube' || info.dim === '1d'
-      ? `ivec4(textureSize(${name}, ${lod}), 0, 1)` : `ivec4(textureSize(${name}, ${lod}), 1)`;
+    const size = this.isLayered(texture) ? `ivec4(textureSize(${name}, ${lod}).xy, 0, 1)`
+      : info.dim === '2d' || info.dim === 'cube' || info.dim === '1d'
+        ? `ivec4(textureSize(${name}, ${lod}), 0, 1)` : `ivec4(textureSize(${name}, ${lod}), 1)`;
     this.notes.push('resinfo reports one mip level (GLSL ES 3.00 cannot query the level count)');
     const kind = ins.resinfoReturn;
     const v = kind === 2 ? `uvec4(${size})` : kind === 1 ? `(1.0 / vec4(${size}))` : `vec4(${size})`;
@@ -929,7 +946,7 @@ export function translate(
   let targetHeightUniform: string | null = null;
   let psWriter: StageWriter | null = null;
   if (ps) {
-    const w = new StageWriter(ps, 'ps', y, notes);
+    const w = new StageWriter(ps, 'ps', y, notes, new Set(options.layered ?? []));
     psWriter = w;
     w.emit();
     const prologue: string[] = [];

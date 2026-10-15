@@ -38,6 +38,8 @@ import WorldScene, {
   WORLD_CATEGORIES, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection, GIZMO_SWATCH, gizmoMaterial,
   GAME_DRAWN_LAYER, placeSkin,
 } from './world/scene.js';
+import { GameBakeWorker } from './world/game-geometry.js';
+import { backgroundStats, backgroundTurn, setBackgroundShare } from './world/frame-budget.js';
 import { FlyControls } from './world/fly-controls.js';
 import {
   WorldWaterRegistry, createWaterUniforms, updateWaterSheetLights,
@@ -46,11 +48,11 @@ import {
 } from './world/water.js';
 import { updateGameWaterLights } from './world/game-water.js';
 import { EffectsClock } from './world/effects-sim.js';
-import { GameFrame } from './world/game-frame.js';
+import { GameFrame, clusterSource, type GameScene, type GameRoomSource } from './world/game-frame.js';
 import { doorNeighbours } from './world/neighbours.js';
 import {
   PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_GAME_DISTANCE, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
-  planeUniforms, setPlaneReach, showPlaneMesh, type PlaneField, type PlaneSource,
+  planeUniforms, setPlaneReach, showPlaneMesh, planeTiles, type PlaneField, type PlaneSource, type PlaneTile,
 } from './world/ground-plane.js';
 import { renderCard, type CardSubject, type CardView } from './world/card.js';
 import { REVEAL_KEY } from './model-rooms.js';
@@ -132,6 +134,7 @@ const DEFAULT_STATE = Object.freeze({
   inspect: false,
   water: true,
   game: true,
+  gamefar: true,                    // all rooms: the whole world with the game's shading (else the rooms near the camera)
   glights: true,                    // game shading: lamps, torches and fires
   gfog: true,                       // game shading: the fog of the rooms that have one
   effects: true,
@@ -146,12 +149,14 @@ const DEFAULT_STATE = Object.freeze({
   scale: 2,       // RENDER_SCALES index (1x)
   cull: false,
   culld: 160,
-  floor: 'none',    // all-rooms under-world surface: none | table | void
-  tableLight: 1,    // wooden-table material brightness multiplier
   shotRes: '8k',    // high-res screenshot long-edge target (see SHOT_RES)
 });
-// z (level csv) and inspect are per-visit; everything else persists.
-const PERSISTED = Object.keys(DEFAULT_STATE).filter((k) => k !== 'inspect');
+// z (level csv) and inspect are per-visit; everything else persists, except
+// the settings the panel no longer offers (the plain view's water, lights,
+// shadows, small-object cull and under-world surface: always their defaults,
+// and the weak-GPU ones below).
+const UNOFFERED = new Set(['inspect', 'water', 'wcolor', 'wopacity', 'ambient', 'sun', 'shadows', 'cull', 'culld']);
+const PERSISTED = Object.keys(DEFAULT_STATE).filter((k) => !UNOFFERED.has(k));
 
 // The view state: DEFAULT_STATE plus the per-visit z csv. Keys are also
 // accessed dynamically (category toggles, the inputs registry).
@@ -160,11 +165,11 @@ interface WorldState {
   untextured: boolean; collision: boolean; empty: boolean; names: boolean; ground: boolean;
   groundd: number; groundw: number; neighbours: boolean; neighbourfade: boolean;
   spawnnames: boolean;
-  inspect: boolean; water: boolean; game: boolean; effects: boolean; idle: boolean;
+  inspect: boolean; water: boolean; game: boolean; gamefar: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
   shadows: boolean; flatten: boolean; merged: boolean;
   scale: number; cull: boolean; culld: number;
-  floor: string; tableLight: number; shotRes: string;
+  shotRes: string;
   z: string;
   [key: string]: any;
 }
@@ -329,20 +334,22 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // prefs exist; nothing is persisted until the user changes something, and a
   // masked adapter ('unknown') is never treated as weak.
   const gpu = allMode ? classifyGpu(renderer) : null;
+  // (the plain view's water is not offered: a software adapter keeps the authored curtains every visit)
+  if (gpu?.tier === 'software') state.water = false;
   if (gpu && !hasSavedWorldState()) {
     if (gpu.tier === 'software') {
       state.scale = RENDER_SCALES.indexOf(0.5);
-      state.water = false;
-      state.cull = true;
       // Weak-GPU default (design 4.4, judge-decided): merged first-run on a
       // software adapter starts with effects off too, alongside water.
       // Single-room keeps effects ON unconditionally (see DEFAULT_STATE) and
       // relies on the per-emitter/per-view caps instead: accept-and-cap, not
       // a blanket disable. Always user-toggleable via the panel checkbox.
       state.effects = false;
+      // the game's frame over many rooms is far too slow in software
+      state.game = false;
     } else if (gpu.tier === 'integrated') {
       state.scale = RENDER_SCALES.indexOf(0.75);
-      state.cull = true;
+      state.gamefar = false;   // (the whole world in the game's shading holds every room on the GPU)
     }
   }
   // The world root converts game Z-up into three Y-up (see world/scene.js),
@@ -378,6 +385,20 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // While the loading overlay hides the canvas the cap is far stricter still
   // (see STREAM_PRESENT_MS below).
   let fly: any = null;     // first-person fly camera (all-rooms only; created below)
+  let worldLoopCost = 0;   // all rooms: a drawn frame's page time (ms, smoothed)
+  // all rooms: the time between drawn frames, the last two seconds' worth (the display's pace shows in it, and
+  // so does what the page's own time does not: Chrome's GPU process falling behind)
+  const worldFrameGaps: number[] = [];
+  let worldLastDrawn = 0;
+  /** The share of recent frames that came late: a gap more than half again the pace aimed for, the display's
+   *  (the quickest tenth of the gaps) held between 75 and 57 a second: the view aims for 60 frames a second
+   *  on any display, and frames all as slow as each other are still late. */
+  function worldLateFrames(): number {
+    if (worldFrameGaps.length < 30) return 0;
+    const sorted = [...worldFrameGaps].sort((a, b) => a - b);
+    const pace = Math.min(17.5, Math.max(1000 / 75, sorted[Math.floor(sorted.length * 0.1)]));
+    return worldFrameGaps.filter((g) => g > pace * 1.5).length / worldFrameGaps.length;
+  }
   if (allMode) {
     const RENDER_BUDGET_MS = 40;
     // While the loading overlay hides the canvas and the merged bake hasn't
@@ -391,6 +412,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     let renderEnd = 0;
     (scene3d as any)._loop = function throttledLoop(this: any, t: number) {
       if (!this._alive) return;
+      const loopStart = performance.now();
       const dt = Math.min(100, t - this._lastT);
       this._lastT = t;
       for (const fn of this._ticks) fn(dt);
@@ -404,9 +426,19 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         ? Math.max(4 * renderCost, STREAM_PRESENT_MS)
         : (renderCost <= RENDER_BUDGET_MS ? 0 : renderCost);
       if (start - renderEnd >= wait) {
-        this.renderer.render(this.scene, this.camera);
+        if (worldLastDrawn) {
+          const gap = start - worldLastDrawn;
+          worldFrameGaps.push(gap);
+          if (worldFrameGaps.length > 120) worldFrameGaps.shift();
+        }
+        worldLastDrawn = start;
+        updateWorldGame(start);
+        renderAllRooms();
         renderEnd = performance.now();
         renderCost = renderEnd - start;
+        // the whole frame's page time (ticks, effects, the game's frame and three's view), smoothed
+        worldLoopCost = worldLoopCost * 0.9 + (renderEnd - loopStart) * 0.1;
+        setBackgroundShare(worldLoopCost);
       }
       requestAnimationFrame(this._loop);
     }.bind(scene3d);
@@ -570,7 +602,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           if (!allMode) effectsRoomLoaded(room.id);
           if (!allMode) idleRoomLoaded(room).catch(() => { /* best-effort */ });
         }
-        syncStatus();
+        syncStatusSoon();
       }
       if (event.state === 'unloaded') {
         for (const id of event.rooms || [event.room]) {
@@ -818,11 +850,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     groundRange.hidden = !state.ground;
     world.setGroundPlaneVisible(state.ground);
     if (gameFrame) gameFrame.showPlane = !!state.ground;
+    applyWorldGameSettings();
     applyWorldGroundPlane();
   };
   const applyGroundDistance = () => {
     world.setGroundPlaneDistance(groundDistance());
     if (gameFrame) gameFrame.planeDistance = groundDistance();
+    applyWorldGameSettings();
     applyWorldGroundPlane();
   };
   const groundRange = range(groundKey, 'Ground plane distance', 1, PLANE_ENDLESS, 1,
@@ -848,22 +882,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     applyWater();   // authored-empty/z passes re-show hidden curtains
   };
 
-  const visSection = section('Visible',
-    ...WORLD_CATEGORIES.map((category: string) => check(category, CATEGORY_LABELS[category][0], () => {
-      clearInspection(true);
-      applyCategories();
-    }, { swatch: CATEGORY_LABELS[category][1] })),
-    check('untextured', 'Untextured fills', applyToggles,
-      { swatch: '#6a7d55', title: 'Placements with no decodable texture, drawn in flat category colours' }),
-    check('collision', 'Collision extents', applyToggles, { swatch: '#79a9c9' }),
-    allMode ? null : check('neighbours', 'Neighbouring rooms', () => applyNeighbours(),
-      { swatch: '#9aa7b8', title: 'Also show the rooms through its doors, in place around it' }),
-    allMode ? null : neighbourFadeCheck,
-    check('ground', 'Ground plane', applyGround,
-      { swatch: '#8c7b5e', title: 'The textured floor the game lays under and around each room. Each episode has its own; sea and river beds show through the water.' }),
-    groundRange,
-    check('empty', 'Editor gizmos', applyToggles,
-      { swatch: GIZMO_SWATCH, title: 'Untextured markers placed for the game\'s editor (effect direction arrows, sound, dig and combat markers). The game does not show them.' }),
+  const categoryCheck = (category: string) => check(category, CATEGORY_LABELS[category][0], () => {
+    clearInspection(true);
+    applyCategories();
+  }, { swatch: CATEGORY_LABELS[category][1] });
+  // what the room is shown with (the rest of the old Visible list is in Debug and Game shading)
+  const visSection = section('Show',
+    ...WORLD_CATEGORIES.filter((category: string) => category !== 'components').map(categoryCheck),
     check('effects', 'Effects', applyEffects,
       { swatch: '#e8b04c', title: 'Ambient particle effects recovered from this game version' }),
     allMode ? null : check('idle', 'Resting animations', applyIdle,
@@ -931,29 +956,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     syncState();
   }
 
-  // water ----------------------------------------------------------------------
-  const waterColor = el('input', { type: 'color', class: 'wp-color', value: state.wcolor === 'auto' ? '#1f4a50' : `#${state.wcolor}` });
-  const waterAuto = el('input', { type: 'checkbox' });
-  waterAuto.checked = state.wcolor === 'auto';
-  waterAuto.addEventListener('change', () => {
-    state.wcolor = waterAuto.checked ? 'auto' : waterColor.value.slice(1);
-    applyWater();
-    syncState();
-  });
-  waterColor.addEventListener('input', () => {
-    if (!waterAuto.checked) state.wcolor = waterColor.value.slice(1);
-    applyWater();
-    syncState();
-  });
-  const waterSection = section('Water',
-    check('water', 'Animated water', applyWater,
-      { swatch: '#2e6f77', title: 'Hide the authored wave curtains and render each body as an animated surface' }),
-    el('div', { class: 'wp-range' },
-      el('div', { class: 'wp-range-head' },
-        el('span', { text: 'Colour' }),
-        el('label', { class: 'wp-inline' }, waterAuto, el('span', { text: 'auto' }))),
-      waterColor),
-    range('wopacity', 'Opacity', 10, 100, 2, (v) => `${v}%`, applyWater));
+  // water: the game's water in rooms with game shading, the plain view's animated sheets beyond (or, on a
+  // weak adapter, its authored curtains); its colour and opacity are the plain view's own
 
   // --- the game's own shading (single room) ----------------------------------
   // With the game's shader bundles and this build's render data, a single
@@ -967,6 +971,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // The view's own framing, taken when the game camera replaces it.
   let savedCamera: { fov: number; near: number; far: number } | null = null;
   function applyGameShading(): void {
+    if (allMode) {
+      if (!state.game) stopWorldGame();
+      else worldGameRanked = 0;
+      return;
+    }
     const on = gameActive();
     world.setGameShading(on);
     const cam = scene3d.camera;
@@ -1011,6 +1020,455 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       gameBuilds--;
     }
   }
+  // --- the game's own shading, all rooms --------------------------------------
+  // The world is drawn with the game's frame. The rooms nearest the camera
+  // (as many as the frame's budget holds) are drawn as the game draws each
+  // alone: built in its own frame (its lighting, vignette, lamps and fog) and
+  // placed at its stitched place. With "Whole world", every room is also part
+  // of its cell's cluster: the cell's rooms' parts joined by what draws them,
+  // one draw per material and lighting preset, without the rooms' vignettes,
+  // fog and lamps (too far to tell). Clusters build once, nearest first, and
+  // stay; a room drawn on its own is left out of its cluster (its slot in the
+  // room mask), so nothing is drawn twice and nothing comes and goes. The
+  // merged batches draw only the rooms the game's frame does not, and not at
+  // all once it draws every room. One shadow map, fitted over the nearest
+  // rooms, and one ambient occlusion chain serve the whole view.
+  const WORLD_CLUSTER_TILES = 128;      // a cluster cell's edge (tiles)
+  const WORLD_GAME_MAX_ROOMS = 96;      // the most rooms drawn on their own...
+  const WORLD_GAME_NEAR_TILES = 40;    // a room whose cell is joined is drawn on its own only this near (3D, tiles)
+  // ...within a draw budget the view keeps its frame within (a town's rooms hold several times a
+  // field's draws, and every draw costs the page's thread), smaller when the frame runs long, larger when
+  // it has room to spare
+  const WORLD_GAME_FRAME_MS = 14;       // a frame's page time aimed for (everything the frame does: 60 a second with room to spare)
+  let worldGameBudget = 1200;
+  const WORLD_GAME_SHADOW_TILES = 40;   // rooms this near the camera cast the shadow map...
+  const WORLD_GAME_CASTERS = 16;        // ...the nearest so many of them
+  const WORLD_GAME_OCCLUDERS = 4;       // the nearest rooms in view in the ambient occlusion (beyond: too small to tell)
+  const WORLD_GATHER_AT_ONCE = 4;       // rooms gathered side by side for a cluster
+  interface WorldGameRoom {
+    id: number;
+    /** Its slot in the game frame's room mask (from 1). */
+    slot: number;
+    /** The room's tile (0, 0), native. */
+    origin: THREE.Vector3;
+    /** Native bounds (min x, y, z, max x, y, z): the room's map rect until built, then its own. */
+    box: number[];
+    scene: GameScene | null;
+    building: boolean;
+    failed: boolean;
+    cell: WorldGameCell;
+    /** What draws it now: the game's frame (on its own or in its cluster), or the merged batches. */
+    drawnByGame: boolean;
+  }
+  interface WorldGameCell {
+    key: string;
+    /** Its tile (0, 0), native: its clusters' frame. */
+    origin: THREE.Vector3;
+    rooms: WorldGameRoom[];
+    /** Native bounds of its rooms (min x, y, z, max x, y, z). */
+    box: number[];
+    /** Its rooms joined (one per lighting preset), once built; and their bounds. */
+    clusters: GameScene[] | null;
+    clusterBoxes: number[][];
+    clusterBuilding: boolean;
+    clusterFailed: boolean;
+  }
+  let worldGame: GameFrame | null = null;
+  const worldGameRooms = new Map<number, WorldGameRoom>();
+  const worldGameCells = new Map<string, WorldGameCell>();
+  /** Rooms being gathered or built (gathering overlaps; the frame builds one at a time), and clusters. */
+  let worldGameBuilding = 0;
+  let worldClusterBuilding = 0;
+  const WORLD_GAME_IN_FLIGHT = 3;
+  /** The game frame's cost on the page's thread per drawn frame (ms, smoothed), and its scenes drawn. */
+  let worldGameCost = 0, worldGameDrawn = 0;
+  let worldGameRanked = 0;
+  const worldGameTimes: number[][] = [];   // per room built: id, gathering ms, building ms
+  let worldPlaneByRoom: Map<number, PlaneTile[]> | null = null;
+  const worldGameOn = () => allMode && !!worldGame && !!state.game && ready && !destroyed;
+  /** Every room is the game's: the merged batches and the plain floor are not drawn at all. */
+  let worldAllGame = false;
+
+  function setupWorldGameShading(): void {
+    const gl = renderer.getContext();
+    if (!allMode || worldGame || !worldFrame || !world.index?.render || !(gl instanceof WebGL2RenderingContext)) return;
+    const frame = new GameFrame(gl, (rel: string) => app.store.url(rel), world.index.render, world.tileUnits, undefined, { roomMask: true });
+    frame.idleTextures = 512;
+    frame.neighbourFade = false;
+    // (its builds share the frames: bakes and uploads in the time left once each frame is drawn)
+    frame.pace = backgroundTurn;
+    // (and their bakes' arithmetic in a worker of their own)
+    frame.bakeWorker = (window as any).__bs?.noBakeWorker ? null : GameBakeWorker.spawn();   // (tests: off, to compare)
+    if ((window as any).__bs?.verifyBake) frame.bakeVerify = { bakes: 0, mismatches: 0 };
+    // parts drawn alike joined into one draw, their textures layers of shared arrays: about a quarter of the draws
+    // (tests: __bs.noJoinLayers draws every part on its own, as a single room does)
+    frame.joinLayers = !(window as any).__bs?.noJoinLayers;
+    worldGame = frame;
+    applyWorldGameSettings();
+    const T = world.tileUnits, C = WORLD_CLUSTER_TILES;
+    for (const [id, f] of worldFrame.frames) {
+      const x = (f.x + worldFrame.ox) * T, y = (f.y + worldFrame.oz) * T;
+      const cx = Math.floor((f.x + worldFrame.ox + f.w / 2) / C), cy = Math.floor((f.y + worldFrame.oz + f.h / 2) / C);
+      const key = `${cx},${cy}`;
+      let cell = worldGameCells.get(key);
+      if (!cell) {
+        worldGameCells.set(key, cell = { key, origin: new THREE.Vector3(cx * C * T, cy * C * T, 0), rooms: [],
+          box: [Infinity, Infinity, 0, -Infinity, -Infinity, -Infinity], clusters: null, clusterBoxes: [],
+          clusterBuilding: false, clusterFailed: false });
+      }
+      const room: WorldGameRoom = { id, slot: worldGameRooms.size + 1, origin: new THREE.Vector3(x, y, 0),
+        box: [x, y, 0, x + f.w * T, y + f.h * T, 16 * world.layerUnits], scene: null, building: false, failed: false, cell, drawnByGame: false };
+      cell.rooms.push(room);
+      worldGameRooms.set(id, room);
+      growBox(cell.box, room.box);
+    }
+  }
+  const growBox = (box: number[], by: number[]) => {
+    for (let k = 0; k < 3; k++) { box[k] = Math.min(box[k], by[k]); box[k + 3] = Math.max(box[k + 3], by[k + 3]); }
+  };
+  function applyWorldGameSettings(): void {
+    if (!worldGame) return;
+    worldGame.showPlane = !!state.ground;
+    worldGame.planeDistance = groundDistance();
+    worldGame.pointLightStrength = state.glights ? 1 : 0;
+    worldGame.showFog = !!state.gfog;
+  }
+
+  /** The room's share of the world's floor (the tiles whose floor it is), in its own frame. */
+  function worldGamePlane(id: number): PlaneTile[] {
+    if (!worldPlaneField || !worldFrame) return [];
+    if (!worldPlaneByRoom) {
+      worldPlaneByRoom = new Map();
+      for (const tile of planeTiles(worldPlaneField, PLANE_DISTANCE_MAX)) {
+        const owner = worldPlaneSourceIds[tile.room];
+        if (owner === undefined) continue;
+        let list = worldPlaneByRoom.get(owner);
+        if (!list) worldPlaneByRoom.set(owner, list = []);
+        list.push(tile);
+      }
+    }
+    const f = worldFrame.frames.get(id);
+    if (!f) return [];
+    const ox = f.x + worldFrame.ox, oy = f.y + worldFrame.oz;
+    return (worldPlaneByRoom.get(id) ?? []).map((tile) => ({ ...tile, x: tile.x - ox, y: tile.y - oy }));
+  }
+
+  async function worldGameSource(id: number): Promise<GameRoomSource> {
+    const shard = await cachedShard(id);
+    const meta = (world.index?.rooms || []).find((room: any) => Number(room.id) === id) ?? null;
+    // the room in its own frame: its parts as a single room has them, without its neighbours
+    const room = { id, shard, meta, group: new THREE.Group() };
+    const parts = await world._gameRoomParts(room as any);
+    return { ...parts, plane: worldGamePlane(id), others: [] };
+  }
+
+  /** The rooms the merged batches (or the room graph) leave to the game's frame. */
+  function setClassicRoomHidden(id: number, hidden: boolean): void {
+    merged?.setRoomsHidden([id], hidden);
+    const room = world.rooms.get(id);
+    if (room) room.group.visible = !hidden;
+  }
+
+  /** What draws each room (on its own, in its cluster, or the merged batches), its slot in the clusters'
+   *  room mask, and whether the merged batches are needed at all. */
+  function syncRooms(): void {
+    const on = worldGameOn();
+    let all = on;
+    for (const room of worldGameRooms.values()) {
+      worldGame?.setRoomHidden(room.slot, !!room.scene);
+      const game = on && (!!room.scene || (!!state.gamefar && !!room.cell.clusters));
+      if (game !== room.drawnByGame) {
+        room.drawnByGame = game;
+        setClassicRoomHidden(room.id, game);
+      }
+      if (!game) all = false;
+    }
+    if (all !== worldAllGame) {
+      worldAllGame = all;
+      // (back in view only where the merged rendering is the display path)
+      if (merged) merged.setVisible(!all && mergedActive());
+      if (worldPlane) worldPlane.visible = !all && !!state.ground;
+    }
+  }
+
+  async function buildWorldGameRoom(entry: WorldGameRoom): Promise<void> {
+    worldGameBuilding++;
+    entry.building = true;
+    try {
+      const t0 = performance.now();
+      // (its resting actors posed once, as parts of the room: they do not move in this view)
+      const parts = await worldGameSource(entry.id);
+      await backgroundTurn('rest actors');
+      const source = worldGame!.restActors(parts);
+      if (!worldGameOn()) return;
+      // its programs and textures readied beside the build under way, then built in turn
+      await worldGame!.prepare(source);
+      if (!worldGameOn()) return;
+      const t1 = performance.now();
+      const scene = await worldGame!.buildScene(source, entry.origin, { shareDepth: true });
+      worldGameTimes.push([entry.id, Math.round(t1 - t0), Math.round(performance.now() - t1)]);
+      renderer.resetState();
+      if (!worldGameOn() || !worldGame) { worldGame?.disposeScene(scene); return; }
+      // its bounds: what it draws (its rect where it draws nothing yet)
+      const T = world.tileUnits, o = entry.origin, b = scene.bounds;
+      const { inner, layers } = source.bounds;
+      entry.box = b ? [o.x + b[0], o.y + b[1], o.z + b[2], o.x + b[3], o.y + b[4], o.z + b[5]]
+        : [o.x + inner[0] * T, o.y + inner[1] * T, 0, o.x + inner[2] * T, o.y + inner[3] * T, Math.max(1, layers) * world.index.render.shadow.layerHeight];
+      entry.scene = scene;
+    } catch (error) {
+      entry.failed = true;
+      console.warn(`game shading: room ${entry.id} skipped`, error);
+    } finally {
+      entry.building = false;
+      worldGameBuilding--;
+      syncRooms();
+    }
+  }
+
+  /** A cell's rooms joined: gathered a few at a time (their actors resting), grouped by the environment
+   *  they are drawn in, each group built as one scene in the cell's frame. */
+  async function buildWorldCluster(cell: WorldGameCell): Promise<void> {
+    worldClusterBuilding++;
+    cell.clusterBuilding = true;
+    const scenes: GameScene[] = [];
+    try {
+      const gathered: ({ source: GameRoomSource; offset: THREE.Vector3; slot: number; key: string } | null)[] = new Array(cell.rooms.length).fill(null);
+      let next = 0;
+      await Promise.all(Array.from({ length: WORLD_GATHER_AT_ONCE }, async () => {
+        for (let k = next++; k < cell.rooms.length; k = next++) {
+          const room = cell.rooms[k];
+          if (room.failed || !worldGameOn()) continue;
+          try {
+            const parts = await worldGameSource(room.id);
+            await backgroundTurn('rest actors');
+            const source = worldGame!.restActors(parts);
+            gathered[k] = { source, offset: room.origin.clone().sub(cell.origin), slot: room.slot, key: worldGame!.environmentKey(room.id) };
+          } catch { /* left to the merged batches */ }
+        }
+      }));
+      if (!worldGameOn()) return;
+      const groups = new Map<string, { source: GameRoomSource; offset: THREE.Vector3; slot: number }[]>();
+      for (const g of gathered) {
+        if (!g) continue;
+        let list = groups.get(g.key);
+        if (!list) groups.set(g.key, list = []);
+        list.push(g);
+      }
+      const T = world.tileUnits;
+      const size: [number, number] = [Math.ceil((cell.box[3] - cell.origin.x) / T), Math.ceil((cell.box[4] - cell.origin.y) / T)];
+      for (const list of groups.values()) {
+        await backgroundTurn('join');
+        if (!worldGameOn()) return;
+        const source = clusterSource(list, size, list[0].source.roomId, T);
+        await worldGame!.prepare(source, 8, false, true);
+        if (!worldGameOn()) return;
+        scenes.push(await worldGame!.buildScene(source, cell.origin, { shareDepth: true, cluster: true }));
+        renderer.resetState();
+      }
+      if (!worldGameOn() || !worldGame) return;
+      cell.clusters = scenes.splice(0);
+      const o = cell.origin;
+      cell.clusterBoxes = cell.clusters.map((s) => (s.bounds
+        ? [o.x + s.bounds[0], o.y + s.bounds[1], o.z + s.bounds[2], o.x + s.bounds[3], o.y + s.bounds[4], o.z + s.bounds[5]] : cell.box));
+    } catch (error) {
+      cell.clusterFailed = true;
+      console.warn(`game shading: cell ${cell.key} not joined`, error);
+    } finally {
+      for (const scene of scenes) worldGame?.disposeScene(scene);   // (left unfinished)
+      cell.clusterBuilding = false;
+      worldClusterBuilding--;
+      syncRooms();
+    }
+  }
+
+  let worldGameDropped = 0;   // rooms given back since the view opened (tests)
+  function dropWorldGameRoom(entry: WorldGameRoom): void {
+    if (!entry.scene) return;
+    worldGameDropped++;
+    worldGame?.disposeScene(entry.scene);
+    entry.scene = null;
+  }
+  function dropWorldCluster(cell: WorldGameCell): void {
+    for (const scene of cell.clusters ?? []) worldGame?.disposeScene(scene);
+    cell.clusters = null;
+    cell.clusterBoxes = [];
+  }
+
+  /** Every room back to the merged batches (game shading off, or the view going). */
+  function stopWorldGame(): void {
+    for (const room of worldGameRooms.values()) dropWorldGameRoom(room);
+    for (const cell of worldGameCells.values()) dropWorldCluster(cell);
+    syncRooms();
+    applyRenderMode();
+  }
+
+  // native frame of the view: the camera, and how far a box is from it
+  const worldFromNative = new THREE.Matrix4(), nativeFromWorld = new THREE.Matrix4();
+  function syncNativeFrame(): void {
+    world.root.updateMatrix();
+    worldFromNative.multiplyMatrices(displayRoot.matrixWorld, world.root.matrix);
+    nativeFromWorld.copy(worldFromNative).invert();
+  }
+  /** How far a box is from a point across the ground (x, y only). */
+  const groundDistance2 = (box: number[], p: THREE.Vector3) => Math.hypot(
+    Math.max(box[0] - p.x, 0, p.x - box[3]), Math.max(box[1] - p.y, 0, p.y - box[4]));
+  const boxDistance = (box: number[], p: THREE.Vector3) => Math.hypot(
+    Math.max(box[0] - p.x, 0, p.x - box[3]), Math.max(box[1] - p.y, 0, p.y - box[4]), Math.max(box[2] - p.z, 0, p.z - box[5]));
+
+  /** A few times a second: the rooms nearest the camera (across the ground: turning changes nothing)
+   *  within the budget are drawn on their own, built nearest first; with "Whole world" the cells build
+   *  their clusters, nearest first, while no room is building. */
+  function updateWorldGame(now: number): void {
+    if (!worldGameOn() || now - worldGameRanked < 200) return;
+    // the draw budget follows the frame's cost (while rooms build, their uploads cost frames too: held)
+    if (worldGameDrawn && !worldGameBuilding && !worldClusterBuilding && !worldGameBudgetFixed && now - worldGameBudgetAt > 1000) {
+      worldGameBudgetAt = now;
+      const frame = worldLoopCost, late = worldLateFrames();
+      // (smaller only when the frame ran long, or frames came late, twice running: a passing spike drops
+      // nothing; larger only while frames keep the display's pace)
+      const slow = frame > WORLD_GAME_FRAME_MS + 1 || late > 0.2;
+      worldGameSlow = slow ? worldGameSlow + 1 : 0;
+      // (a budget that made frames late is remembered: the budget grows back to just under it, and the
+      // mark itself rises a tenth every half minute, so the budget neither saws up and down nor stays low)
+      if (now - worldGameCeilingAt > 30000) { worldGameCeiling *= 1.1; worldGameCeilingAt = now; }
+      if (worldGameSlow >= 2) {
+        if (late > 0.2) { worldGameCeiling = worldGameBudget * 0.9; worldGameCeilingAt = now; }
+        worldGameBudget = Math.max(200, Math.round(worldGameBudget * Math.min(0.85, WORLD_GAME_FRAME_MS / frame)));
+      } else if (!slow && frame < WORLD_GAME_FRAME_MS - 1 && late < 0.05) {
+        worldGameBudget = Math.max(worldGameBudget, Math.min(4000, Math.round(worldGameCeiling), Math.round(worldGameBudget * 1.1)));
+      }
+    }
+    worldGameRanked = now;
+    syncNativeFrame();
+    const eye = scene3d.camera.position.clone().applyMatrix4(nativeFromWorld);
+    const ranked = [...worldGameRooms.values()].filter((r) => !r.failed)
+      .map((room) => ({ room, distance: boxDistance(room.box, eye) }))
+      .sort((a, b) => a.distance - b.distance);
+    // (by distance in 3D, which turning does not change either: from high above, rooms whose cell is joined
+    // are left to the cell, each too small on screen to be worth its own draws)
+    const reach = WORLD_GAME_NEAR_TILES * world.tileUnits;
+    // the nearest rooms within the count and the draw budget (a room not built yet counts as the built
+    // ones' average); a room built is kept a little past both, so one at the edge does not come and go
+    const built = ranked.filter((r) => r.room.scene);
+    const average = built.length ? built.reduce((n, r) => n + r.room.scene!.drawCount, 0) / built.length : 60;
+    const wanted: WorldGameRoom[] = [];
+    let draws = 0;
+    ranked.forEach(({ room, distance }, rank) => {
+      const cost = room.scene?.drawCount ?? average;
+      const joined = !!room.cell.clusters;
+      const want = rank < WORLD_GAME_MAX_ROOMS && draws + cost <= worldGameBudget && (!joined || distance <= reach);
+      const keep = !!room.scene && rank < WORLD_GAME_MAX_ROOMS * 1.5 && draws + cost <= worldGameBudget * 1.5
+        && (!joined || distance <= reach * 1.25);
+      if (want || keep) draws += cost;
+      if (want) wanted.push(room);
+      if (room.scene && !want && !keep) dropWorldGameRoom(room);
+      // (the room graph, when it draws instead of the merged batches, may have loaded the room again since)
+      if (room.drawnByGame) { const graph = world.rooms.get(room.id); if (graph?.group.visible) graph.group.visible = false; }
+    });
+    syncRooms();
+    for (const room of wanted) {
+      if (worldGameBuilding >= WORLD_GAME_IN_FLIGHT) break;
+      if (!room.scene && !room.building) buildWorldGameRoom(room).catch(() => { /* reported above */ });
+    }
+    // the whole world: the nearest cell not yet joined, while no room is building
+    if (state.gamefar && !worldGameBuilding && !worldClusterBuilding) {
+      const cells = [...worldGameCells.values()].filter((c) => !c.clusters && !c.clusterBuilding && !c.clusterFailed)
+        .sort((a, b) => groundDistance2(a.box, eye) - groundDistance2(b.box, eye));
+      if (cells.length) buildWorldCluster(cells[0]).catch(() => { /* reported above */ });
+    }
+  }
+
+  /** The scenes the camera sees, nearest first: the rooms drawn on their own and the clusters (less those
+   *  rooms); and the rooms near enough to cast the shadow map. */
+  const worldFrustum = new THREE.Frustum(), worldBox = new THREE.Box3(), frustumMatrix = new THREE.Matrix4();
+  function visibleWorldScenes(eye: THREE.Vector3): { visible: { scene: GameScene; box: number[]; room: boolean }[]; casters: { scene: GameScene; box: number[] }[] } {
+    const camera = scene3d.camera;
+    camera.updateMatrixWorld();
+    frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    worldFrustum.setFromProjectionMatrix(frustumMatrix);
+    const inView = (b: number[]) => {
+      worldBox.min.set(b[0], b[1], b[2]); worldBox.max.set(b[3], b[4], b[5]);
+      return worldFrustum.intersectsBox(worldBox.applyMatrix4(worldFromNative));
+    };
+    const visible: { scene: GameScene; box: number[]; room: boolean; distance: number }[] = [];
+    for (const room of worldGameRooms.values()) {
+      if (room.scene && inView(room.box)) visible.push({ scene: room.scene, box: room.box, room: true, distance: boxDistance(room.box, eye) });
+    }
+    if (state.gamefar) {
+      for (const cell of worldGameCells.values()) {
+        cell.clusters?.forEach((scene, k) => {
+          const box = cell.clusterBoxes[k];
+          if (inView(box)) visible.push({ scene, box, room: false, distance: boxDistance(box, eye) });
+        });
+      }
+    }
+    visible.sort((a, b) => a.distance - b.distance);
+    const shadowReach = WORLD_GAME_SHADOW_TILES * world.tileUnits;
+    return {
+      visible,
+      casters: visible.filter((v) => v.room && v.distance <= shadowReach).slice(0, WORLD_GAME_CASTERS),
+    };
+  }
+
+  /** All rooms' frame: the game's frame for the cells it draws (the canvas cleared to the view's
+   *  background first), then three's view of the rest of the world and the overlays. */
+  let frozenTicks: number | null = null;   // tests: the game frame's clock held (stills that compare byte for byte)
+  function renderAllRooms(): void {
+    const scene = scene3d.scene, camera = scene3d.camera;
+    // the merged world's cells out of view are skipped whole (all of them drawn while the sun casts
+    // shadows: an unseen cell can shade the view)
+    if (merged && !worldAllGame) { merged.cellCulling = !state.shadows; merged.cullCells(camera); }
+    if (!worldGameOn()) {
+      if (worldGameBuilding || worldClusterBuilding) renderer.resetState();
+      renderer.render(scene, camera);
+      return;
+    }
+    syncNativeFrame();
+    const eye = camera.position.clone().applyMatrix4(nativeFromWorld);
+    const { visible, casters } = visibleWorldScenes(eye);
+    if (!visible.length) {
+      renderer.resetState();
+      renderer.render(scene, camera);
+      return;
+    }
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    const target = camera.position.clone().add(forward).applyMatrix4(nativeFromWorld);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).transformDirection(nativeFromWorld);
+    const units = nativeFromWorld.getMaxScaleOnAxis();
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    // the shadow map over the casters (or, with none near, the nearest scenes in view)
+    const box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    for (const v of casters.length ? casters : visible.slice(0, 1)) growBox(box, v.box);
+    // the plain floor under the rooms the game's frame draws lies at its floor's depth: it gives way
+    for (const material of worldPlaneMaterials.values()) {
+      material.polygonOffset = true; material.polygonOffsetFactor = 1; material.polygonOffsetUnits = 8;
+    }
+    const background = scene.background as THREE.Color | null;
+    if (background?.isColor) renderer.setClearColor(background, 1);
+    renderer.setRenderTarget(null);
+    renderer.clear();
+    const t0 = performance.now();
+    worldGame!.renderWorld({ eye, target, up, fov: camera.fov, width: size.x, height: size.y, near: camera.near * units, far: camera.far * units },
+      frozenTicks ?? waterTicks, 0, visible.map((v) => v.scene), casters.map((v) => v.scene), box,
+      visible.filter((v) => v.room).slice(0, WORLD_GAME_OCCLUDERS).map((v) => v.scene));
+    worldGameCost = worldGameCost * 0.9 + (performance.now() - t0) * 0.1;
+    worldGameDrawn = visible.length;
+    renderer.resetState();
+    const autoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    scene.background = null;
+    const t1 = performance.now();
+    renderer.render(scene, camera);
+    worldThreeCost = worldThreeCost * 0.9 + (performance.now() - t1) * 0.1;
+    renderer.autoClear = autoClear;
+    scene.background = background;
+  }
+  let worldThreeCost = 0;
+  let worldGameBudgetAt = 0;
+  let worldGameBudgetFixed = false;   // (tests: a budget that does not follow the frame)
+  let worldGameSlow = 0;
+  let worldGameCeiling = Infinity, worldGameCeilingAt = 0;   // the budget that last made frames late
+
   // Actors in the game's frame: a spawn playing a clip (its resting clip, or
   // one picked in the inspector) is drawn in its live pose. Its skinned
   // meshes' skin matrices, taken to the native frame, are the palette the
@@ -1111,7 +1569,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const enabled = !!state.water;
     if (gameWaterAvailable()) world.setGameWaterEnabled(enabled);
     const auto = state.wcolor === 'auto';
-    waterColor.disabled = auto;
     const override = waterUniforms.sheetColorOverride.value;
     override.w = auto ? 0 : 1;
     if (!auto) {
@@ -1294,7 +1751,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     for (const room of candidates) {
       const dx = room.x - cam.x;
       const dz = room.z - cam.z;
-      const d = Math.hypot(dx, dz);
+      // (the camera's height counts: from high above, effects too small to see stay off)
+      const d = Math.hypot(dx, dz, cam.y);
       const wasActive = activeEffectRooms.has(room.id);
       if (d <= (wasActive ? keepRadius : enterRadius)) eligible.push({ id: room.id, d });
     }
@@ -1405,25 +1863,50 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     storyBox.hidden = false;
   }
 
+  // all rooms: the whole world with the game's shading, or only the rooms near the camera (as many as
+  // the frame holds at its pace either way: the nearest room by room, the rest joined)
+  const gameReachRange = allMode ? check('gamefar', 'Whole world', () => {
+    if (!state.gamefar) { for (const cell of worldGameCells.values()) dropWorldCluster(cell); syncRooms(); }
+    worldGameRanked = 0;
+  }, { title: "Draw every room with the game's shading (the nearest exactly, the rest a little simplified: no lamps or edge fade). Off: only the rooms near the camera; the rest keep the plain shading." }) : null;
+  gameReachRange?.classList.add('wp-sub');
+
+  // the views of the data rather than the room (Debug)
+  const debugChecks = [
+    WORLD_CATEGORIES.includes('components') ? categoryCheck('components') : null,
+    check('untextured', 'Untextured fills', applyToggles,
+      { swatch: '#6a7d55', title: 'Placements with no decodable texture, drawn in flat category colours' }),
+    check('collision', 'Collision extents', applyToggles, { swatch: '#79a9c9' }),
+    check('empty', 'Editor gizmos', applyToggles,
+      { swatch: GIZMO_SWATCH, title: 'Untextured markers placed for the game\'s editor (effect direction arrows, sound, dig and combat markers). The game does not show them.' }),
+  ];
+
   // the game's own lamps and fog (game shading; rooms that have them)
   const gameLightsCheck = check('glights', 'Lamps and torches', () => {
     if (gameFrame) gameFrame.pointLightStrength = state.glights ? 1 : 0;
+    applyWorldGameSettings();
   }, { title: 'The light lamps, torches and fires cast (game shading)' });
   const gameFogCheck = check('gfog', 'Fog', () => {
     if (gameFrame) gameFrame.showFog = !!state.gfog;
+    applyWorldGameSettings();
   }, { title: 'The fog and deeper light of the rooms an event haunts, as when nothing scares them off (game shading)' });
   gameLightsCheck.classList.add('wp-sub');
   gameFogCheck.classList.add('wp-sub');
-  const lightSection = section('Lighting & effects',
+  const lightSection = section('Game shading',
     check('game', 'Game shading', () => applyGameShading(),
-      { swatch: '#c9a86a', title: "Draw the room with the game's own lights, shadows, shading and water (single room)" }),
-    gameLightsCheck, gameFogCheck,
+      { swatch: '#c9a86a', title: allMode
+        ? "Draw the rooms near the camera with the game's own lights, shadows, shading and water"
+        : "Draw the room with the game's own lights, shadows, shading and water" }),
+    gameReachRange, gameLightsCheck, gameFogCheck,
     storyBox,
-    range('ambient', 'Ambient / sky', 0, 2.5, 0.05, (v) => v.toFixed(2), applyLights),
-    range('sun', 'Sun', 0, 3, 0.05, (v) => v.toFixed(2), applyLights),
-    check('shadows', 'Shadows', applyShadows, { swatch: '#5f6670' }),
-    check('flatten', 'Flatten heights', applyFlatten,
-      { swatch: '#3a4759', title: 'Squash the vertical axis to read the room like a map' }));
+    check('ground', 'Ground plane', applyGround,
+      { swatch: '#8c7b5e', title: 'The textured floor the game lays under and around each room. Each episode has its own; sea and river beds show through the water.' }),
+    groundRange,
+    allMode ? null : check('neighbours', 'Neighbouring rooms', () => applyNeighbours(),
+      { swatch: '#9aa7b8', title: 'Also show the rooms through its doors, in place around it' }),
+    allMode ? null : neighbourFadeCheck);
+  const flattenCheck = check('flatten', 'Flatten heights', applyFlatten,
+    { swatch: '#3a4759', title: 'Squash the vertical axis to read the room like a map' });
 
   // performance (all-rooms only) ----------------------------------------------
   let perfSection: HTMLElement | null = null;
@@ -1614,13 +2097,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
   }
   if (allMode) {
-    const cullRange = range('culld', 'Cull distance', 40, 400, 20, (v) => `${v} tiles`, () => applyCull());
-    cullRange.hidden = !state.cull;
-    perfSection = section('Performance',
+    perfSection = section('Drawing',
       range('scale', 'Render scale', 0, RENDER_SCALES.length - 1, 1, scaleLabel, applyRenderScale),
-      check('cull', 'Hide small distant objects', () => { cullRange.hidden = !state.cull; applyCull(); },
-        { swatch: '#c99a5b' }),
-      cullRange,
       // escape hatch: merged is the invisible default; the raw per-room
       // graph remains reachable here for debugging/inspection workflows.
       // Session edits are undone first: the other path's display data
@@ -1636,37 +2114,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         { swatch: '#7fb069', title: 'Bake all rooms into a few large static batches (much faster). Untick for the raw per-room graph.' }));
   }
 
-  // the under-world surface: board-game table / black void plane (buildFloor)
-  let tableSection: HTMLElement | null = null;
-  if (allMode) {
-    if (!['none', 'table', 'void'].includes(state.floor)) state.floor = 'none';
-    const floorSelect = el('select', { class: 'wp-floor-select', title: 'What the world sits on' });
-    for (const [value, label] of [['none', 'None'], ['table', 'Wooden table'], ['void', 'Black void plane']]) {
-      floorSelect.appendChild(el('option', { value, text: label }));
-    }
-    floorSelect.value = state.floor;
-    floorSelect.addEventListener('change', () => {
-      state.floor = floorSelect.value;
-      applyFloor();
-      syncState();
-    });
-    inputs.floor = floorSelect;
-    tableSection = section('Surface',
-      el('div', { class: 'wp-range' },
-        el('div', { class: 'wp-range-head' }, el('span', { text: 'Under the world' })),
-        floorSelect),
-      range('tableLight', 'Table brightness', 0.2, 2, 0.05, (v) => Number(v).toFixed(2), () => applyFloor()));
-  }
-
-  // Advanced accordion: collapsed by default, its open state persisted.
-  // Category/wireframe/names toggles and the Inspect mode stay top-level.
+  // Debug accordion: the views of the data rather than of the room, collapsed by default, its open state
+  // persisted. Showing the room and its game shading stay top-level.
   const advanced = el('details', { class: 'wp-advanced' },
-    el('summary', { text: 'Advanced' }));
+    el('summary', { text: 'Debug' }));
   advanced.open = getPref('worldadv') === true;
   advanced.addEventListener('toggle', () => setPref('worldadv', advanced.open));
-  append(advanced, waterSection, lightSection, perfSection, zSection, tableSection);
+  append(advanced, section('Data', ...debugChecks, flattenCheck), perfSection, zSection);
 
-  append(panel, inspectBtn, resetEditsBtn, readout, statusEl, visSection, advanced);
+  append(panel, inspectBtn, resetEditsBtn, readout, statusEl, visSection, lightSection, advanced);
 
   // --- pref sync (state lives ONLY in prefs/localStorage, no URL mirroring) ---
   function syncState(): void {
@@ -3414,6 +3870,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             instanceArray: live === batch.entries.length ? array : array.subarray(0, live * 16),
             roomX,
             roomY,
+            room: merged.roomSlot(roomId),
             metaZ: classified.metaZ,
             metaBits: classified.metaBits,
             recolors: batch.recolors,
@@ -4483,6 +4940,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let worldPlane: THREE.Group | null = null;
   let worldPlaneField: PlaneField | null = null;
   let worldPlaneExtent = 0;
+  /** The room of each source of the world's floor field (its index). */
+  let worldPlaneSourceIds: number[] = [];
   let worldPlaneBuild = 0;
   let worldPlaneTimer: ReturnType<typeof setTimeout> | null = null;
   const worldPlaneMaterials = new Map<string, THREE.MeshStandardMaterial>();
@@ -4492,11 +4951,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   async function buildWorldGroundPlane(): Promise<void> {
     if (!allMode || !worldFrame || worldPlaneField || destroyed) return;
     const sources: PlaneSource[] = [];
+    worldPlaneSourceIds = [];
     for (const room of world.rooms.values()) {
       const frame = worldFrame.frames.get(Number(room.id));
       // rooms outside the connected layout sit on a display grid: no floor
       if (!frame || frame.detached || !room.shard?.ground_plane) continue;
       sources.push({ shard: room.shard, offset: [frame.x + worldFrame.ox, frame.y + worldFrame.oz] });
+      worldPlaneSourceIds.push(Number(room.id));
     }
     worldPlaneField = planeField(sources, { tileUnits: world.tileUnits });
     if (!worldPlaneField || destroyed) return;
@@ -4591,159 +5052,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     worldPlane.removeFromParent();
     for (const mesh of worldPlane.children as THREE.Mesh[]) mesh.geometry.dispose();
     worldPlane = null;
-  }
-
-  // --- board-game tabletop (all-rooms) ---------------------------------------
-  // A flat wooden "table" plane just under z=0 spanning the stitched world, so
-  // the merged map reads like a board game. Viewer-only: the wood is drawn
-  // procedurally on a canvas (seamlessly tiling planks + grain) so the app
-  // stays self-contained: no image asset, nothing in the extraction.
-  let tableTop: any = null;
-  let voidPlane: any = null;
-  function woodTexture(): THREE.CanvasTexture {
-    const size = 512;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d')!;
-    const planks = 6;
-    const plankH = size / planks;
-    for (let p = 0; p < planks; p++) {
-      // deterministic per-plank warm brown (Knuth-hash jitter, no RNG)
-      const tone = ((p * 2654435761) % 97) / 97;
-      ctx.fillStyle = `rgb(${(134 + tone * 28) | 0},${(90 + tone * 22) | 0},${(52 + tone * 15) | 0})`;
-      ctx.fillRect(0, p * plankH, size, plankH);
-      // grain: faint wavy streaks with whole sine periods so the left/right
-      // edges meet and the texture tiles seamlessly
-      for (let s = 0; s < 7; s++) {
-        const yBase = p * plankH + ((s + 0.5) / 7) * plankH;
-        const amp = 1.5 + ((s * 37) % 5);
-        const periods = 1 + (s + p) % 3;
-        const phase = (((p * 7 + s) * 61) % 100) / 100 * Math.PI * 2;
-        ctx.strokeStyle = `rgba(58,36,19,${0.10 + (s % 3) * 0.05})`;
-        ctx.lineWidth = 0.8 + (s % 2);
-        ctx.beginPath();
-        for (let x = 0; x <= size; x += 4) {
-          const y = yBase + Math.sin((x / size) * Math.PI * 2 * periods + phase) * amp;
-          if (x === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-      ctx.fillStyle = 'rgba(38,22,11,0.55)';   // plank seam
-      ctx.fillRect(0, p * plankH, size, 1.5);
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.anisotropy = 8;
-    return texture;
-  }
-  function buildTableTop(): void {
-    if (!allMode || !worldFrame || tableTop || destroyed) return;
-    let minX = Infinity; let minZ = Infinity; let maxX = -Infinity; let maxZ = -Infinity;
-    for (const frame of worldFrame.frames.values()) {
-      minX = Math.min(minX, frame.x);
-      minZ = Math.min(minZ, frame.y);
-      maxX = Math.max(maxX, frame.x + frame.w);
-      maxZ = Math.max(maxZ, frame.y + frame.h);
-    }
-    if (!Number.isFinite(minX)) return;
-    const margin = Math.max(16, worldFrame.span * 0.06);
-    const width = (maxX - minX) + margin * 2;
-    const depth = (maxZ - minZ) + margin * 2;
-    // real-table proportions scaled to the world span: a thick slab whose TOP
-    // sits at z=-0.01 (z=0 belongs to the game's ground floors), four chunky
-    // rectangular legs under the corners
-    const span = Math.max(width, depth);
-    const slabThick = Math.max(3, span * 0.014);
-    const legSide = Math.max(6, span * 0.035);
-    const legHeight = Math.max(14, span * 0.2);
-    const topY = -0.01;
-
-    const slabTexture = woodTexture();
-    slabTexture.repeat.set(width / 48, depth / 48);   // 48-tile texture square -> 8-tile planks
-    const slabMaterial = new THREE.MeshStandardMaterial({
-      map: slabTexture, roughness: 0.88, metalness: 0.02,
-    });
-    const legTexture = slabTexture.clone();
-    legTexture.needsUpdate = true;
-    legTexture.repeat.set(legSide / 48, legHeight / 48);
-    const legMaterial = new THREE.MeshStandardMaterial({
-      map: legTexture, roughness: 0.9, metalness: 0.02,
-    });
-
-    tableTop = new THREE.Group();
-    tableTop.name = 'world-tabletop';
-    const slab = new THREE.Mesh(
-      new THREE.BoxGeometry(width, slabThick, depth), slabMaterial,
-    );
-    slab.position.y = topY - slabThick / 2;
-    slab.receiveShadow = true;
-    tableTop.add(slab);
-    const legGeometry = new THREE.BoxGeometry(legSide, legHeight, legSide);
-    const legY = topY - slabThick - legHeight / 2 + 0.5;   // embed into the slab: no seam
-    const legX = width / 2 - legSide / 2 - legSide * 0.4;
-    const legZ = depth / 2 - legSide / 2 - legSide * 0.4;
-    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-      const leg = new THREE.Mesh(legGeometry, legMaterial);
-      leg.position.set(sx * legX, legY, sz * legZ);
-      leg.receiveShadow = true;
-      tableTop.add(leg);
-    }
-    // displayRoot space is three Y-up tiles
-    tableTop.position.set(
-      minX + worldFrame.ox + (maxX - minX) / 2,
-      0,
-      minZ + worldFrame.oz + (maxZ - minZ) / 2,
-    );
-    tableTop.traverse((node: any) => {   // static furniture: compose once
-      node.matrixAutoUpdate = false;
-      node.updateMatrix();
-    });
-    displayRoot.add(tableTop);
-
-    // the alternative surface: a huge matte-black plane at the same height.
-    // fog:false keeps it pure black to the horizon: a hard void edge
-    // instead of fading into the fog colour.
-    voidPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(worldFrame.span * 12, worldFrame.span * 12),
-      new THREE.MeshBasicMaterial({ color: 0x000000, fog: false, side: THREE.DoubleSide }),
-    );
-    voidPlane.name = 'world-void-plane';
-    voidPlane.rotation.x = -Math.PI / 2;
-    voidPlane.position.copy(tableTop.position);
-    voidPlane.position.y = topY;
-    voidPlane.matrixAutoUpdate = false;
-    voidPlane.updateMatrix();
-    displayRoot.add(voidPlane);
-    applyFloor();
-  }
-  function applyFloor(): void {
-    if (!tableTop) return;
-    tableTop.visible = state.floor === 'table';
-    voidPlane.visible = state.floor === 'void';
-    const brightness = Math.max(0.05, Number(state.tableLight) || 1);
-    for (const mesh of tableTop.children) mesh.material.color.setScalar(brightness);
-  }
-  function disposeTableTop(): void {
-    if (!tableTop) return;
-    tableTop.removeFromParent();
-    const disposed = new Set<any>();
-    for (const mesh of tableTop.children) {
-      if (!disposed.has(mesh.geometry)) { mesh.geometry.dispose(); disposed.add(mesh.geometry); }
-      if (!disposed.has(mesh.material)) {
-        mesh.material.map?.dispose();
-        mesh.material.dispose();
-        disposed.add(mesh.material);
-      }
-    }
-    tableTop = null;
-    voidPlane.removeFromParent();
-    voidPlane.geometry.dispose();
-    voidPlane.material.dispose();
-    voidPlane = null;
   }
 
   // --- high-res viewport screenshot (single room + all-rooms) ------------------
@@ -4993,6 +5301,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
     return count;
   }
+  // (a stream of rooms loading: one status a frame, not one per room; each counts every loaded room's parts)
+  let statusQueued = false;
+  function syncStatusSoon(): void {
+    if (statusQueued) return;
+    statusQueued = true;
+    requestAnimationFrame(() => { statusQueued = false; syncStatus(); });
+  }
   function syncStatus(): void {
     if (destroyed) return;
     if (entry) {
@@ -5120,7 +5435,6 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (fly) fly.moveSpeed = Math.max(20, worldFrame.span / 125);
       focusWorld();
       buildNameSprites();
-      buildTableTop();
       if (renderer.capabilities.isWebGL2) {
         pickIndex = new WorldPickIndex({ tileUnits: world.tileUnits });
         merged = new MergedWorld({
@@ -5219,6 +5533,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     ready = true;
     syncStatus();
     if (!allMode) revealModel();
+    else setupWorldGameShading();
   })().catch((error) => {
     if (destroyed) return;
     console.warn('world view load failed:', error);
@@ -5296,6 +5611,74 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     },
     pickInfo() {
       return pickIndex ? pickIndex.stats() : null;
+    },
+    /** All rooms (tests): put the fly camera `height` tiles above and `back` tiles south of the room
+     *  whose name matches, looking at its middle; returns the room's id and name. */
+    lookAtRoom(name: string, height = 14, back = 16) {
+      if (!allMode || !worldFrame || !fly) return null;
+      const pattern = new RegExp(name, 'i');
+      const room = (world.index?.rooms || []).find((r: any) => pattern.test(String(r.name ?? '')));
+      const entry = room ? worldGameRooms.get(Number(room.id)) : null;
+      const f = room ? worldFrame.frames.get(Number(room.id)) : null;
+      if (!room || !f) return null;
+      syncNativeFrame();
+      const T = world.tileUnits;
+      const centre = new THREE.Vector3((f.x + worldFrame.ox + f.w / 2) * T, (f.y + worldFrame.oz + f.h / 2) * T, 0).applyMatrix4(worldFromNative);
+      scene3d.camera.position.copy(centre).add(new THREE.Vector3(0, height, back));
+      fly.lookAt(centre);
+      worldGameRanked = 0;
+      return { id: Number(room.id), name: room.name, built: !!entry?.scene };
+    },
+    /** Tests: the plain view's animated water on or off (no longer a setting; a still frame without it). */
+    setPlainWater(on: boolean) {
+      state.water = !!on;
+      applyWater();
+      return state.water;
+    },
+    /** All rooms (tests): the game's frame drawing the world. */
+    get worldGameFrame() { return worldGame; },
+    /** All rooms (tests): hold the game shading's draw budget at `draws` (null: follow the frame again). */
+    setGameBudget(draws: number | null) {
+      worldGameBudgetFixed = draws !== null;
+      if (draws !== null) worldGameBudget = draws;
+      worldGameRanked = 0;
+      return worldGameBudget;
+    },
+    /** All rooms (tests): one frame drawn with the GPU waited on after each part (ms): the game's
+     *  frame, three's view over it, and three's view alone. */
+    /** All rooms (tests): hold the game frame's clock at `ticks` (null: run again). */
+    freezeClock(ticks: number | null) { frozenTicks = ticks; },
+    /** All rooms (tests): the joined cells' scenes. */
+    worldGameClusters() { return [...worldGameCells.values()].flatMap((c) => c.clusters ?? []); },
+    worldGameProfile() {
+      const gl = renderer.getContext();
+      const timed = (fn: () => void) => { gl.finish(); const t0 = performance.now(); fn(); gl.finish(); return +(performance.now() - t0).toFixed(2); };
+      if (worldGame) { worldGame.timePasses = true; worldGame.gl.counting = true; worldGame.gl.calls = {}; }
+      const all = timed(() => renderAllRooms());
+      const calls = worldGame ? { ...worldGame.gl.calls } : null;
+      if (worldGame) worldGame.gl.counting = false;
+      const passes = worldGame ? { ...worldGame.lastPassTimes } : null;
+      if (worldGame) worldGame.timePasses = false;
+      const plain = timed(() => { renderer.resetState(); renderer.render(scene3d.scene, scene3d.camera); });
+      return { all, plain, game: +worldGameCost.toFixed(2), passes, calls, draws: worldGame?.lastDraws ?? null };
+    },
+    /** All rooms' game shading (tests): the rooms built, being built and failed, their bytes, and the
+     *  rooms the merged batches leave out. */
+    worldGameInfo() {
+      const rooms = [...worldGameRooms.values()];
+      return {
+        on: worldGameOn(), built: rooms.filter((r) => r.scene).map((r) => r.id), building: rooms.some((r) => r.building),
+        background: backgroundStats(),
+        late: +worldLateFrames().toFixed(2),
+        failed: rooms.filter((r) => r.failed).map((r) => r.id),
+        bytes: rooms.reduce((n, r) => n + (r.scene?.bytes ?? 0), 0), hidden: merged ? [...merged.hiddenRooms] : [],
+        split: rooms.filter((r) => r.scene).map((r) => [r.id, r.scene!.draws.length, r.scene!.actorDraws.length, r.scene!.planeDraws.length, r.scene!.waterDraws.length]),
+        times: worldGameTimes.slice(-20), cost: +worldGameCost.toFixed(2), three: +worldThreeCost.toFixed(2), drawn: worldGameDrawn,
+        budget: worldGameBudget, frame: +worldLoopCost.toFixed(2), dropped: worldGameDropped,
+        cells: worldGameCells.size, joined: [...worldGameCells.values()].filter((c) => c.clusters).length,
+        joining: worldClusterBuilding, allGame: worldAllGame,
+        clusterBytes: [...worldGameCells.values()].reduce((n, c) => n + (c.clusters ?? []).reduce((m, s) => m + s.bytes, 0), 0), draws: worldGame?.lastDraws ?? null,
+      };
     },
     inspectInfo() {
       return {
@@ -5649,7 +6032,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       overlay = null;
       disposeNameSprites();
       disposeSpawnNameSprites();
-      disposeTableTop();
+      stopWorldGame();
+      worldGame?.releaseTextures();
+      worldGame?.bakeWorker?.dispose();
+      worldGame = null;
       disposeWorldGroundPlane();
       wire?.dispose();
       wire = null;

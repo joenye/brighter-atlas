@@ -207,6 +207,7 @@ export class MergedBakePool {
         metaZ: item.metaZ,
         metaBits: item.metaBits,
         palette: item.palette,
+        room: item.room ?? 0,
       });
     }
     // LRU-evict down to the cap, never a mesh THIS job needs (if one job's
