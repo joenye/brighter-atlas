@@ -633,12 +633,30 @@ function parallelRecolors(
   }
 
   const pairForm = () => actorPairRecolors(decoded, resolver, materialOp, partCount, row, colorSeries);
+  // From the 13-Oct-2026 build an actor's group is interleaved: mesh, material, then its two tint series and
+  // the one output modulation colour for all its parts (the older schema repeated the material between
+  // them, below). Taken only where neither older form reads (they would both fail here).
+  const interleaved = () => {
+    const tints = [colorSeries(materialOp + 1), colorSeries(materialOp + 2)];
+    const modulation = decoded.get(materialOp + 3);
+    if (!tints.every((channel) => channel !== null) || modulation === undefined || modulation.nodes.length !== 1) return null;
+    const node = resolver.deref(modulation.nodes[0]);
+    if (!(isNode(node) && node.tag === 0x15 && (node.value || []).length === 4)) return null;
+    const value = nativeThirdToHalfRange([...node.value]);
+    const values = tints.map((channel) => channel![0]);
+    return {
+      values: Array.from({ length: partCount }, (_, index) => [values[0][index], values[1][index], value]),
+      field_ops: [materialOp + 1, materialOp + 2, materialOp + 3],
+      scope: 'parallel_broadcast',
+      channel_scopes: [...tints.map((channel) => channel![1]), 'broadcast'],
+    };
+  };
   const materialField = decoded.get(materialOp);
   const repeatedMaterial = decoded.get(materialOp + 1);
   const broadcastField = decoded.get(materialOp + 4);
   if (!(materialField !== undefined && repeatedMaterial !== undefined
         && nodesEqual(repeatedMaterial.nodes, materialField.nodes)
-        && broadcastField !== undefined && broadcastField.nodes.length === 1)) return pairForm();
+        && broadcastField !== undefined && broadcastField.nodes.length === 1)) return pairForm() ?? interleaved();
   const colors = [colorSeries(materialOp + 2), colorSeries(materialOp + 3)];
   const broadcast = resolver.deref(broadcastField.nodes[0]);
   if (!(colors.every((channel) => channel !== null)
