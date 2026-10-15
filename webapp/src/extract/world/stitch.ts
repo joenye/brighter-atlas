@@ -111,7 +111,9 @@ export function resolveRoomPositions(
   const result = new Map<number, [number, number]>();
   const delta = mostCommon(offsets).split(',').map(Number);
   for (const [id, xy] of stitched) result.set(id, [xy[0] + delta[0], xy[1] + delta[1]]);
-  for (const [id, xy] of authored) if (stitched.has(id)) result.set(id, [xy[0], xy[1]]);
+  // every room the map places, those no door reaches too (a ferry's landing, a room entered by teleport): the map's
+  // own frame is the one the door-stitched rooms were just moved into
+  for (const [id, xy] of authored) result.set(id, [xy[0], xy[1]]);
   return result;
 }
 

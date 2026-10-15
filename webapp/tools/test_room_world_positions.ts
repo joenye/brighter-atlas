@@ -15,13 +15,14 @@ try {
  const stitched=new Map([[1,[0,0]],[2,[10,0]],[3,[20,0]],[4,[30,0]]]);
  const authored=new Map([[1,[-19,31]],[2,[-9,31]],[3,[2,33]],[9,[90,90]]]);
  const resolved=resolveRoomPositions(stitched,authored);
- assert.deepEqual([...resolved],[[1,[-19,31]],[2,[-9,31]],[3,[2,33]],[4,[11,31]]]);
- assert(!resolved.has(9),'isolated room must not enter the connected layout');
+ assert.deepEqual([...resolved],[[1,[-19,31]],[2,[-9,31]],[3,[2,33]],[4,[11,31]],[9,[90,90]]]);
+ // a room no door reaches (a ferry's landing) takes its place on the map, the frame the stitched rooms moved into
+ assert.deepEqual(resolved.get(9),[90,90],'a room the map places joins the layout');
  assert.deepEqual([...resolveRoomPositions(stitched,new Map())],[...stitched]);
  assert.deepEqual([...resolveRoomPositions(stitched,new Map([[9,[90,90]]]))],[...stitched]);
  assert.deepEqual(stitched.get(3),[20,0],'keep the fallback source intact');
  const w=Object.create(WorldScene.prototype);
- Object.assign(w,{categoryVisibility:{},assetConcurrency:1,tileUnits:1024,layerUnits:512,meshForwardQuarterTurns:2,
+ Object.assign(w,{categoryVisibility:{},_neighbourIds:new Set(),assetConcurrency:1,tileUnits:1024,layerUnits:512,meshForwardQuarterTurns:2,
   _buildCollision:()=>({group:new Group(),mesh:null}),_batchRows:()=>[],
   spawnColumns:{x:0,y:1,z:2,centre_offset:3,surface_z:4,rotation_quarters:5},spawnPartColumns:{spawn:0}});
  for(const [id,xy] of resolved)for(const sceneOrigin of [[0,0],[-40,27],[137,-211]]){
