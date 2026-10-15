@@ -649,26 +649,24 @@ async function worldSuite(browser: any, base: string) {
   ok(await page.$$eval('.search-item', nodes => nodes.some(n => n.textContent.includes('Fixture Meadow'))), 'global search finds rooms by map annotation');
   await page.keyboard.press('Escape');
 
-  // ---- sidebar: pinned "All" + "Effects" rows above the rooms ---------------
-  // The fixtures carry a world:effects doc (commit 1), so the C12-gated
-  // Effects row rides pinned above the rooms right alongside All.
+  // ---- sidebar: the pinned "All" row above the rooms (and no Effects list) --
   const pinnedRows = await page.evaluate(() => [...document.querySelectorAll('.vlist .vrow')].map((r) => ({
     pinned: r.classList.contains('vrow-all'),
     label: r.querySelector('.r-main')?.textContent || '',
     meta: r.querySelector('.r-meta')?.textContent || '',
     selected: r.classList.contains('selected'),
   })));
-  ok(pinnedRows.length === 4 && pinnedRows[0]?.pinned && pinnedRows[0]?.label === 'All'
-    && pinnedRows[1]?.pinned && pinnedRows[1]?.label === 'Effects',
-    `world list pins "All" then "Effects" above the 2 rooms (${JSON.stringify(pinnedRows)})`);
+  ok(pinnedRows.length === 3 && pinnedRows[0]?.pinned && pinnedRows[0]?.label === 'All'
+    && !pinnedRows.some((r) => r.label === 'Effects'),
+    `world list pins "All" above the 2 rooms, and no Effects row (${JSON.stringify(pinnedRows)})`);
   ok(/2 rooms/.test(pinnedRows[0]?.meta || ''), `All row shows the room count (${pinnedRows[0]?.meta})`);
-  ok(!pinnedRows[0]?.selected && !pinnedRows[1]?.selected, 'neither pinned row is active on the landing route');
-  // both pinned through sort direction flips and through a filter that hides every room
+  ok(!pinnedRows[0]?.selected, 'the pinned row is not active on the landing route');
+  // pinned through sort direction flips and through a filter that hides every room
   await page.click('#list-sort-dir');
   ok(await page.evaluate(() => {
     const rows = [...document.querySelectorAll('.vlist .vrow')];
-    return rows.length >= 2 && rows[0].classList.contains('vrow-all') && rows[1].classList.contains('vrow-all');
-  }), 'both pinned rows stay first when the sort direction flips');
+    return rows.length >= 1 && rows[0].classList.contains('vrow-all');
+  }), 'the pinned row stays first when the sort direction flips');
   await page.click('#list-sort-dir');   // restore (persists in localStorage)
   await page.type('#list-filter', 'no room matches this');
   await sleep(300);   // input debounce
@@ -676,7 +674,7 @@ async function worldSuite(browser: any, base: string) {
     const rows = [...document.querySelectorAll('.vlist .vrow')];
     return { n: rows.length, pinned: rows.filter((r) => r.classList.contains('vrow-all')).length };
   });
-  ok(filtered.n === 2 && filtered.pinned === 2, `both pinned rows stay pinned when a filter hides every room (${JSON.stringify(filtered)})`);
+  ok(filtered.n === 1 && filtered.pinned === 1, `the pinned row stays when a filter hides every room (${JSON.stringify(filtered)})`);
   await page.evaluate(() => {
     const f = document.getElementById('list-filter');
     f.value = '';
@@ -966,96 +964,6 @@ async function worldSuite(browser: any, base: string) {
   ok(fxRestored.live === 34 && fxRestored.draws === 3,
     `re-ticking Effects rebuilds the exact frozen state (${fxRestored.live} live, ${fxRestored.draws} draws)`);
   await page.evaluate(() => window.__bs.worldView.effectsApi.setRunning(true));
-
-  // ---- effects browser: #/world/effects --------------------------------------
-  await page.evaluate(() => { location.hash = '#/world/effects'; });
-  await page.waitForFunction(() => typeof window.__bs.effectsView?.count === 'function'
-    && window.__bs.effectsView.count() === 2, { timeout: 15000 });
-  const browserRows = await page.evaluate(() =>
-    [...document.querySelectorAll('.we-left .vlist .vrow')].map((r) => r.querySelector('.r-main')?.textContent));
-  // Two of the four fixture systems carry no material on any emitter, so
-  // they cannot draw anything and are not listed: a browser entry whose
-  // preview can only ever be an empty stage is noise.
-  ok(browserRows.length === 2 && browserRows.every((t) => !!t),
-    `effects browser lists the 2 drawable fixture systems (${JSON.stringify(browserRows)})`);
-  await sleep(500);   // the first system's preview mounts async
-  const covBrowse0 = await paintCoverage(page, '.we-canvas canvas');
-  ok(covBrowse0 > 0.02, `effects browser preview paints on load (coverage ${(covBrowse0 * 100).toFixed(1)}% > 2%)`);
-
-  await page.type('.we-search', 'fountain');
-  await sleep(300);
-  const searchByName = await page.evaluate(() => ({
-    total: window.__bs.effectsView.count(),
-    shown: document.querySelectorAll('.we-left .vlist .vrow').length,
-    label: document.querySelector('.we-left .vlist .vrow .r-main')?.textContent || '',
-  }));
-  ok(searchByName.total === 2 && searchByName.shown === 1 && searchByName.label === 'fixture_fountain_loop',
-    `typing "fountain" filters the list to 1 match (${JSON.stringify(searchByName)})`);
-
-  // the killer feature: search by the NAME of an attached room, not just the
-  // system's own name (fixture room 1 is "Fixture Meadow")
-  await page.evaluate(() => { const inp = document.querySelector('.we-search'); inp.value = ''; inp.dispatchEvent(new Event('input')); });
-  await sleep(300);
-  await page.type('.we-search', 'Fixture Meadow');
-  await sleep(300);
-  const searchByRoom = await page.evaluate(() =>
-    [...document.querySelectorAll('.we-left .vlist .vrow .r-main')].map((n) => n.textContent));
-  ok(searchByRoom.length === 2 && searchByRoom.includes('fixture_torch_idle') && searchByRoom.includes('fixture_fountain_loop'),
-    `searching by an attached room's name finds both room-1 systems (${JSON.stringify(searchByRoom)})`);
-  await page.evaluate(() => { const inp = document.querySelector('.we-search'); inp.value = ''; inp.dispatchEvent(new Event('input')); });
-  await sleep(300);
-
-  // ---- sparse emitters hold their authored population -----------------------
-  // The torch fixture emitter's population is 4 (20/s x 120 ticks). It used
-  // to be inflated to a floor of eight, with alpha scaled down to hide the
-  // extra bodies, to stop a lone particle visibly pulsing. The pulse was
-  // really the colour envelope being read as a ramp across the whole
-  // lifetime; with the three-window envelope the game uses, one particle
-  // holds steady on its own and the count is the authored one. Scrub to two
-  // different developed clocks and confirm it stays exactly 4 at both.
-  ok(await page.evaluate(() => window.__bs.effectsView.select('fixture_torch_idle')),
-    'effectsView.select() finds the sparse torch fixture system');
-  await sleep(500);
-  const torchSteady = await page.evaluate(() => {
-    const scrub = document.querySelector('.we-scrub');
-    scrub.value = '150';
-    scrub.dispatchEvent(new Event('input'));
-    const liveA = window.__bs.effectsView.previewInfo().live;
-    scrub.value = '300';
-    scrub.dispatchEvent(new Event('input'));
-    const liveB = window.__bs.effectsView.previewInfo().live;
-    return { liveA, liveB };
-  });
-  ok(torchSteady.liveA === 4 && torchSteady.liveB === 4,
-    `sparse torch emitter holds its authored population of 4 `
-    + `at a developed clock (${JSON.stringify(torchSteady)})`);
-  ok(torchSteady.liveA === torchSteady.liveB,
-    `population is identical across two different frozen clocks `
-    + `(${torchSteady.liveA} === ${torchSteady.liveB}) -> the clumsy-repeat throb is gone`);
-
-  // select + preview a specific system by name (debug API), then the transport
-  ok(await page.evaluate(() => window.__bs.effectsView.select('fixture_fountain_loop')),
-    'effectsView.select() finds a fixture system by name');
-  await sleep(500);
-  const selInfo = await page.evaluate(() => window.__bs.effectsView.previewInfo());
-  ok(selInfo.label === 'fixture_fountain_loop' && selInfo.mode === 'loop' && selInfo.live > 0,
-    `previewInfo() reports the selected loop system with live particles (${JSON.stringify(selInfo)})`);
-  const covFountain = await paintCoverage(page, '.we-canvas canvas');
-  ok(covFountain > 0.02, `fountain preview paints (coverage ${(covFountain * 100).toFixed(1)}% > 2%)`);
-  ok(await page.$$eval('.we-transport .btn', (b) => b.some((x) => /Pause|Play/.test(x.textContent))),
-    'transport exposes a play/pause toggle');
-
-  // navigation: "View in room" hands off a reveal + routes to the room view,
-  // landing exactly where the inspector checks right below expect to be
-  await page.evaluate(() => {
-    const btn = [...document.querySelectorAll('.we-details .we-nav .btn')].find((b) => /View in room/.test(b.textContent));
-    btn?.click();
-  });
-  await page.waitForFunction(() => /world\/1(\?|$)/.test(location.hash), { timeout: 10000 });
-  const reveal = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bs.effects.reveal') || 'null'));
-  ok(reveal?.system === 201, `"View in room" hands off the selected system via sessionStorage (${JSON.stringify(reveal)})`);
-  await page.waitForFunction(() => window.__bs.worldView?.ready === true, { timeout: 30000 });
-  ok(true, '"View in room" routes back to #/world/1');
 
   // ---- inspector: click a terrain tile -> pinned readout with source rows ----
   // Inspect is a distinct button-style MODE toggle at the top of the panel
@@ -1379,19 +1287,6 @@ async function worldSuite(browser: any, base: string) {
   const fxRowText = await page.$eval('.world-panel .wp-readout', (n) => n.textContent);
   ok(/Effects/.test(fxRowText) && /fixture_torch_idle/.test(fxRowText),
     `pinned readout surfaces the attached effect system by its recovered name (${JSON.stringify(fxRowText.includes('fixture_torch_idle'))})`);
-  const fxLink = await page.$eval('.world-panel .wp-readout', (n) => {
-    const a = [...n.querySelectorAll('dd a')].find((x) => x.textContent === 'fixture_torch_idle');
-    return a ? { href: a.getAttribute('href'), text: a.textContent } : null;
-  });
-  ok(fxLink?.href === '#/world/effects' && fxLink.text === 'fixture_torch_idle',
-    `effects row follows the same readout-link idiom as Mesh/Material/Texture (${JSON.stringify(fxLink)})`);
-  await page.evaluate(() => sessionStorage.removeItem('bs.effects.reveal'));
-  await page.$$eval('.world-panel .wp-readout dd a',
-    (as) => as.find((a) => a.textContent === 'fixture_torch_idle')?.click());
-  await page.waitForFunction(() => /world\/effects/.test(location.hash), { timeout: 10000 });
-  const fxReveal = await page.evaluate(() => JSON.parse(sessionStorage.getItem('bs.effects.reveal') || 'null'));
-  ok(fxReveal?.system === 101 && fxReveal?.controller === 120,
-    `clicking the row hands off the same {system, controller} shape the browser's own "View in room" link writes (${JSON.stringify(fxReveal)})`);
 
   // ---- all-rooms merged view, entered via the pinned All row ------------------
   await page.click('.vlist .vrow-all');

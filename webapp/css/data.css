@@ -623,47 +623,10 @@
 .variant-strip .subthumb.kb-focus { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* clip picker text filter (PlaybackBar) */
 .clip-filter { width: 6.875rem; min-width: 0; padding: .1875rem .375rem; border: 1px solid var(--line); border-radius: .375rem; background: var(--bg3); color: var(--fg0); font-size: .71875rem; }
-/* ---------- particle effects browser (#/world/effects) ---------- */
-.we-body { flex: 1; min-height: 0; min-width: 0; display: flex; }
-.we-left {
-  width: 22.5rem; flex: none; display: flex; flex-direction: column;
-  border-right: 1px solid var(--line); min-height: 0; background: var(--bg1);
-}
-.we-search-row { padding: .5rem; border-bottom: 1px solid var(--line-soft); flex: none; }
-.we-search {
-  width: 100%; padding: .3125rem .5625rem; border-radius: .375rem;
-  background: var(--bg3); border: 1px solid var(--line); color: var(--fg0); outline: none;
-}
-.we-search:focus { border-color: var(--accent-dim); }
-.we-list-host { flex: 1; min-height: 0; position: relative; }
-/* two-line row: the name gets its own full-width line (system names run
-   long and are the primary way a system is found); badges + where-used
-   share a tighter second line, so neither squeezes the other. */
-.vrow .we-row-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .125rem; justify-content: center; }
-.we-row-top { display: flex; min-width: 0; }
-.we-row-top .r-main { flex: 1; min-width: 0; }
-.we-row-bottom { display: flex; align-items: center; gap: .3125rem; min-width: 0; }
-.we-row-bottom .r-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.we-row-header {
-  cursor: pointer; background: var(--bg2); color: var(--fg2);
-  font-size: .6875rem; text-transform: uppercase; letter-spacing: .04em;
-}
-.we-row-header:hover { background: var(--bg3); }
-.we-row-header .we-row-toggle { flex: none; width: .875rem; text-align: center; }
-.we-right { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
-.we-canvas { flex: 1 1 50%; min-height: 11.25rem; }
-.we-transport {
-  flex: none; padding: .5rem .75rem; background: var(--bg1);
-  border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
-}
-.we-transport-row { display: flex; align-items: center; gap: .5rem; }
-.we-scrub { flex: 1; min-width: 0; }
-.we-time { flex: none; min-width: 4.75rem; text-align: right; }
-.we-details { flex: 1 1 auto; min-height: 6.25rem; overflow: auto; padding: .625rem .75rem; }
+/* an effect system's colours and pictures in the World inspector (viewers/world.ts buildEmitterSummary) */
 .we-swatches, .we-thumbs { display: inline-flex; gap: .25rem; flex-wrap: wrap; }
 .we-swatch { width: 1rem; height: 1rem; border-radius: .1875rem; border: 1px solid var(--line); display: inline-block; }
 .we-thumb { width: 1.75rem; height: 1.75rem; border-radius: .25rem; border: 1px solid var(--line); object-fit: cover; background: var(--bg3); image-rendering: pixelated; }
-.we-nav { display: flex; flex-wrap: wrap; gap: .375rem; margin-top: .625rem; }
 /* ------------------------------------------------------------------ Brighter Data on a phone
    (src/mobile-gate.ts): a dialog over the app, once per visit */
 .mgate-overlay { z-index: 70; padding: 1rem; padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); }

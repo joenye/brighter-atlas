@@ -92,15 +92,9 @@ const ordinalCat = (cat: string) => ASSET_CATS.has(cat) || cat === 'world';
 // filteredItems() prepends it AFTER filtering/sorting, so it stays first under
 // any sort and remains visible under any filter (it's navigation, not a room).
 const WORLD_ALL_ROW = Object.freeze({ __worldAll: true, i: -1 });
-// Pinned "Effects" row: routes to the effects browser (#/world/effects), same
-// prepend-after-filter treatment as WORLD_ALL_ROW. Gated on _hasWorldEffects
-// (C12): hidden for a version with no recovered effects doc, so it never
-// promises a surface that has nothing to show.
-const WORLD_EFFECTS_ROW = Object.freeze({ __worldEffects: true, i: -2 });
-const isPinnedWorldRow = (it: any): boolean => !!it && (it.__worldAll || it.__worldEffects);
+const isPinnedWorldRow = (it: any): boolean => !!it && it.__worldAll;
 // tolerate a legacy hash query on the all route (state now lives in prefs)
 const isWorldAllRoute = (r: Route | null | undefined) => r?.cat === 'world' && (r.sub || '').split('?')[0] === 'all';
-const isWorldEffectsRoute = (r: Route | null | undefined) => r?.cat === 'world' && (r.sub || '').split('?')[0] === 'effects';
 
 const imgMaxArea = (e: any) => Math.max(0, ...(e.entries || []).map((s: any) => (s.w || 0) * (s.h || 0)));
 const imgMaxDim = (e: any) => Math.max(0, ...(e.entries || []).map((s: any) => Math.max(s.w || 0, s.h || 0)));
@@ -398,7 +392,6 @@ export class App {
   // probe, awaited once per app session (a version switch reloads the page, so
   // this never goes stale) and cached here so filteredItems() can read it
   // synchronously instead of blocking list rendering on the probe.
-  private _hasWorldEffects: boolean | null = null;
   private _bannerMsgs: Set<string>;
   private _diffFacets: FilterDef[] = [];
   private _pendingDiffFacet: { cat: string; kind: string } | null = null;
@@ -862,13 +855,6 @@ export class App {
           ...r, i: r.id ?? r.i, w: r.size?.[0] ?? r.w ?? null, h: r.size?.[1] ?? r.h ?? null,
         }));
       } catch { this.items = []; }
-      // C12: the effects sidebar row is gated on a cheap probe, awaited once
-      // (never the multi-MB doc itself) and cached for the rest of the session.
-      if (this._hasWorldEffects === null) {
-        try { this._hasWorldEffects = !!(await this.store.hasWorldEffects?.()); }
-        catch { this._hasWorldEffects = false; }
-        if (token !== this._navToken) return;
-      }
     }
 
     // compare mode: added/changed/moved/unchanged facets vs the diff base
@@ -979,16 +965,9 @@ export class App {
       const dir = this.sortDir === 'desc' ? -1 : 1;
       arr = [...arr].sort((a, b) => dir * cmp(a, b));
     }
-    // the pinned merged-world + effects-browser entries ride above the
-    // rooms, immune to sort/filter (prepended last so comparators/predicates
-    // never see them). All rides on room count; Effects rides on the C12
-    // probe alone (it doesn't need any rooms to exist).
-    if (cat === 'world') {
-      const pinned: any[] = [];
-      if (this.items.length) pinned.push(WORLD_ALL_ROW);
-      if (this._hasWorldEffects) pinned.push(WORLD_EFFECTS_ROW);
-      if (pinned.length) arr = [...pinned, ...arr];
-    }
+    // the pinned merged-world entry rides above the rooms, immune to
+    // sort/filter (prepended last so comparators/predicates never see it)
+    if (cat === 'world' && this.items.length) arr = [WORLD_ALL_ROW, ...arr];
     if(cat==='maps'){
       const all=this.items.find(it=>it.room===null);
       if(all)arr=[all,...arr.filter(it=>it!==all)];
@@ -1019,7 +998,7 @@ export class App {
     // keep selection highlighted if still present
     const selIdx = this.findSelectionIndex(items);
     this.vlist.setSelectedIndex(selIdx, { reveal: false });
-    // pinned rows (All / Effects) always sort to the front; neither is an entry
+    // the pinned All row always sorts to the front; it is not an entry
     let pinnedN = 0;
     while (pinnedN < items.length && isPinnedWorldRow(items[pinnedN])) pinnedN++;
     const shown = items.length - pinnedN;
@@ -1030,7 +1009,6 @@ export class App {
     const r = this.cur;
     if (!r) return -1;
     if (isWorldAllRoute(r)) return items.findIndex((it) => it.__worldAll);
-    if (isWorldEffectsRoute(r)) return items.findIndex((it) => it.__worldEffects);
     if (ordinalCat(r.cat) && r.id != null) {
       return items.findIndex((it) => it.i === r.id);
     }
@@ -1042,11 +1020,6 @@ export class App {
     if (cat === 'world' && item.__worldAll) {
       sessionStorage.setItem('bs.last.world', 'all');   // World tab returns here
       location.hash = '#/world/all';
-      return;
-    }
-    if (cat === 'world' && item.__worldEffects) {
-      sessionStorage.setItem('bs.last.world', 'effects');
-      location.hash = '#/world/effects';
       return;
     }
     if (USER_CATS.has(cat)) {
@@ -1172,17 +1145,6 @@ export class App {
             el('span', {
               class: 'r-meta', text: `${fmtInt(this.items.length)} rooms`,
               title: 'Open the whole world: every room merged into one 3D scene (heavy)',
-            }));
-          break;
-        }
-        if (item.__worldEffects) {   // pinned effects-browser entry (see WORLD_EFFECTS_ROW)
-          row.classList.add('vrow-all');
-          append(row,
-            el('span', { class: 'r-id', text: '✳' }),
-            el('span', { class: 'r-main', text: 'Effects' }),
-            el('span', {
-              class: 'r-meta', text: 'browse ▸',
-              title: 'Browse every recovered particle effect system, searchable by name or attached room',
             }));
           break;
         }

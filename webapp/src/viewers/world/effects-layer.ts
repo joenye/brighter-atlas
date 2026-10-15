@@ -357,8 +357,7 @@ export class WorldEffectsLayer {
       // one while nothing is happening puts it somewhere that only makes
       // sense mid-action: a chest's item-spawn burst a tile out in the room,
       // a forager's debris at the player's chest height. The world views show
-      // ambient effects only; the effects browser still previews these on
-      // demand, which is where looking at one deliberately belongs.
+      // ambient effects only.
       if (system.triggered) continue;
       if (opts.loopOnly && !system.loop) continue;
       const cell = Array.isArray(att.cell) ? att.cell : [0, 0, 0];

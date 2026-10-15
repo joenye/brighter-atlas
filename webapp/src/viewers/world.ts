@@ -72,7 +72,6 @@ import {
 import { EffectBoneAnimation } from './world/effects-animation.js';
 import { WorldEffectsLayer, effectInstanceKey } from './world/effects-layer.js';
 import type { EffectInstanceEdit } from './world/effects-layer.js';
-import { createEffectsBrowserView } from './world/effects-browser.js';
 import { spriteDrawOf } from './world/effects-sprite.js';
 import type { AppStore, IndexEntry } from '../store.js';
 
@@ -186,12 +185,10 @@ interface WorldState {
 // and the output blob. 64K/128K are for the patient: thousands of tiles and
 // multi-gigabyte PNGs that most image viewers will refuse to open.
 const isAllRoute = (): boolean => /^#\/?world\/all(\?|$)/i.test(location.hash || '');
-const isEffectsRoute = (): boolean => /^#\/?world\/effects(\?|$)/i.test(location.hash || '');
 
 export function createWorldView(app: WorldViewApp, entry?: IndexEntry | null): WorldViewHandle {
   if (entry) return createSceneView(app, entry, false);
   if (isAllRoute()) return createSceneView(app, null, true);
-  if (isEffectsRoute()) return createEffectsBrowserView(app);
   return createLandingView(app);
 }
 
@@ -2974,12 +2971,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     return [...bySystem.entries()].map(([system, controller]) => ({ system, controller }));
   }
 
-  // "Effects: <name>" (or "Effects: N systems") linking to the effects
-  // browser, following the same readout-link idiom as Mesh/Material/Texture
-  // above. The click writes the same sessionStorage selection handoff shape
-  // the browser's own "View in room" link writes in the other direction
-  // (system slot + controller slot), then navigates same-tab (new tab in
-  // all-rooms mode, matching readoutLink).
+  // "Effects: <name>" (or "Effects: N systems"): the effect systems attached to a placement.
   function effectsReadoutRow(info: any): HTMLElement | null {
     const attached = attachedEffectSystems(info);
     if (!attached.length) return null;
@@ -2987,15 +2979,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const sys = effectsDoc?.systems?.find((s: any) => Number(s.slot) === first.system);
     const name = sys?.names?.[0]?.name || `system #${first.system}`;
     const text = attached.length === 1 ? name : `${attached.length} systems`;
-    const attrs: any = allMode
-      ? { href: '#/world/effects', text, target: '_blank', rel: 'noopener' }
-      : { href: '#/world/effects', text };
-    attrs.onclick = () => {
-      try {
-        sessionStorage.setItem('bs.effects.reveal', JSON.stringify({ system: first.system, controller: first.controller }));
-      } catch { /* storage unavailable: navigation still works, just no reveal handoff */ }
-    };
-    return el('a', attrs);
+    return el('span', { text });
   }
 
   function readoutRows(info: any, pinned: boolean): [string, any][] {
@@ -4339,9 +4323,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   // --- pinned effect instance: readout + session edits ------------------
   // Per-emitter summary rows for the pinned/hovered instance's system: rate
-  // (from its burst config), life, colour swatches and a sprite thumbnail --
-  // the same facts effects-browser.ts's kvTable shows, but one row per
-  // EMITTER rather than aggregated, since a system's emitters can differ.
+  // (from its burst config), life, colour swatches and a sprite thumbnail, one
+  // row per EMITTER, since a system's emitters can differ.
   function buildEmitterSummary(system: any): HTMLElement {
     const wrap = el('div', { class: 'wp-fx-emitters' });
     for (let i = 0; i < (system.emitters || []).length; i++) {
@@ -4388,20 +4371,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const system = effectsDoc?.systems?.find((s: any) => Number(s.slot) === sysSlot) || null;
     const info = effectsLayer ? effectsLayer.instanceInfo(key) : null;
     const name = system?.names?.[0]?.name || `system #${sysSlot}`;
-    const attachment = effectsDoc?.attachments?.rooms?.find((a: any) => Number(a.room) === roomId
-      && Number(a.occurrence) === occurrence && Number(a.system) === sysSlot) || null;
-    const sysLinkAttrs: any = allMode
-      ? { href: '#/world/effects', text: name, target: '_blank', rel: 'noopener' }
-      : { href: '#/world/effects', text: name };
-    sysLinkAttrs.onclick = () => {
-      try {
-        sessionStorage.setItem('bs.effects.reveal',
-          JSON.stringify({ system: sysSlot, controller: attachment?.controller ?? null }));
-      } catch { /* storage unavailable: navigation still works, just no reveal handoff */ }
-    };
     const roomCell = `${identifier(roomId)}${world.roomMeta(roomId)?.name ? ` · ${world.roomMeta(roomId).name}` : ''}`;
     const rows: [string, any][] = [
-      ['System', el('a', sysLinkAttrs)],
+      ['System', name],
       ['Room', `${roomCell} · occurrence ${identifier(occurrence)}`],
       ['Emitters', String(system?.emitters?.length ?? 0)],
       ['Blend', system?.blend || 'none'],
