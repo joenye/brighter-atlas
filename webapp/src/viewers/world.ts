@@ -120,6 +120,8 @@ const MERGED_ACTIVATION_INTERVAL_MS = 500;  // re-rank cadence
 // current defaults (v2: water 50%, ambient 1.85, sun 2.80, no aniso control).
 const STATE_VERSION = 2;
 
+/** The height (tiles) a room's framing focuses at, which the game frame also takes as the player's height. */
+const FOCUS_HEIGHT_TILES = 1.5;
 const DEFAULT_STATE = Object.freeze({
   terrain: true,
   models: true,
@@ -1670,7 +1672,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       for (const cell of worldGameCells.values()) if (cell.shadow) for (const scene of cell.clusters ?? []) tiles.set(scene, cell.shadow);
     }
     worldGame!.renderWorld({ eye, target, up, fov: camera.fov, width: size.x, height: size.y, near: camera.near * units, far: camera.far * units },
-      frozenTicks ?? waterTicks, 0, visible.map((v) => v.scene), casters.map((v) => v.scene), box,
+      // (the player's height as the room view frames a room: rooms whose fade follows the player look the same in both)
+      frozenTicks ?? waterTicks, FOCUS_HEIGHT_TILES * world.tileUnits, visible.map((v) => v.scene), casters.map((v) => v.scene), box,
       (steady ? visible : visible.filter((v) => v.room).slice(0, WORLD_GAME_OCCLUDERS)).map((v) => v.scene), tiles);
     worldGameCost = worldGameCost * 0.9 + (performance.now() - t0) * 0.1;
     worldGameDrawn = visible.length;
@@ -1737,6 +1740,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     });
   }
 
+  // The focus height of the lighting that follows the player (environments whose height fade and floor take the
+  // avatar's height: everything from that height up at full light, below it fading to the floor): the game's
+  // camera focuses on the player, so that height changes only when the player climbs. The free camera's target is
+  // not the player (panning and orbiting move it), so the view keeps the height it frames a room at
+  // (FOCUS_HEIGHT_TILES); a fixed game camera (gameApi.setCamera) focuses where its player is.
   /** Native-frame camera of the current view (or the harness override). */
   function currentGameCamera() {
     const nativeFromWorld = world.root.matrixWorld.clone().invert();
@@ -1767,7 +1775,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         // the bones' posed matrices, current for this frame's palettes
         spawnAnimRoot.updateMatrixWorld(true);
         syncActorLayers(true);
-        gameFrame!.render(camera, waterTicks, camera.target.z);
+        gameFrame!.render(camera, waterTicks, gameCamera ? camera.target.z : FOCUS_HEIGHT_TILES * world.tileUnits);
         this.renderer.resetState();
         // A colour background makes three clear the frame: overlays only.
         const autoClear = this.renderer.autoClear, background = this.scene.background, fog = this.scene.fog;
@@ -5033,7 +5041,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // rooms don't over-zoom.
   function focusExtent(cx: number, cz: number, extent: number): void {
     const distance = Math.max(extent, 4) * 1.35;
-    scene3d.controls.target.set(cx, 1.5, cz);
+    scene3d.controls.target.set(cx, FOCUS_HEIGHT_TILES, cz);
     scene3d.camera.position.set(cx - distance * 0.72, distance * 0.86, cz + distance * 0.72);
     scene3d.camera.near = 0.05;
     scene3d.camera.far = Math.max(3000, distance * 30);
