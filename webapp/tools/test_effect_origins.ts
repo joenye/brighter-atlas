@@ -7,7 +7,7 @@ import {build} from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-effect-origins-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({stdin: {contents: "export * from './src/extract/world/effect-origins.ts'; export {EmitterSim, hash32} from './src/viewers/world/effects-sim.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
+  await build({stdin: {contents: "export * from './src/extract/world/effect-origins.ts'; export {EmitterSim, hash32, throughTable} from './src/viewers/world/effects-sim.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
   const T = await import(pathToFileURL(file).href);
   const binding = {instance: 12, kind: 'radial', resample: 32, center: 20, radius: 21, axisScale: [22, 23], yaw: [24, 25], pitch: [26, 27], samples: [28, 29], overrides: [30, 31], uniformClass: 8};
   assert(T.validEffectOrigins([binding]));
@@ -178,5 +178,22 @@ try {
     assert(lo[0] >= -100 && hi[0] <= 100 && lo[1] >= -50 && hi[1] <= 50 && lo[2] >= 0 && hi[2] <= 20, `inside the box (${lo} ${hi})`);
     assert(hi[0] - lo[0] > 180 && hi[1] - lo[1] > 90 && hi[2] - lo[2] > 18, `spread over the box (${lo} ${hi})`);
   }
+    // a radial origin whose yaw fraction the class's code draws: the full yaw range, a quantile table
+  const coded = {instance: 12, resample: 32, center: 20, radius: 21, axisScale: [22, 23], yaw: [24, 25], pitch: [26, 27],
+    samples: [{quantiles: [0.1, 0.2, 0.8, 0.9]}, 29], uniformClass: 8};
+  assert(T.validEffectRadialsCoded([coded]));
+  assert(!T.validEffectRadialsCoded([{...coded, samples: [28, 29]}]), 'a coded binding needs a coded sample');
+  assert(!T.validEffectRadialsCoded([{...coded, samples: [{quantiles: [2, 3]}, 29]}]));
+  const codedRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}], undefined, undefined, undefined, undefined, undefined, [coded]);
+  const codedOrigin = codedRead(0, ops);
+  assert.deepEqual(codedOrigin, {kind: 'radial', radial: {center: [10, 20, 30], radius: 7, axisScale: [2, .5], yaw: [45, 135],
+    pitch: [10, 10], yawTable: [0.1, 0.2, 0.8, 0.9]}});
+  // an even draw through quantiles: each quantile at its own place, linear between, the draw itself with none
+  assert.equal(T.throughTable([0.1, 0.2, 0.8, 0.9], 0.125), 0.1);
+  assert.equal(T.throughTable([0.1, 0.2, 0.8, 0.9], 0.375), 0.2);
+  assert(Math.abs(T.throughTable([0.1, 0.2, 0.8, 0.9], 0.5) - 0.5) < 1e-12);
+  assert.equal(T.throughTable([0.1, 0.2, 0.8, 0.9], 0), 0.1);
+  assert.equal(T.throughTable([0.1, 0.2, 0.8, 0.9], 0.999), 0.9);
+  assert.equal(T.throughTable(undefined, 0.3), 0.3);
   console.log('effect origin extraction, sampled radius, point, position, segment (both routes), disc and box sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

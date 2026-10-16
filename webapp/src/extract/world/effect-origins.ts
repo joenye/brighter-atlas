@@ -122,6 +122,28 @@ export interface RadialOrigin {
   axisScale: [number, number];
   yaw: [number, number];
   pitch: [number, number];
+  /** Fractions of the yaw or pitch range the class's code draws (equally likely quantiles): where they stand, a
+   *  particle's angle is the range at a fraction taken through them rather than an even one. */
+  yawTable?: number[];
+  pitchTable?: number[];
+}
+
+// A radial origin one of whose samples the class's code draws (from 2026-10: a ring whose particles are spaced
+// evenly along an ellipse): that sample as quantiles of the fraction. Kept apart.
+export interface RadialCodedBinding {
+  instance: number; resample: number; center: number; radius: number; axisScale?: [number, number];
+  yaw: [number, number]; pitch: [number, number];
+  samples: [number | {quantiles: number[]}, number | {quantiles: number[]}];
+  uniformClass: number;
+}
+export function validEffectRadialsCoded(v: any): v is RadialCodedBinding[] {
+  const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
+  const sample = (x: any) => bindingIndex(x) || (x && Array.isArray(x.quantiles) && x.quantiles.length >= 2
+    && x.quantiles.length <= 256 && x.quantiles.every((q: any) => Number.isFinite(q) && q >= 0 && q <= 1));
+  return validBindingList(v, b => [b.resample, b.center, b.radius, b.uniformClass].every(bindingIndex)
+    && [b.yaw, b.pitch].every(pair) && (b.axisScale === undefined || pair(b.axisScale))
+    && Array.isArray(b.samples) && b.samples.length === 2 && b.samples.every(sample)
+    && b.samples.some((x: any) => typeof x !== 'number'));
 }
 export interface PointOrigin {
   position: [number, number, number];
@@ -212,8 +234,10 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
 }
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
-  boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[]) {
+  boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[]) {
   if (wanders !== undefined && !validEffectWanders(wanders)) throw Error('invalid effect wander bindings');
+  if (codedRadials !== undefined && !validEffectRadialsCoded(codedRadials)) throw Error('invalid effect coded radial bindings');
+  const codedOf = instanceLookup((codedRadials || []).map(b => [b.instance, b] as const), objects);
   const wanderOf = instanceLookup((wanders || []).map(b => [b.instance, b] as const), objects);
   if (bindings !== undefined && !validEffectOrigins(bindings)) throw Error('invalid effect origin bindings');
   if (cylinders !== undefined && !validEffectCylinders(cylinders)) throw Error('invalid effect cylinder bindings');
@@ -230,8 +254,33 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     const l = b || c || d ? undefined : lineOf(slot);
     const x = b || c || d || l ? undefined : boxOf(slot);
     const w = b || c || d || l || x ? undefined : wanderOf(slot);
-    if (!b && !c && !d && !l && !x && !w) return null;
+    const k = b || c || d || l || x || w ? undefined : codedOf(slot);
+    if (!b && !c && !d && !l && !x && !w && !k) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
+    if (k) {
+      const resample = fields.get(k.resample);
+      if (resample?.kind !== 'other' || resample.tag !== 12) return null;
+      const center = effectVec3(fields.get(k.center));
+      const radiusField = fields.get(k.radius);
+      const radius = effectScalar(radiusField) ?? effectRange(radiusField, k.uniformClass);
+      const scales = k.axisScale ? k.axisScale.map(op => effectScalar(fields.get(op))) : [1, 1];
+      if (!center || radius === null || scales.some(n => n === null)) return null;
+      const side = (bounds: [number, number], sample: number | {quantiles: number[]}) => {
+        if (typeof sample === 'number') {
+          const lo = effectScalar(fields.get(bounds[0])), hi = effectScalar(fields.get(bounds[1]));
+          const s = fields.get(sample), n = effectScalar(s);
+          const fraction = effectRange(s, k.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
+          return lo === null || hi === null || !fraction ? null
+            : {range: [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]] as [number, number]};
+        }
+        const lo = effectScalar(fields.get(bounds[0])), hi = effectScalar(fields.get(bounds[1]));
+        return lo === null || hi === null ? null : {range: [lo, hi] as [number, number], table: [...sample.quantiles]};
+      };
+      const yaw = side(k.yaw, k.samples[0]), pitch = side(k.pitch, k.samples[1]);
+      if (!yaw || !pitch) return null;
+      return {kind: 'radial', radial: {center, radius, axisScale: scales as [number, number], yaw: yaw.range, pitch: pitch.range,
+        ...(yaw.table ? {yawTable: yaw.table} : {}), ...(pitch.table ? {pitchTable: pitch.table} : {})}};
+    }
     if (w) {
       const center = effectVec3(fields.get(w.center));
       if (!center) return null;

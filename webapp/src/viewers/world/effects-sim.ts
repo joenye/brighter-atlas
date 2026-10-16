@@ -24,6 +24,14 @@ import type {
 import {EffectRandom} from './effects-random.js';
 import type {EffectScales} from '../../extract/world/effect-scales.js';
 import {wanderPoint} from './effects-wander.js';
+
+/** An even draw u taken through equally likely quantiles (linear between neighbours; none: u itself). */
+export function throughTable(table: number[] | undefined, u: number): number {
+  if (!table || table.length < 2) return u;
+  const at = Math.min(table.length - 1, Math.max(0, u * table.length - 0.5));
+  const i = Math.floor(at), f = at - i;
+  return i + 1 < table.length ? table[i] + (table[i + 1] - table[i]) * f : table[i];
+}
 import {effectHslToRgb, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
 import {waterHeight, type EffectWave} from '../../extract/world/effect-waves.js';
 import type {EffectWindow} from '../../extract/world/effect-windows.js';
@@ -729,8 +737,9 @@ export class EmitterSim {
     let dx = s.w[0]; let dy = s.w[1]; let dz = s.w[2];
     if (s.kind === 'radial' && s.radial) {
       const radial = s.radial;
-      const yaw = (radial.yaw[0] + (radial.yaw[1] - radial.yaw[0]) * r0) * DEG;
-      const pitch = (radial.pitch[0] + (radial.pitch[1] - radial.pitch[0]) * r1) * DEG;
+      // (a fraction the class's code draws: an even draw taken through its quantiles)
+      const yaw = (radial.yaw[0] + (radial.yaw[1] - radial.yaw[0]) * throughTable(radial.yawTable, r0)) * DEG;
+      const pitch = (radial.pitch[0] + (radial.pitch[1] - radial.pitch[0]) * throughTable(radial.pitchTable, r1)) * DEG;
       const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch);
       x += radius * radial.axisScale[0] * cy;
       y += radius * radial.axisScale[1] * sy;
