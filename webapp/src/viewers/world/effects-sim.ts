@@ -757,7 +757,8 @@ export class EmitterSim {
       const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch);
       x += radius * radial.axisScale[0] * cy;
       y += radius * radial.axisScale[1] * sy;
-      dx = cy * cp; dy = sy * cp; dz = Math.sin(pitch);
+      if (radial.direction) [dx, dy, dz] = radial.direction;
+      else { dx = cy * cp; dy = sy * cp; dz = Math.sin(pitch); }
     } else if (s.kind === 'segment' && s.segment) {
       // Uniform along the authored line, so a shoreline wave breaks across the
       // whole width the game gives it rather than jetting from one end.

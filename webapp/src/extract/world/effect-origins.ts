@@ -126,6 +126,15 @@ export interface RadialOrigin {
    *  particle's angle is the range at a fraction taken through them rather than an even one. */
   yawTable?: number[];
   pitchTable?: number[];
+  /** Where every particle leaves along one vector of the record, instead of out along its yaw and pitch. */
+  direction?: [number, number, number];
+}
+
+// A radial origin whose particles all leave along one vector field of the shape's record (from 2026-10): that field.
+// Kept apart.
+export interface OriginDirectionBinding { instance: number; direction: number }
+export function validEffectOriginDirections(v: any): v is OriginDirectionBinding[] {
+  return validBindingList(v, b => bindingIndex(b.direction));
 }
 
 // A radial origin one of whose samples the class's code draws (from 2026-10: a ring whose particles are spaced
@@ -248,7 +257,9 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
   boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[],
-  codedOrigins?: CodedOriginBinding[]) {
+  codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[]) {
+  if (directions !== undefined && !validEffectOriginDirections(directions)) throw Error('invalid effect origin direction bindings');
+  const directionOf = instanceLookup((directions || []).map(b => [b.instance, b] as const), objects);
   if (codedOrigins !== undefined && !validEffectOriginsCoded(codedOrigins)) throw Error('invalid effect coded origin bindings');
   const coded = new Map((codedOrigins || []).map(b => [`${b.instance}|${b.owner}`, b] as const));
   // (the shape's own instance, and its owner's: the record its op 0 names)
@@ -270,7 +281,7 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
   const discOf = instanceLookup((discs || []).map(b => [b.instance, b] as const), objects);
   const lineOf = instanceLookup((lines || []).map(b => [b.instance, b] as const), objects);
   const boxOf = instanceLookup((boxes || []).map(b => [b.instance, b] as const), objects);
-  return (slot: number, ops: EffectExtra[]): EffectOrigin | null => {
+  const read = (slot: number, ops: EffectExtra[]): EffectOrigin | null => {
     const b = bindingOf(slot), c = b ? undefined : cylinderOf(slot), d = b || c ? undefined : discOf(slot);
     const l = b || c || d ? undefined : lineOf(slot);
     const x = b || c || d || l ? undefined : boxOf(slot);
@@ -409,5 +420,11 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     const yaw = angles(b.yaw, b.samples[0]), pitch = angles(b.pitch, b.samples[1]);
     if (!yaw || !pitch) return null;
     return {kind: 'radial', radial: {center, radius, axisScale: scales as [number, number], yaw, pitch}};
+  };
+  return (slot: number, ops: EffectExtra[]): EffectOrigin | null => {
+    const origin = read(slot, ops), d = directionOf(slot);
+    if (!d || origin?.kind !== 'radial') return origin;
+    const direction = effectVec3(ops.find(e => e.op === d.direction));
+    return direction ? {kind: 'radial', radial: {...origin.radial, direction}} : null;
   };
 }

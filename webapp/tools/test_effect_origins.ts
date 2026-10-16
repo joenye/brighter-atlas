@@ -45,6 +45,24 @@ try {
       for (let k = 0; k < 3; k++) assert(Math.abs(points[0][k] - expected[k] - direction[k] * tick) < 1e-5);
     }
   }
+  // A ring whose particles all leave along one vector of the record: that vector, as it is, whatever the yaw
+  {
+    assert(T.validEffectOriginDirections([{instance: 12, direction: 33}]));
+    assert(!T.validEffectOriginDirections([{instance: 12, direction: -1}]));
+    const fixed = T.createEffectOriginReader([binding], [{values: [0, 12]}], undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, [{instance: 12, direction: 33}]);
+    const withDir = [...ops, {op: 33, kind: 'vec3', v: [0, 0, -2]}];
+    const got = fixed(0, withDir);
+    assert.deepEqual(got.radial.direction, [0, 0, -2]);
+    assert.equal(fixed(0, ops), null, 'a direction field that does not read leaves the origin unbound');
+    const shape = {...got.radial, yaw: [90, 90], pitch: [30, 30]};
+    const sim = new T.EmitterSim({slot: 1, loop: false}, 0, {life: {ticks: 100}, burst: 1, shape: 2, speed: {value: 600}},
+      {1: {kind: 'burst_windowed', per_second: 600, windows: [[0, 0]]}, 2: {kind: 'shape', shape_kind: 'radial', center: shape.center, radial: shape}}, 600);
+    sim.ensure(10); const points: number[][] = [];
+    sim.evaluate(10, (...p: number[]) => points.push(p));
+    const want = [10, 20 + 3.5, 30 - 2 * 10];
+    for (let k = 0; k < 3; k++) assert(Math.abs(points[0][k] - want[k]) < 1e-4, `fixed direction ${points[0]}`);
+  }
   // A sampled radius is a uniform range drawn for every particle, first in
   // its per-particle stream (the game evaluates the origin before the
   // emitter's own properties).
