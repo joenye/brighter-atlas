@@ -172,7 +172,20 @@ export interface CylinderOrigin {
 }
 export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'point'; point: PointOrigin}
   | {kind: 'segment'; segment: SegmentOrigin} | {kind: 'cylinder'; cylinder: CylinderOrigin} | {kind: 'box'; box: BoxOrigin}
-  | {kind: 'wander'; wander: {center: [number, number, number]; shape: WanderShapeValues}};
+  | {kind: 'wander'; wander: {center: [number, number, number]; shape: WanderShapeValues}}
+  | {kind: 'coded'; coded: CodedOrigin};
+
+// An origin the code makes from uniform draws and constants alone, its owner's class choosing the case (from 2026-10:
+// a streak straight up from the system, say): per shape and owner instance, each axis a multilinear polynomial over
+// the draws' fractions (coefficient k for the product of the draws whose bits k sets). Kept apart.
+export interface CodedOrigin { draws: number; axes: [number[], number[], number[]] }
+export interface CodedOriginBinding extends CodedOrigin { instance: number; owner: number }
+export function validEffectOriginsCoded(v: any): v is CodedOriginBinding[] {
+  return Array.isArray(v) && v.length <= 65536 && v.every((b: any) => b && bindingIndex(b.instance) && bindingIndex(b.owner)
+    && Number.isInteger(b.draws) && b.draws >= 1 && b.draws <= 4 && Array.isArray(b.axes) && b.axes.length === 3
+    && b.axes.every((a: any) => Array.isArray(a) && a.length === 1 << b.draws && a.every(Number.isFinite)))
+    && new Set(v.map((b: any) => `${b.instance}|${b.owner}`)).size === v.length;
+}
 
 // A wandering source (from 2026-10): each batch of `period` particles spawns about one seeded spot along a tilted
 // streak (angle round the centre, tilt, half length and sign, height, base radius). Each value is a multilinear
@@ -234,7 +247,15 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
 }
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
-  boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[]) {
+  boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[],
+  codedOrigins?: CodedOriginBinding[]) {
+  if (codedOrigins !== undefined && !validEffectOriginsCoded(codedOrigins)) throw Error('invalid effect coded origin bindings');
+  const coded = new Map((codedOrigins || []).map(b => [`${b.instance}|${b.owner}`, b] as const));
+  // (the shape's own instance, and its owner's: the record its op 0 names)
+  const instanceOf = (slot: number): number | null => {
+    const v = objects[slot]?.values?.[1];
+    return Number.isInteger(v) ? v as number : null;
+  };
   if (wanders !== undefined && !validEffectWanders(wanders)) throw Error('invalid effect wander bindings');
   if (codedRadials !== undefined && !validEffectRadialsCoded(codedRadials)) throw Error('invalid effect coded radial bindings');
   const codedOf = instanceLookup((codedRadials || []).map(b => [b.instance, b] as const), objects);
@@ -255,7 +276,13 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     const x = b || c || d || l ? undefined : boxOf(slot);
     const w = b || c || d || l || x ? undefined : wanderOf(slot);
     const k = b || c || d || l || x || w ? undefined : codedOf(slot);
-    if (!b && !c && !d && !l && !x && !w && !k) return null;
+    if (!b && !c && !d && !l && !x && !w && !k) {
+      if (!coded.size) return null;
+      const own = ops.find(e => e.op === 0 && e.kind === 'scalar');
+      const inst = instanceOf(slot), owner = own && 'value' in own ? instanceOf(Number(own.value)) : null;
+      const got = inst !== null && owner !== null ? coded.get(`${inst}|${owner}`) : undefined;
+      return got ? {kind: 'coded', coded: {draws: got.draws, axes: got.axes.map(a => [...a]) as [number[], number[], number[]]}} : null;
+    }
     const fields = new Map(ops.map(e => [e.op, e]));
     if (k) {
       const resample = fields.get(k.resample);

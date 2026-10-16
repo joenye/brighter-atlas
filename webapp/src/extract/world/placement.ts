@@ -7,7 +7,7 @@ import {validEffectSprites, type EffectSpriteBinding} from './effect-sprites.js'
 import {validEffectSpeeds, type EffectSpeedBinding} from './effect-fields.js';
 import {validEffectColours, validEffectColourTables, type EffectColourMixBinding, type EffectColourTableBinding} from './effect-properties.js';
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
-import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, type WanderOriginBinding, type RadialCodedBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
+import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, validEffectOriginsCoded, type WanderOriginBinding, type RadialCodedBinding, type CodedOriginBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
 import {validEffectFields, type EffectFieldData} from './effect-fields.js';
 import {validEffectWaves, type EffectWaveData} from './effect-waves.js';
@@ -45,6 +45,7 @@ export interface PlacementDecodeData {
   effectBoxes?: BoxOriginBinding[];
   effectWanders?: WanderOriginBinding[];
   effectRadialsCoded?: RadialCodedBinding[];
+  effectOriginsCoded?: CodedOriginBinding[];
   effectSpeeds?: EffectSpeedBinding[];
   effectColours?: EffectColourMixBinding[];
   effectColourTables?: EffectColourTableBinding[];
@@ -117,6 +118,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectBoxes!==undefined&&!validEffectBoxes(data.effectBoxes))throw Error('invalid effect box bindings');
   if(data.effectWanders!==undefined&&!validEffectWanders(data.effectWanders))throw Error('invalid effect wander bindings');
   if(data.effectRadialsCoded!==undefined&&!validEffectRadialsCoded(data.effectRadialsCoded))throw Error('invalid effect coded radial bindings');
+  if(data.effectOriginsCoded!==undefined&&!validEffectOriginsCoded(data.effectOriginsCoded))throw Error('invalid effect coded origin bindings');
   if(data.effectSpeeds!==undefined&&!validEffectSpeeds(data.effectSpeeds))throw Error('invalid effect speed bindings');
   if(data.effectColours!==undefined&&!validEffectColours(data.effectColours))throw Error('invalid effect colour bindings');
   if(data.effectColourTables!==undefined&&!validEffectColourTables(data.effectColourTables))throw Error('invalid effect colour tables');

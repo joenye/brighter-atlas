@@ -195,5 +195,15 @@ try {
   assert.equal(T.throughTable([0.1, 0.2, 0.8, 0.9], 0), 0.1);
   assert.equal(T.throughTable([0.1, 0.2, 0.8, 0.9], 0.999), 0.9);
   assert.equal(T.throughTable(undefined, 0.3), 0.3);
+  // an origin the code makes from draws alone, chosen by shape and owner instance
+  const made = {instance: 12, owner: 40, draws: 1, axes: [[0, 0], [0, 0], [600, 800]]};
+  assert(T.validEffectOriginsCoded([made]));
+  assert(!T.validEffectOriginsCoded([{...made, axes: [[0], [0], [600]]}]));
+  assert(!T.validEffectOriginsCoded([made, made]));
+  const madeRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}, {values: [0, 40]}, {values: [0, 41]}],
+    undefined, undefined, undefined, undefined, undefined, undefined, [made]);
+  const own = (slot: number) => [{op: 0, kind: 'scalar', tag: -85, value: slot}];
+  assert.deepEqual(madeRead(0, own(1)), {kind: 'coded', coded: {draws: 1, axes: [[0, 0], [0, 0], [600, 800]]}});
+  assert.equal(madeRead(0, own(2)), null, 'another owner, another case');
   console.log('effect origin extraction, sampled radius, point, position, segment (both routes), disc and box sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

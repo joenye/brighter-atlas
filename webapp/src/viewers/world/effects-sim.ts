@@ -111,6 +111,8 @@ interface ShapeSpec {
   cylinder: EffectConfig['cylinder'] | null;
   // a wandering source: each particle's offset from the centre, by its number
   wander: EffectConfig['wander'] | null;
+  // an origin the code makes from draws alone
+  coded: EffectConfig['coded'] | null;
   // a box source: each particle born at a point drawn between its corners (in place of the centre)
   box: EffectConfig['box'] | null;
   cone: EffectConfig['cone'] | null;
@@ -239,6 +241,7 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
     radial: config?.radial ?? null,
     cylinder: config?.cylinder ?? null,
     wander: config?.wander ?? null,
+    coded: config?.coded ?? null,
     box: config?.box ?? null,
     cone: config?.cone ?? null,
     ...frame,
@@ -450,7 +453,7 @@ export class EmitterSim {
     this.shape = resolveShape(shapeCfg, fallbackAxis, tickRate);
     this._random = !!this._scales || this._perParticle || this.spriteChoices > 1
       || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number') || !!this.shape.spiral?.range || !!this.shape.spiral?.axisRange
-      || !!this.shape.cylinder || !!this.shape.box;
+      || !!this.shape.cylinder || !!this.shape.box || !!this.shape.coded;
 
     // Burst schedule. A missing/degenerate burst leaves the emitter inert
     // (alive stays zero); siblings are unaffected.
@@ -676,6 +679,16 @@ export class EmitterSim {
     })() : null;
     const bx = this.shape.box;
     const box = bx ? [0, 1, 2].map(i => draw([bx.a[i], bx.b[i]])) : null;
+    // (an origin made in code: its draws' fractions, then each axis's polynomial over them)
+    const cd = this.shape.coded;
+    const codedPoint = cd ? (() => {
+      const u = Array.from({length: cd.draws}, () => draw([0, 1]));
+      return cd.axes.map((coef) => coef.reduce((sum, c, k) => {
+        let term = c;
+        for (let i = 0; i < u.length; i++) if (k & (1 << i)) term *= u[i];
+        return sum + term;
+      }, 0));
+    })() : null;
     let speed = this.speed; let speedSlope = this.speedSlope;
     const f = this._fields;
     if (f) {
@@ -734,6 +747,7 @@ export class EmitterSim {
     if (cylinder) { x += cylinder[0]; y += cylinder[1]; z += cylinder[2]; }
     if (box) { x = box[0]; y = box[1]; z = box[2]; }
     if (s.wander) { const w = wanderPoint(s.wander, j); x += w[0]; y += w[1]; z += w[2]; }
+    if (codedPoint) { x += codedPoint[0]; y += codedPoint[1]; z += codedPoint[2]; }
     let dx = s.w[0]; let dy = s.w[1]; let dz = s.w[2];
     if (s.kind === 'radial' && s.radial) {
       const radial = s.radial;
