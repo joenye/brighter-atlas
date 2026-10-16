@@ -1,9 +1,10 @@
 // Values a shape's geometry takes from somewhere other than its own record, from per-build decode data (produced
 // offline purely from analysis of the game's own files, never by inspecting or modifying a running game process or
 // its memory): a field of a record up the shape's owner chain (level 1 the emitter that owns the shape, level 2 the
-// system that owns that), or a value computed for each particle. One resolver for every kind of shape that uses them.
+// system that owns that), a value computed for each particle, or a sampled value (a number, a range, or one of a few
+// picked per particle). One resolver for every kind of shape that uses them.
 import type {EffectExtra} from './effects.js';
-import {effectRange, effectScalar, effectVec3} from './effect-fields.js';
+import {effectRange, effectScalar, effectVec3, validEffectChoice, type EffectSample} from './effect-fields.js';
 import {bindingIndex} from './effect-bindings.js';
 
 /** Computed for each particle: a polynomial over a few uniform draws (coefficient k belongs to the product of the
@@ -17,7 +18,7 @@ export interface ComputedValue {
   count?: number[];
   perCount?: number[] | number[][];
 }
-export type ValueSource = {op: number} | {owner: number; op: number} | ComputedValue;
+export type ValueSource = {op: number} | {owner: number; op: number} | ComputedValue | {value: EffectSample};
 export const OWNER_LEVELS = 2;
 
 const finiteList = (v: any, n: number) => Array.isArray(v) && v.length === n && v.every(Number.isFinite);
@@ -28,6 +29,12 @@ export function validValueSource(v: any, vector: boolean): v is ValueSource {
   if ('op' in v) {
     return bindingIndex(v.op) && (v.owner === undefined
       || (Number.isInteger(v.owner) && v.owner >= 1 && v.owner <= OWNER_LEVELS));
+  }
+  if ('value' in v) {
+    // (a sampled value: a scalar only)
+    const s = v.value;
+    return !vector && (Number.isFinite(s) || (Array.isArray(s) && s.length === 2 && s.every(Number.isFinite))
+      || validEffectChoice(s));
   }
   if (!Number.isInteger(v.draws) || v.draws < 0 || v.draws > 4) return false;
   const terms = 1 << v.draws;
@@ -53,7 +60,7 @@ export function ownerFields(ops: EffectExtra[], opsOf?: (slot: number) => Effect
   return (level: number): Map<number, EffectExtra> | null => levels[level - 1] ?? null;
 }
 
-export type ResolvedScalar = {value: number | [number, number]} | {computed: ComputedValue};
+export type ResolvedScalar = {value: EffectSample} | {computed: ComputedValue};
 export type ResolvedVector = {value: [number, number, number]} | {computed: ComputedValue};
 
 const fieldOf = (src: {op: number; owner?: number}, fields: Map<number, EffectExtra>,
@@ -68,6 +75,7 @@ export function resolveScalar(src: ValueSource, fields: Map<number, EffectExtra>
     const value = effectScalar(e) ?? effectRange(e, uniformClass);
     return value === null ? null : {value};
   }
+  if ('value' in src) return {value: src.value};
   return {computed: src};
 }
 /** A vector, else null. */
@@ -77,5 +85,6 @@ export function resolveVector(src: ValueSource, fields: Map<number, EffectExtra>
     const value = effectVec3(fieldOf(src, fields, owners));
     return value ? {value} : null;
   }
+  if ('value' in src) return null;
   return {computed: src};
 }

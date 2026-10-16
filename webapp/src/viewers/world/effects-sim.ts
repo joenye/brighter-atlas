@@ -33,7 +33,7 @@ export function throughTable(table: number[] | undefined, u: number): number {
   const i = Math.floor(at), f = at - i;
   return i + 1 < table.length ? table[i] + (table[i + 1] - table[i]) * f : table[i];
 }
-import {effectHslToRgb, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
+import {effectHslToRgb, type EffectChoice, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
 import {waterHeight, type EffectWave} from '../../extract/world/effect-waves.js';
 import type {EffectWindow} from '../../extract/world/effect-windows.js';
 import type { EffectBirthFrames } from './effects-frames.js';
@@ -82,6 +82,18 @@ const ramp = (elapsed: number, span: number): number => (
   span > 0 ? clamp(elapsed / span, 0, 1) : (elapsed > 0 ? 1 : 0));
 
 /** Deterministic 32-bit combine of two integers (seed material). */
+/** The value a choice gives particle number `n`: its weights walked in order by one fraction, the particle's own seeded
+ *  draw with the choice's salt (every choice of a particle with that salt picks alike), else `unit()`. */
+export function pickChoice(c: EffectChoice, n: number, unit: () => number): number | [number, number] {
+  const f = c.salt !== undefined ? wanderUnit(n, c.salt) : unit();
+  let at = 0;
+  for (const [weight, value] of c.choice) {
+    at += weight;
+    if (f < at) return value;
+  }
+  return c.choice[c.choice.length - 1][1];
+}
+
 export function hash32(a: number, b: number): number {
   let h = (a | 0) ^ 0x9e3779b9;
   h = Math.imul(h ^ (h >>> 16), 0x21f0aaad);
@@ -436,7 +448,8 @@ export class EmitterSim {
     this.accelSlope = [(accel1[0] - accel[0]) / t2 / this.life,
       (accel1[1] - accel[1]) / t2 / this.life, (accel1[2] - accel[2]) / t2 / this.life];
     const fields = emitter.fields ?? null;
-    const sampled = (v: unknown): boolean => Array.isArray(v) && v.length === 2 && typeof v[0] === 'number';
+    const sampled = (v: unknown): boolean => (Array.isArray(v) && v.length === 2 && typeof v[0] === 'number')
+      || (!!v && typeof v === 'object' && 'choice' in v);
     const anySampled = (v: unknown): boolean => sampled(v) || (Array.isArray(v) && v.some(sampled));
     const colourSampled = (c: EffectColourSample | 'start' | undefined) => !!c && c !== 'start' && ('ahsl' in c || 'mix' in c || 'table' in c);
     this._sampledColour = !Number.isFinite(emitter.color_override_alpha) && !!fields?.color
@@ -670,7 +683,11 @@ export class EmitterSim {
     // acceleration, size, rotation, spin, sprite, colour); the session's
     // shared stream state is not implied by this per-particle preview seed.
     const random = this._random ? new EffectRandom(BigInt(particleSeed)) : null;
-    const draw = (v: EffectSample) => typeof v === 'number' ? v : random!.range(v[0], v[1]);
+    const draw = (v: EffectSample): number => {
+      if (typeof v === 'number') return v;
+      if (Array.isArray(v)) return random!.range(v[0], v[1]);
+      return draw(pickChoice(v, counter, () => random!.range(0, 1)));
+    };
     const computed = this.shape.radial?.computed;
     const unit = () => draw([0, 1]);
     const radius = this.shape.radial

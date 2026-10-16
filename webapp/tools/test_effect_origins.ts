@@ -272,6 +272,14 @@ try {
     assert.deepEqual(read(0, shapeOps, opsOf), {kind: 'radial', radial: {center: [1, 2, 3], radius: 450, axisScale: [2, .5],
       yaw: [67.5, 112.5], pitch: [10, 10]}});
     assert.equal(read(0, shapeOps), null, 'no owner records: unbound');
+    // (a radius one draw picks among a few: a sampled value, drawn per particle as the shape's own range is)
+    const picked = {choice: [[0.25, 300], [0.75, [400, 500]]], salt: 3};
+    assert(T.validEffectRadialsSourced([{...sourced, radius: {value: picked}}]));
+    assert(!T.validEffectRadialsSourced([{...sourced, center: {value: picked}}]), 'a centre is no sampled value');
+    assert(!T.validEffectRadialsSourced([{...sourced, radius: {value: {choice: [[0.5, 1]]}}}]));
+    const pickRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}], undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, [{...sourced, radius: {value: picked}}]);
+    assert.deepEqual(pickRead(0, shapeOps, opsOf).radial.radius, picked);
     assert.equal(read(0, ops, opsOf), null, 'no owner named: unbound');
     const grow = {draws: 1, coef: [900, 100], count: [0, 0.5]};
     const funnel = {draws: 0, axes: [[0], [0], [300]], perCount: [[0], [0], [-10]]};

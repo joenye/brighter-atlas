@@ -24,8 +24,20 @@ export interface EffectFieldData {
   bindings: EffectFieldBinding[];
 }
 
-/** A literal, or a uniform range sampled once per particle. */
-export type EffectSample = number | [number, number];
+/** A literal, a uniform range sampled once per particle, or one of a few of those picked per particle. */
+export type EffectSample = number | [number, number] | EffectChoice;
+/** One of a few values, each with its weight, picked per particle in their order by one fraction: the particle's own
+ *  seeded draw with `salt` (so every value a particle picks with that salt agrees), else a draw of its own. */
+export interface EffectChoice { choice: [number, number | [number, number]][]; salt?: number }
+const plainSample = (v: any) => Number.isFinite(v) || (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite));
+/** A choice as the decode data gives it: weights that sum to one, each value a number or a range. */
+export function validEffectChoice(v: any): v is EffectChoice {
+  if (!v || typeof v !== 'object' || !Array.isArray(v.choice) || v.choice.length < 2 || v.choice.length > 16) return false;
+  if (v.salt !== undefined && !(Number.isInteger(v.salt) && v.salt >= 0 && v.salt < 2 ** 32)) return false;
+  if (!v.choice.every((e: any) => Array.isArray(e) && e.length === 2 && Number.isFinite(e[0]) && e[0] >= 0
+    && plainSample(e[1]))) return false;
+  return Math.abs(v.choice.reduce((sum: number, e: any) => sum + e[0], 0) - 1) < 1e-3;
+}
 /** `value` per `ticks`: native units (degrees for spin) over a duration. */
 export interface EffectRateSample { value: EffectSample; ticks: number }
 /** Alpha, hue (sextants: 1 = 60 degrees), saturation and lightness. */
@@ -62,8 +74,9 @@ export function effectVec3(e: EffectExtra | undefined): [number, number, number]
 }
 
 // Where a property the emitter's record does not hold comes from (per-build decode data): the emitter's own field, a
-// field of the system that owns it (owner level 1), or a value worked out from the game's own draws (a number, or a
-// uniform range per number; a rate also its ticks). Kept apart from the field bindings.
+// field of the system that owns it (owner level 1), or a value worked out from the game's own draws (a number, a
+// uniform range per number, or one of a few such picked per particle; a rate also its ticks). Kept apart from the
+// field bindings.
 export type PropertySource = {op: number} | {owner: number; op: number}
   | {value: EffectSample | [EffectSample, EffectSample, EffectSample]; ticks?: number};
 export interface PropertySourceBinding {
@@ -74,7 +87,7 @@ export interface PropertySourceBinding {
   rotation?: PropertySource;
   angularSpeed?: PropertySource;
 }
-const sampleOk = (v: any) => Number.isFinite(v) || (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite));
+const sampleOk = (v: any) => plainSample(v) || validEffectChoice(v);
 function validPropertySource(s: any, kind: 'scalar' | 'vector' | 'rate'): boolean {
   if (s === null) return true;
   if (!s || typeof s !== 'object') return false;

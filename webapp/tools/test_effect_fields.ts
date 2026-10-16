@@ -11,7 +11,7 @@ import {build} from 'esbuild';
 const tmp=await mkdtemp(path.join(os.tmpdir(),'atlas-effect-fields-'));
 try {
  const file=path.join(tmp,'test.mjs');
- await build({stdin:{contents:"export * from './src/extract/world/effect-fields.ts'; export {EmitterSim, hash32} from './src/viewers/world/effects-sim.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts'; export {emitterSpriteDraws} from './src/viewers/world/effects-sprite.ts';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
+ await build({stdin:{contents:"export * from './src/extract/world/effect-fields.ts'; export {EmitterSim, hash32, pickChoice} from './src/viewers/world/effects-sim.ts'; export {wanderUnit} from './src/viewers/world/effects-wander.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts'; export {emitterSpriteDraws} from './src/viewers/world/effects-sprite.ts';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
  const T=await import(pathToFileURL(file).href);
  let checks=0;const ok=(c:any,m:string)=>{assert(c,m);checks++;};
  const classes={range:7,rate:8,vector:9,colour:10};
@@ -139,6 +139,47 @@ try {
   const alone=T.createEffectFieldReader(undefined,[{values:[0,4]}],sources);
   ok(alone.bound(0)&&alone(0,own,()=>system).rotation===20,'sources without field bindings');
   ok(JSON.stringify(read(0,ops))===JSON.stringify(values),'records holding their properties read as before');
+ }
+ // One of a few values picked per particle: by the particle's own seeded draw (a salt: every pick of a particle with
+ // that salt agrees, as the game's do) or a draw of its own; the picked range then drawn from the particle's stream
+ {
+  const rotation={value:{choice:[[.5,[-10,-50]],[.5,[10,50]]],salt:1}};
+  const spin={value:{choice:[[.5,[40,28]],[.5,[-40,-28]]],salt:1},ticks:600};
+  const coin={value:[0,{choice:[[.5,-50],[.5,50]]},0]};
+  const picks=[{instance:4,rotation,angularSpeed:spin,acceleration:[coin,null]}];
+  ok(T.validEffectPropertySources(picks),'valid choices');
+  ok(!T.validEffectPropertySources([{instance:4,rotation:{value:{choice:[[.5,1],[.4,2]]}}}]),'weights sum to one');
+  ok(!T.validEffectPropertySources([{instance:4,rotation:{value:{choice:[[1,1]]}}}]),'a choice has two values or more');
+  ok(!T.validEffectPropertySources([{instance:4,rotation:{value:{choice:[[.5,1],[.5,2]],salt:-1}}}]),'a salt is a word');
+  ok(!T.validEffectPropertySources([{instance:4,rotation:{value:{choice:[[.5,{choice:[]}],[.5,2]]}}}]),'no choice inside a choice');
+  const own=[{op:0,kind:'scalar',tag:-85,value:1}];
+  const got=T.createEffectFieldReader(undefined,[{values:[0,4]}],picks)(0,own,()=>null);
+  ok(JSON.stringify(got.rotation)===JSON.stringify(rotation.value)&&JSON.stringify(got.angularSpeed)===JSON.stringify(spin),
+   'choices read as given');
+  ok(got.acceleration===null,'no end anywhere: the acceleration stays unresolved');
+  // (the pick itself: in order, by the seeded draw of the particle's number)
+  for(const n of [0,1,2,77,4096]){
+   const want=T.wanderUnit(n,1)<.5?[-10,-50]:[10,50];
+   ok(JSON.stringify(T.pickChoice(rotation.value,n,()=>{throw Error('a seeded pick draws nothing');}))===JSON.stringify(want),'seeded pick '+n);
+  }
+  ok(T.pickChoice({choice:[[.25,1],[.75,2]]},0,()=>.2)===1&&T.pickChoice({choice:[[.25,1],[.75,2]]},0,()=>.3)===2,'a pick of its own by weight');
+  const em:any={life:{ticks:600},fade_in:{ticks:0},fade_out:{ticks:0},burst:1,shape:2,
+   fields:{rotation:rotation.value,angularSpeed:spin},sprite_choices:null,sprite:{material:1,images:[11]}};
+  const s2=new T.EmitterSim({slot:6,loop:true},0,em,configs,600);
+  ok((s2 as any)._perParticle,'a choice is drawn per particle');
+  s2.ensure(200);const live:any[]=[];s2.evaluate(200,(...p:number[])=>live.push(p));
+  ok(live.length>10,'particles live');
+  let both=0;
+  live.forEach((p,n)=>{
+   const r=new T.EffectRandom(BigInt(T.hash32(s2.seed,n)));
+   const first=T.wanderUnit(n,1)<.5;
+   const rot0=(first?r.range(-10,-50):r.range(10,50))*Math.PI/180;
+   const sp=(first?r.range(40,28):r.range(-40,-28))*Math.PI/180/600;
+   const age=200-Math.trunc(n*600/60);
+   ok(Math.abs(p[8]-(sp*age-rot0))<1e-6,'rotation and spin from the picked ranges, particle '+n);
+   if(first)both++;
+  });
+  ok(both>0&&both<live.length,'both picks occur');
  }
  console.log(`effect fields: ${checks} reader, colour, sampling order, choice, seek and basis checks passed`);
 }finally{await rm(tmp,{recursive:true,force:true});}

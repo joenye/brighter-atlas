@@ -3,12 +3,12 @@
 // process or its memory. Authored sizes remain in the user's bundle.
 import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
-import {effectRange, effectScalar} from './effect-fields.js';
+import {effectRange, effectScalar, type EffectSample} from './effect-fields.js';
 import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
 export interface EffectScaleBinding {
   instance: number; start: number; end: number; rangeClass: number;
 }
-export type EffectScaleValue = number | [number, number];
+export type EffectScaleValue = EffectSample;
 export interface EffectScales {start: EffectScaleValue; end: EffectScaleValue | 'start'}
 export function validEffectScales(value: any): value is EffectScaleBinding[] {
   return validBindingList(value,b=>[b.start,b.end,b.rangeClass].every(bindingIndex)&&b.start!==b.end);

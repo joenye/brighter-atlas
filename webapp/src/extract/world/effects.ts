@@ -34,7 +34,7 @@ import type {EffectWindow, createEffectWindowReader} from './effect-windows.js';
 import type {createEffectSpriteReader} from './effect-sprites.js';
 import type {EffectFacing, createEffectFacingReader} from './effect-facing.js';
 import type {RadialOrigin, WanderShapeValues, CodedOrigin, createEffectOriginReader} from './effect-origins.js';
-import type {EffectFieldValues, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
+import type {EffectFieldValues, EffectSample, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
 import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader, type createEffectColourReader, type createEffectColourTableReader} from './effect-properties.js';
@@ -1520,8 +1520,8 @@ function extractEffects(
           emitter.scales = scales;
           // A sampled range has no single literal endpoint. Do not retain a
           // scalar inferred from an unrelated field beside the range.
-          if (Array.isArray(scales.start)) emitter.scale0 = null;
-          if (Array.isArray(scales.end) || (scales.end === 'start' && Array.isArray(scales.start))) emitter.scale1 = null;
+          if (typeof scales.start !== 'number') emitter.scale0 = null;
+          if ((scales.end !== 'start' && typeof scales.end !== 'number') || (scales.end === 'start' && typeof scales.start !== 'number')) emitter.scale1 = null;
         }
       }
     }
@@ -2141,7 +2141,7 @@ function deriveTickRate(decoded: Map<number, EffectExtra[] | null>): WorldEffect
 // the binding cannot read keeps its previous inference.
 function applyEffectFields(emitter: EffectEmitter, fields: EffectFieldValues): void {
   emitter.fields = fields;
-  const literalRate = (r: {value: number | [number, number]; ticks: number}) =>
+  const literalRate = (r: {value: EffectSample; ticks: number}) =>
     typeof r.value === 'number' ? {value: r.value, den: r.ticks, op: -1} : null;
   if (fields.speed) {
     emitter.speed = literalRate(fields.speed.start);
@@ -2149,7 +2149,7 @@ function applyEffectFields(emitter: EffectEmitter, fields: EffectFieldValues): v
   }
   if (fields.angularSpeed) emitter.angular_speed = literalRate(fields.angularSpeed);
   if (fields.acceleration) {
-    const literal = (v: (number | [number, number])[]) =>
+    const literal = (v: (EffectSample)[]) =>
       v.every(c => typeof c === 'number') ? {v: v as [number, number, number], op: -1} : null;
     emitter.acceleration = literal(fields.acceleration.start);
     emitter.acceleration1 = fields.acceleration.end === 'start' ? emitter.acceleration : literal(fields.acceleration.end);

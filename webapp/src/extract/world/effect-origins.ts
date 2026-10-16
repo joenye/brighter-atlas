@@ -3,7 +3,7 @@
 // process or its memory. Geometry values remain in the user's bundle.
 import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
-import {effectRange, effectScalar, effectVec3} from './effect-fields.js';
+import {effectRange, effectScalar, effectVec3, type EffectSample} from './effect-fields.js';
 import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
 import {ownerFields, resolveScalar, resolveVector, validValueSource, type ComputedValue,
   type ValueSource} from './effect-sources.js';
@@ -119,8 +119,8 @@ export interface BoxOrigin {
 }
 export interface RadialOrigin {
   center: [number, number, number];
-  // A sampled radius is drawn for every particle.
-  radius: number | [number, number];
+  // A sampled radius is drawn for every particle (a range, or one of a few picked per particle).
+  radius: EffectSample;
   axisScale: [number, number];
   yaw: [number, number];
   pitch: [number, number];
