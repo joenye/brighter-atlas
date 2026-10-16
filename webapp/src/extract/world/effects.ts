@@ -1659,6 +1659,36 @@ function extractEffects(
     return found && found.flourishes.includes(controller) ? found : null;
   };
 
+  // ---- a resource's animatic set: a map field whose values are all empty, keyed by every animatic the resource
+  // can play (what is loaded with it). A controller the resource names only there plays when something acts on it
+  // (a forager's debris, a lamp being lit), never as its resting look. Used where no appearance binding tells.
+  const rawRows = makeRegistryRowDecoder(rows, ab0, profile);
+  const setOnly = new Map<number, Set<number>>();
+  const emptyValue = (n: any) => { const v = n?.tag === 0 ? derefPool(pool, n.value) : n; return v?.tag === 0x01 || v?.tag === 0x0c || v?.tag === 0x0d; };
+  const refsIn = (n: any, out: Set<number>, depth = 0) => {
+    if (!n || depth > 32) return;
+    if (n.tag === 0x26 && isInt(n.value)) out.add(n.value);
+    else if (n.tag === 0 && isInt(n.value)) for (const t of shared.poolRegistryRefs(n.value)) out.add(t);
+    for (const c of n.values ?? []) if (c && typeof c === 'object') refsIn(c, out, depth + 1);
+    for (const c of n.fields ?? []) refsIn(c, out, depth + 1);
+  };
+  const setOnlyOf = (slot: number): Set<number> => {
+    let got = setOnly.get(slot);
+    if (got) return got;
+    const inSet = new Set<number>(), elsewhere = new Set<number>();
+    for (const f of rawRows(slot) ?? []) {
+      if (f.kind === 'G') {
+        const node = f.node?.tag === 0 ? derefPool(pool, f.node.value) : f.node;
+        const values = node?.tag === 0x2c && Array.isArray(node.values) ? node.values : null;
+        refsIn(f.node, values && values.length && values.slice(values.length / 2).every(emptyValue) ? inSet : elsewhere);
+      } else if (f.kind === 'R' && isInt(f.value)) elsewhere.add(f.value);
+      else if (f.kind === 'S') for (const t of f.refs) if (isInt(t)) elsewhere.add(t);
+    }
+    got = new Set([...inSet].filter((c) => !elsewhere.has(c)));
+    setOnly.set(slot, got);
+    return got;
+  };
+
   // ---- attachments (inverted ref maps, never per-occurrence walks) ----------
   const pairsCache = new Map<number, { system: number; controller: number | null }[]>();
   const pairsFor = (slot: number): { system: number; controller: number | null }[] => {
@@ -1772,7 +1802,8 @@ function extractEffects(
             ...(selected?.effectColor && selected.controllers.includes(controller ?? system)
               ? {color_override: selected.effectColor} : {}),
             ...(selected ? { default_active: selected.controllers.includes(controller ?? system) }
-              : candidates && !candidates.includes(controller ?? system) ? { default_active: false } : {}),
+              : candidates && !candidates.includes(controller ?? system) ? { default_active: false }
+              : !candidates && controller !== null && setOnlyOf(slot!).has(controller) ? { default_active: false } : {}),
             ...(flourish ? { flourish } : {}),
           });
         }
