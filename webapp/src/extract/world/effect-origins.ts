@@ -257,6 +257,17 @@ export function validEffectOriginsTabulated(v: any): v is TabulatedOriginBinding
       && b.table.every((p: any) => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite));
   }) && new Set(v.map((b: any) => `${b.instance}|${b.owner}`)).size === v.length;
 }
+// An origin like a coded or tabulated one for a single shape record (from 2026-10): where the records of one shape
+// and owner instance put their particles at different points (a system whose emitters each stand at their own spot,
+// worked out from their own records), a row for each record, `slot` naming it. Kept apart.
+export type PerRecordOriginBinding = (CodedOriginBinding | TabulatedOriginBinding) & { slot: number };
+export function validEffectOriginsPerRecord(v: any): v is PerRecordOriginBinding[] {
+  return Array.isArray(v) && v.length <= 65536 && v.every((b: any) => {
+    if (!b || !Number.isInteger(b.slot) || b.slot < 0 || b.slot >= 2 ** 31) return false;
+    const {slot, ...row} = b;
+    return validEffectOriginsCoded([row]) || validEffectOriginsTabulated([row]);
+  }) && new Set(v.map((b: any) => b.slot)).size === v.length;
+}
 export interface CodedOriginBinding {
   instance: number; owner: number; draws: number; axes: [number[], number[], number[]];
   steps?: number[]; seeded?: number[];
@@ -339,7 +350,9 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
   boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[],
   codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[], sourced?: RadialSourcedBinding[],
-  tabulated?: TabulatedOriginBinding[]) {
+  tabulated?: TabulatedOriginBinding[], perRecord?: PerRecordOriginBinding[]) {
+  if (perRecord !== undefined && !validEffectOriginsPerRecord(perRecord)) throw Error('invalid effect per-record origin bindings');
+  const recordRows = new Map<number, CodedOriginBinding | TabulatedOriginBinding>((perRecord || []).map(b => [b.slot, b] as const));
   if (tabulated !== undefined && !validEffectOriginsTabulated(tabulated)) throw Error('invalid effect tabulated origin bindings');
   if (sourced !== undefined && !validEffectRadialsSourced(sourced)) throw Error('invalid effect sourced radial bindings');
   const sourcedOf = instanceLookup((sourced || []).map(b => [b.instance, b] as const), objects);
@@ -375,10 +388,11 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     const w = b || c || d || l || x ? undefined : wanderOf(slot);
     const k = b || c || d || l || x || w ? undefined : codedOf(slot);
     if (!b && !c && !d && !l && !x && !w && !k) {
-      if (!coded.size) return null;
+      if (!coded.size && !recordRows.size) return null;
       const own = ops.find(e => e.op === 0 && e.kind === 'scalar');
       const inst = instanceOf(slot), owner = own && 'value' in own ? instanceOf(Number(own.value)) : null;
-      const got = inst !== null && owner !== null ? coded.get(`${inst}|${owner}`) : undefined;
+      // (a row for this shape record itself first, then the shape and owner instance's)
+      const got = recordRows.get(slot) ?? (inst !== null && owner !== null ? coded.get(`${inst}|${owner}`) : undefined);
       if (!got) return null;
       let fieldValues: number[] | undefined;
       if ('fields' in got && got.fields?.length) {

@@ -223,6 +223,22 @@ try {
   const own = (slot: number) => [{op: 0, kind: 'scalar', tag: -85, value: slot}];
   assert.deepEqual(madeRead(0, own(1)), {kind: 'coded', coded: {draws: 1, axes: [[0, 0], [0, 0], [600, 800]]}});
   assert.equal(madeRead(0, own(2)), null, 'another owner, another case');
+  // records of one shape and owner instance each at their own point: a row for the record first
+  {
+    const perRecord = [{...made, slot: 0, axes: [[10, 0], [20, 0], [30, 0]]}, {...made, slot: 3, axes: [[-10, 0], [0, 0], [0, 0]]}];
+    assert(T.validEffectOriginsPerRecord(perRecord));
+    assert(!T.validEffectOriginsPerRecord([perRecord[0], perRecord[0]]), 'one row per record');
+    assert(!T.validEffectOriginsPerRecord([{...perRecord[0], slot: -1}]));
+    assert(!T.validEffectOriginsPerRecord([{...perRecord[0], axes: [[0], [0], [0]]}]));
+    const objects = [{values: [0, 12]}, {values: [0, 40]}, {values: [0, 41]}, {values: [0, 12]}, {values: [0, 12]}];
+    const recordRead = T.createEffectOriginReader(undefined, objects, undefined, undefined, undefined, undefined, undefined,
+      undefined, [made], undefined, undefined, undefined, perRecord);
+    assert.deepEqual(recordRead(0, own(1)).coded.axes, [[10, 0], [20, 0], [30, 0]]);
+    assert.deepEqual(recordRead(3, own(1)).coded.axes, [[-10, 0], [0, 0], [0, 0]]);
+    assert.deepEqual(recordRead(4, own(1)).coded.axes, [[0, 0], [0, 0], [600, 800]], 'a record with no row of its own: the pair\'s');
+    assert.deepEqual(T.createEffectOriginReader(undefined, objects, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, perRecord)(3, own(1)).coded.axes, [[-10, 0], [0, 0], [0, 0]]);
+  }
   // whole-number draws, draws the same for every particle born on a tick, and the system's own numbers
   {
     // x = -100 + 50 u F (u the tick's draw with salt 7, F the system's field 28); y = -40 + 80 c (c a coin); z = 5
