@@ -360,5 +360,37 @@ try {
     for (let i = 1; i < cp.length; i++) assert(Math.abs((cp[i][1] - cp[i - 1][1]) % 18.5) < 1e-6, `counted y ${cp[i][1]}`);
     for (const p of cp) assert(p[0] >= -1024 - 1e-6 && p[0] <= 1024 + 1e-6 && Math.abs(p[2] - 100) < 1e-6);
   }
+  // A start point worked out in code whose particles leave through the shape's own cone: its axis field (pointing
+  // down here, as weather over a room falls), yaw and pitch bounds, and fractions keyed by the birth tick
+  {
+    const cone = {instance: 12, axis: 6, yaw: [7, 8], pitch: [9, 10], samples: [{seeded: 28387520}, {seeded: 27395479}], uniformClass: 8};
+    assert(T.validEffectDirections([cone]));
+    assert(!T.validEffectDirections([{...cone, samples: [{seeded: -1}, 3]}]));
+    assert(!T.validEffectDirections([{...cone, axis: 'x'}]));
+    const coneRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}, {values: [0, 40]}],
+      undefined, undefined, undefined, undefined, undefined, undefined, [made], undefined, undefined, undefined, undefined, [cone]);
+    const shapeOps = [...own(1), {op: 6, kind: 'vec3', v: [0.1, 0.1, -0.7]}, scalar(7, 0), scalar(8, 360), scalar(9, 0), scalar(10, 0.3)];
+    const got = coneRead(0, shapeOps);
+    assert.equal(got.kind, 'coded');
+    assert.deepEqual(got.cone, {axis: [0.1, 0.1, -0.7], yaw: [0, 360], pitch: [0, 0.3], salts: [28387520, 27395479]});
+    // (a cone that does not read leaves the start point bound, its direction as the shape reads it)
+    assert.equal(coneRead(0, shapeOps.filter(e => e.op !== 6)).cone, undefined);
+    // the particles fall along the axis, and two born on one tick leave the same way
+    const level = {draws: 1, axes: [[0, 0], [0, 0], [1000, 0]]};
+    const shape = {kind: 'shape', shape_kind: 'point', center: [0, 0, 0], origin: 'bound', coded: level,
+      axis: got.cone.axis, cone: {yaw: got.cone.yaw, pitch: got.cone.pitch}, cone_salts: got.cone.salts};
+    const sim = new T.EmitterSim({slot: 1, loop: false}, 0, {life: {ticks: 100}, burst: 1, shape: 2, speed: {value: 600}},
+      {1: {kind: 'burst_windowed', per_second: 1200, windows: [[0, 0]]}, 2: shape}, 600);
+    sim.ensure(30); const points: number[][] = [];
+    sim.evaluate(30, (...p: number[]) => points.push(p));
+    assert(points.length >= 1);
+    for (const p of points) assert(p[2] < 1000 - 20, `particle ${p} falls`);
+    // (without the cone the shape's guessed direction, up, would carry them up)
+    const up = new T.EmitterSim({slot: 1, loop: false}, 0, {life: {ticks: 100}, burst: 1, shape: 2, speed: {value: 600}},
+      {1: {kind: 'burst_windowed', per_second: 1200, windows: [[0, 0]]}, 2: {...shape, axis: null, cone: null, cone_salts: undefined}}, 600);
+    up.ensure(30); const risen: number[][] = [];
+    up.evaluate(30, (...p: number[]) => risen.push(p));
+    assert(risen.some(p => p[2] > 1001));
+  }
   console.log('effect origin extraction, sampled radius, point, position, segment (both routes), disc and box sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

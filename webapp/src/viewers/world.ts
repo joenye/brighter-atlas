@@ -2027,7 +2027,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick
     } else {
       for (const id of effectsRooms) {
-        effectsLayer.addRoom(id, spawnRoomOffset(id), { leftOut: world.roomLeftOut.get(id) });
+        effectsLayer.addRoom(id, spawnRoomOffset(id), { leftOut: world.roomLeftOut.get(id), storyPosition: storyPositionFor(id) });
         if (!actorEffectRooms.has(id)) addActorEffects(id).catch(() => { /* the room keeps its other effects */ });
       }
     }
@@ -2181,6 +2181,13 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // Story progress: rooms whose lighting follows a quest get a slider over
   // that quest's steps (game shading only), starting at the story's end.
   const storyBox = el('div', { class: 'wp-range', hidden: true });
+  // each room's chosen story step, and a room's position on a quest variable as its slider has it (none: the story's
+  // end, which effects that follow a quest take too)
+  const storySteps = new Map<number, number>();
+  const storyPositionFor = (roomId: number) => (variable: number): number | null => {
+    const story = world.index?.render?.story?.[String(roomId)];
+    return story?.variable === variable && storySteps.has(roomId) ? storySteps.get(roomId)! : null;
+  };
   function setupStory(roomId: number): void {
     clear(storyBox);
     storyBox.hidden = true;
@@ -2195,8 +2202,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       const active = [...story.steps].reverse().find((st: any) => st.from <= step);
       if (gameFrame) gameFrame.environmentOverride = active?.environment ?? null;
       out.textContent = `step ${step + 1} of ${story.states}`;
+      storySteps.set(roomId, step);
     };
     input.addEventListener('input', apply);
+    // (effects that play only at some steps of the story: the room's effects again at the new step)
+    input.addEventListener('change', () => {
+      if (!effectsLayer || allMode) return;
+      effectsLayer.removeRoom(roomId);
+      effectsLayer.addRoom(roomId, spawnRoomOffset(roomId), { leftOut: world.roomLeftOut.get(roomId), storyPosition: storyPositionFor(roomId) });
+    });
     apply();
     append(storyBox,
       el('div', { class: 'wp-range-head' }, el('span', { text: 'Story progress', title: `${story.quest}: this room's lighting changes at step ${changes}` }), out),

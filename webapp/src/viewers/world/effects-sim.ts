@@ -129,6 +129,8 @@ interface ShapeSpec {
   // a box source: each particle born at a point drawn between its corners (in place of the centre)
   box: EffectConfig['box'] | null;
   cone: EffectConfig['cone'] | null;
+  // the cone's fractions keyed by the particle's birth tick (-1: the particle's own draw)
+  coneSalts: [number, number] | null;
   // orthonormal frame: w = emission axis, u/v span its perpendicular plane
   w: Vec3; u: Vec3; v: Vec3;
   yaw: number;            // point cone azimuth range (rad)
@@ -257,6 +259,7 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
     coded: config?.coded ?? null,
     box: config?.box ?? null,
     cone: config?.cone ?? null,
+    coneSalts: config?.cone_salts ?? null,
     ...frame,
     yaw: clamp(finite(config?.spread_yaw, 360), 0, 360) * DEG,
     pitch: clamp(finite(config?.spread_pitch, 30), 0, 180) * DEG,
@@ -847,7 +850,11 @@ export class EmitterSim {
     } else {
       const yaw: [number, number] = s.cone ? [s.cone.yaw[0] * DEG, s.cone.yaw[1] * DEG] : [0, s.yaw];
       const pitch: [number, number] = s.cone ? [s.cone.pitch[0] * DEG, s.cone.pitch[1] * DEG] : [0, s.pitch];
-      [dx, dy, dz] = sampleConeDirection(s.w, yaw, pitch, r0, r1);
+      // (a fraction keyed by the birth tick: the same for every particle born on it, as the game draws it)
+      const cs = s.coneSalts;
+      const azimuth = cs && cs[0] >= 0 ? wanderUnit(tick - 1, cs[0]) : r0;
+      const polar = cs && cs[1] >= 0 ? wanderUnit(tick - 1, cs[1]) : r1;
+      [dx, dy, dz] = sampleConeDirection(s.w, yaw, pitch, azimuth, polar);
     }
     const frames = this._birthFrameSampler?.(tick);
     const p = frames ? frames.position : this._birthPosition;

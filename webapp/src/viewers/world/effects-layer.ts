@@ -46,6 +46,7 @@ import * as THREE from '../../../vendor/three.module.js';
 import { bindRigBirthFrames } from './effects-frames.js';
 import type { EffectBoneAnimation } from './effects-animation.js';
 import { proceduralEffectFrame } from './effects-motion.js';
+import { gateOpen } from '../../extract/world/effect-gates.js';
 import { FlourishSchedule } from './effects-flourish.js';
 import {
   EmitterSim, EffectsClock, hash32,
@@ -370,7 +371,8 @@ export class WorldEffectsLayer {
   // a lighting approximation, separate from recovered emitter/owner colours.
   // Omitted or absent leaves particles at their authored colour.
   addRoom(roomId: number, offset: [number, number],
-    opts: { loopOnly?: boolean; modulation?: number[] | null; leftOut?: ReadonlySet<number> | null; extra?: any[] } = {}): void {
+    opts: { loopOnly?: boolean; modulation?: number[] | null; leftOut?: ReadonlySet<number> | null; extra?: any[];
+      storyPosition?: (variable: number) => number | null } = {}): void {
     const id = Number(roomId);
     if (this._disposed || this._rooms.has(id)) return;
     const recs: InstanceRec[] = [];
@@ -450,6 +452,9 @@ export class WorldEffectsLayer {
       // child rigs and older documents still need their own resolved frames.
       const animationSetters: ((animation: EffectBoneAnimation | null) => void)[] = [];
       system.emitters.forEach((emitter, index) => {
+        // A burst that emits only in some states of a quest: as the room's story stands (its end by default).
+        const gate = (this.doc.configs || {})[String(emitter.burst)]?.gate;
+        if (gate && !gateOpen(gate, opts.storyPosition?.(gate.variable) ?? null)) return;
         // Nothing drawable: skip rather than invent a fallback dot.
         const draws = emitterSpriteDraws(emitter, this.doc.configs || {});
         if (!draws.length) return;

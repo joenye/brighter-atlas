@@ -33,7 +33,8 @@ import type {createEffectScaleReader, EffectScales} from './effect-scales.js';
 import type {EffectWindow, createEffectWindowReader} from './effect-windows.js';
 import type {createEffectSpriteReader} from './effect-sprites.js';
 import type {EffectFacing, createEffectFacingReader} from './effect-facing.js';
-import type {RadialOrigin, WanderShapeValues, CodedOrigin, createEffectOriginReader} from './effect-origins.js';
+import type {RadialOrigin, WanderShapeValues, CodedOrigin, ConeDirection, createEffectOriginReader} from './effect-origins.js';
+import type {EffectGate, createEffectGateReader} from './effect-gates.js';
 import type {EffectFieldValues, EffectSample, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
@@ -105,6 +106,8 @@ export interface EffectConfig {
   emission_window?: EffectWindow;
   // 'burst_wave': fires when the water height at its point crests.
   wave?: EffectWave;
+  // A burst that emits only while a quest variable is in some of its states.
+  gate?: EffectGate;
   radial?: RadialOrigin;
   // A cylinder about `center` (a point source's cone aims it): radius, height and the two across scales.
   // A box: each particle born at a point drawn between the two corners, x, y then z (the centre is not added).
@@ -126,6 +129,8 @@ export interface EffectConfig {
   radius?: number | null; sweep?: number | null;
   spread_yaw?: number | null; spread_pitch?: number | null;
   cone?: { yaw: [number, number]; pitch: [number, number] };
+  // A cone fraction keyed by the particle's birth tick (azimuth, polar; -1: the particle's own draw).
+  cone_salts?: [number, number];
   // 'spiral': a ring that turns with time. Each particle is born where the
   // ring's moving point is at its birth tick: radius start_radius +
   // radius_rate * t, angle start_angle + angle_rate * t (degrees; rates per
@@ -316,6 +321,7 @@ export interface WorldEffectsShared {
   effectFields?: ReturnType<typeof createEffectFieldReader>;
   effectSpeed?: ReturnType<typeof createEffectSpeedReader>;
   effectWave?: ReturnType<typeof createEffectWaveReader>;
+  effectGate?: ReturnType<typeof createEffectGateReader>;
   effectMotion?: (controller: number, hit: RoomOccurrence, room: number) => EffectAttachmentMotion | null;
   rigBoneTranslations: Map<number, number[][]>;
   rigWorldMatrices?: Map<number, number[][]>;
@@ -726,6 +732,13 @@ export function extractWorldEffects(
     if (err?.message === 'cancelled') throw err;
     return makeEmptyDoc(rows.length, String(err?.message || err));
   }
+}
+
+/** A bound cone: the shape's own axis and its yaw and pitch ranges, with any fractions keyed by the birth tick. */
+function applyCone(cfg: EffectConfig, cone: ConeDirection): void {
+  cfg.axis = cone.axis; cfg.cone = {yaw: cone.yaw, pitch: cone.pitch};
+  cfg.spread_yaw = Math.abs(cone.yaw[1] - cone.yaw[0]); cfg.spread_pitch = Math.max(Math.abs(cone.pitch[0]), Math.abs(cone.pitch[1]));
+  if (cone.salts.some(n => n >= 0)) cfg.cone_salts = [cone.salts[0], cone.salts[1]];
 }
 
 function extractEffects(
@@ -1626,10 +1639,12 @@ function extractEffects(
       // (only where particles are born is bound: the direction stays the cone read by shape)
       cfg.center = [0, 0, 0]; cfg.coded = origin.coded; cfg.origin = 'bound';
       if (cfg.shape_kind !== 'point') { cfg.shape_kind = 'point'; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null; }
+      if (origin.cone) applyCone(cfg, origin.cone);
     } else if (origin?.kind === 'wander') {
       // (the direction stays the cone read by shape: only where particles are born is bound)
       cfg.center = origin.wander.center; cfg.wander = origin.wander.shape; cfg.origin = 'bound';
       if (cfg.shape_kind !== 'point') { cfg.shape_kind = 'point'; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null; }
+      if (origin.cone) applyCone(cfg, origin.cone);
     } else if (origin?.kind === 'box') {
       const {a, b, axis, yaw, pitch} = origin.box;
       cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = [0, 1, 2].map(i => (a[i] + b[i]) / 2) as [number, number, number];
@@ -1650,6 +1665,8 @@ function extractEffects(
     if (wave) {
       cfg.kind = 'burst_wave'; cfg.wave = wave; cfg.per_second = null; delete cfg.windows;
     }
+    const gate = cfg.kind !== 'shape' && cfg.kind !== 'unknown' ? shared.effectGate?.(slot) : null;
+    if (gate) cfg.gate = gate;
     cfg.extra = info.extra;   // assigned last so the retained-extras key lands last
     configs[String(slot)] = cfg;
   }

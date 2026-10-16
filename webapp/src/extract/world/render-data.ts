@@ -164,6 +164,8 @@ export interface RenderMaterial {
 export interface StoryEnvironment {
   quest: string;
   states: number;
+  /** The quest variable the steps follow (its record), where kept. */
+  variable?: number;
   steps: {from: number; environment: RenderEnvironment}[];
 }
 

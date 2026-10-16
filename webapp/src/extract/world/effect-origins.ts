@@ -201,8 +201,26 @@ export interface CylinderOrigin {
 }
 export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'point'; point: PointOrigin}
   | {kind: 'segment'; segment: SegmentOrigin} | {kind: 'cylinder'; cylinder: CylinderOrigin} | {kind: 'box'; box: BoxOrigin}
-  | {kind: 'wander'; wander: {center: [number, number, number]; shape: WanderShapeValues}}
-  | {kind: 'coded'; coded: CodedOrigin};
+  | {kind: 'wander'; wander: {center: [number, number, number]; shape: WanderShapeValues}; cone?: ConeDirection}
+  | {kind: 'coded'; coded: CodedOrigin; cone?: ConeDirection};
+
+// The cone particles leave through, for shapes whose start point is bound but whose direction the record's shape
+// leaves unread (from 2026-10: weather falling over a whole room, say): its axis field, the yaw and pitch bounds'
+// fields (degrees) and the two fractions (azimuth, then polar), each a field of the uniform range class or the
+// particle's own draw keyed by its birth tick (`seeded`, the salt). Kept apart.
+export interface ConeDirectionBinding {
+  instance: number; axis: number; yaw: [number, number]; pitch: [number, number];
+  samples: [number | {seeded: number}, number | {seeded: number}]; uniformClass: number;
+}
+export function validEffectDirections(v: any): v is ConeDirectionBinding[] {
+  const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
+  const sample = (x: any) => bindingIndex(x) || (x && Number.isInteger(x.seeded) && x.seeded >= 0 && x.seeded < 2 ** 32);
+  return validBindingList(v, b => bindingIndex(b.axis) && bindingIndex(b.uniformClass) && pair(b.yaw) && pair(b.pitch)
+    && Array.isArray(b.samples) && b.samples.length === 2 && b.samples.every(sample));
+}
+/** A cone as read: the axis, the yaw and pitch ranges (degrees) and each fraction's salt (-1: the particle's own
+ *  draw). */
+export interface ConeDirection { axis: [number, number, number]; yaw: [number, number]; pitch: [number, number]; salts: [number, number] }
 
 // An origin the code makes from random draws, constants and its system's own numbers, its owner's class choosing the
 // case (from 2026-10: a streak straight up from the system, an area high over a room, say): per shape and owner
@@ -350,7 +368,9 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
   boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[],
   codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[], sourced?: RadialSourcedBinding[],
-  tabulated?: TabulatedOriginBinding[], perRecord?: PerRecordOriginBinding[]) {
+  tabulated?: TabulatedOriginBinding[], perRecord?: PerRecordOriginBinding[], cones?: ConeDirectionBinding[]) {
+  if (cones !== undefined && !validEffectDirections(cones)) throw Error('invalid effect direction bindings');
+  const coneOf = instanceLookup((cones || []).map(b => [b.instance, b] as const), objects);
   if (perRecord !== undefined && !validEffectOriginsPerRecord(perRecord)) throw Error('invalid effect per-record origin bindings');
   const recordRows = new Map<number, CodedOriginBinding | TabulatedOriginBinding>((perRecord || []).map(b => [b.slot, b] as const));
   if (tabulated !== undefined && !validEffectOriginsTabulated(tabulated)) throw Error('invalid effect tabulated origin bindings');
@@ -577,6 +597,27 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
   return (slot: number, ops: EffectExtra[], opsOf?: (slot: number) => EffectExtra[] | null): EffectOrigin | null => {
     const sb = sourcedOf(slot);
     const origin = sb ? readSourced(sb, ops, opsOf) : read(slot, ops, opsOf), d = directionOf(slot);
+    const cb = origin?.kind === 'coded' || origin?.kind === 'wander' ? coneOf(slot) : undefined;
+    if (cb && (origin?.kind === 'coded' || origin?.kind === 'wander')) {
+      const fields = new Map(ops.map(e => [e.op, e]));
+      const axis = effectVec3(fields.get(cb.axis));
+      const side = (bounds: [number, number], sample: number | {seeded: number}): {range: [number, number]; salt: number} | null => {
+        const lo = effectScalar(fields.get(bounds[0])), hi = effectScalar(fields.get(bounds[1]));
+        if (lo === null || hi === null) return null;
+        let fraction: [number, number] | null = [0, 1], salt = -1;
+        if (typeof sample === 'number') {
+          const f = fields.get(sample), n = effectScalar(f);
+          fraction = effectRange(f, cb.uniformClass) ?? (n === null ? null : [n, n]);
+        } else salt = sample.seeded;
+        if (!fraction) return null;
+        const range: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
+        return range.every(Number.isFinite) ? {range, salt} : null;
+      };
+      const yaw = side(cb.yaw, cb.samples[0]), pitch = side(cb.pitch, cb.samples[1]);
+      // (a cone that does not read leaves the start point bound and the direction as the shape reads it)
+      if (axis && yaw && pitch) return {...origin, cone: {axis, yaw: yaw.range, pitch: pitch.range, salts: [yaw.salt, pitch.salt]}};
+      return origin;
+    }
     if (!d || origin?.kind !== 'radial') return origin;
     const direction = effectVec3(ops.find(e => e.op === d.direction));
     return direction ? {kind: 'radial', radial: {...origin.radial, direction}} : null;

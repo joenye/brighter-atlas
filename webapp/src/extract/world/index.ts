@@ -34,6 +34,7 @@ import {effectLayout} from './effect-shape.js';
 import {groundPlaneLayout, roomGroundPlane, type GroundPlaneLayout} from './ground-plane.js';
 import {lightCarrier, restingLights, roomPointLights, type ShardSpawnLights} from './point-lights.js';
 import {createEffectPropertyReader, createEffectColourReader, createEffectColourTableReader} from './effect-properties.js';
+import {createEffectGateReader} from './effect-gates.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
 import { SpawnGraph } from './spawns.js';
@@ -818,7 +819,8 @@ export async function extractWorld({
         placementBindings?.effectDiscs, placementBindings?.effectSegments, placementBindings?.effectBoxes,
         placementBindings?.effectWanders, placementBindings?.effectRadialsCoded, placementBindings?.effectOriginsCoded,
         placementBindings?.effectOriginDirections, placementBindings?.effectRadialsSourced,
-        placementBindings?.effectOriginsTabulated, placementBindings?.effectOriginsPerRecord),
+        placementBindings?.effectOriginsTabulated, placementBindings?.effectOriginsPerRecord,
+        placementBindings?.effectDirections),
       effectSpeed: createEffectSpeedReader(placementBindings?.effectSpeeds, objects),
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
       effectColour: createEffectColourReader(placementBindings?.effectColours, objects, ab0, profile, pool.values),
@@ -826,6 +828,7 @@ export async function extractWorld({
         placementBindings?.effectColourTablesOwned),
       effectFields: createEffectFieldReader(placementBindings?.effectFields, objects, placementBindings?.effectPropertySources),
       effectWave: createEffectWaveReader(placementBindings?.effectWaves, objects, rowDecoder, pool.values),
+      effectGate: createEffectGateReader(placementBindings?.effectBurstGates, objects),
       effectMotion: (controller,hit,roomId) => {
         const motion=effectMotion(controller);
         if(!motion||!placementBindings?.rooms)return null;
@@ -947,7 +950,8 @@ export async function extractWorld({
           const steps = entry.steps.map(([from, offset]) => ({from, environment: read(offset < 0 ? own : archivedValue(ab0, profile, offset))}));
           const count = Array.isArray(states?.values) ? states!.values.length : entry.steps[entry.steps.length - 1][0] + 1;
           if (name && steps.every(st => st.environment)) {
-            story[roomId] = {quest: region ? `${name} (${region})` : name, states: count, steps: steps as StoryEnvironment['steps']};
+            story[roomId] = {quest: region ? `${name} (${region})` : name, states: count, steps: steps as StoryEnvironment['steps'],
+              variable: entry.variable};
           }
         }
       }
