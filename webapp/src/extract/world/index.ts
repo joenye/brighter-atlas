@@ -822,7 +822,7 @@ export async function extractWorld({
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
       effectColour: createEffectColourReader(placementBindings?.effectColours, objects, ab0, profile, pool.values),
       effectColourTable: createEffectColourTableReader(placementBindings?.effectColourTables, objects),
-      effectFields: createEffectFieldReader(placementBindings?.effectFields, objects),
+      effectFields: createEffectFieldReader(placementBindings?.effectFields, objects, placementBindings?.effectPropertySources),
       effectWave: createEffectWaveReader(placementBindings?.effectWaves, objects, rowDecoder, pool.values),
       effectMotion: (controller,hit,roomId) => {
         const motion=effectMotion(controller);

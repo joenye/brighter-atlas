@@ -1493,7 +1493,7 @@ function extractEffects(
         framed(emitter.sprite);
         for (const choice of (emitter.sprite_choices as any)?.sprites ?? []) framed(choice);
         emitters.push(emitter);
-        const fields = shared.effectFields?.(ref, ops);
+        const fields = shared.effectFields?.(ref, ops, (s) => decoded.get(s) ?? null);
         if (fields) applyEffectFields(emitter, fields);
         // (a speed the game computes: a uniform draw per particle, per second; a start colour it mixes by a draw)
         const blank = {speed: null, angularSpeed: null, acceleration: null, scale: null, rotation: null, color: null};

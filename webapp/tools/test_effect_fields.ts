@@ -112,5 +112,33 @@ try {
  ok(T.emitterSpriteDraws(emitter,configs).map((d:any)=>d.choice).join()==='0,1,2','bound selection draws every outcome');
  ok(T.emitterSpriteDraws(emitter,{...configs,2:{...configs[2],origin:undefined}}).length===0,'unbound selection stays hidden');
  ok(T.emitterSpriteDraws(literal,configs)[0].choice===-1,'single sprite');
+ // A property the record does not hold: from its source (a value worked out from the game's own draws, a field of
+ // the system that owns the emitter, or the emitter's own field), read the way the record's own field would be
+ {
+  const sources=[{instance:4,speed:[{value:[6600,7200],ticks:600},{op:31}],scale:[{value:[1,1.5]},null],
+   acceleration:[{owner:1,op:5},{op:34}],rotation:{value:20},angularSpeed:{owner:1,op:6}}];
+  ok(T.validEffectPropertySources(sources),'valid property sources');
+  ok(!T.validEffectPropertySources([{instance:4,speed:[{value:[1,2]},null]}]),'a rate needs its ticks');
+  ok(!T.validEffectPropertySources([{instance:4,acceleration:[{value:[1,2]},null]}]),'a vector has three numbers');
+  ok(!T.validEffectPropertySources([{instance:4,rotation:{owner:3,op:1}}]),'owner levels are 1 or 2');
+  ok(!T.validEffectPropertySources([...sources,...sources]),'one row per instance');
+  const open={instance:4,speed:[null,31],angularSpeed:null,acceleration:[null,null],scale:[null,null],rotation:null,color:[38,39]};
+  const own=[{op:0,kind:'scalar',tag:-85,value:1},...ops];
+  const system=[{op:5,kind:'typed',class:9,fields:[f(5,1),f(5,2),f(5,3)]},{op:6,kind:'rate',value:45,den:300}];
+  const readSources=T.createEffectFieldReader({classes,bindings:[open]},[{values:[0,4]},{values:[0,9]}],sources);
+  const got=readSources(0,own,(slot:number)=>slot===1?system:null);
+  ok(JSON.stringify(got.speed)===JSON.stringify({start:{value:[6600,7200],ticks:600},end:'start'}),'speed worked out, its end the record\'s marker');
+  ok(JSON.stringify(got.acceleration)===JSON.stringify({start:[1,2,3],end:'start'}),'acceleration from the system\'s field');
+  ok(got.scale===null,'no end anywhere: the scale stays unresolved');
+  ok(got.rotation===20&&JSON.stringify(got.angularSpeed)===JSON.stringify({value:45,ticks:300}),'rotation worked out, spin from the system');
+  ok(readSources(0,own)!.acceleration===null,'no system: no acceleration');
+  // (the end the build does not work out: the record's own end field)
+  const withEnd=T.createEffectFieldReader({classes,bindings:[{...open,scale:[null,35]}]},[{values:[0,4]}],sources);
+  ok(JSON.stringify(withEnd(0,own,()=>null).scale)===JSON.stringify({start:[1,1.5],end:[1.5,2]}),'scale end from the record');
+  // (no field binding at all: the sources alone)
+  const alone=T.createEffectFieldReader(undefined,[{values:[0,4]}],sources);
+  ok(alone.bound(0)&&alone(0,own,()=>system).rotation===20,'sources without field bindings');
+  ok(JSON.stringify(read(0,ops))===JSON.stringify(values),'records holding their properties read as before');
+ }
  console.log(`effect fields: ${checks} reader, colour, sampling order, choice, seek and basis checks passed`);
 }finally{await rm(tmp,{recursive:true,force:true});}

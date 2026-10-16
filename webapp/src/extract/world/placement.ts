@@ -9,7 +9,7 @@ import {validEffectColours, validEffectColourTables, type EffectColourMixBinding
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
 import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, validEffectOriginsCoded, validEffectOriginDirections, validEffectRadialsSourced, type OriginDirectionBinding, type RadialSourcedBinding, type WanderOriginBinding, type RadialCodedBinding, type CodedOriginBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
-import {validEffectFields, type EffectFieldData} from './effect-fields.js';
+import {validEffectFields, validEffectPropertySources, type EffectFieldData, type PropertySourceBinding} from './effect-fields.js';
 import {validEffectWaves, type EffectWaveData} from './effect-waves.js';
 import {validWaterData, type WaterDecodeData} from './water-materials.js';
 import {validRenderBuildData, type RenderBuildData} from './render-data.js';
@@ -53,6 +53,7 @@ export interface PlacementDecodeData {
   effectColourTables?: EffectColourTableBinding[];
   effectProperties?: EffectPropertyBinding[];
   effectFields?: EffectFieldData;
+  effectPropertySources?: PropertySourceBinding[];
   effectWaves?: EffectWaveData;
   water?: WaterDecodeData;
   render?: RenderBuildData;
@@ -128,6 +129,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectColourTables!==undefined&&!validEffectColourTables(data.effectColourTables))throw Error('invalid effect colour tables');
   if(data.effectProperties!==undefined&&!validEffectProperties(data.effectProperties))throw Error('invalid effect property bindings');
   if(data.effectFields!==undefined&&!validEffectFields(data.effectFields))throw Error('invalid effect field bindings');
+  if(data.effectPropertySources!==undefined&&!validEffectPropertySources(data.effectPropertySources))throw Error('invalid effect property sources');
   if(data.effectWaves!==undefined&&!validEffectWaves(data.effectWaves))throw Error('invalid effect wave bindings');
   if(data.water!==undefined&&!validWaterData(data.water))throw Error('invalid water bindings');
   if(data.render!==undefined&&!validRenderBuildData(data.render))throw Error('invalid render bindings');

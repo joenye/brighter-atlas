@@ -5,6 +5,7 @@
 import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
 import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
+import {ownerFields} from './effect-sources.js';
 
 // null marks a property whose value the game computes elsewhere.
 export interface EffectFieldBinding {
@@ -60,6 +61,38 @@ export function effectVec3(e: EffectExtra | undefined): [number, number, number]
   return e?.kind === 'vec3' && e.v.every(Number.isFinite) ? [...e.v] : null;
 }
 
+// Where a property the emitter's record does not hold comes from (per-build decode data): the emitter's own field, a
+// field of the system that owns it (owner level 1), or a value worked out from the game's own draws (a number, or a
+// uniform range per number; a rate also its ticks). Kept apart from the field bindings.
+export type PropertySource = {op: number} | {owner: number; op: number}
+  | {value: EffectSample | [EffectSample, EffectSample, EffectSample]; ticks?: number};
+export interface PropertySourceBinding {
+  instance: number;
+  speed?: [PropertySource | null, PropertySource | null];
+  acceleration?: [PropertySource | null, PropertySource | null];
+  scale?: [PropertySource | null, PropertySource | null];
+  rotation?: PropertySource;
+  angularSpeed?: PropertySource;
+}
+const sampleOk = (v: any) => Number.isFinite(v) || (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite));
+function validPropertySource(s: any, kind: 'scalar' | 'vector' | 'rate'): boolean {
+  if (s === null) return true;
+  if (!s || typeof s !== 'object') return false;
+  if ('value' in s) {
+    const ticks = s.ticks === undefined ? kind !== 'rate' : kind === 'rate' && Number.isInteger(s.ticks) && s.ticks > 0;
+    const value = kind === 'vector' ? Array.isArray(s.value) && s.value.length === 3 && s.value.every(sampleOk) : sampleOk(s.value);
+    return ticks && value;
+  }
+  return bindingIndex(s.op) && (s.owner === undefined || (Number.isInteger(s.owner) && s.owner >= 1 && s.owner <= 2));
+}
+export function validEffectPropertySources(v: any): v is PropertySourceBinding[] {
+  const pair = (p: any, kind: 'scalar' | 'vector' | 'rate') => p === undefined
+    || (Array.isArray(p) && p.length === 2 && p.every((s: any) => validPropertySource(s, kind)));
+  const one = (s: any, kind: 'scalar' | 'rate') => s === undefined || (s !== null && validPropertySource(s, kind));
+  return validBindingList(v, b => pair(b.speed, 'rate') && pair(b.acceleration, 'vector') && pair(b.scale, 'scalar')
+    && one(b.rotation, 'scalar') && one(b.angularSpeed, 'rate'));
+}
+
 export function validEffectFields(value: any): value is EffectFieldData {
   const field = (v: any) => v === null || bindingIndex(v);
   const pair = (v: any) => Array.isArray(v) && v.length === 2 && v.every(field);
@@ -69,13 +102,18 @@ export function validEffectFields(value: any): value is EffectFieldData {
       && [b.speed, b.acceleration, b.scale, b.color].every(pair));
 }
 
-export function createEffectFieldReader(data: EffectFieldData | undefined, objects: ConstructorRecord[]) {
+export function createEffectFieldReader(data: EffectFieldData | undefined, objects: ConstructorRecord[],
+  sources?: PropertySourceBinding[]) {
   if (data !== undefined && !validEffectFields(data)) throw Error('invalid effect field bindings');
+  if (sources !== undefined && !validEffectPropertySources(sources)) throw Error('invalid effect property sources');
   const bindingOf = instanceLookup((data?.bindings ?? []).map(b => [b.instance, b] as const), objects);
-  const classes = data?.classes;
-  const read = (slot: number, ops: EffectExtra[]): EffectFieldValues | null => {
-    const b = bindingOf(slot);
-    if (!b || !classes) return null;
+  const sourceOf = instanceLookup((sources ?? []).map(b => [b.instance, b] as const), objects);
+  const none = -1;   // (no value of any build has this class)
+  const classes = data?.classes ?? (sources?.length ? {range: none, rate: none, vector: none, colour: none} : undefined);
+  // opsOf: any record's fields by slot, for a value read from the system that owns the emitter
+  const read = (slot: number, ops: EffectExtra[], opsOf?: (slot: number) => EffectExtra[] | null): EffectFieldValues | null => {
+    const b = bindingOf(slot), src = sourceOf(slot);
+    if ((!b && !src) || !classes) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
     const sample = (e: EffectExtra | undefined): EffectSample | null => effectScalar(e) ?? effectRange(e, classes.range);
     const marker = (op: number | null, name: string) => {
@@ -107,17 +145,45 @@ export function createEffectFieldReader(data: EffectFieldData | undefined, objec
       const end = marker(pair[1], name) ? 'start' as const : read(fields.get(pair[1]));
       return start !== null && end !== null ? {start, end} : null;
     };
-    return {
+    const values: EffectFieldValues = b ? {
       speed: endpoints(b.speed, '$speed0', rate),
       angularSpeed: b.angularSpeed === null ? null : rate(fields.get(b.angularSpeed)),
       acceleration: endpoints(b.acceleration, '$acceleration0', vector),
       scale: endpoints(b.scale, '$scale0', sample),
       rotation: b.rotation === null ? null : sample(fields.get(b.rotation)),
       color: endpoints(b.color, '$color0', colour),
+    } : {speed: null, angularSpeed: null, acceleration: null, scale: null, rotation: null, color: null};
+    if (!src) return values;
+    // (a property the record does not hold: from its source, read the way the record's own field would be)
+    const owners = ownerFields(ops, opsOf);
+    const fieldOf = (s: {op: number; owner?: number}) => s.owner ? owners(s.owner)?.get(s.op) : fields.get(s.op);
+    const one = <T>(s: PropertySource | null | undefined, from: (e: EffectExtra | undefined) => T | null,
+      made: (s: {value: any; ticks?: number}) => T | null): T | null =>
+      !s ? null : 'value' in s ? made(s) : from(fieldOf(s));
+    // (an end the build does not work out: the record's own end field, where the binding names one)
+    const pair = <T>(p: [PropertySource | null, PropertySource | null] | undefined, name: string,
+      from: (e: EffectExtra | undefined) => T | null, made: (s: {value: any; ticks?: number}) => T | null,
+      ownEnd: number | null | undefined): EffectEndpoints<T> | null => {
+      if (!p) return null;
+      const start = one(p[0], from, made);
+      if (start === null) return null;
+      const endSource: PropertySource | null = p[1] ?? (ownEnd === null || ownEnd === undefined ? null : {op: ownEnd});
+      const e = endSource && !('value' in endSource) ? fieldOf(endSource) : undefined;
+      const end = e?.kind === 'symbol' && e.name === name ? 'start' as const : one(endSource, from, made);
+      return end === null ? null : {start, end};
     };
+    const madeSample = (s: {value: any}) => s.value as EffectSample;
+    const madeRate = (s: {value: any; ticks?: number}) => ({value: s.value as EffectSample, ticks: s.ticks!});
+    const madeVector = (s: {value: any}) => s.value as [EffectSample, EffectSample, EffectSample];
+    if (!values.speed) values.speed = pair(src.speed, '$speed0', rate, madeRate, b?.speed[1]);
+    if (!values.angularSpeed) values.angularSpeed = one(src.angularSpeed, rate, madeRate);
+    if (!values.acceleration) values.acceleration = pair(src.acceleration, '$acceleration0', vector, madeVector, b?.acceleration[1]);
+    if (!values.scale) values.scale = pair(src.scale, '$scale0', sample, madeSample, b?.scale[1]);
+    if (values.rotation === null || values.rotation === undefined) values.rotation = one(src.rotation, sample, madeSample);
+    return values;
   };
   // Whether the build's decode data knows this row as a particle emitter.
-  const bound = (slot: number): boolean => bindingOf(slot) !== undefined;
+  const bound = (slot: number): boolean => bindingOf(slot) !== undefined || sourceOf(slot) !== undefined;
   return Object.assign(read, {bound});
 }
 
