@@ -170,8 +170,34 @@ interface InstanceRec {
   /** A resting set's flourish: drawn only while one of its plays is out (time counts from that play's start),
    *  nothing born after `duration`. */
   flourish?: { schedule: FlourishSchedule; pick: number; duration: number; span: number };
+  /** Shown on request though it plays only now and then (a one-shot, or an action that does not loop): it
+   *  starts again every `repeat` ticks. */
+  repeat?: number;
   // One entry per drawn sprite outcome; a selecting emitter repeats its sim.
   emitters: { sim: EmitterSim; batchKey: string; choice: number }[];
+}
+
+/** The kinds of effect a world view can show. `rest`: what plays with nobody acting; `extras`: a resting set's
+ *  occasional flourishes; `states`: what the owner plays in its other states (another stage of a quest, a
+ *  plant's other growth stages); `actions`: what it plays while someone uses it (skilling, opening); `oneshot`:
+ *  effects fired by an event. */
+export type EffectKind = 'rest' | 'extras' | 'states' | 'actions' | 'oneshot';
+export const EFFECT_KINDS: readonly EffectKind[] = ['rest', 'extras', 'states', 'actions', 'oneshot'];
+export const DEFAULT_EFFECT_KINDS: readonly EffectKind[] = ['rest', 'extras'];
+
+/** Which kind a room attachment is. */
+export function effectKindOf(att: any, system: any, flourish: boolean): EffectKind {
+  if (system?.triggered && !att?.active) return 'oneshot';
+  if (flourish) return 'extras';
+  if (att?.default_active === false) return att.inactive === 'action' ? 'actions' : 'states';
+  return 'rest';
+}
+
+/** How often an effect shown on request though it plays only now and then starts again: its cycle and its
+ *  particles' longest life, then a short pause (at least ten seconds of ticks overall). */
+function repeatTicks(system: any): number {
+  const life = Math.max(0, ...(system?.emitters ?? []).map((e: any) => Number(e.life?.ticks) || 0));
+  return Math.max(600, (Number(system?.cycle_ticks) || 0) + life + 120);
 }
 
 /** Mean of an instance's emitter spawn centres, in the owner's local frame.
@@ -244,6 +270,8 @@ export interface WorldEffectsLayerOptions {
   // Defaults to the scene.ts default so a caller that has not wired the
   // real value still gets a self-consistent frame.
   meshForwardQuarterTurns?: number;
+  /** The kinds of effect shown (default: what plays at rest and its occasional extras). */
+  kinds?: readonly EffectKind[];
 }
 
 export class WorldEffectsLayer {
@@ -295,7 +323,7 @@ export class WorldEffectsLayer {
 
   constructor({
     root, doc, url, textures, tileUnits, layerUnits,
-    meshForwardQuarterTurns = DEFAULT_MESH_FORWARD_QUARTER_TURNS,
+    meshForwardQuarterTurns = DEFAULT_MESH_FORWARD_QUARTER_TURNS, kinds,
   }: WorldEffectsLayerOptions) {
     this.root = root;
     this.doc = doc;
@@ -306,6 +334,7 @@ export class WorldEffectsLayer {
     this._layerUnits = layerUnits;
     this._meshForwardQuarterTurns = meshForwardQuarterTurns;
     this._systemsBySlot = new Map((doc?.systems || []).map((s) => [s.slot, s]));
+    this._kinds = new Set(kinds ?? DEFAULT_EFFECT_KINDS);
     this._proxyGeometry = new THREE.SphereGeometry(1, 6, 4);
     const proxyRadius = Math.max(12, tileUnits * 0.05);
     this._proxyGeometry.scale(proxyRadius, proxyRadius, proxyRadius);
@@ -357,7 +386,10 @@ export class WorldEffectsLayer {
       // active attachment of the same system. (A flourish of the owner's
       // resting set is off as a loop but plays on its schedule.)
       const flourish = this._flourishFor(id, att);
-      if (att.default_active === false && !flourish) continue;
+      // (the kinds of effect shown: what plays at rest, its occasional extras, the owner's other states, the
+      // actions it plays when used, one-shots; see effectKindOf)
+      const kind = effectKindOf(att, this._systemsBySlot.get(Number(att.system)), !!flourish);
+      if (!this._kinds.has(kind)) continue;
       // controller variants repeat (occurrence, system) pairs: one instance each
       const key = `${att.occurrence}|${att.system}`;
       if (seen.has(key)) continue;
@@ -369,8 +401,8 @@ export class WorldEffectsLayer {
       // sense mid-action: a chest's item-spawn burst a tile out in the room,
       // a forager's debris at the player's chest height. The world views show
       // ambient effects only.
-      if (system.triggered && !att.active) continue;
-      if (opts.loopOnly && !system.loop) continue;
+      if (system.triggered && !att.active && kind !== 'oneshot') continue;
+      if (opts.loopOnly && !system.loop && kind === 'rest') continue;
       const cell = Array.isArray(att.cell) ? att.cell : [0, 0, 0];
       // Static controller root, using the same owner-frame composition as
       // scenery. New extractions leave matrix null: individual component
@@ -403,6 +435,8 @@ export class WorldEffectsLayer {
         key: recKey, occurrence: Number(att.occurrence), animation: null, configureAnimation: () => {},
         phase: Number.isFinite(Number(att.phase)) ? Number(att.phase) : 0,
         ...(flourish ? { flourish } : {}),
+        ...(kind !== 'rest' && kind !== 'extras' && (!system.loop || system.triggered)
+          ? { repeat: repeatTicks(system) } : {}),
         system, anchor, anchorOriginal, edit, proxy: null,
         modulation: mod, emitters: [],
       };
@@ -496,6 +530,7 @@ export class WorldEffectsLayer {
   private _instanceTime(rec: InstanceRec): number {
     if (rec.edit.paused) return rec.edit.frozenT;
     const t = (rec.animation?.time() ?? this.clock.t) + rec.edit.clockOffset + rec.phase;
+    if (rec.repeat) return t % rec.repeat;
     if (!rec.flourish) return t;
     // (a flourish: ticks since its latest play began, -1 while none is out)
     const start = rec.flourish.schedule.lastStart(rec.flourish.pick, t, rec.flourish.span);
@@ -504,6 +539,9 @@ export class WorldEffectsLayer {
 
   // One schedule per placement and resting set, shared by the set's flourishes there.
   private readonly _flourishSchedules = new Map<string, FlourishSchedule>();
+  private _kinds: Set<EffectKind>;
+  /** The kinds of effect shown (rooms added after this take it; a view re-adds its rooms to apply it). */
+  get kinds(): ReadonlySet<EffectKind> { return this._kinds; }
   private _flourishFor(roomId: number, att: any): InstanceRec['flourish'] | null {
     const f = att?.flourish;
     if (!f || !Array.isArray(f.flourishes) || !Array.isArray(f.wait) || f.wait.length !== 2) return null;

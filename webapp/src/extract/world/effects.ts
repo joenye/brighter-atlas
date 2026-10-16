@@ -254,6 +254,9 @@ export interface WorldEffectsDoc {
              // False retains a catalogue candidate that is not selected by
              // this owner's stored default. Omission means unresolved.
              default_active?: boolean;
+             // Why a candidate is not active at rest: one of the actions the owner plays when someone uses it
+             // (`action`), or another state of the owner (`state`). Absent on documents from before it was kept.
+             inactive?: 'action' | 'state';
              color_override?: [number, number, number, number];
              rig?: number | 'transform' | null;
              motion?: EffectAttachmentMotion;
@@ -1824,6 +1827,10 @@ function extractEffects(
             ...(selected ? { default_active: selected.controllers.includes(controller ?? system) }
               : candidates && !candidates.includes(controller ?? system) ? { default_active: false }
               : !candidates && controller !== null && setOnlyOf(slot!).has(controller) ? { default_active: false } : {}),
+            ...((selected ? !selected.controllers.includes(controller ?? system)
+              : candidates ? !candidates.includes(controller ?? system)
+              : controller !== null && setOnlyOf(slot!).has(controller))
+              ? { inactive: controller !== null && setOnlyOf(slot!).has(controller) ? 'action' as const : 'state' as const } : {}),
             ...(flourish ? { flourish } : {}),
           });
         }

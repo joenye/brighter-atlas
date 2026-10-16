@@ -71,7 +71,7 @@ import {
 } from './world/spawn-anim.js';
 import { EffectBoneAnimation } from './world/effects-animation.js';
 import { WorldEffectsLayer, effectInstanceKey } from './world/effects-layer.js';
-import type { EffectInstanceEdit } from './world/effects-layer.js';
+import type { EffectInstanceEdit, EffectKind } from './world/effects-layer.js';
 import { spriteDrawOf } from './world/effects-sprite.js';
 import type { AppStore, IndexEntry } from '../store.js';
 
@@ -144,6 +144,11 @@ const DEFAULT_STATE = Object.freeze({
   glights: true,                    // game shading: lamps, torches and fires
   gfog: true,                       // game shading: the fog of the rooms that have one
   effects: true,
+  fxrest: true,                     // effects: what plays at rest
+  fxextras: true,                   // ... the occasional extras of a resting set
+  fxstates: false,                  // ... what owners play in their other states
+  fxactions: false,                 // ... what owners play while someone uses them
+  fxoneshot: false,                 // ... effects fired by an event, repeated
   idle: true,
   wcolor: 'auto',
   wopacity: 50,
@@ -911,6 +916,29 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     applyWater();   // authored-empty/z passes re-show hidden curtains
   };
 
+  // the kinds of effect shown, under Effects (a change re-adds the rooms' effects)
+  const EFFECT_KIND_ROWS: [string, EffectKind, string, string][] = [
+    ['fxrest', 'rest', 'At rest', 'What plays with nobody acting, as the game shows a room'],
+    ['fxextras', 'extras', 'Occasional extras', 'The extras a resting object plays now and then'],
+    ['fxstates', 'states', 'Other states', "What objects play in their other states (another stage of a quest, a plant's other growth stages)"],
+    ['fxactions', 'actions', 'Skill and use effects', 'What objects play while someone uses them (skilling, opening, lighting), shown looping'],
+    ['fxoneshot', 'oneshot', 'One-off effects', 'Effects fired by an event, repeated every few seconds'],
+  ];
+  const effectKinds = (): EffectKind[] => EFFECT_KIND_ROWS.filter(([key]) => state[key]).map(([, kind]) => kind);
+  const effectKindChecks = EFFECT_KIND_ROWS.map(([key, , label, title]) => {
+    const row = check(key, label, () => {
+      // (the layer takes its kinds when made: a fresh one with the new set)
+      effectsLayer?.dispose(); effectsLayer = null;
+      activeEffectRooms.clear();
+      for (const id of [...actorEffectRooms.keys()]) dropActorEffects(id);
+      if (effectPinned) clearEffectInspection(true);
+      applyEffects();
+    }, { title });
+    row.classList.add('wp-sub');
+    return row;
+  });
+  const syncEffectKinds = () => { for (const row of effectKindChecks) row.hidden = !state.effects; };
+  syncEffectKinds();
   const categoryCheck = (category: string) => check(category, CATEGORY_LABELS[category][0], () => {
     clearInspection(true);
     applyCategories();
@@ -918,8 +946,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // what the room is shown with (the rest of the old Visible list is in Debug and Game shading)
   const visSection = section('Show',
     ...WORLD_CATEGORIES.filter((category: string) => category !== 'components').map(categoryCheck),
-    check('effects', 'Effects', applyEffects,
+    check('effects', 'Effects', () => { syncEffectKinds(); applyEffects(); },
       { swatch: '#e8b04c', title: 'Ambient particle effects recovered from this game version' }),
+    ...effectKindChecks,
     allMode ? null : check('idle', 'Resting animations', applyIdle,
       { swatch: '#c9a0dc', title: 'NPCs, enemies and animals play the animation they rest in (standing, sitting, lying in wait). Off: each holds its resting pose.' }),
     allMode ? check('names', 'Room names', () => applyNames(),
@@ -1976,6 +2005,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         tileUnits: world.tileUnits,
         layerUnits: world.layerUnits,
         meshForwardQuarterTurns: world.meshForwardQuarterTurns,
+        kinds: effectKinds(),
         // Merged mode activates far more room effect sets than a lone room
         // ever holds at once, and the alive budget must thin proportionally
         // across all of them, not per room.
