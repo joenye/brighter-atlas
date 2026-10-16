@@ -72,6 +72,7 @@ import {
 import { EffectBoneAnimation } from './world/effects-animation.js';
 import { WorldEffectsLayer, effectInstanceKey } from './world/effects-layer.js';
 import type { EffectInstanceEdit, EffectKind } from './world/effects-layer.js';
+import { makeLabel, refreshLabels, disposeLabel, LabelDeclutter, ROOM_LABEL, NPC_LABEL } from './world/labels.js';
 import { spriteDrawOf } from './world/effects-sprite.js';
 import type { AppStore, IndexEntry } from '../store.js';
 
@@ -2357,6 +2358,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   function applyRenderScale(): void {
     renderer.setPixelRatio((devicePixelRatio || 1) * (RENDER_SCALES[state.rscale] ?? 1));
     (scene3d as any)._resize();
+    // (labels drawn again for the new pixel ratio: texel for pixel)
+    refreshLabels(namesGroup, renderer.getPixelRatio());
+    refreshLabels(spawnNamesGroup, renderer.getPixelRatio());
   }
   const scaleLabel = (v: number) => `${Math.round((RENDER_SCALES[v] ?? 1) * 100)}%`;
   function applyCull(): void {
@@ -5141,47 +5145,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // after the index resolves, toggled purely by group visibility, released on
   // destroy.
   let namesGroup: any = null;
-  function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-  }
-  // Text sprite factory shared by room names and NPC-spawn names. The defaults
-  // ARE the room-name look (fontSize 34, scale 0.03, light text): spawn labels
-  // pass smaller values and the category tint, so room names stay byte-identical.
-  function labelSprite(text: string, {
-    fontSize = 34, scale = 0.03, color = '#eef2f7',
-  }: { fontSize?: number; scale?: number; color?: string } = {}): THREE.Sprite {
-    const pad = 10;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
-    ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
-    canvas.width = Math.ceil(ctx.measureText(text).width) + pad * 2;
-    canvas.height = fontSize + pad * 2;
-    ctx.font = `600 ${fontSize}px system-ui, sans-serif`;   // reset by the resize
-    ctx.fillStyle = 'rgba(10,12,16,.72)';
-    roundRect(ctx, 0, 0, canvas.width, canvas.height, 8);
-    ctx.fill();
-    ctx.fillStyle = color;
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, pad, canvas.height / 2 + 1);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.minFilter = THREE.LinearFilter;
-    texture.anisotropy = 4;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      // fog off: labels are UI text (already depth-test-off). Distance fog
-      // would wash far room names into the background colour
-      map: texture, depthTest: false, transparent: true, fog: false,
-    }));
-    sprite.renderOrder = 999;   // painted after all scenery, never covered
-    sprite.scale.set(canvas.width * scale, canvas.height * scale, 1);
-    return sprite;
-  }
+  // (labels kept from piling on one another: one for the view, made with its first labels)
+  let labelDeclutter: LabelDeclutter | null = null;
+  const declutter = (): LabelDeclutter => (labelDeclutter ??= new LabelDeclutter(scene3d.scene));
   function buildNameSprites(): void {
     if (!allMode || !worldFrame || namesGroup || destroyed) return;
     namesGroup = new THREE.Group();
@@ -5191,7 +5157,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       const frame = worldFrame.frames.get(Number(room.id));
       const name = room.name ? String(room.name) : '';
       if (!frame || !name) continue;
-      const sprite = labelSprite(name);
+      const sprite = makeLabel(name, ROOM_LABEL, renderer.getPixelRatio());
       // displayRoot space is three Y-up tiles: (x, height, z)
       sprite.position.set(
         frame.x + worldFrame.ox + frame.w / 2,
@@ -5205,6 +5171,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     namesGroup.matrixAutoUpdate = false;
     namesGroup.updateMatrix();
     displayRoot.add(namesGroup);
+    declutter().add(namesGroup);
   }
   function applyNames(): void {
     if (namesGroup) namesGroup.visible = !!state.names;
@@ -5262,7 +5229,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         p.x += offX;   // room-local -> raw world, exactly as the overlay bake
         p.y += offY;
         p.applyMatrix4(world.root.matrix);   // raw world -> displayRoot-local
-        const sprite = labelSprite(name, { fontSize: 22, scale: 0.017, color: '#f0b49c' });
+        const sprite = makeLabel(name, NPC_LABEL, renderer.getPixelRatio());
         sprite.position.set(p.x, p.y + SPAWN_LABEL_HEIGHT, p.z);
         sprite.matrixAutoUpdate = false;   // static label: compose once
         sprite.updateMatrix();
@@ -5272,16 +5239,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     spawnNamesGroup.matrixAutoUpdate = false;
     spawnNamesGroup.updateMatrix();
     displayRoot.add(spawnNamesGroup);
+    declutter().add(spawnNamesGroup);
   }
   function applySpawnNames(): void {
     if (spawnNamesGroup) spawnNamesGroup.visible = !!state.spawnnames;
   }
   function disposeSpawnNameSprites(): void {
     if (!spawnNamesGroup) return;
-    for (const sprite of spawnNamesGroup.children) {
-      sprite.material.map?.dispose();
-      sprite.material.dispose();
-    }
+    for (const sprite of spawnNamesGroup.children) disposeLabel(sprite);
+    labelDeclutter?.remove(spawnNamesGroup);
     spawnNamesGroup.removeFromParent();
     spawnNamesGroup.clear();
     spawnNamesGroup = null;
@@ -5486,10 +5452,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
 
   function disposeNameSprites(): void {
     if (!namesGroup) return;
-    for (const sprite of namesGroup.children) {
-      sprite.material.map?.dispose();
-      sprite.material.dispose();
-    }
+    for (const sprite of namesGroup.children) disposeLabel(sprite);
+    labelDeclutter?.remove(namesGroup);
     namesGroup.removeFromParent();
     namesGroup.clear();
     namesGroup = null;
