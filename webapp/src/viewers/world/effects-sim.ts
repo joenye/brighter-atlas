@@ -422,7 +422,7 @@ export class EmitterSim {
     const fields = emitter.fields ?? null;
     const sampled = (v: unknown): boolean => Array.isArray(v) && v.length === 2 && typeof v[0] === 'number';
     const anySampled = (v: unknown): boolean => sampled(v) || (Array.isArray(v) && v.some(sampled));
-    const colourSampled = (c: EffectColourSample | 'start' | undefined) => !!c && c !== 'start' && ('ahsl' in c || 'mix' in c);
+    const colourSampled = (c: EffectColourSample | 'start' | undefined) => !!c && c !== 'start' && ('ahsl' in c || 'mix' in c || 'table' in c);
     this._sampledColour = !Number.isFinite(emitter.color_override_alpha) && !!fields?.color
       && (colourSampled(fields.color.start) || colourSampled(fields.color.end));
     this._perParticle = !!fields && (anySampled(fields.speed?.start.value) || (fields.speed?.end !== 'start' && anySampled(fields.speed?.end?.value))
@@ -699,6 +699,8 @@ export class EmitterSim {
     if (this._sampledColour) {
       const rgba = (c: EffectColourSample): number[] => {
         if ('rgba' in c) return c.rgba.map(byteChannel);
+        // (one of equally likely colours)
+        if ('table' in c) return c.table[Math.min(c.table.length - 1, Math.floor(draw([0, 1]) * c.table.length))].map(byteChannel);
         if ('mix' in c) {
           // (each channel straight, or the colour premultiplied by its alpha and divided back after)
           const t = draw([0, 1]), [p, q] = c.mix, s = c.scale ?? [1, 1, 1, 1];

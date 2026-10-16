@@ -37,7 +37,7 @@ import type {RadialOrigin, createEffectOriginReader} from './effect-origins.js';
 import type {EffectFieldValues, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
-import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader, type createEffectColourReader} from './effect-properties.js';
+import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader, type createEffectColourReader, type createEffectColourTableReader} from './effect-properties.js';
 import { PoolDecoder } from './value-pool.js';
 import type { PoolNode } from './value-pool.js';
 import type { WorldProfile, WorldProfileSelector } from './profile.js';
@@ -305,6 +305,7 @@ export interface WorldEffectsShared {
   effectOrigin?: ReturnType<typeof createEffectOriginReader>;
   effectProperties?: ReturnType<typeof createEffectPropertyReader>;
   effectColour?: ReturnType<typeof createEffectColourReader>;
+  effectColourTable?: ReturnType<typeof createEffectColourTableReader>;
   effectFields?: ReturnType<typeof createEffectFieldReader>;
   effectSpeed?: ReturnType<typeof createEffectSpeedReader>;
   effectWave?: ReturnType<typeof createEffectWaveReader>;
@@ -1502,6 +1503,13 @@ function extractEffects(
           emitter.fields = {...(emitter.fields ?? blank), color: {start: {mix: [mix.from, mix.to], premultiplied: mix.premultiplied,
             ...(mix.scale ? {scale: mix.scale} : {})}, end: 'start'}};
           emitter.color0 = null; emitter.color1 = null;
+        }
+        // (a start colour the game draws in code: one of a table's equally likely colours per particle; its end
+        // colour, where the record names none of its own, is the same)
+        const table = !mix && !emitter.color0 ? shared.effectColourTable?.(ref) : null;
+        if (table) {
+          emitter.fields = {...(emitter.fields ?? blank), color: {start: {table}, end: emitter.color1 ? {rgba: emitter.color1.rgba} : 'start'}};
+          emitter.color1 = null;
         }
         const scales = fields?.scale ?? shared.effectScales?.(ref, ops);
         if (scales) {

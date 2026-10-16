@@ -31,7 +31,8 @@ export interface EffectRateSample { value: EffectSample; ticks: number }
 /** `mix`: a colour the game mixes from two by a uniform draw per particle (each channel straight, or premultiplied by
  *  alpha), times `scale` channel by channel. */
 export type EffectColourSample = {rgba: [number, number, number, number]} | {ahsl: [EffectSample, EffectSample, EffectSample, EffectSample]}
-  | {mix: [[number, number, number, number], [number, number, number, number]]; premultiplied: boolean; scale?: [number, number, number, number]};
+  | {mix: [[number, number, number, number], [number, number, number, number]]; premultiplied: boolean; scale?: [number, number, number, number]}
+  | {table: [number, number, number, number][]};
 /** A second endpoint of 'start' repeats the first particle's own sample. */
 export interface EffectEndpoints<T> { start: T; end: T | 'start' }
 // Absent: no binding for this emitter. null: bound but not a supported value.

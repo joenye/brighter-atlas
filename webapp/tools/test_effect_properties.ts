@@ -8,7 +8,17 @@ const tmp=await mkdtemp(path.join(os.tmpdir(),'atlas-effect-properties-'));
 try {
   const file=path.join(tmp,'properties.mjs');
   await build({entryPoints:[path.resolve(import.meta.dirname,'../src/extract/world/effect-properties.ts')],bundle:true,platform:'node',format:'esm',outfile:file});
-  const {createEffectPropertyReader,validEffectProperties,effectTimingDurations}=await import(pathToFileURL(file).href);
+  const {createEffectPropertyReader,validEffectProperties,effectTimingDurations,createEffectColourTableReader,validEffectColourTables}=await import(pathToFileURL(file).href);
+  // start colours drawn in code: a table of equally likely colours per emitter instance
+  const tableBinding={instance:8,colours:[[0.25,0.5,0.75,1],[1,1,1,0.4]]};
+  assert(validEffectColourTables([tableBinding]));
+  for(const bad of [{...tableBinding,colours:[[0,0,0,1]]},{...tableBinding,colours:[[0,0,0]] .concat([[0,0,0]])},{...tableBinding,colours:[[2,0,0,1],[0,0,0,1]]}])
+    assert(!validEffectColourTables([bad]));
+  assert(!validEffectColourTables([tableBinding,tableBinding]));
+  const tableRead=createEffectColourTableReader([tableBinding],[{values:[0,8]},{values:[0,9]}]);
+  assert.deepEqual(tableRead(0),[[0.25,0.5,0.75,1],[1,1,1,0.4]]);
+  assert(!tableRead(1));
+  assert(!createEffectColourTableReader(undefined,[{values:[0,8]}])(0));
   const bytes=new Uint8Array(18),view=new DataView(bytes.buffer);bytes[1]=21;
   [0.25,0.5,0.75,0.8].forEach((v,i)=>view.setFloat32(2+i*4,v));
   const binding={instance:8,color:{start:1,end:18,alphaScale:0.25,systemField:7},speedField:12,angularSpeedField:4};

@@ -113,6 +113,18 @@ export function validEffectColours(values: any): values is EffectColourMixBindin
 }
 export type EffectColourMix = {from: [number, number, number, number]; to: [number, number, number, number];
   premultiplied: boolean; scale?: [number, number, number, number]};
+/** A start colour the game makes in code from draws alone: equally likely colours (red, green, blue, alpha), from
+ *  per-build decode data. */
+export interface EffectColourTableBinding { instance: number; colours: [number, number, number, number][] }
+export function validEffectColourTables(values: any): values is EffectColourTableBinding[] {
+  return validBindingList(values, v => Array.isArray(v.colours) && v.colours.length >= 2 && v.colours.length <= 256
+    && v.colours.every((c: any) => Array.isArray(c) && c.length === 4 && c.every((n: any) => Number.isFinite(n) && n >= 0 && n <= 1)));
+}
+export function createEffectColourTableReader(bindings: EffectColourTableBinding[] | undefined, objects: ConstructorRecord[]) {
+  if (bindings !== undefined && !validEffectColourTables(bindings)) throw Error('invalid effect colour tables');
+  return instanceLookup(new Map((bindings ?? []).map(b => [b.instance, b.colours.map(c => [...c] as [number, number, number, number])])), objects);
+}
+
 export function createEffectColourReader(bindings: EffectColourMixBinding[] | undefined,
   objects: ConstructorRecord[], bytes: Uint8Array, profile: WorldProfile, pool: any[]) {
   if (bindings !== undefined && !validEffectColours(bindings)) throw Error('invalid effect colour bindings');

@@ -5,7 +5,7 @@ import {validEffectScales, type EffectScaleBinding} from './effect-scales.js';
 import {validEffectWindows, type EffectWindowBinding} from './effect-windows.js';
 import {validEffectSprites, type EffectSpriteBinding} from './effect-sprites.js';
 import {validEffectSpeeds, type EffectSpeedBinding} from './effect-fields.js';
-import {validEffectColours, type EffectColourMixBinding} from './effect-properties.js';
+import {validEffectColours, validEffectColourTables, type EffectColourMixBinding, type EffectColourTableBinding} from './effect-properties.js';
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
 import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
@@ -45,6 +45,7 @@ export interface PlacementDecodeData {
   effectBoxes?: BoxOriginBinding[];
   effectSpeeds?: EffectSpeedBinding[];
   effectColours?: EffectColourMixBinding[];
+  effectColourTables?: EffectColourTableBinding[];
   effectProperties?: EffectPropertyBinding[];
   effectFields?: EffectFieldData;
   effectWaves?: EffectWaveData;
@@ -114,6 +115,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectBoxes!==undefined&&!validEffectBoxes(data.effectBoxes))throw Error('invalid effect box bindings');
   if(data.effectSpeeds!==undefined&&!validEffectSpeeds(data.effectSpeeds))throw Error('invalid effect speed bindings');
   if(data.effectColours!==undefined&&!validEffectColours(data.effectColours))throw Error('invalid effect colour bindings');
+  if(data.effectColourTables!==undefined&&!validEffectColourTables(data.effectColourTables))throw Error('invalid effect colour tables');
   if(data.effectProperties!==undefined&&!validEffectProperties(data.effectProperties))throw Error('invalid effect property bindings');
   if(data.effectFields!==undefined&&!validEffectFields(data.effectFields))throw Error('invalid effect field bindings');
   if(data.effectWaves!==undefined&&!validEffectWaves(data.effectWaves))throw Error('invalid effect wave bindings');
