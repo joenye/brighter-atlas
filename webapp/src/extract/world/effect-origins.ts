@@ -149,7 +149,33 @@ export interface CylinderOrigin {
   pitch: [number, number];
 }
 export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'point'; point: PointOrigin}
-  | {kind: 'segment'; segment: SegmentOrigin} | {kind: 'cylinder'; cylinder: CylinderOrigin} | {kind: 'box'; box: BoxOrigin};
+  | {kind: 'segment'; segment: SegmentOrigin} | {kind: 'cylinder'; cylinder: CylinderOrigin} | {kind: 'box'; box: BoxOrigin}
+  | {kind: 'wander'; wander: {center: [number, number, number]; shape: WanderShapeValues}};
+
+// A wandering source (from 2026-10): each batch of `period` particles spawns about one seeded spot along a tilted
+// streak (angle round the centre, tilt, half length and sign, height, base radius). Each value is a multilinear
+// polynomial over seeded draws (the batch's or the particle's place in it, with a salt); its terms name the draws by
+// bit mask, the record's fields they multiply (scalar fields, by number) and a coefficient. Kept apart.
+export type WanderDraw = ['cycle' | 'index', number];
+export interface WanderValueBinding { draws: WanderDraw[]; terms: [number, number[], number][] }
+export interface WanderOriginBinding {
+  instance: number; center: number; period: number;
+  values: Record<'angle' | 'tilt' | 'amp' | 'height' | 'base', WanderValueBinding>;
+}
+/** A wander value with the record's numbers in: coefficient k for the product of the draws whose bits k sets. */
+export interface WanderValue { draws: WanderDraw[]; coef: number[] }
+export type WanderShapeValues = {period: number} & Record<'angle' | 'tilt' | 'amp' | 'height' | 'base', WanderValue>;
+const WANDER_VALUES = ['angle', 'tilt', 'amp', 'height', 'base'] as const;
+export function validEffectWanders(v: any): v is WanderOriginBinding[] {
+  const value = (x: any) => x && Array.isArray(x.draws) && x.draws.length <= 6
+    && x.draws.every((d: any) => Array.isArray(d) && d.length === 2 && (d[0] === 'cycle' || d[0] === 'index')
+      && Number.isInteger(d[1]) && d[1] >= 0 && d[1] < 2 ** 32)
+    && Array.isArray(x.terms) && x.terms.length <= 4096 && x.terms.every((t: any) => Array.isArray(t) && t.length === 3
+      && Number.isInteger(t[0]) && t[0] >= 0 && t[0] < 1 << x.draws.length && Array.isArray(t[1]) && t[1].length <= 4
+      && t[1].every(bindingIndex) && Number.isFinite(t[2]));
+  return validBindingList(v, b => bindingIndex(b.center) && Number.isInteger(b.period) && b.period > 0 && b.period <= 65536
+    && b.values && WANDER_VALUES.every(k => value(b.values[k])));
+}
 
 export function validEffectCylinders(v: any): v is CylinderOriginBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
@@ -186,7 +212,9 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
 }
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
-  boxes?: BoxOriginBinding[]) {
+  boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[]) {
+  if (wanders !== undefined && !validEffectWanders(wanders)) throw Error('invalid effect wander bindings');
+  const wanderOf = instanceLookup((wanders || []).map(b => [b.instance, b] as const), objects);
   if (bindings !== undefined && !validEffectOrigins(bindings)) throw Error('invalid effect origin bindings');
   if (cylinders !== undefined && !validEffectCylinders(cylinders)) throw Error('invalid effect cylinder bindings');
   if (discs !== undefined && !validEffectDiscs(discs)) throw Error('invalid effect disc bindings');
@@ -201,8 +229,28 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     const b = bindingOf(slot), c = b ? undefined : cylinderOf(slot), d = b || c ? undefined : discOf(slot);
     const l = b || c || d ? undefined : lineOf(slot);
     const x = b || c || d || l ? undefined : boxOf(slot);
-    if (!b && !c && !d && !l && !x) return null;
+    const w = b || c || d || l || x ? undefined : wanderOf(slot);
+    if (!b && !c && !d && !l && !x && !w) return null;
     const fields = new Map(ops.map(e => [e.op, e]));
+    if (w) {
+      const center = effectVec3(fields.get(w.center));
+      if (!center) return null;
+      const shape: any = {period: w.period};
+      for (const k of WANDER_VALUES) {
+        const v = w.values[k], coef = new Array(1 << v.draws.length).fill(0);
+        for (const [mask, ops, c] of v.terms) {
+          let term = c;
+          for (const op of ops) {
+            const n = effectScalar(fields.get(op));
+            if (n === null) return null;
+            term *= n;
+          }
+          coef[mask] += term;
+        }
+        shape[k] = {draws: v.draws.map(([kind, salt]) => [kind, salt]), coef};
+      }
+      return {kind: 'wander', wander: {center, shape}};
+    }
     // A sample field selects a sub-interval of its authored angle range. The
     // game interpolates the endpoints by the sampled fraction.
     const angles = (bounds: [number, number], sampleOp: number): [number, number] | null => {

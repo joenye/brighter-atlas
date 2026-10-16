@@ -33,7 +33,7 @@ import type {createEffectScaleReader, EffectScales} from './effect-scales.js';
 import type {EffectWindow, createEffectWindowReader} from './effect-windows.js';
 import type {createEffectSpriteReader} from './effect-sprites.js';
 import type {EffectFacing, createEffectFacingReader} from './effect-facing.js';
-import type {RadialOrigin, createEffectOriginReader} from './effect-origins.js';
+import type {RadialOrigin, WanderShapeValues, createEffectOriginReader} from './effect-origins.js';
 import type {EffectFieldValues, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
@@ -111,6 +111,8 @@ export interface EffectConfig {
   box?: { a: [number, number, number]; b: [number, number, number] };
   // (a disc: the radius may be ranged, drawn first; flat: no height drawn)
   cylinder?: { radius: number | [number, number]; height: number; axisScale: [number, number]; flat?: boolean };
+  // A wandering source: each particle's offset from the centre, by its number (effects-wander.ts).
+  wander?: WanderShapeValues;
   // 'bound': origin and direction come from verified per-build decode
   // data rather than the structural shape guess.
   origin?: 'bound';
@@ -1615,6 +1617,10 @@ function extractEffects(
       cfg.cone = {yaw, pitch}; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null;
       cfg.spread_yaw = Math.abs(yaw[1] - yaw[0]); cfg.spread_pitch = Math.max(Math.abs(pitch[0]), Math.abs(pitch[1]));
       cfg.origin = 'bound';
+    } else if (origin?.kind === 'wander') {
+      // (the direction stays the cone read by shape: only where particles are born is bound)
+      cfg.center = origin.wander.center; cfg.wander = origin.wander.shape; cfg.origin = 'bound';
+      if (cfg.shape_kind !== 'point') { cfg.shape_kind = 'point'; cfg.segment = null; cfg.radius = null; cfg.sweep = null; cfg.spiral = null; }
     } else if (origin?.kind === 'box') {
       const {a, b, axis, yaw, pitch} = origin.box;
       cfg.kind = 'shape'; cfg.shape_kind = 'point'; cfg.center = [0, 1, 2].map(i => (a[i] + b[i]) / 2) as [number, number, number];

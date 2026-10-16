@@ -23,6 +23,7 @@ import type {
 } from '../../extract/world/effects.js';
 import {EffectRandom} from './effects-random.js';
 import type {EffectScales} from '../../extract/world/effect-scales.js';
+import {wanderPoint} from './effects-wander.js';
 import {effectHslToRgb, type EffectColourSample, type EffectFieldValues, type EffectSample} from '../../extract/world/effect-fields.js';
 import {waterHeight, type EffectWave} from '../../extract/world/effect-waves.js';
 import type {EffectWindow} from '../../extract/world/effect-windows.js';
@@ -100,6 +101,8 @@ interface ShapeSpec {
   radial: EffectConfig['radial'] | null;
   // a point source's cylinder: each particle born a drawn distance (up to the radius), angle and height from the centre
   cylinder: EffectConfig['cylinder'] | null;
+  // a wandering source: each particle's offset from the centre, by its number
+  wander: EffectConfig['wander'] | null;
   // a box source: each particle born at a point drawn between its corners (in place of the centre)
   box: EffectConfig['box'] | null;
   cone: EffectConfig['cone'] | null;
@@ -227,6 +230,7 @@ function resolveShape(config: EffectConfig | null, fallbackAxis: Vec3, tickRate:
     center,
     radial: config?.radial ?? null,
     cylinder: config?.cylinder ?? null,
+    wander: config?.wander ?? null,
     box: config?.box ?? null,
     cone: config?.cone ?? null,
     ...frame,
@@ -721,6 +725,7 @@ export class EmitterSim {
     let x = s.center[0]; let y = s.center[1]; let z = s.center[2];
     if (cylinder) { x += cylinder[0]; y += cylinder[1]; z += cylinder[2]; }
     if (box) { x = box[0]; y = box[1]; z = box[2]; }
+    if (s.wander) { const w = wanderPoint(s.wander, j); x += w[0]; y += w[1]; z += w[2]; }
     let dx = s.w[0]; let dy = s.w[1]; let dz = s.w[2];
     if (s.kind === 'radial' && s.radial) {
       const radial = s.radial;
