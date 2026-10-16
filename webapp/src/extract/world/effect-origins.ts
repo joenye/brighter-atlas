@@ -5,6 +5,8 @@ import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
 import {effectRange, effectScalar, effectVec3} from './effect-fields.js';
 import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
+import {ownerFields, resolveScalar, resolveVector, validValueSource, type ComputedValue,
+  type ValueSource} from './effect-sources.js';
 
 export interface RadialOriginBinding {
   instance: number;
@@ -128,6 +130,24 @@ export interface RadialOrigin {
   pitchTable?: number[];
   /** Where every particle leaves along one vector of the record, instead of out along its yaw and pitch. */
   direction?: [number, number, number];
+  /** Values computed for each particle (the fixed ones above then stand at zero or one). */
+  computed?: {center?: ComputedValue; radius?: ComputedValue; axisScale?: [ComputedValue | null, ComputedValue | null]};
+}
+
+// A radial origin whose radius, centre or axis scales come from elsewhere (from 2026-10: rings sized by the emitter
+// that owns them, rings that grow over their first particles, funnels): each a value source. Kept apart.
+export interface RadialSourcedBinding {
+  instance: number; resample: number; yaw: [number, number]; pitch: [number, number]; samples: [number, number];
+  overrides: number[]; uniformClass: number;
+  center: ValueSource; radius: ValueSource; axisScale?: [ValueSource, ValueSource];
+}
+export function validEffectRadialsSourced(v: any): v is RadialSourcedBinding[] {
+  const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
+  return validBindingList(v, b => [b.resample, b.uniformClass].every(bindingIndex) && [b.yaw, b.pitch, b.samples].every(pair)
+    && Array.isArray(b.overrides) && b.overrides.length <= 8 && b.overrides.every(bindingIndex)
+    && validValueSource(b.center, true) && validValueSource(b.radius, false)
+    && (b.axisScale === undefined || (Array.isArray(b.axisScale) && b.axisScale.length === 2
+      && b.axisScale.every((s: any) => validValueSource(s, false)))));
 }
 
 // A radial origin whose particles all leave along one vector field of the shape's record (from 2026-10): that field.
@@ -184,16 +204,35 @@ export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'poin
   | {kind: 'wander'; wander: {center: [number, number, number]; shape: WanderShapeValues}}
   | {kind: 'coded'; coded: CodedOrigin};
 
-// An origin the code makes from uniform draws and constants alone, its owner's class choosing the case (from 2026-10:
-// a streak straight up from the system, say): per shape and owner instance, each axis a multilinear polynomial over
-// the draws' fractions (coefficient k for the product of the draws whose bits k sets). Kept apart.
-export interface CodedOrigin { draws: number; axes: [number[], number[], number[]] }
-export interface CodedOriginBinding extends CodedOrigin { instance: number; owner: number }
+// An origin the code makes from random draws, constants and its system's own numbers, its owner's class choosing the
+// case (from 2026-10: a streak straight up from the system, an area high over a room, say): per shape and owner
+// instance, each axis a multilinear polynomial over its variables, the draws then the system's fields (coefficient k
+// for the product of the variables whose bits k sets). A draw is a fraction, or a whole number (`steps`: draw k
+// takes steps[k] + 1 even values, its variable their index over steps[k]), or the same for every particle born on a
+// tick (`seeded`: the salt of the tick's seeded draw, -1 for an ordinary draw). Kept apart.
+export interface CodedOrigin {
+  draws: number; axes: [number[], number[], number[]]; steps?: number[]; seeded?: number[];
+  /** The system's numbers, in the order of the binding's fields. */
+  fieldValues?: number[];
+}
+export interface CodedOriginBinding {
+  instance: number; owner: number; draws: number; axes: [number[], number[], number[]];
+  steps?: number[]; seeded?: number[];
+  /** Fields of the system listing the owner, after the draws among the variables. */
+  fields?: number[];
+}
 export function validEffectOriginsCoded(v: any): v is CodedOriginBinding[] {
-  return Array.isArray(v) && v.length <= 65536 && v.every((b: any) => b && bindingIndex(b.instance) && bindingIndex(b.owner)
-    && Number.isInteger(b.draws) && b.draws >= 1 && b.draws <= 4 && Array.isArray(b.axes) && b.axes.length === 3
-    && b.axes.every((a: any) => Array.isArray(a) && a.length === 1 << b.draws && a.every(Number.isFinite)))
-    && new Set(v.map((b: any) => `${b.instance}|${b.owner}`)).size === v.length;
+  const ints = (a: any, n: number, ok: (x: number) => boolean) => Array.isArray(a) && a.length === n
+    && a.every((x: any) => Number.isInteger(x) && ok(x));
+  return Array.isArray(v) && v.length <= 65536 && v.every((b: any) => {
+    if (!b || !bindingIndex(b.instance) || !bindingIndex(b.owner) || !Number.isInteger(b.draws) || b.draws < 1) return false;
+    const fields = b.fields === undefined ? 0 : Array.isArray(b.fields) && b.fields.every(bindingIndex) ? b.fields.length : -1;
+    const k = b.draws + fields;
+    return fields >= 0 && k <= 6 && Array.isArray(b.axes) && b.axes.length === 3
+      && b.axes.every((a: any) => Array.isArray(a) && a.length === 1 << k && a.every(Number.isFinite))
+      && (b.steps === undefined || ints(b.steps, b.draws, x => x >= 0 && x < 65536))
+      && (b.seeded === undefined || ints(b.seeded, b.draws, x => x >= -1 && x < 2 ** 32));
+  }) && new Set(v.map((b: any) => `${b.instance}|${b.owner}`)).size === v.length;
 }
 
 // A wandering source (from 2026-10): each batch of `period` particles spawns about one seeded spot along a tilted
@@ -257,7 +296,9 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
   boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[],
-  codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[]) {
+  codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[], sourced?: RadialSourcedBinding[]) {
+  if (sourced !== undefined && !validEffectRadialsSourced(sourced)) throw Error('invalid effect sourced radial bindings');
+  const sourcedOf = instanceLookup((sourced || []).map(b => [b.instance, b] as const), objects);
   if (directions !== undefined && !validEffectOriginDirections(directions)) throw Error('invalid effect origin direction bindings');
   const directionOf = instanceLookup((directions || []).map(b => [b.instance, b] as const), objects);
   if (codedOrigins !== undefined && !validEffectOriginsCoded(codedOrigins)) throw Error('invalid effect coded origin bindings');
@@ -281,7 +322,8 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
   const discOf = instanceLookup((discs || []).map(b => [b.instance, b] as const), objects);
   const lineOf = instanceLookup((lines || []).map(b => [b.instance, b] as const), objects);
   const boxOf = instanceLookup((boxes || []).map(b => [b.instance, b] as const), objects);
-  const read = (slot: number, ops: EffectExtra[]): EffectOrigin | null => {
+  // (opsOf: any record's fields by slot, for values read from the records up the owner chain)
+  const read = (slot: number, ops: EffectExtra[], opsOf?: (slot: number) => EffectExtra[] | null): EffectOrigin | null => {
     const b = bindingOf(slot), c = b ? undefined : cylinderOf(slot), d = b || c ? undefined : discOf(slot);
     const l = b || c || d ? undefined : lineOf(slot);
     const x = b || c || d || l ? undefined : boxOf(slot);
@@ -292,7 +334,18 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
       const own = ops.find(e => e.op === 0 && e.kind === 'scalar');
       const inst = instanceOf(slot), owner = own && 'value' in own ? instanceOf(Number(own.value)) : null;
       const got = inst !== null && owner !== null ? coded.get(`${inst}|${owner}`) : undefined;
-      return got ? {kind: 'coded', coded: {draws: got.draws, axes: got.axes.map(a => [...a]) as [number[], number[], number[]]}} : null;
+      if (!got) return null;
+      let fieldValues: number[] | undefined;
+      if (got.fields?.length) {
+        const sys = ownerFields(ops, opsOf)(2);
+        if (!sys) return null;
+        const values = got.fields.map(op => effectScalar(sys.get(op)));
+        if (values.some(n => n === null)) return null;
+        fieldValues = values as number[];
+      }
+      return {kind: 'coded', coded: {draws: got.draws, axes: got.axes.map(a => [...a]) as [number[], number[], number[]],
+        ...(got.steps ? {steps: [...got.steps]} : {}), ...(got.seeded ? {seeded: [...got.seeded]} : {}),
+        ...(fieldValues ? {fieldValues} : {})}};
     }
     const fields = new Map(ops.map(e => [e.op, e]));
     if (k) {
@@ -421,8 +474,45 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
     if (!yaw || !pitch) return null;
     return {kind: 'radial', radial: {center, radius, axisScale: scales as [number, number], yaw, pitch}};
   };
-  return (slot: number, ops: EffectExtra[]): EffectOrigin | null => {
-    const origin = read(slot, ops), d = directionOf(slot);
+  // (a radial origin with value sources: the shape's own fields as a radial's, the rest resolved)
+  const readSourced = (b: RadialSourcedBinding, ops: EffectExtra[],
+    opsOf?: (slot: number) => EffectExtra[] | null): EffectOrigin | null => {
+    const fields = new Map(ops.map(e => [e.op, e]));
+    const resample = fields.get(b.resample);
+    if (resample?.kind !== 'other' || resample.tag !== 12) return null;
+    if (b.overrides.some(op => { const e = fields.get(op); return e?.kind !== 'other' || e.tag !== 1; })) return null;
+    const owners = ownerFields(ops, opsOf);
+    const center = resolveVector(b.center, fields, owners);
+    const radius = resolveScalar(b.radius, fields, owners, b.uniformClass);
+    const scales = b.axisScale ? b.axisScale.map(s => resolveScalar(s, fields, owners, b.uniformClass)) : null;
+    if (!center || !radius || scales?.some(s => !s || ('value' in s && typeof s.value !== 'number'))) return null;
+    const side = (bounds: [number, number], sampleOp: number): [number, number] | null => {
+      const lo = effectScalar(fields.get(bounds[0])), hi = effectScalar(fields.get(bounds[1]));
+      const sample = fields.get(sampleOp), n = effectScalar(sample);
+      const fraction = effectRange(sample, b.uniformClass) ?? (n === null ? null : [n, n] as [number, number]);
+      if (lo === null || hi === null || !fraction) return null;
+      const r: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
+      return r.every(Number.isFinite) ? r : null;
+    };
+    const yaw = side(b.yaw, b.samples[0]), pitch = side(b.pitch, b.samples[1]);
+    if (!yaw || !pitch) return null;
+    const computed: NonNullable<RadialOrigin['computed']> = {};
+    if ('computed' in center) computed.center = center.computed;
+    if ('computed' in radius) computed.radius = radius.computed;
+    if (scales?.some(s => s && 'computed' in s)) {
+      computed.axisScale = scales.map(s => s && 'computed' in s ? s.computed : null) as [ComputedValue | null, ComputedValue | null];
+    }
+    const radial: RadialOrigin = {
+      center: 'value' in center ? center.value : [0, 0, 0],
+      radius: 'value' in radius ? radius.value : 0,
+      axisScale: (scales ? scales.map(s => s && 'value' in s ? s.value as number : 1) : [1, 1]) as [number, number],
+      yaw, pitch, ...(Object.keys(computed).length ? {computed} : {}),
+    };
+    return {kind: 'radial', radial};
+  };
+  return (slot: number, ops: EffectExtra[], opsOf?: (slot: number) => EffectExtra[] | null): EffectOrigin | null => {
+    const sb = sourcedOf(slot);
+    const origin = sb ? readSourced(sb, ops, opsOf) : read(slot, ops, opsOf), d = directionOf(slot);
     if (!d || origin?.kind !== 'radial') return origin;
     const direction = effectVec3(ops.find(e => e.op === d.direction));
     return direction ? {kind: 'radial', radial: {...origin.radial, direction}} : null;

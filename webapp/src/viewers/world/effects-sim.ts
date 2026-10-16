@@ -23,7 +23,8 @@ import type {
 } from '../../extract/world/effects.js';
 import {EffectRandom} from './effects-random.js';
 import type {EffectScales} from '../../extract/world/effect-scales.js';
-import {wanderPoint} from './effects-wander.js';
+import {wanderPoint, wanderUnit} from './effects-wander.js';
+import {evaluateComputed} from './effects-computed.js';
 
 /** An even draw u taken through equally likely quantiles (linear between neighbours; none: u itself). */
 export function throughTable(table: number[] | undefined, u: number): number {
@@ -453,7 +454,7 @@ export class EmitterSim {
     this.shape = resolveShape(shapeCfg, fallbackAxis, tickRate);
     this._random = !!this._scales || this._perParticle || this.spriteChoices > 1
       || (!!this.shape.radial && typeof this.shape.radial.radius !== 'number') || !!this.shape.spiral?.range || !!this.shape.spiral?.axisRange
-      || !!this.shape.cylinder || !!this.shape.box || !!this.shape.coded;
+      || !!this.shape.cylinder || !!this.shape.box || !!this.shape.coded || !!this.shape.radial?.computed;
 
     // Burst schedule. A missing/degenerate burst leaves the emitter inert
     // (alive stays zero); siblings are unaffected.
@@ -670,7 +671,10 @@ export class EmitterSim {
     // shared stream state is not implied by this per-particle preview seed.
     const random = this._random ? new EffectRandom(BigInt(particleSeed)) : null;
     const draw = (v: EffectSample) => typeof v === 'number' ? v : random!.range(v[0], v[1]);
-    const radius = this.shape.radial ? draw(this.shape.radial.radius) : 0;
+    const computed = this.shape.radial?.computed;
+    const unit = () => draw([0, 1]);
+    const radius = this.shape.radial
+      ? (computed?.radius ? evaluateComputed(computed.radius, counter, unit)[0] : draw(this.shape.radial.radius)) : 0;
     // (a cylinder's three draws: distance, angle in degrees, height; the across pair scaled per axis)
     const cyl = this.shape.cylinder;
     const cylinder = cyl ? (() => {
@@ -679,11 +683,18 @@ export class EmitterSim {
     })() : null;
     const bx = this.shape.box;
     const box = bx ? [0, 1, 2].map(i => draw([bx.a[i], bx.b[i]])) : null;
-    // (an origin made in code: its draws' fractions, then each axis's polynomial over them)
+    // (an origin made in code: its draws (a fraction; a whole number's step over its steps; or the birth tick's seeded
+    // draw, the tick less one as the game counts it), then the system's numbers, and each axis's polynomial over them)
     const cd = this.shape.coded;
     const codedPoint = cd ? (() => {
-      const u = Array.from({length: cd.draws}, () => draw([0, 1]));
+      const u = Array.from({length: cd.draws}, (_, i) => {
+        const salt = cd.seeded?.[i] ?? -1;
+        const f = salt >= 0 ? wanderUnit(tick - 1, salt) : draw([0, 1]);
+        const n = cd.steps?.[i] ?? 0;
+        return n > 0 ? Math.min(n, Math.floor(f * (n + 1))) / n : f;
+      }).concat(cd.fieldValues ?? []);
       return cd.axes.map((coef) => coef.reduce((sum, c, k) => {
+        if (!c) return sum;
         let term = c;
         for (let i = 0; i < u.length; i++) if (k & (1 << i)) term *= u[i];
         return sum + term;
@@ -755,8 +766,11 @@ export class EmitterSim {
       const yaw = (radial.yaw[0] + (radial.yaw[1] - radial.yaw[0]) * throughTable(radial.yawTable, r0)) * DEG;
       const pitch = (radial.pitch[0] + (radial.pitch[1] - radial.pitch[0]) * throughTable(radial.pitchTable, r1)) * DEG;
       const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch);
-      x += radius * radial.axisScale[0] * cy;
-      y += radius * radial.axisScale[1] * sy;
+      const rc = radial.computed;
+      if (rc?.center) { const c = evaluateComputed(rc.center, counter, unit); x += c[0]; y += c[1]; z += c[2]; }
+      const scale = (i: 0 | 1) => rc?.axisScale?.[i] ? evaluateComputed(rc.axisScale[i]!, counter, unit)[0] : radial.axisScale[i];
+      x += radius * scale(0) * cy;
+      y += radius * scale(1) * sy;
       if (radial.direction) [dx, dy, dz] = radial.direction;
       else { dx = cy * cp; dy = sy * cp; dz = Math.sin(pitch); }
     } else if (s.kind === 'segment' && s.segment) {

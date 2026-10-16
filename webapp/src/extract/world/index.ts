@@ -817,7 +817,7 @@ export async function extractWorld({
       effectOrigin: createEffectOriginReader(placementBindings?.effectOrigins, objects, placementBindings?.effectCylinders,
         placementBindings?.effectDiscs, placementBindings?.effectSegments, placementBindings?.effectBoxes,
         placementBindings?.effectWanders, placementBindings?.effectRadialsCoded, placementBindings?.effectOriginsCoded,
-        placementBindings?.effectOriginDirections),
+        placementBindings?.effectOriginDirections, placementBindings?.effectRadialsSourced),
       effectSpeed: createEffectSpeedReader(placementBindings?.effectSpeeds, objects),
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
       effectColour: createEffectColourReader(placementBindings?.effectColours, objects, ab0, profile, pool.values),

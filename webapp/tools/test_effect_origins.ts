@@ -7,7 +7,7 @@ import {build} from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-effect-origins-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({stdin: {contents: "export * from './src/extract/world/effect-origins.ts'; export {EmitterSim, hash32, throughTable} from './src/viewers/world/effects-sim.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
+  await build({stdin: {contents: "export * from './src/extract/world/effect-origins.ts'; export {EmitterSim, hash32, throughTable} from './src/viewers/world/effects-sim.ts'; export {wanderUnit} from './src/viewers/world/effects-wander.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts'; export {evaluateComputed} from './src/viewers/world/effects-computed.ts';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
   const T = await import(pathToFileURL(file).href);
   const binding = {instance: 12, kind: 'radial', resample: 32, center: 20, radius: 21, axisScale: [22, 23], yaw: [24, 25], pitch: [26, 27], samples: [28, 29], overrides: [30, 31], uniformClass: 8};
   assert(T.validEffectOrigins([binding]));
@@ -223,5 +223,79 @@ try {
   const own = (slot: number) => [{op: 0, kind: 'scalar', tag: -85, value: slot}];
   assert.deepEqual(madeRead(0, own(1)), {kind: 'coded', coded: {draws: 1, axes: [[0, 0], [0, 0], [600, 800]]}});
   assert.equal(madeRead(0, own(2)), null, 'another owner, another case');
+  // whole-number draws, draws the same for every particle born on a tick, and the system's own numbers
+  {
+    // x = -100 + 50 u F (u the tick's draw with salt 7, F the system's field 28); y = -40 + 80 c (c a coin); z = 5
+    const axes = [[-100, 0, 0, 0, 0, 0, 0, 0], [-40, 80, 0, 0, 0, 0, 0, 0], [5, 0, 0, 0, 0, 0, 0, 0]];
+    axes[0][0b110] = 50;
+    const rich = {instance: 12, owner: 40, draws: 2, steps: [1, 0], seeded: [-1, 7], fields: [28], axes};
+    assert(T.validEffectOriginsCoded([rich]));
+    assert(!T.validEffectOriginsCoded([{...rich, axes: axes.map(a => a.slice(0, 4))}]), 'coefficients for every variable');
+    assert(!T.validEffectOriginsCoded([{...rich, steps: [1]}]));
+    assert(!T.validEffectOriginsCoded([{...rich, seeded: [-2, 7]}]));
+    const richRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}, {values: [0, 40]}],
+      undefined, undefined, undefined, undefined, undefined, undefined, [rich]);
+    // (the records up the chain: the shape names its emitter (slot 1), the emitter its system (slot 2))
+    const system = (slot: number) => slot === 1 ? [{op: 0, kind: 'scalar', tag: -85, value: 2}]
+      : slot === 2 ? [{op: 28, kind: 'float', value: 13}] : null;
+    const got = richRead(0, own(1), system);
+    assert.deepEqual(got.coded.fieldValues, [13]);
+    assert.deepEqual([got.coded.steps, got.coded.seeded], [[1, 0], [-1, 7]]);
+    assert.equal(richRead(0, own(1)), null, 'no system: no origin');
+    assert.equal(richRead(0, own(1), () => [{op: 27, kind: 'float', value: 13}]), null, 'a system without the field');
+    const sim = new T.EmitterSim({slot: 1, loop: false}, 0, {life: {ticks: 100}, burst: 1, shape: 2},
+      {1: {kind: 'burst_windowed', per_second: 600, windows: [[0, 0]]}, 2: {kind: 'shape', shape_kind: 'point', center: [0, 0, 0], origin: 'bound', coded: got.coded}}, 600);
+    sim.ensure(1); const points: number[][] = [];
+    sim.evaluate(1, (...p: number[]) => points.push(p));
+    assert(points.length >= 1);
+    const born = sim.spawnTick(0), want = -100 + 50 * 13 * T.wanderUnit(born - 1, 7);
+    for (const p of points) {
+      assert(Math.abs(p[0] - want) < 1e-3, `seeded x ${p[0]} vs ${want}`);
+      assert(Math.abs(Math.abs(p[1]) - 40) < 1e-6, `whole draw y ${p[1]}`);
+      assert(Math.abs(p[2] - 5) < 1e-6);
+    }
+  }
+  // A ring whose values come from elsewhere: the emitter that owns it (field 0 names the owner), or computed for each
+  // particle (a draw, a ramp over the first particles, a step per particle)
+  {
+    const sourced = {instance: 12, resample: 32, yaw: [24, 25], pitch: [26, 27], samples: [28, 29], overrides: [30, 31],
+      uniformClass: 8, center: {owner: 1, op: 38}, radius: {owner: 1, op: 39}, axisScale: [{op: 22}, {op: 23}]};
+    assert(T.validEffectRadialsSourced([sourced]));
+    assert(!T.validEffectRadialsSourced([{...sourced, center: {owner: 3, op: 38}}]));
+    assert(!T.validEffectRadialsSourced([{...sourced, radius: {draws: 1, coef: [1]}}]));
+    assert(!T.validEffectRadialsSourced([{...sourced, center: {draws: 0, coef: [1]}}]));
+    const read = T.createEffectOriginReader(undefined, [{values: [0, 12]}], undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, [sourced]);
+    const shapeOps = [{op: 0, kind: 'scalar', tag: -85, value: 5}, ...ops];
+    const emitter = [{op: 0, kind: 'scalar', tag: -85, value: 6}, {op: 38, kind: 'vec3', v: [1, 2, 3]}, {op: 39, kind: 'fixed', floats: [450]}];
+    const opsOf = (slot: number) => slot === 5 ? emitter : null;
+    assert.deepEqual(read(0, shapeOps, opsOf), {kind: 'radial', radial: {center: [1, 2, 3], radius: 450, axisScale: [2, .5],
+      yaw: [67.5, 112.5], pitch: [10, 10]}});
+    assert.equal(read(0, shapeOps), null, 'no owner records: unbound');
+    assert.equal(read(0, ops, opsOf), null, 'no owner named: unbound');
+    const grow = {draws: 1, coef: [900, 100], count: [0, 0.5]};
+    const funnel = {draws: 0, axes: [[0], [0], [300]], perCount: [[0], [0], [-10]]};
+    const computedRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}], undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, [{...sourced, center: funnel, radius: grow}]);
+    const made = computedRead(0, shapeOps, opsOf);
+    assert.deepEqual(made.radial.computed, {center: funnel, radius: grow});
+    assert.deepEqual(made.radial.center, [0, 0, 0]);
+    // the values per particle number: the ramp, then the settled draw; the step per particle
+    const half = () => 0.5;
+    assert.deepEqual(T.evaluateComputed(grow, 0, half), [0]);
+    assert.deepEqual(T.evaluateComputed(grow, 1, half), [475]);
+    assert.deepEqual(T.evaluateComputed(grow, 7, half), [950]);
+    assert.deepEqual(T.evaluateComputed(funnel, 4, half), [0, 0, 260]);
+    assert.deepEqual(T.evaluateComputed({draws: 2, axes: [[1, 2, 3, 4], [0, 0, 0, 0], [0, 0, 0, 0]]}, 0, (() => {
+      let k = 0; return () => [0.5, 0.25][k++]; })()), [1 + 1 + .75 + .5, 0, 0]);
+    // the first particle: the funnel's top, the ring not yet grown
+    const shape = {...made.radial, yaw: [0, 0], pitch: [0, 0]};
+    const sim = new T.EmitterSim({slot: 4, loop: false}, 0, {life: {ticks: 100}, burst: 1, shape: 2},
+      {1: {kind: 'burst_windowed', per_second: 600, windows: [[0, 0]]}, 2: {kind: 'shape', shape_kind: 'radial', center: shape.center, radial: shape}}, 600);
+    sim.ensure(1); const points: number[][] = [];
+    sim.evaluate(1, (...p: number[]) => points.push(p));
+    assert.equal(points.length, 1);
+    for (const [k, want] of [[0, 0], [1, 0], [2, 300]]) assert(Math.abs(points[0][k] - want) < 1e-4, `first particle ${points[0]}`);
+  }
   console.log('effect origin extraction, sampled radius, point, position, segment (both routes), disc and box sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

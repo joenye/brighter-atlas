@@ -1600,7 +1600,7 @@ function extractEffects(
       cfg.kind = 'burst_windowed'; cfg.per_second = emissionWindow.rate;
       cfg.windows = emissionWindow.windows; cfg.emission_window = emissionWindow;
     }
-    const origin = shared.effectOrigin?.(slot, decoded.get(slot) || []);
+    const origin = shared.effectOrigin?.(slot, decoded.get(slot) || [], (s) => decoded.get(s) ?? null);
     if (origin?.kind === 'radial') {
       cfg.kind = 'shape'; cfg.shape_kind = 'radial'; cfg.center = origin.radial.center;
       cfg.radial = origin.radial; cfg.origin = 'bound';
