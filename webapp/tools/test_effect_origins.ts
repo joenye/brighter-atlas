@@ -297,6 +297,17 @@ try {
       undefined, undefined, undefined, undefined, [{...sourced, radius: {value: picked}}]);
     assert.deepEqual(pickRead(0, shapeOps, opsOf).radial.radius, picked);
     assert.equal(read(0, ops, opsOf), null, 'no owner named: unbound');
+    // (a ring with yaw bounds only: no pitch or sample fields, and no flag when the game resamples it regardless;
+    // its yaw drawn evenly between the bounds, no pitch)
+    const yawOnly = {instance: 12, yaw: [24, 25], overrides: [], uniformClass: 8, center: {op: 20}, radius: {op: 21}};
+    assert(T.validEffectRadialsSourced([yawOnly]));
+    assert(T.validEffectRadialsSourced([{...yawOnly, resample: 32}]));
+    assert(!T.validEffectRadialsSourced([{...yawOnly, pitch: [26, 27]}]), 'pitch fields without samples');
+    assert(!T.validEffectRadialsSourced([{...sourced, resample: undefined}]), 'a ring with pitch fields keeps its flag');
+    const yawRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}], undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, [yawOnly]);
+    assert.deepEqual(yawRead(0, ops, opsOf), {kind: 'radial', radial: {center: [10, 20, 30], radius: 7, axisScale: [1, 1],
+      yaw: [45, 135], pitch: [0, 0]}});
     const grow = {draws: 1, coef: [900, 100], count: [0, 0.5]};
     const funnel = {draws: 0, axes: [[0], [0], [300]], perCount: [[0], [0], [-10]]};
     const computedRead = T.createEffectOriginReader(undefined, [{values: [0, 12]}], undefined, undefined, undefined,

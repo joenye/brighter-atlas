@@ -137,13 +137,23 @@ export interface RadialOrigin {
 // A radial origin whose radius, centre or axis scales come from elsewhere (from 2026-10: rings sized by the emitter
 // that owns them, rings that grow over their first particles, funnels): each a value source. Kept apart.
 export interface RadialSourcedBinding {
-  instance: number; resample: number; yaw: [number, number]; pitch: [number, number]; samples: [number, number];
+  instance: number;
+  /** Absent on a ring whose resample runs whatever its record's flag says. */
+  resample?: number;
+  yaw: [number, number];
+  /** Both absent on a ring with yaw bounds only: its yaw drawn evenly between them, no pitch. */
+  pitch?: [number, number]; samples?: [number, number];
   overrides: number[]; uniformClass: number;
   center: ValueSource; radius: ValueSource; axisScale?: [ValueSource, ValueSource];
 }
 export function validEffectRadialsSourced(v: any): v is RadialSourcedBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
-  return validBindingList(v, b => [b.resample, b.uniformClass].every(bindingIndex) && [b.yaw, b.pitch, b.samples].every(pair)
+  // (a ring with yaw bounds only carries no pitch or sample fields, and one the game evaluates whatever the record's
+  // flag says carries no flag)
+  const yawOnly = (b: any) => b.pitch === undefined && b.samples === undefined;
+  return validBindingList(v, b => bindingIndex(b.uniformClass) && pair(b.yaw)
+    && (yawOnly(b) ? (b.resample === undefined || bindingIndex(b.resample))
+      : bindingIndex(b.resample) && [b.pitch, b.samples].every(pair))
     && Array.isArray(b.overrides) && b.overrides.length <= 8 && b.overrides.every(bindingIndex)
     && validValueSource(b.center, true) && validValueSource(b.radius, false)
     && (b.axisScale === undefined || (Array.isArray(b.axisScale) && b.axisScale.length === 2
@@ -562,8 +572,10 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
   const readSourced = (b: RadialSourcedBinding, ops: EffectExtra[],
     opsOf?: (slot: number) => EffectExtra[] | null): EffectOrigin | null => {
     const fields = new Map(ops.map(e => [e.op, e]));
-    const resample = fields.get(b.resample);
-    if (resample?.kind !== 'other' || resample.tag !== 12) return null;
+    if (b.resample !== undefined) {
+      const resample = fields.get(b.resample);
+      if (resample?.kind !== 'other' || resample.tag !== 12) return null;
+    }
     if (b.overrides.some(op => { const e = fields.get(op); return e?.kind !== 'other' || e.tag !== 1; })) return null;
     const owners = ownerFields(ops, opsOf);
     const center = resolveVector(b.center, fields, owners);
@@ -578,7 +590,13 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
       const r: [number, number] = [lo + (hi - lo) * fraction[0], lo + (hi - lo) * fraction[1]];
       return r.every(Number.isFinite) ? r : null;
     };
-    const yaw = side(b.yaw, b.samples[0]), pitch = side(b.pitch, b.samples[1]);
+    // (yaw bounds only: the yaw drawn evenly between them, no pitch)
+    const bounds = (pair: [number, number]): [number, number] | null => {
+      const lo = effectScalar(fields.get(pair[0])), hi = effectScalar(fields.get(pair[1]));
+      return lo === null || hi === null ? null : [lo, hi];
+    };
+    const yaw = b.samples ? side(b.yaw, b.samples[0]) : bounds(b.yaw);
+    const pitch: [number, number] | null = b.samples && b.pitch ? side(b.pitch, b.samples[1]) : [0, 0];
     if (!yaw || !pitch) return null;
     const computed: NonNullable<RadialOrigin['computed']> = {};
     if ('computed' in center) computed.center = center.computed;

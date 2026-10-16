@@ -31,7 +31,10 @@ try {
  add(80,14,[owner,flag,empty,empty,range(0,1),range(0,1),vec(0,0,1),float(0),float(360),float(0),float(10)]);
  add(80,16,[owner,flag,vec(1,2,3),empty,range(0,1),range(0,1),empty,float(0),float(360),float(0),float(10)]);
  const position=add(81,15,[owner,vec(4,5,6),empty,vec(0,0,1),float(0),float(90),float(0),float(45)]);
- const configs=[windows,wave,wide,point,position];
+ // (the same two shapes as older builds write them: no empty field)
+ const pointOld=add(82,17,[owner,flag,vec(7,8,9),range(0,1),range(0,1),vec(0,0,1),float(0),float(360),float(0),float(6)]);
+ const positionOld=add(83,18,[owner,vec(1,1,1),vec(0,1,0),float(0),float(180),float(0),float(30)]);
+ const configs=[windows,wave,wide,point,position,pointOld,positionOld];
  // A larger emitter: direction, speed end, rotation, spin, colour end, scale
  // start and end, acceleration start and end, colour start, sprite, speed start.
  const large=(instance:number,speed1:any,colour0:any,accel1:any,mode='$screen')=>add(100,instance,[owner,sym(mode),vec(0,0,1),speed1,float(0),rate(0),sym('$color0'),
@@ -95,7 +98,9 @@ try {
   waterFields:{amplitude:[8,12],frequency:[9,13],rate:[10,14]}}]},'a burst with a trailing count is not a wave burst');
  assert.deepEqual(out.effectOrigins,[
   {instance:13,kind:'point',position:2,axis:6,yaw:[7,8],pitch:[9,10],samples:[4,5],uniformClass:40},
-  {instance:15,kind:'position',position:1,axis:3,yaw:[4,5],pitch:[6,7],uniformClass:40}],'a computed position or axis stays unbound');
+  {instance:15,kind:'position',position:1,axis:3,yaw:[4,5],pitch:[6,7],uniformClass:40},
+  {instance:17,kind:'point',position:2,axis:5,yaw:[6,7],pitch:[8,9],samples:[3,4],uniformClass:40},
+  {instance:18,kind:'position',position:1,axis:2,yaw:[3,4],pitch:[5,6],uniformClass:40}],'a computed position or axis stays unbound');
  assert.deepEqual(out.effectMotion,{controllers:[{runtime:900,field:3},{runtime:901,field:3}],
   settings:[{runtime:70,x:[8,9,10],y:[12,13,14]}]},'controllers outside the subtree or with other values are left out');
  assert.equal(ctrl>=0&&surface>=0,true);

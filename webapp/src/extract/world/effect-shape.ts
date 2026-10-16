@@ -294,7 +294,7 @@ function waveBindings(reg: EffectRegistry, configs: Family[], styleRuntime: numb
 /** Plain point sources: every field literal but the one that stays empty.
  *  Two record shapes: [flag, position, an empty field, two sample ranges,
  *  axis, yaw and pitch bounds] and [position, an empty field, axis, yaw and
- *  pitch bounds]. */
+ *  pitch bounds]; builds before 2026-04 have each without the empty field. */
 function pointOrigins(configs: Family[], range: number): EffectOriginBinding[] {
   const samples = new Set(['float', `typed:${range}`]);
   const shapes: { kinds: (Set<string> | null)[]; bind: (instance: number) => EffectOriginBinding }[] = [
@@ -302,6 +302,10 @@ function pointOrigins(configs: Family[], range: number): EffectOriginBinding[] {
       bind: (instance) => ({ instance, kind: 'point', position: 2, axis: 6, yaw: [7, 8], pitch: [9, 10], samples: [4, 5], uniformClass: range }) },
     { kinds: [new Set(['vec3']), null, new Set(['vec3']), ...Array(4).fill(new Set(['float']))],
       bind: (instance) => ({ instance, kind: 'position', position: 1, axis: 3, yaw: [4, 5], pitch: [6, 7], uniformClass: range }) },
+    { kinds: [FLAGS, new Set(['vec3']), samples, samples, new Set(['vec3']), ...Array(4).fill(new Set(['float']))],
+      bind: (instance) => ({ instance, kind: 'point', position: 2, axis: 5, yaw: [6, 7], pitch: [8, 9], samples: [3, 4], uniformClass: range }) },
+    { kinds: [new Set(['vec3']), new Set(['vec3']), ...Array(4).fill(new Set(['float']))],
+      bind: (instance) => ({ instance, kind: 'position', position: 1, axis: 2, yaw: [3, 4], pitch: [5, 6], uniformClass: range }) },
   ];
   const out: EffectOriginBinding[] = [];
   for (const f of configs) {

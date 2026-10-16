@@ -54,6 +54,8 @@ export interface PlacementDecodeData {
   effectBurstGates?: EffectGateBinding[];
   effectOriginDirections?: OriginDirectionBinding[];
   effectRadialsSourced?: RadialSourcedBinding[];
+  /** Rings with yaw bounds only (older builds' flat rings): the same form, no pitch or samples. */
+  effectRadialsYaw?: RadialSourcedBinding[];
   effectSpeeds?: EffectSpeedBinding[];
   effectColours?: EffectColourMixBinding[];
   effectColourTables?: EffectColourTableBinding[];
@@ -135,6 +137,8 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectBurstGates!==undefined&&!validEffectBurstGates(data.effectBurstGates))throw Error('invalid effect burst gate bindings');
   if(data.effectOriginDirections!==undefined&&!validEffectOriginDirections(data.effectOriginDirections))throw Error('invalid effect origin direction bindings');
   if(data.effectRadialsSourced!==undefined&&!validEffectRadialsSourced(data.effectRadialsSourced))throw Error('invalid effect sourced radial bindings');
+  if(data.effectRadialsYaw!==undefined&&(!validEffectRadialsSourced(data.effectRadialsYaw)
+    ||data.effectRadialsYaw.some((b:any)=>b.pitch!==undefined||b.samples!==undefined)))throw Error('invalid effect yaw ring bindings');
   if(data.effectSpeeds!==undefined&&!validEffectSpeeds(data.effectSpeeds))throw Error('invalid effect speed bindings');
   if(data.effectColours!==undefined&&!validEffectColours(data.effectColours))throw Error('invalid effect colour bindings');
   if(data.effectColourTables!==undefined&&!validEffectColourTables(data.effectColourTables))throw Error('invalid effect colour tables');
