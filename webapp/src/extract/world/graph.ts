@@ -482,6 +482,33 @@ export class AssetGraph {
     return node.value.slice();
   }
 
+  /** Whether a mesh definition (the record a part's mesh comes from) is solid geometry: it carries the height
+   *  slices the game keeps for a tall solid object (a typed value holding a list of bounds boxes, tag 0x25).
+   *  Editor markers (labels, arrows, flat click areas) never do. Found by shape: the field holding it moves
+   *  between builds. */
+  meshDefinitionSolid(slot: number): boolean {
+    const cached = this._solidDefinitions.get(slot);
+    if (cached !== undefined) return cached;
+    let solid = false;
+    for (const field of this._decode?.(slot) ?? []) {
+      if (field.kind !== 'G') continue;
+      const node = this.deref(field.node);
+      if (!isNode(node) || !Array.isArray(node.fields)) continue;
+      for (const child of node.fields) {
+        const list = this.deref(child);
+        if (isNode(list) && list.tag === 0x20 && Array.isArray(list.values) && list.values.length
+          && list.values.every((v: any) => { const box = this.deref(v); return isNode(box) && box.tag === 0x25; })) {
+          solid = true;
+          break;
+        }
+      }
+      if (solid) break;
+    }
+    this._solidDefinitions.set(slot, solid);
+    return solid;
+  }
+  private readonly _solidDefinitions = new Map<number, boolean>();
+
   staticAppearance(slot: number): StaticAppearance | null {
     if (this._staticAppearance.has(slot)) return this._staticAppearance.get(slot)!;
     const fields = this._decode?.(slot);

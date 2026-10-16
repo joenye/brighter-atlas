@@ -812,7 +812,12 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       const directEmpty = ctx.texMeta(textureId).kind === 'empty';
       const fallbackEmpty = fallbackTexture === null
         || ctx.texMeta(fallbackTexture).kind === 'empty';
-      if (directEmpty && fallbackEmpty) {
+      if (directEmpty && fallbackEmpty && Number.isInteger(part.mesh_def_slot)
+        && ctx.graph.meshDefinitionSolid(part.mesh_def_slot)) {
+        // (solid geometry on the default material, which has no picture: the game draws it, lit, near white; a
+        // giant crystal, not an editor marker)
+        inc(counts, 'untextured_solid');
+      } else if (directEmpty && fallbackEmpty) {
         flags |= PF_AUTHORED_EMPTY;
         inc(counts, 'authored_empty');
       } else {
