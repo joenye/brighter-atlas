@@ -45,7 +45,7 @@ export interface GameRenderIndex extends GameRenderTables {
 }
 
 /** Many rooms as one source (all rooms, far from the camera): each room's parts and floor moved by its
- *  offset (native) into the cluster's frame, its resting actors posed as parts, no lights; the cluster's
+ *  offset (native) into the cluster's frame, its resting actors posed as parts, its own lamps with `lit`; the cluster's
  *  bounds span `size` tiles. Its environment is `roomId`'s (the rooms joined share one). */
 export function clusterSource(rooms: { source: GameRoomSource; offset: THREE.Vector3; slot: number }[], size: [number, number],
   roomId: number, tileUnits: number, lit = false): GameRoomSource {

@@ -1092,8 +1092,10 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // alone: built in its own frame (its lighting, vignette, lamps and fog) and
   // placed at its stitched place. With "Whole world", every room is also part
   // of its cell's cluster: the cell's rooms' parts joined by what draws them,
-  // one draw per material and lighting preset, without the rooms' vignettes,
-  // fog and lamps (too far to tell). Clusters build once, nearest first, and
+  // one draw per material and lighting preset, without the rooms' vignettes
+  // and fog (too far to tell) but with their lamps (a room passing between its
+  // own scene and its cluster as the budget changes keeps its light). Clusters
+  // build once, nearest first, and
   // stay; a room drawn on its own is left out of its cluster (its slot in the
   // room mask), so nothing is drawn twice and nothing comes and goes. The
   // merged batches draw only the rooms the game's frame does not, and not at
@@ -1388,6 +1390,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       return groundDistance2(cell.box, scene3d.camera.position.clone().applyMatrix4(nativeFromWorld)) > far * 1.25;
     };
     try {
+      // (a cluster carries its rooms' lamps, so a room it takes over from its own scene keeps them: which rooms
+      // are drawn on their own follows the frame's budget, and the lamps must not come and go with it)
       const lit = worldSteady();
       const gathered: ({ source: GameRoomSource; offset: THREE.Vector3; slot: number; key: string } | null)[] = new Array(cell.rooms.length).fill(null);
       let next = 0;
@@ -1416,7 +1420,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       for (const list of groups.values()) {
         await backgroundTurn('join');
         if (!worldGameOn() || behind()) return;
-        const source = clusterSource(list, size, list[0].source.roomId, T, lit);
+        const source = clusterSource(list, size, list[0].source.roomId, T, true);
         await worldGame!.prepare(source, 8, false, true);
         if (!worldGameOn()) return;
         scenes.push(await worldGame!.buildScene(source, cell.frame, { shareDepth: true, cluster: true }));
@@ -2274,7 +2278,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       applyWorldGameSettings();
       if (inputs.gamesteady) inputs.gamesteady.disabled = !worldWhole();
       worldGameRanked = 0;
-    }), { title: "How far from the camera rooms are drawn with the game's shading, nearest first (the nearest exactly, the rest a little simplified: no lamps or edge fade). Rooms further away are not drawn: a shorter distance is lighter for slower graphics cards." }) : null;
+    }), { title: "How far from the camera rooms are drawn with the game's shading, nearest first (the nearest exactly, the rest a little simplified: no edge fade). Rooms further away are not drawn: a shorter distance is lighter for slower graphics cards." }) : null;
   gameReachRange?.classList.add('wp-sub');
   // everything kept: the clusters built again with their lamps, in full detail, each cell's shadows its own
   const gameSteadyCheck = allMode ? check('gamesteady', 'Keep everything loaded', () => {
