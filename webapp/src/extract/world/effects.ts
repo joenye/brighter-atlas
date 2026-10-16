@@ -1513,7 +1513,7 @@ function extractEffects(
         }
         // (a start colour the game draws in code: one of a table's equally likely colours per particle; its end
         // colour, where the record names none of its own, is the same)
-        const table = !mix && !emitter.color0 ? shared.effectColourTable?.(ref) : null;
+        const table = !mix && !emitter.color0 ? shared.effectColourTable?.(ref, ops) : null;
         if (table) {
           emitter.fields = {...(emitter.fields ?? blank), color: {start: {table}, end: emitter.color1 ? {rgba: emitter.color1.rgba} : 'start'}};
           emitter.color1 = null;

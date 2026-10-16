@@ -24,7 +24,7 @@ import type {
 import {EffectRandom} from './effects-random.js';
 import type {EffectScales} from '../../extract/world/effect-scales.js';
 import {wanderPoint, wanderUnit} from './effects-wander.js';
-import {evaluateComputed, gridPoint} from './effects-computed.js';
+import {evaluateComputed, gridPoint, tabulatedValue} from './effects-computed.js';
 
 /** An even draw u taken through equally likely quantiles (linear between neighbours; none: u itself). */
 export function throughTable(table: number[] | undefined, u: number): number {
@@ -449,7 +449,7 @@ export class EmitterSim {
       (accel1[1] - accel[1]) / t2 / this.life, (accel1[2] - accel[2]) / t2 / this.life];
     const fields = emitter.fields ?? null;
     const sampled = (v: unknown): boolean => (Array.isArray(v) && v.length === 2 && typeof v[0] === 'number')
-      || (!!v && typeof v === 'object' && 'choice' in v);
+      || (!!v && typeof v === 'object' && ('choice' in v || 'tabulated' in v));
     const anySampled = (v: unknown): boolean => sampled(v) || (Array.isArray(v) && v.some(sampled));
     const colourSampled = (c: EffectColourSample | 'start' | undefined) => !!c && c !== 'start' && ('ahsl' in c || 'mix' in c || 'table' in c);
     this._sampledColour = !Number.isFinite(emitter.color_override_alpha) && !!fields?.color
@@ -686,6 +686,7 @@ export class EmitterSim {
     const draw = (v: EffectSample): number => {
       if (typeof v === 'number') return v;
       if (Array.isArray(v)) return random!.range(v[0], v[1]);
+      if ('tabulated' in v) return tabulatedValue(v.tabulated, counter, () => random!.range(0, 1));
       return draw(pickChoice(v, counter, () => random!.range(0, 1)));
     };
     const computed = this.shape.radial?.computed;

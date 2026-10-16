@@ -1,6 +1,15 @@
 // A value computed for each particle (effect-sources.ts): its draws, then each axis's polynomial over them, scaled or
-// moved on by the particle's number.
+// moved on by the particle's number; or tabulated over its draws (a grid, interpolated).
 import type {ComputedValue} from '../../extract/world/effect-sources.js';
+import type {EffectDrawKey, EffectTabulated} from '../../extract/world/effect-fields.js';
+import {wanderUnit} from './effects-wander.js';
+
+/** A draw's fraction for particle number `n`: keyed, the particle's own seeded draw; else `unit()`. */
+export function keyedUnit(key: EffectDrawKey | null | undefined, n: number, unit: () => number): number {
+  if (!key) return unit();
+  const seed = key.period === undefined ? n : key.by === 'cycle' ? Math.floor(n / key.period) : n % key.period;
+  return wanderUnit(seed, key.salt);
+}
 
 function poly(coef: number[], u: number[]): number {
   let sum = 0;
@@ -15,6 +24,7 @@ function poly(coef: number[], u: number[]): number {
 
 /** The value for particle number `n`, its draws taken from `unit` (each a fraction in [0, 1)). */
 export function evaluateComputed(c: ComputedValue, n: number, unit: () => number): number[] {
+  if (c.grid) return gridPoint(c.grid, Array.from({length: c.draws}, (_, i) => keyedUnit(c.keys?.[i], n, unit)));
   const u = Array.from({length: c.draws}, unit);
   const axes = c.axes ?? [c.coef ?? [0]];
   const per = c.perCount === undefined ? null : (c.axes ? c.perCount as number[][] : [c.perCount as number[]]);
@@ -22,8 +32,14 @@ export function evaluateComputed(c: ComputedValue, n: number, unit: () => number
   return axes.map((coef, a) => poly(coef, u) * factor + (per ? n * poly(per[a], u) : 0));
 }
 
-/** A point tabulated on a grid over fractions (draw 0 fastest), interpolated multilinearly at `u`. */
-export function gridPoint(grid: {res: number[]; values: number[][]}, u: number[]): [number, number, number] {
+/** A tabulated number for particle number `n` (its draws keyed or from `unit`). */
+export function tabulatedValue(t: EffectTabulated['tabulated'], n: number, unit: () => number): number {
+  return gridPoint({res: t.res, values: [t.values]}, t.res.map((_, i) => keyedUnit(t.keys?.[i], n, unit)))[0];
+}
+
+/** A point (or any number of axes) tabulated on a grid over fractions (draw 0 fastest), interpolated multilinearly
+ *  at `u`. */
+export function gridPoint(grid: {res: number[]; values: number[][]}, u: number[]): number[] {
   const k = grid.res.length;
   const lo: number[] = [], frac: number[] = [];
   for (let i = 0; i < k; i++) {
@@ -31,7 +47,7 @@ export function gridPoint(grid: {res: number[]; values: number[][]}, u: number[]
     const j = Math.min(Math.floor(x), grid.res[i] - 2);
     lo.push(j); frac.push(x - j);
   }
-  const out: [number, number, number] = [0, 0, 0];
+  const axes = grid.values.length, out = new Array<number>(axes).fill(0);
   for (let corner = 0; corner < 1 << k; corner++) {
     let weight = 1, flat = 0, stride = 1;
     for (let i = 0; i < k; i++) {
@@ -40,7 +56,7 @@ export function gridPoint(grid: {res: number[]; values: number[][]}, u: number[]
       flat += (lo[i] + up) * stride;
       stride *= grid.res[i];
     }
-    if (weight) for (let a = 0; a < 3; a++) out[a] += weight * grid.values[a][flat];
+    if (weight) for (let a = 0; a < axes; a++) out[a] += weight * grid.values[a][flat];
   }
   return out;
 }

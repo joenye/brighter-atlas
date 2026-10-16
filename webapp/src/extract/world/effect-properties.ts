@@ -120,9 +120,30 @@ export function validEffectColourTables(values: any): values is EffectColourTabl
   return validBindingList(values, v => Array.isArray(v.colours) && v.colours.length >= 2 && v.colours.length <= 256
     && v.colours.every((c: any) => Array.isArray(c) && c.length === 4 && c.every((n: any) => Number.isFinite(n) && n >= 0 && n <= 1)));
 }
-export function createEffectColourTableReader(bindings: EffectColourTableBinding[] | undefined, objects: ConstructorRecord[]) {
+// Colour tables for an emitter shared by systems of different colours: per instance and the system record that owns
+// each of its records (the record its field 0 names). Kept apart.
+export interface EffectColourTableOwnedBinding extends EffectColourTableBinding { owner: number }
+export function validEffectColourTablesOwned(values: any): values is EffectColourTableOwnedBinding[] {
+  return Array.isArray(values) && values.length <= 65536 && values.every((v: any) => v && bindingIndex(v.instance)
+    && Number.isInteger(v.owner) && v.owner >= 0 && v.owner < 2 ** 24 && validEffectColourTables([{instance: v.instance, colours: v.colours}]))
+    && new Set(values.map((v: any) => `${v.instance}|${v.owner}`)).size === values.length;
+}
+/** An emitter record's colour table: its owner's (field 0 names the owning system's record) before its instance's. */
+export function createEffectColourTableReader(bindings: EffectColourTableBinding[] | undefined, objects: ConstructorRecord[],
+  owned?: EffectColourTableOwnedBinding[]) {
   if (bindings !== undefined && !validEffectColourTables(bindings)) throw Error('invalid effect colour tables');
-  return instanceLookup(new Map((bindings ?? []).map(b => [b.instance, b.colours.map(c => [...c] as [number, number, number, number])])), objects);
+  if (owned !== undefined && !validEffectColourTablesOwned(owned)) throw Error('invalid effect owned colour tables');
+  const copy = (b: EffectColourTableBinding) => b.colours.map(c => [...c] as [number, number, number, number]);
+  const byInstance = instanceLookup(new Map((bindings ?? []).map(b => [b.instance, copy(b)])), objects);
+  const byOwner = new Map((owned ?? []).map(b => [`${b.instance}|${b.owner}`, copy(b)] as const));
+  return (slot: number, ops?: {op: number; kind: string; value?: unknown}[]) => {
+    if (byOwner.size && ops) {
+      const own = ops.find(e => e.op === 0 && e.kind === 'scalar');
+      const got = own && byOwner.get(`${objects[slot]?.values[1]}|${Number(own.value)}`);
+      if (got) return got;
+    }
+    return byInstance(slot);
+  };
 }
 
 export function createEffectColourReader(bindings: EffectColourMixBinding[] | undefined,

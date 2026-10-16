@@ -822,7 +822,8 @@ export async function extractWorld({
       effectSpeed: createEffectSpeedReader(placementBindings?.effectSpeeds, objects),
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
       effectColour: createEffectColourReader(placementBindings?.effectColours, objects, ab0, profile, pool.values),
-      effectColourTable: createEffectColourTableReader(placementBindings?.effectColourTables, objects),
+      effectColourTable: createEffectColourTableReader(placementBindings?.effectColourTables, objects,
+        placementBindings?.effectColourTablesOwned),
       effectFields: createEffectFieldReader(placementBindings?.effectFields, objects, placementBindings?.effectPropertySources),
       effectWave: createEffectWaveReader(placementBindings?.effectWaves, objects, rowDecoder, pool.values),
       effectMotion: (controller,hit,roomId) => {

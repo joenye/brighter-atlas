@@ -5,7 +5,8 @@ import {validEffectScales, type EffectScaleBinding} from './effect-scales.js';
 import {validEffectWindows, type EffectWindowBinding} from './effect-windows.js';
 import {validEffectSprites, type EffectSpriteBinding} from './effect-sprites.js';
 import {validEffectSpeeds, type EffectSpeedBinding} from './effect-fields.js';
-import {validEffectColours, validEffectColourTables, type EffectColourMixBinding, type EffectColourTableBinding} from './effect-properties.js';
+import {validEffectColours, validEffectColourTables, validEffectColourTablesOwned, type EffectColourMixBinding,
+  type EffectColourTableBinding, type EffectColourTableOwnedBinding} from './effect-properties.js';
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
 import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, validEffectOriginsCoded, validEffectOriginsTabulated, type TabulatedOriginBinding, validEffectOriginDirections, validEffectRadialsSourced, type OriginDirectionBinding, type RadialSourcedBinding, type WanderOriginBinding, type RadialCodedBinding, type CodedOriginBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
@@ -52,6 +53,7 @@ export interface PlacementDecodeData {
   effectSpeeds?: EffectSpeedBinding[];
   effectColours?: EffectColourMixBinding[];
   effectColourTables?: EffectColourTableBinding[];
+  effectColourTablesOwned?: EffectColourTableOwnedBinding[];
   effectProperties?: EffectPropertyBinding[];
   effectFields?: EffectFieldData;
   effectPropertySources?: PropertySourceBinding[];
@@ -129,6 +131,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectSpeeds!==undefined&&!validEffectSpeeds(data.effectSpeeds))throw Error('invalid effect speed bindings');
   if(data.effectColours!==undefined&&!validEffectColours(data.effectColours))throw Error('invalid effect colour bindings');
   if(data.effectColourTables!==undefined&&!validEffectColourTables(data.effectColourTables))throw Error('invalid effect colour tables');
+  if(data.effectColourTablesOwned!==undefined&&!validEffectColourTablesOwned(data.effectColourTablesOwned))throw Error('invalid effect owned colour tables');
   if(data.effectProperties!==undefined&&!validEffectProperties(data.effectProperties))throw Error('invalid effect property bindings');
   if(data.effectFields!==undefined&&!validEffectFields(data.effectFields))throw Error('invalid effect field bindings');
   if(data.effectPropertySources!==undefined&&!validEffectPropertySources(data.effectPropertySources))throw Error('invalid effect property sources');

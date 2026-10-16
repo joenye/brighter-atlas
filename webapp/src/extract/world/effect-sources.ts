@@ -4,19 +4,24 @@
 // system that owns that), a value computed for each particle, or a sampled value (a number, a range, or one of a few
 // picked per particle). One resolver for every kind of shape that uses them.
 import type {EffectExtra} from './effects.js';
-import {effectRange, effectScalar, effectVec3, validEffectChoice, type EffectSample} from './effect-fields.js';
+import {effectRange, effectScalar, effectVec3, validEffectChoice, validEffectGrid, validEffectTabulated,
+  type EffectDrawKey, type EffectSample} from './effect-fields.js';
 import {bindingIndex} from './effect-bindings.js';
 
 /** Computed for each particle: a polynomial over a few uniform draws (coefficient k belongs to the product of the
  *  draws whose bits k sets), per axis for a vector; at a particle number below `count`'s length, times that entry
  *  (a value that grows to its size over the first particles); with `perCount`, plus the particle number times a
- *  second such polynomial (a value that moves on with every particle). */
+ *  second such polynomial (a value that moves on with every particle). Or, a value through curves of its draws,
+ *  `grid`: per axis, the value at every point of a grid over the draws' fractions (`res` samples each, draw 0
+ *  fastest), interpolated between them; `keys`: draws that are the particle's own seeded ones. */
 export interface ComputedValue {
   draws: number;
   coef?: number[];
   axes?: number[][];
   count?: number[];
   perCount?: number[] | number[][];
+  grid?: {res: number[]; values: number[][]};
+  keys?: (EffectDrawKey | null)[];
 }
 export type ValueSource = {op: number} | {owner: number; op: number} | ComputedValue | {value: EffectSample};
 export const OWNER_LEVELS = 2;
@@ -34,9 +39,14 @@ export function validValueSource(v: any, vector: boolean): v is ValueSource {
     // (a sampled value: a scalar only)
     const s = v.value;
     return !vector && (Number.isFinite(s) || (Array.isArray(s) && s.length === 2 && s.every(Number.isFinite))
-      || validEffectChoice(s));
+      || validEffectChoice(s) || validEffectTabulated(s));
   }
   if (!Number.isInteger(v.draws) || v.draws < 0 || v.draws > 4) return false;
+  if (v.grid !== undefined) {
+    return v.coef === undefined && v.axes === undefined && v.count === undefined && v.perCount === undefined
+      && v.grid?.res?.length === v.draws && validEffectGrid(v.grid.res, v.grid.values, v.keys, vector ? 3 : 1);
+  }
+  if (v.keys !== undefined) return false;
   const terms = 1 << v.draws;
   const shape = (x: any) => vector ? Array.isArray(x) && x.length === 3 && x.every((a: any) => finiteList(a, terms))
     : finiteList(x, terms);

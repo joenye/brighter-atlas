@@ -24,12 +24,40 @@ export interface EffectFieldData {
   bindings: EffectFieldBinding[];
 }
 
-/** A literal, a uniform range sampled once per particle, or one of a few of those picked per particle. */
-export type EffectSample = number | [number, number] | EffectChoice;
+/** A literal, a uniform range sampled once per particle, one of a few of those picked per particle, or a value
+ *  tabulated over a few draws per particle. */
+export type EffectSample = number | [number, number] | EffectChoice | EffectTabulated;
 /** One of a few values, each with its weight, picked per particle in their order by one fraction: the particle's own
  *  seeded draw with `salt` (so every value a particle picks with that salt agrees), else a draw of its own. */
 export interface EffectChoice { choice: [number, number | [number, number]][]; salt?: number }
 const plainSample = (v: any) => Number.isFinite(v) || (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite));
+/** Which fraction a draw is: the particle's own seeded draw with `salt` of its number n (n itself; with `period`,
+ *  n's place in its batch of that many, or with `by: 'cycle'` the batch's number), so values drawn alike agree. */
+export interface EffectDrawKey { salt: number; period?: number; by?: 'cycle' }
+/** A value tabulated over a few draws' fractions (`res` samples each, draw 0 fastest), interpolated between them;
+ *  each draw a fraction of its own or, keyed, the particle's seeded one. */
+export interface EffectTabulated { tabulated: {res: number[]; values: number[]; keys?: (EffectDrawKey | null)[]} }
+export const TABULATED_MAX = 4096;
+export function validEffectDrawKey(k: any): k is EffectDrawKey {
+  return !!k && typeof k === 'object' && Number.isInteger(k.salt) && k.salt >= 0 && k.salt < 2 ** 32
+    && (k.period === undefined || (Number.isInteger(k.period) && k.period >= 2 && k.period < 65536))
+    && (k.by === undefined || (k.by === 'cycle' && k.period !== undefined));
+}
+/** A grid's samples per draw and their keys as the decode data gives them, for `axes` axes of values. */
+export function validEffectGrid(res: any, values: any, keys: any, axes: number): boolean {
+  if (!Array.isArray(res) || res.length < 1 || res.length > 3
+    || !res.every((r: any) => Number.isInteger(r) && r >= 2 && r <= 65)) return false;
+  const n = res.reduce((a: number, b: number) => a * b, 1);
+  if (n > TABULATED_MAX) return false;
+  if (!Array.isArray(values) || values.length !== axes
+    || !values.every((a: any) => Array.isArray(a) && a.length === n && a.every(Number.isFinite))) return false;
+  return keys === undefined || (Array.isArray(keys) && keys.length === res.length
+    && keys.every((k: any) => k === null || validEffectDrawKey(k)));
+}
+export function validEffectTabulated(v: any): v is EffectTabulated {
+  const t = v?.tabulated;
+  return !!t && typeof t === 'object' && validEffectGrid(t.res, [t.values], t.keys, 1);
+}
 /** A choice as the decode data gives it: weights that sum to one, each value a number or a range. */
 export function validEffectChoice(v: any): v is EffectChoice {
   if (!v || typeof v !== 'object' || !Array.isArray(v.choice) || v.choice.length < 2 || v.choice.length > 16) return false;
@@ -87,7 +115,7 @@ export interface PropertySourceBinding {
   rotation?: PropertySource;
   angularSpeed?: PropertySource;
 }
-const sampleOk = (v: any) => plainSample(v) || validEffectChoice(v);
+const sampleOk = (v: any) => plainSample(v) || validEffectChoice(v) || validEffectTabulated(v);
 function validPropertySource(s: any, kind: 'scalar' | 'vector' | 'rate'): boolean {
   if (s === null) return true;
   if (!s || typeof s !== 'object') return false;

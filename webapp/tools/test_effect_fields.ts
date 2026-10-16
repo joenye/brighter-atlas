@@ -11,7 +11,7 @@ import {build} from 'esbuild';
 const tmp=await mkdtemp(path.join(os.tmpdir(),'atlas-effect-fields-'));
 try {
  const file=path.join(tmp,'test.mjs');
- await build({stdin:{contents:"export * from './src/extract/world/effect-fields.ts'; export {EmitterSim, hash32, pickChoice} from './src/viewers/world/effects-sim.ts'; export {wanderUnit} from './src/viewers/world/effects-wander.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts'; export {emitterSpriteDraws} from './src/viewers/world/effects-sprite.ts';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
+ await build({stdin:{contents:"export * from './src/extract/world/effect-fields.ts'; export {EmitterSim, hash32, pickChoice} from './src/viewers/world/effects-sim.ts'; export {wanderUnit} from './src/viewers/world/effects-wander.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts'; export {emitterSpriteDraws} from './src/viewers/world/effects-sprite.ts'; export {tabulatedValue, keyedUnit, evaluateComputed} from './src/viewers/world/effects-computed.ts'; export {validValueSource} from './src/extract/world/effect-sources.ts';",resolveDir:path.resolve(import.meta.dirname,'..')},bundle:true,platform:'node',format:'esm',outfile:file});
  const T=await import(pathToFileURL(file).href);
  let checks=0;const ok=(c:any,m:string)=>{assert(c,m);checks++;};
  const classes={range:7,rate:8,vector:9,colour:10};
@@ -181,5 +181,43 @@ try {
   });
   ok(both>0&&both<live.length,'both picks occur');
  }
- console.log(`effect fields: ${checks} reader, colour, sampling order, choice, seek and basis checks passed`);
+ // A value through a curve of its draws, tabulated over their fractions per particle: a size the particle's seeded
+ // draw of its place in its batch picks (start and end alike), interpolated between the samples
+ {
+  const key={salt:4325532,period:200};
+  const start={tabulated:{res:[3],values:[0,10,0],keys:[key]}},end={tabulated:{res:[3],values:[1,11,1],keys:[key]}};
+  ok(T.validEffectTabulated(start),'a tabulated value');
+  ok(!T.validEffectTabulated({tabulated:{res:[3],values:[0,10]}}),'a value at every grid point');
+  ok(!T.validEffectTabulated({tabulated:{res:[1],values:[0]}}),'two samples per draw at least');
+  ok(!T.validEffectTabulated({tabulated:{res:[3],values:[0,1,2],keys:[{salt:1,by:'cycle'}]}}),'a cycle needs its period');
+  ok(!T.validEffectTabulated({tabulated:{res:[3],values:[0,1,2],keys:[]}}),'a key per draw');
+  ok(T.validEffectPropertySources([{instance:4,scale:[{value:start},{value:end}]}]),'a tabulated size as a property source');
+  ok(T.validValueSource({value:start},false)&&!T.validValueSource({value:start},true),'a tabulated scalar as a value source');
+  const ringGrid={draws:1,grid:{res:[3],values:[[0,4,0]]},keys:[{salt:9}]};
+  ok(T.validValueSource(ringGrid,false),'a computed value on a grid');
+  ok(!T.validValueSource({...ringGrid,coef:[1,2]},false),'a grid or a polynomial, not both');
+  ok(!T.validValueSource({draws:1,grid:{res:[3],values:[[0,4,0],[0,0,0],[0,0,0]]}},false),'one axis for a scalar');
+  ok(!T.validValueSource({draws:2,grid:{res:[3],values:[[0,4,0]]}},false),'a sample count per draw');
+  for(const n of [0,1,199,200,4321]){
+   const f=T.wanderUnit(n%200,key.salt);
+   const want=f<.5?20*f:20*(1-f);
+   ok(Math.abs(T.tabulatedValue(start.tabulated,n,()=>{throw Error('a keyed draw draws nothing');})-want)<1e-9,'keyed tabulated value '+n);
+   const g=T.wanderUnit(n,9);
+   ok(Math.abs(T.evaluateComputed(ringGrid,n,()=>{throw Error('a keyed draw draws nothing');})[0]-(g<.5?8*g:8*(1-g)))<1e-9,
+    'a computed grid value, keyed by n '+n);
+  }
+  ok(Math.abs(T.keyedUnit({salt:3,period:10,by:'cycle'},57,()=>0)-T.wanderUnit(5,3))<1e-12,'a cycle key: the batch number');
+  ok(T.keyedUnit(null,57,()=>.25)===.25,'no key: a draw of its own');
+  const em:any={life:{ticks:600},fade_in:{ticks:0},fade_out:{ticks:0},burst:1,shape:2,fields:{rotation:0},
+   scales:{start,end},sprite_choices:null,sprite:{material:1,images:[11]}};
+  const s3=new T.EmitterSim({slot:7,loop:true},0,em,configs,600);
+  s3.ensure(200);const live:any[]=[];s3.evaluate(200,(...p:number[])=>live.push(p));
+  ok(live.length>10,'particles live');
+  live.forEach((p,n)=>{
+   const f=T.wanderUnit(n%200,key.salt),s0=f<.5?20*f:20*(1-f),s1=s0+1;
+   const age=200-Math.trunc(n*600/60);
+   ok(Math.abs(p[3]-(s0+(s1-s0)*age/600))<1e-6,'size from the tabulated start and end, particle '+n);
+  });
+ }
+ console.log(`effect fields: ${checks} reader, colour, sampling order, choice, tabulated, seek and basis checks passed`);
 }finally{await rm(tmp,{recursive:true,force:true});}
