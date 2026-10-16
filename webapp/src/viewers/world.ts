@@ -149,6 +149,7 @@ const DEFAULT_STATE = Object.freeze({
   fxstates: false,                  // ... what owners play in their other states
   fxactions: false,                 // ... what owners play while someone uses them
   fxoneshot: false,                 // ... effects fired by an event, repeated
+  fxmarkers: true,                  // ... their pick markers while inspecting
   idle: true,
   wcolor: 'auto',
   wopacity: 50,
@@ -796,7 +797,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     inspectBtn.classList.toggle('active', state.inspect);
     inspectBtn.setAttribute('aria-pressed', state.inspect ? 'true' : 'false');
     if (!state.inspect) { clearInspection(true); clearEffectInspection(true); }
-    effectsLayer?.setMarkersShown(state.inspect);
+    effectsLayer?.setMarkersShown(state.inspect && state.fxmarkers);
   }
   inspectBtn.addEventListener('click', () => {
     if (!inspectBtn.disabled) setInspect(!state.inspect);
@@ -937,6 +938,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     row.classList.add('wp-sub');
     return row;
   });
+  // the effects' pick markers (drawn while inspecting): picking still works with them hidden
+  const effectMarkersCheck = check('fxmarkers', 'Effect markers', () => {
+    effectsLayer?.setMarkersShown(state.inspect && state.fxmarkers);
+  }, { title: 'The small markers drawn at each effect while inspecting, to find and pick it; picking still works with them hidden' });
+  effectMarkersCheck.classList.add('wp-sub');
+  effectKindChecks.push(effectMarkersCheck);
   const syncEffectKinds = () => { for (const row of effectKindChecks) row.hidden = !state.effects; };
   syncEffectKinds();
   const categoryCheck = (category: string) => check(category, CATEGORY_LABELS[category][0], () => {
@@ -2010,7 +2017,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         // ever holds at once, and the alive budget must thin proportionally
         // across all of them, not per room.
       });
-      effectsLayer.setMarkersShown(state.inspect);
+      effectsLayer.setMarkersShown(state.inspect && state.fxmarkers);
     }
     if (allMode) {
       updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick
