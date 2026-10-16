@@ -7,7 +7,7 @@ import {build} from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-effect-origins-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({stdin: {contents: "export * from './src/extract/world/effect-origins.ts'; export {EmitterSim, hash32, throughTable} from './src/viewers/world/effects-sim.ts'; export {wanderUnit} from './src/viewers/world/effects-wander.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts'; export {evaluateComputed} from './src/viewers/world/effects-computed.ts';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
+  await build({stdin: {contents: "export * from './src/extract/world/effect-origins.ts'; export {EmitterSim, hash32, throughTable} from './src/viewers/world/effects-sim.ts'; export {wanderUnit} from './src/viewers/world/effects-wander.ts'; export {EffectRandom} from './src/viewers/world/effects-random.ts'; export {evaluateComputed, gridPoint} from './src/viewers/world/effects-computed.ts';", resolveDir: path.resolve(import.meta.dirname, '..')}, bundle: true, platform: 'node', format: 'esm', outfile: file});
   const T = await import(pathToFileURL(file).href);
   const binding = {instance: 12, kind: 'radial', resample: 32, center: 20, radius: 21, axisScale: [22, 23], yaw: [24, 25], pitch: [26, 27], samples: [28, 29], overrides: [30, 31], uniformClass: 8};
   assert(T.validEffectOrigins([binding]));
@@ -296,6 +296,45 @@ try {
     sim.evaluate(1, (...p: number[]) => points.push(p));
     assert.equal(points.length, 1);
     for (const [k, want] of [[0, 0], [1, 0], [2, 300]]) assert(Math.abs(points[0][k] - want) < 1e-4, `first particle ${points[0]}`);
+  }
+  // Start points the plain rows cannot carry: a polynomial that takes the particle's number itself, a grid
+  // interpolated over the draws, a table of equally likely points
+  {
+    const own = (slot: number) => [{op: 0, kind: 'scalar', tag: -85, value: slot}];
+    const counted = {instance: 12, owner: 40, draws: 2, counted: [0, 1], axes: [[-1024, 2048, 0, 0], [0, 0, 18.5, 0], [100, 0, 0, 0]]};
+    const grid = {instance: 13, owner: 40, draws: 2, grid: {res: [3, 2], values: [[0, 10, 40, 0, 10, 40], [0, 0, 0, 6, 6, 6], [1, 1, 1, 1, 1, 1]]}};
+    const table = {instance: 14, owner: 40, draws: 4, table: [[1, 2, 3], [4, 5, 6], [7, 8, 9]]};
+    assert(T.validEffectOriginsTabulated([counted, grid, table]));
+    assert(!T.validEffectOriginsTabulated([{...grid, axes: counted.axes}]), 'one shape of row');
+    assert(!T.validEffectOriginsTabulated([{...grid, grid: {res: [3, 2], values: [[0], [0], [0]]}}]), 'every grid point');
+    assert(!T.validEffectOriginsTabulated([{...grid, counted: [1, 0]}]), 'a grid takes fractions only');
+    assert(!T.validEffectOriginsTabulated([{...table, table: [[1, 2]]}]));
+    assert(!T.validEffectOriginsTabulated([{...counted, counted: [2, 0]}]));
+    // (a grid point exactly, and halfway between two along a curved draw)
+    assert.deepEqual(T.gridPoint(grid.grid, [0.5, 1]), [10, 6, 1]);
+    assert.deepEqual(T.gridPoint(grid.grid, [0.75, 0]), [25, 0, 1]);
+    const read = T.createEffectOriginReader(undefined, [{values: [0, 12]}, {values: [0, 40]}, {values: [0, 13]}, {values: [0, 14]}],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [counted, grid, table]);
+    const got = read(0, own(1)), gotGrid = read(2, own(1)), gotTable = read(3, own(1));
+    assert.deepEqual(got.coded.counted, [0, 1]);
+    assert.deepEqual(gotGrid.coded.grid, grid.grid);
+    assert.deepEqual(gotTable.coded.table, table.table);
+    const run = (coded: any, ticks: number) => {
+      const sim = new T.EmitterSim({slot: 1, loop: false}, 0, {life: {ticks: 600}, burst: 1, shape: 2},
+        {1: {kind: 'burst_windowed', per_second: 600, windows: [[0, 10]]}, 2: {kind: 'shape', shape_kind: 'point', center: [0, 0, 0], origin: 'bound', coded}}, 600);
+      sim.ensure(ticks); const points: number[][] = [];
+      sim.evaluate(ticks, (...p: number[]) => points.push(p));
+      return points;
+    };
+    // (the table: every particle at one of its points)
+    const tp = run(gotTable.coded, 10);
+    assert(tp.length >= 3);
+    for (const p of tp) assert(table.table.some(q => q.every((v, a) => Math.abs(v - p[a]) < 1e-6)), `table point ${p}`);
+    // (counted: y steps on by 18.5 a particle, x stays within its draw)
+    const cp = run(got.coded, 10).sort((a, b) => a[1] - b[1]);
+    assert(cp.length >= 3);
+    for (let i = 1; i < cp.length; i++) assert(Math.abs((cp[i][1] - cp[i - 1][1]) % 18.5) < 1e-6, `counted y ${cp[i][1]}`);
+    for (const p of cp) assert(p[0] >= -1024 - 1e-6 && p[0] <= 1024 + 1e-6 && Math.abs(p[2] - 100) < 1e-6);
   }
   console.log('effect origin extraction, sampled radius, point, position, segment (both routes), disc and box sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }

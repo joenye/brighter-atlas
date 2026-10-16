@@ -211,9 +211,51 @@ export type EffectOrigin = {kind: 'radial'; radial: RadialOrigin} | {kind: 'poin
 // takes steps[k] + 1 even values, its variable their index over steps[k]), or the same for every particle born on a
 // tick (`seeded`: the salt of the tick's seeded draw, -1 for an ordinary draw). Kept apart.
 export interface CodedOrigin {
-  draws: number; axes: [number[], number[], number[]]; steps?: number[]; seeded?: number[];
+  /** Each axis a polynomial over the variables; or, for a tabulated origin (below), a grid or a table instead. */
+  draws: number; axes?: [number[], number[], number[]]; steps?: number[]; seeded?: number[];
   /** The system's numbers, in the order of the binding's fields. */
   fieldValues?: number[];
+  /** 1 for a variable that is the particle's number in its emitter's stream itself, not a fraction. */
+  counted?: number[];
+  /** Samples per draw (draw 0 fastest) and, per axis, the point at every grid point: interpolated between them. */
+  grid?: OriginGrid;
+  /** Equally likely points: a particle takes one at random. */
+  table?: [number, number, number][];
+}
+export interface OriginGrid { res: number[]; values: [number[], number[], number[]] }
+
+// An origin like a coded one that its rows cannot carry (from 2026-10): a polynomial that also takes the particle's
+// number in its emitter's stream (`counted`), a grid over the draws' fractions (a point through angles or a wrap), or a
+// table of equally likely points (a point the particle's number steps round a circle). Kept apart.
+export interface TabulatedOriginBinding {
+  instance: number; owner: number; draws: number; steps?: number[]; seeded?: number[]; counted?: number[];
+  axes?: [number[], number[], number[]]; grid?: OriginGrid; table?: [number, number, number][];
+}
+const TABLE_MAX = 4096, GRID_MAX = 8192;
+export function validEffectOriginsTabulated(v: any): v is TabulatedOriginBinding[] {
+  const ints = (a: any, n: number, ok: (x: number) => boolean) => Array.isArray(a) && a.length === n
+    && a.every((x: any) => Number.isInteger(x) && ok(x));
+  const triple = (a: any, n: number) => Array.isArray(a) && a.length === 3
+    && a.every((x: any) => Array.isArray(x) && x.length === n && x.every(Number.isFinite));
+  return Array.isArray(v) && v.length <= 65536 && v.every((b: any) => {
+    if (!b || !bindingIndex(b.instance) || !bindingIndex(b.owner) || !Number.isInteger(b.draws) || b.draws < 1
+      || b.draws > 6) return false;
+    if (b.steps !== undefined && !ints(b.steps, b.draws, x => x >= 0 && x < 65536)) return false;
+    if (b.seeded !== undefined && !ints(b.seeded, b.draws, x => x >= -1 && x < 2 ** 32)) return false;
+    if (b.counted !== undefined && !ints(b.counted, b.draws, x => x === 0 || x === 1)) return false;
+    const kinds = ['axes', 'grid', 'table'].filter(k => b[k] !== undefined);
+    if (kinds.length !== 1) return false;
+    if (b.axes !== undefined) return triple(b.axes, 1 << b.draws);
+    if (b.grid !== undefined) {
+      const res = b.grid?.res;
+      if (!ints(res, b.draws, x => x >= 2 && x <= 65537) || b.counted?.some((c: number) => c)) return false;
+      if ((b.steps ?? []).some((s: number, i: number) => s > 0 && res[i] !== s + 1)) return false;
+      const n = res.reduce((p: number, r: number) => p * r, 1);
+      return n <= GRID_MAX && triple(b.grid.values, n);
+    }
+    return Array.isArray(b.table) && b.table.length >= 1 && b.table.length <= TABLE_MAX
+      && b.table.every((p: any) => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite));
+  }) && new Set(v.map((b: any) => `${b.instance}|${b.owner}`)).size === v.length;
 }
 export interface CodedOriginBinding {
   instance: number; owner: number; draws: number; axes: [number[], number[], number[]];
@@ -296,13 +338,16 @@ export function validEffectOrigins(v: any): v is EffectOriginBinding[] {
 export function createEffectOriginReader(bindings: EffectOriginBinding[] | undefined,
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
   boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[],
-  codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[], sourced?: RadialSourcedBinding[]) {
+  codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[], sourced?: RadialSourcedBinding[],
+  tabulated?: TabulatedOriginBinding[]) {
+  if (tabulated !== undefined && !validEffectOriginsTabulated(tabulated)) throw Error('invalid effect tabulated origin bindings');
   if (sourced !== undefined && !validEffectRadialsSourced(sourced)) throw Error('invalid effect sourced radial bindings');
   const sourcedOf = instanceLookup((sourced || []).map(b => [b.instance, b] as const), objects);
   if (directions !== undefined && !validEffectOriginDirections(directions)) throw Error('invalid effect origin direction bindings');
   const directionOf = instanceLookup((directions || []).map(b => [b.instance, b] as const), objects);
   if (codedOrigins !== undefined && !validEffectOriginsCoded(codedOrigins)) throw Error('invalid effect coded origin bindings');
-  const coded = new Map((codedOrigins || []).map(b => [`${b.instance}|${b.owner}`, b] as const));
+  const coded = new Map<string, CodedOriginBinding | TabulatedOriginBinding>(
+    [...(codedOrigins || []), ...(tabulated || [])].map(b => [`${b.instance}|${b.owner}`, b] as const));
   // (the shape's own instance, and its owner's: the record its op 0 names)
   const instanceOf = (slot: number): number | null => {
     const v = objects[slot]?.values?.[1];
@@ -336,14 +381,19 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
       const got = inst !== null && owner !== null ? coded.get(`${inst}|${owner}`) : undefined;
       if (!got) return null;
       let fieldValues: number[] | undefined;
-      if (got.fields?.length) {
+      if ('fields' in got && got.fields?.length) {
         const sys = ownerFields(ops, opsOf)(2);
         if (!sys) return null;
         const values = got.fields.map(op => effectScalar(sys.get(op)));
         if (values.some(n => n === null)) return null;
         fieldValues = values as number[];
       }
-      return {kind: 'coded', coded: {draws: got.draws, axes: got.axes.map(a => [...a]) as [number[], number[], number[]],
+      const t = got as TabulatedOriginBinding;
+      return {kind: 'coded', coded: {draws: got.draws,
+        ...(got.axes ? {axes: got.axes.map(a => [...a]) as [number[], number[], number[]]} : {}),
+        ...(t.grid ? {grid: {res: [...t.grid.res], values: t.grid.values.map(a => [...a]) as [number[], number[], number[]]}} : {}),
+        ...(t.table ? {table: t.table.map(p => [...p] as [number, number, number])} : {}),
+        ...(t.counted ? {counted: [...t.counted]} : {}),
         ...(got.steps ? {steps: [...got.steps]} : {}), ...(got.seeded ? {seeded: [...got.seeded]} : {}),
         ...(fieldValues ? {fieldValues} : {})}};
     }

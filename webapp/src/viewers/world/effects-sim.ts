@@ -24,7 +24,7 @@ import type {
 import {EffectRandom} from './effects-random.js';
 import type {EffectScales} from '../../extract/world/effect-scales.js';
 import {wanderPoint, wanderUnit} from './effects-wander.js';
-import {evaluateComputed} from './effects-computed.js';
+import {evaluateComputed, gridPoint} from './effects-computed.js';
 
 /** An even draw u taken through equally likely quantiles (linear between neighbours; none: u itself). */
 export function throughTable(table: number[] | undefined, u: number): number {
@@ -687,13 +687,17 @@ export class EmitterSim {
     // draw, the tick less one as the game counts it), then the system's numbers, and each axis's polynomial over them)
     const cd = this.shape.coded;
     const codedPoint = cd ? (() => {
+      // (a table: one of its equally likely points)
+      if (cd.table) return cd.table[Math.min(cd.table.length - 1, Math.floor(draw([0, 1]) * cd.table.length))];
       const u = Array.from({length: cd.draws}, (_, i) => {
+        if (cd.counted?.[i]) return counter;
         const salt = cd.seeded?.[i] ?? -1;
         const f = salt >= 0 ? wanderUnit(tick - 1, salt) : draw([0, 1]);
         const n = cd.steps?.[i] ?? 0;
         return n > 0 ? Math.min(n, Math.floor(f * (n + 1))) / n : f;
       }).concat(cd.fieldValues ?? []);
-      return cd.axes.map((coef) => coef.reduce((sum, c, k) => {
+      if (cd.grid) return gridPoint(cd.grid, u);
+      return (cd.axes ?? [[0], [0], [0]]).map((coef) => coef.reduce((sum, c, k) => {
         if (!c) return sum;
         let term = c;
         for (let i = 0; i < u.length; i++) if (k & (1 << i)) term *= u[i];

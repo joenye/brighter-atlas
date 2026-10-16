@@ -21,3 +21,26 @@ export function evaluateComputed(c: ComputedValue, n: number, unit: () => number
   const factor = c.count && n >= 0 && n < c.count.length ? c.count[n] : 1;
   return axes.map((coef, a) => poly(coef, u) * factor + (per ? n * poly(per[a], u) : 0));
 }
+
+/** A point tabulated on a grid over fractions (draw 0 fastest), interpolated multilinearly at `u`. */
+export function gridPoint(grid: {res: number[]; values: number[][]}, u: number[]): [number, number, number] {
+  const k = grid.res.length;
+  const lo: number[] = [], frac: number[] = [];
+  for (let i = 0; i < k; i++) {
+    const x = Math.min(1, Math.max(0, u[i] ?? 0)) * (grid.res[i] - 1);
+    const j = Math.min(Math.floor(x), grid.res[i] - 2);
+    lo.push(j); frac.push(x - j);
+  }
+  const out: [number, number, number] = [0, 0, 0];
+  for (let corner = 0; corner < 1 << k; corner++) {
+    let weight = 1, flat = 0, stride = 1;
+    for (let i = 0; i < k; i++) {
+      const up = (corner >> i) & 1;
+      weight *= up ? frac[i] : 1 - frac[i];
+      flat += (lo[i] + up) * stride;
+      stride *= grid.res[i];
+    }
+    if (weight) for (let a = 0; a < 3; a++) out[a] += weight * grid.values[a][flat];
+  }
+  return out;
+}
