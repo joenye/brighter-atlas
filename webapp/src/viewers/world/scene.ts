@@ -1922,13 +1922,16 @@ export class WorldScene {
     // (the pick ray tests every layer).
     const actor = exact?.category === 'spawns';
     mesh.layers.set(actor && this.gameShading && this._gameDraws(exact) ? GAME_DRAWN_LAYER : 0);
-    if (!actor && this.gameShading && this._gameDraws(exact)) { mesh.visible = false; return; }
     // A water surface has no plain texture of its own (its material is
     // authored empty): while the game's water draws it, it is always shown.
     const water = !!mesh.userData.gameWater && this.gameWaterEnabled;
-    mesh.visible = this._isZVisible(exact.z)
+    const shown = this._isZVisible(exact.z)
       && (!exact.authoredEmpty || this.showAuthoredEmpty || water)
       && (!exact.untextured || this.showUntextured || water);
+    // What the view shows, whoever draws it: the pick ray tests a piece the game's frame draws in three's place
+    // (hidden here) as it tests a shown one.
+    mesh.userData.pickable = shown;
+    mesh.visible = shown && !(!actor && this.gameShading && this._gameDraws(exact));
   }
 
   _buildCollision(shard: any): { group: THREE.Group; mesh: THREE.InstancedMesh | null } {

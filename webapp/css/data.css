@@ -159,6 +159,11 @@
 .viewer-title { font-weight: 650; font-size: .875rem; margin-right: .375rem; }
 .canvas-host { flex: 1; min-height: 0; position: relative; overflow: hidden; background: radial-gradient(75rem 43.75rem at 50% 30%, #171b23, #0c0e12); }
 .canvas-host canvas { display: block; }
+/* the room's loading ring while the game's frame is built (the shared .load-card, in the middle of the view) */
+.canvas-host .world-curtain { top: 50%; }
+/* All rooms: rooms in view still being shaded (the shared .load-card, small, at the foot of the view) */
+.canvas-host .world-shading-ring { top: auto; bottom: 4.5rem; transform: translateX(-50%); }
+.canvas-host .world-shading-ring svg { width: 1.75rem; height: 1.75rem; }
 /* Immersive mode (U toggle, js/viewers/three-common.js): hide all chrome so
    only the renderer shows. F fullscreen uses the browser :fullscreen state. */
 .viewer-pane.ui-hidden .viewer-toolbar,

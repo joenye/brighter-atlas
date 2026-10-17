@@ -450,6 +450,8 @@ export class GameFrame {
   private textureRefs = new Map<string, number>();
   private unreadTextures = new Set<string>();
   idleTextures = Infinity;
+  /** A room's build under way: the share of its draws built so far (0 to 1), for a loading indicator. */
+  onBuildProgress: ((fraction: number) => void) | null = null;
   /** The textures the scene being built reads. */
   private buildingTextures: Set<string> | null = null;
   /** Builds run one at a time (a build's GL calls and its program choice are the frame's state meanwhile). */
@@ -845,7 +847,7 @@ export class GameFrame {
       // draw, their textures layers of arrays (the groups so joined are built here, the rest as before)
       // (and, in all rooms, the rooms drawn on their own: their depth goes to the scene's shared depth draw)
       const joined = this.joinLayers && (this.buildingCluster || this.sharedDepth) ? await this.joinGroups(groups, built, next) : new Set<number>();
-      let at = 0;
+      let at = 0, done = 0;
       const worker = async () => {
         for (let i = at++; i < groups.length; i = at++) {
           if (joined.has(i)) continue;
@@ -854,6 +856,7 @@ export class GameFrame {
             console.warn('game shading: group skipped', group.batch.material, group.batch.renderTexture, error);
             return null;
           });
+          this.onBuildProgress?.((k + ++done / groups.length) / scenes.length);
         }
       };
       await Promise.all(Array.from({ length: 6 }, worker));

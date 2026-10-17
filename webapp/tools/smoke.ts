@@ -754,6 +754,13 @@ async function worldSuite(browser: any, base: string) {
   await sleep(600);
   const covRoom = await paintCoverage(page);
   ok(covRoom > 0.05, `room #1 canvas paints (coverage ${(covRoom * 100).toFixed(1)}% > 5%)`);
+  // With the game's shading on, the room waits behind the loading ring for its frame; a room the frame cannot
+  // build (these fixtures carry no game drawing data) is shown in the plain drawing, never left behind the ring.
+  const curtain = await page.evaluate(() => ({ game: window.__bs.worldView.state.game,
+    ring: !!document.querySelector('.canvas-host .world-curtain:not([hidden])'),
+    canvas: (document.querySelector('.canvas-host canvas') as any)?.style.visibility ?? null }));
+  ok(curtain.game && !curtain.ring && curtain.canvas === '',
+    `a room the game's frame cannot build is shown, not left behind the loading ring (${JSON.stringify(curtain)})`);
   const stats = await page.evaluate(() => ({
     total: [...window.__bs.worldView.world.rooms.values()]
       .flatMap((r) => r.meshes).reduce((s, m) => s + m.count, 0),

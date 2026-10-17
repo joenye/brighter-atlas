@@ -1160,6 +1160,13 @@ else {
   const gameReady = await page.waitForFunction(() => window.__bs.worldView?.gameApi?.ready?.() === true, { timeout: 60000 })
     .then(() => true).catch(() => false);
   ok(gameReady, 'East Beach draws with the game’s own shaders');
+  // with the game's shading on, the room is never shown in the plain drawing while its frame builds: the canvas
+  // waits behind the loading ring, and the ring is gone once the frame draws
+  const curtain = await page.evaluate(() => ({ unshaded: window.__bs.worldView.unshadedFrames,
+    ring: !!document.querySelector('.canvas-host .world-curtain:not([hidden])'),
+    canvas: (document.querySelector('.canvas-host canvas') as any)?.style.visibility ?? null }));
+  ok(curtain.unshaded === 0 && !curtain.ring && curtain.canvas === '',
+    `East Beach is never shown in the plain drawing before its game frame (${JSON.stringify(curtain)})`);
   await sleep(2500);
   const beachCov = await paintCoverage(page);
   ok(beachCov > 0.05, `East Beach paints with game shading (coverage ${(beachCov * 100).toFixed(1)}% > 5%)`);
@@ -1177,6 +1184,87 @@ else {
     return n;
   });
   ok(doubled === 0, `no spawn is drawn twice over the game's frame (${doubled} three.js spawn batches on the camera layer)`);
+  // Inspect picks what the view shows, whoever draws it: scenery the game's frame draws (hidden from three's own
+  // camera) and actors posed in their resting animation (their static copies hidden), with game shading on and
+  // off; a pinned part that names a texture previews with it, never the grey stand-in.
+  const setWorldCheck = (label: string, on: boolean) => page.evaluate((label: string, on: boolean) => {
+    const row = [...document.querySelectorAll('.world-panel label, .world-panel .wp-check')].find((x) => x.textContent!.trim() === label);
+    const input = row?.querySelector('input') as any;
+    if (input && input.checked !== on) input.click();
+    return input?.checked ?? null;
+  }, label, on);
+  // screen points over scenery models (shading on: the hidden, game-drawn ones) and over posed actors
+  const pickPoints = (kind: 'scenery' | 'actor') => page.evaluate((kind: string) => {
+    const v = window.__bs.worldView;
+    const cam = v.scene3d.camera;
+    const rect = document.querySelector('.canvas-host canvas')!.getBoundingClientRect();
+    const any = [...v.world.rooms.values()][0].meshes[0];
+    const m4 = new any.matrixWorld.constructor(), out: number[][] = [];
+    const push = (centre: any) => {
+      const s = centre.clone().project(cam);
+      if (Math.abs(s.x) < 0.8 && Math.abs(s.y) < 0.8 && s.z < 1) out.push([rect.left + (s.x + 1) / 2 * rect.width, rect.top + (1 - s.y) / 2 * rect.height]);
+    };
+    if (kind === 'actor') {
+      v.scene3d.scene.getObjectByName('world-spawn-anim')?.children.forEach((group: any) => {
+        const mesh = group.children.find((o: any) => o.isMesh);
+        if (!mesh) return;
+        mesh.updateMatrixWorld(true);
+        if (mesh.isSkinnedMesh) mesh.computeBoundingSphere(); else mesh.geometry.computeBoundingSphere();
+        push((mesh.isSkinnedMesh ? mesh.boundingSphere : mesh.geometry.boundingSphere).center.clone().applyMatrix4(mesh.matrixWorld));
+      });
+      return out;
+    }
+    for (const room of v.world.rooms.values()) for (const mesh of room.meshes) {
+      if (mesh.userData.exact?.category !== 'models' || !(mesh.visible || mesh.userData.pickable) || out.length >= 24) continue;
+      mesh.updateMatrixWorld(true);
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      mesh.getMatrixAt(0, m4);
+      push(mesh.geometry.boundingBox.getCenter(new any.position.constructor()).applyMatrix4(m4).applyMatrix4(mesh.matrixWorld));
+    }
+    return out;
+  }, kind);
+  const readoutText = () => page.evaluate(() => {
+    const r = document.querySelector('.wp-readout') as any;
+    return r && !r.hidden ? r.textContent || '' : '';
+  });
+  await page.evaluate(() => (document.querySelector('.wp-inspect') as any).click());
+  for (const game of [true, false]) {
+    await setWorldCheck('Game shading', game);
+    await sleep(2500);
+    const mode = game ? 'with game shading' : 'without game shading';
+    const scenery = await pickPoints('scenery');
+    let picked = 0, pinPoint: number[] | null = null;
+    for (const [x, y] of scenery.slice(0, 12)) {
+      await page.mouse.move(x, y);
+      await sleep(150);
+      if (await readoutText()) { picked++; pinPoint ??= [x, y]; }
+    }
+    ok(picked > 0, `Inspect picks scenery ${mode} (${picked} of ${Math.min(12, scenery.length)} points)`);
+    const actorPoints = await pickPoints('actor');
+    let actorPicked = 0;
+    for (const [x, y] of actorPoints.slice(0, 6)) {
+      await page.mouse.move(x, y);
+      await sleep(150);
+      if (/Spawn/.test(await readoutText())) actorPicked++;
+    }
+    ok(actorPoints.length > 0 && actorPicked > 0,
+      `Inspect picks posed actors ${mode} (${actorPicked} of ${Math.min(6, actorPoints.length)} in view)`);
+    if (pinPoint) {
+      await page.mouse.move(pinPoint[0], pinPoint[1]);
+      await sleep(150);
+      await page.mouse.click(pinPoint[0], pinPoint[1]);
+      const pin = await page.waitForFunction(() => {
+        const info = window.__bs.worldView.inspectInfo();
+        return info.pinned && info.previewMeshes > 0 ? info : false;
+      }, { timeout: 30000 }).then((h) => h.jsonValue()).catch(() => null) as any;
+      ok(!!pin && pin.previewMissingTextures === 0,
+        `a pinned part previews with its own textures ${mode} (${pin ? `${pin.previewMeshes} meshes, ${pin.previewMissingTextures} without` : 'nothing pinned'})`);
+      await page.evaluate(() => window.__bs.worldView.unpinInspect());
+    }
+  }
+  await setWorldCheck('Game shading', true);
+  await page.evaluate(() => (document.querySelector('.wp-inspect') as any).click());
+  await sleep(1500);
   // The ground plane: Hopeport's floor around the room, removed under its
   // ground, and its own sea bed under the water, drawn by the game's frame.
   const plane = await page.evaluate(() => {

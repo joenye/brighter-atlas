@@ -713,6 +713,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let overlayFill: HTMLElement | null = null;
   let overlayPct: HTMLElement | null = null;
   let overlayProgress = 0;
+  let overlayTitle: HTMLElement | null = null;
   let gateResolve: ((v: boolean) => void) | null = null;
   // Loading every room is deliberately gated behind an explicit confirmation:
   // the merged world is heavy (all rooms streamed + baked; roughly 1 to 2 GB of
@@ -725,6 +726,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     bar.hidden = true;
     overlayPct.hidden = true;
     const title = el('div', { class: 'wlo-title', text: 'Load the whole world?' });
+    overlayTitle = title;
     const note = el('p', {
       class: 'wlo-note',
       text: 'Streams every extracted room into one scene and bakes it for fast '
@@ -773,9 +775,16 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }).catch(() => {});
   }
   const roomPhaseShare = () => (merged ? 0.5 : 0.95);
-  function setOverlayProgress(fraction: number): void {
+  // With the game's shading on, the world is shown only once the nearest rooms are drawn in it: loading and
+  // baking take the bar to 85%, shading those rooms the rest.
+  const allGameWanted = () => allMode && !!state.game && renderer.getContext() instanceof WebGL2RenderingContext
+    && (!world.index || !!world.index.render);
+  const SHADING_SHARE = 0.15;
+  function setOverlayProgress(fraction: number, shading = false): void {
     if (!overlay) return;
-    overlayProgress = Math.max(overlayProgress, Math.min(1, Number(fraction) || 0));
+    const f = Math.min(1, Number(fraction) || 0);
+    const share = allGameWanted() ? 1 - SHADING_SHARE : 1;
+    overlayProgress = Math.max(overlayProgress, shading ? 1 - SHADING_SHARE + SHADING_SHARE * f : f * share);
     overlayFill!.style.width = `${(overlayProgress * 100).toFixed(1)}%`;
     overlayPct!.textContent = `${Math.round(overlayProgress * 100)}%`;
   }
@@ -785,6 +794,34 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     overlay = null;
     node.classList.add('done');
     setTimeout(() => node.remove(), 450);
+  }
+
+  // --- the room with the game's shading: shown once its frame is built ---------------------------------------
+  // The room loads in three's plain drawing and the game's frame is built after it. With the game's shading on,
+  // the canvas stays hidden behind the site's loading ring until that frame is ready, so the plain drawing is never
+  // shown first (a room the frame cannot build is shown in the plain drawing). The ring spins while the room loads,
+  // then fills as the frame's draws are built.
+  let gameUnavailable = false;
+  let loadFailed = false;
+  let unshadedFrames = 0;   // (tests: frames shown in the plain drawing while the game's shading was wanted)
+  const curtain = el('div', { class: 'load-card spin world-curtain', role: 'status', 'aria-label': 'Loading the room', hidden: true });
+  curtain.innerHTML = '<svg viewBox="0 0 44 44" aria-hidden="true"><circle class="pl-track" cx="22" cy="22" r="19" /><circle class="pl-fill" cx="22" cy="22" r="19" /></svg>';
+  const curtainFill = curtain.querySelector('.pl-fill') as SVGCircleElement;
+  if (!allMode) host.appendChild(curtain);
+  let curtainShown = false;
+  const curtainWanted = () => !allMode && !!state.game && !gameFrame && !gameUnavailable && !loadFailed && !destroyed;
+  function syncCurtain(): void {
+    const want = curtainWanted();
+    if (want === curtainShown) return;
+    curtainShown = want;
+    curtain.hidden = !want;
+    renderer.domElement.style.visibility = want ? 'hidden' : '';
+  }
+  /** The ring's fill (0 to 1), or null: it spins (how far the load is cannot be told). */
+  function setCurtainProgress(fraction: number | null): void {
+    curtain.classList.toggle('spin', fraction === null);
+    curtainFill.style.strokeDashoffset = fraction === null ? '' : String(119.4 * (1 - Math.max(0, Math.min(1, fraction))));
+    curtain.setAttribute('aria-label', fraction === null ? 'Loading the room' : `Loading the room, ${Math.round(fraction * 100)}%`);
   }
 
   // --- inspect mode toggle ----------------------------------------------------
@@ -1065,7 +1102,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let savedCamera: { fov: number; near: number; far: number } | null = null;
   function applyGameShading(): void {
     if (allMode) {
-      if (!state.game) stopWorldGame();
+      if (!state.game) { stopWorldGame(); shadeRing.hidden = true; }
       else worldGameRanked = 0;
       return;
     }
@@ -1091,11 +1128,15 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let gameBuilds = 0;
   async function setupGameShading(room: any): Promise<void> {
     const gl = renderer.getContext();
-    if (allMode || !world.index?.render || !(gl instanceof WebGL2RenderingContext)) return;
+    if (allMode) return;
+    if (!world.index?.render || !(gl instanceof WebGL2RenderingContext)) { gameUnavailable = true; return; }
     gameBuilds++;
     try {
       const frame = new GameFrame(gl, (rel: string) => app.store.url(rel), world.index.render, world.tileUnits);
+      setCurtainProgress(0);
+      frame.onBuildProgress = (fraction) => setCurtainProgress(fraction);
       await frame.setRoom(await world.gameRoomSource(room, world.neighbourRooms()));
+      frame.onBuildProgress = null;
       renderer.resetState();
       if (destroyed) return;
       frame.showPlane = !!state.ground;
@@ -1111,6 +1152,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       setupStory(room.id);
     } catch (error) {
       renderer.resetState();
+      gameUnavailable = true;
       console.warn('game shading unavailable for this room', error);
     } finally {
       gameBuilds--;
@@ -1590,6 +1632,60 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
     if (steady) bakeWorldShadows(eye);
     syncWorldFarFloor();
+    worldRevealCheck(eye, far, wanted);
+  }
+
+  // With the game's shading, All rooms is shown once the rooms nearest the camera are drawn in it (the overlay
+  // waits for the first ones the view asks for, at most WORLD_REVEAL_MAX_MS); while rooms in view are still
+  // being shaded after that, the site's loading ring fills at the foot of the view. A room is never shown in the
+  // plain drawing first.
+  let worldRevealSince = 0;
+  let worldRevealWanted: Set<number> | null = null;
+  const WORLD_REVEAL_MAX_MS = 30000;
+  const shadeRing = el('div', { class: 'load-card world-shading-ring', role: 'status', 'aria-label': 'Shading the rooms in view', hidden: true });
+  shadeRing.innerHTML = '<svg viewBox="0 0 44 44" aria-hidden="true"><circle class="pl-track" cx="22" cy="22" r="19" /><circle class="pl-fill" cx="22" cy="22" r="19" /></svg>';
+  const shadeRingFill = shadeRing.querySelector('.pl-fill') as SVGCircleElement;
+  if (allMode) host.appendChild(shadeRing);
+  /** The rooms in view within the shading distance, and those drawn in the game's frame (on their own or in their
+   *  cell's cluster) or given up on. */
+  function worldShaded(eye: THREE.Vector3, far: number): { done: number; total: number } {
+    const camera = scene3d.camera;
+    camera.updateMatrixWorld();
+    frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    worldFrustum.setFromProjectionMatrix(frustumMatrix);
+    let total = 0, done = 0;
+    for (const room of worldGameRooms.values()) {
+      if (far !== Infinity && groundDistance2(room.box, eye) > far) continue;
+      worldBox.min.set(room.box[0], room.box[1], room.box[2]); worldBox.max.set(room.box[3], room.box[4], room.box[5]);
+      if (!worldFrustum.intersectsBox(worldBox.applyMatrix4(worldFromNative))) continue;
+      total++;
+      if (room.scene || room.cell.clusters || room.failed || room.cell.clusterFailed) done++;
+    }
+    return { done, total };
+  }
+  function worldRevealCheck(eye: THREE.Vector3, far: number, wanted: WorldGameRoom[]): void {
+    if (worldRevealSince && overlay) {
+      worldRevealWanted ??= new Set(wanted.map((room) => room.id));
+      let done = 0;
+      for (const id of worldRevealWanted) {
+        const room = worldGameRooms.get(id);
+        if (!room || room.scene || room.failed) done++;
+      }
+      const total = worldRevealWanted.size;
+      setOverlayProgress(total ? done / total : 1, true);
+      if (done < total && performance.now() - worldRevealSince < WORLD_REVEAL_MAX_MS) return;
+      setOverlayProgress(1, true);
+      dismissOverlay();
+    }
+    worldRevealSince = 0;
+    worldRevealWanted = null;
+    if (overlay) return;
+    const { done, total } = worldShaded(eye, far);
+    shadeRing.hidden = done >= total;
+    if (!shadeRing.hidden) {
+      shadeRingFill.style.strokeDashoffset = String(119.4 * (1 - done / total));
+      shadeRing.setAttribute('aria-label', `Shading the rooms in view, ${done} of ${total}`);
+    }
   }
 
   /** Everything kept: the shadow maps of the cells whose casters changed (a cell joined within reach), nearest
@@ -1792,6 +1888,9 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       this._lastT = t;
       for (const fn of this._ticks) fn(dt);
       this.controls.update();
+      // (the game's shading wanted but its frame not built yet: nothing drawn, the canvas hidden behind the ring)
+      syncCurtain();
+      if (curtainShown) { requestAnimationFrame(this._loop); return; }
       if (gameActive()) {
         world.root.updateMatrixWorld();
         const camera = currentGameCamera();
@@ -1819,6 +1918,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       } else {
         if (gameBuilds) this.renderer.resetState();
         syncActorLayers(false);
+        if (state.game && !gameUnavailable && world.rooms.size) unshadedFrames++;
         this.renderer.render(this.scene, this.camera);
       }
       requestAnimationFrame(this._loop);
@@ -2428,6 +2528,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     stallPhase('ready');
     hud.setStage(`ready · ${allProgress?.loaded ?? world.rooms.size} rooms`, { steady: true });
     setOverlayProgress(1);
+    // (with the game's shading: the overlay stays until the nearest rooms are drawn in it, worldRevealCheck)
+    if (allGameWanted() && overlay) {
+      if (overlayTitle) overlayTitle.textContent = 'Shading the nearest rooms';
+      return;
+    }
     dismissOverlay();
   }
   // Chunked release of whatever per-room graph remains, then the shared
@@ -3161,12 +3266,39 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     for (const room of world.rooms.values()) {
       if (!room.group.visible) continue;
       for (const mesh of room.meshes) {
-        if (mesh.visible && mesh.parent?.visible) candidates.push(mesh);
+        // (a piece the game's frame draws is hidden from three but shown: pickable as it is)
+        if ((mesh.visible || mesh.userData.pickable) && mesh.parent?.visible) candidates.push(mesh);
       }
     }
-    return raycaster.intersectObjects(candidates, false).find(
-      (hit) => Number.isInteger(hit.instanceId),
+    const hit = raycaster.intersectObjects(candidates, false).find(
+      (h) => Number.isInteger(h.instanceId),
     ) || null;
+    const actor = pickPosedActor();
+    return actor && (!hit || actor.distance < hit.distance) ? actor : hit;
+  }
+  // A posed actor (a resting or pinned animation) stands in for its static instances, which are hidden: a hit on
+  // it is a hit on the static it replaces, with that static's own placement (its matrix is zeroed while hidden).
+  function pickPosedActor(): any {
+    let best: any = null;
+    const posed = [...persistentAnims.values(), ...(spawnAnim ? [spawnAnim] : [])];
+    for (const sa of posed) {
+      const hidden = sa?._hiddenGraph;
+      const group = sa?.composite?.group;
+      if (!hidden?.length || !group?.visible || !group.parent) continue;
+      if (!world.rooms.get(Number(sa.info?.room))?.group.visible) continue;
+      if (!state.spawns) continue;
+      const hits = raycaster.intersectObject(group, true);
+      if (!hits.length || (best && hits[0].distance >= best.distance)) continue;
+      const first = hidden[0];
+      best = { object: first.mesh, instanceId: first.instanceId, distance: hits[0].distance, point: hits[0].point, matrix: first.original };
+    }
+    return best;
+  }
+  /** A pick hit's instance matrix: its own, or the placement a posed actor's hidden static keeps. */
+  function hitInstanceMatrix(hit: any, out: THREE.Matrix4): THREE.Matrix4 {
+    if (hit.matrix) return out.copy(hit.matrix);
+    hit.object.getMatrixAt(hit.instanceId, out);
+    return out;
   }
 
   const identifier = (value: any, prefix = '#'): string => (
@@ -3372,7 +3504,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     };
     return preview;
   }
-  function showPreviewMesh(geometry: any, material: any, sourceMatrix: THREE.Matrix4): HTMLElement {
+  function showPreviewMesh(geometry: any, material: any, sourceMatrix: THREE.Matrix4, expectsTexture = false): HTMLElement {
     const p = ensurePreview();
     p.spinner?.removeFromParent();
     const spinner = new THREE.Group();
@@ -3380,6 +3512,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     conversion.rotation.x = -Math.PI / 2;             // native Z-up -> preview Y-up
     conversion.scale.set(1, -world.roomYSign, 1);
     const mesh = new THREE.Mesh(geometry, material || highlightMaterial);
+    mesh.userData.expectsTexture = expectsTexture;
     mesh.matrixAutoUpdate = false;
     mesh.matrix.copy(sourceMatrix);
     mesh.matrix.elements[12] = 0;                     // keep orientation, drop position
@@ -3431,6 +3564,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       scratch.elements[13] -= base[13];   // whole assembly is recentred below
       scratch.elements[14] -= base[14];
       const mesh = new THREE.Mesh(member.geometry, mats[i] || highlightMaterial);
+      mesh.userData.expectsTexture = Number(member.info.renderTexture) >= 0;
       mesh.matrixAutoUpdate = false;
       mesh.matrix.copy(scratch);
       conversion.add(mesh);
@@ -4515,7 +4649,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     } catch { material = null; }
     if (destroyed || pinnedCtx?.entryIndex !== hit.entryIndex) return;
     pickIndex.matrix(hit.entryIndex, pickMatrix);
-    showPreviewMesh(hit.geometry, material, pickMatrix);
+    showPreviewMesh(hit.geometry, material, pickMatrix, Number(info.renderTexture) >= 0);
     // re-render the readout so the preview slots in above the edit tools
     if (pinnedCtx) showReadout(pinnedCtx.info, true);
   }
@@ -4909,7 +5043,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         highlight.removeFromParent();
         highlight.geometry = hit.object.geometry;
       }
-      hit.object.getMatrixAt(hit.instanceId, highlight.matrix);
+      hitInstanceMatrix(hit, highlight.matrix);
       for (let node = hit.object; node && node !== world.root; node = node.parent) {
         highlight.matrix.premultiply(node.matrix);
       }
@@ -4917,8 +5051,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       highlightRoot.add(highlight);
     }
     if (pinned) {
-      hit.object.getMatrixAt(hit.instanceId, editScratch);
-      showPreviewMesh(hit.object.geometry, hit.object.material, editScratch);
+      hitInstanceMatrix(hit, editScratch);
+      showPreviewMesh(hit.object.geometry, hit.object.material, editScratch, Number(info.renderTexture) >= 0);
     }
     showReadout(info, inspectPinned);
     if (pinned) syncSpawnAnim();
@@ -5829,7 +5963,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       // neighbours sit at their stitched places around the room
       world.getWorldRoom = (roomId: any) => ({ id: Number(roomId), ...(neighbourOffsets.get(Number(roomId)) ?? { x: 0, y: 0 }) });
       const room = await world.loadRoom(entry.i);
-      if (destroyed || !room) return;
+      if (destroyed) return;
+      if (!room) { gameUnavailable = true; return; }   // (nothing to shade: the ring gives way to the view's status)
       setupProgress(room.id);
       hud.setStage(`ready · ${room.meshes.length} batches`, { steady: true });
       gameSetup = setupGameShading(room);
@@ -5958,9 +6093,16 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     ready = true;
     syncStatus();
     if (!allMode) revealModel();
-    else setupWorldGameShading();
+    else {
+      setupWorldGameShading();
+      // (the plain drawing hidden at once wherever the game's frame will draw; the overlay waits for the rooms in view)
+      if (worldGameOn()) { syncRooms(); worldRevealSince = performance.now(); }
+      else dismissOverlay();
+    }
   })().catch((error) => {
     if (destroyed) return;
+    loadFailed = true;
+    syncCurtain();
     console.warn('world view load failed:', error);
     setStatus(error?.message || String(error), true);
     hud.setStage(error?.message || String(error), { bad: true });
@@ -5997,6 +6139,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     get cameraSpeed() { return fly ? fly.cameraSpeed : null; },
     set cameraSpeed(v) { if (fly && Number.isFinite(v) && v > 0) fly.cameraSpeed = v; },
     get ready() { return ready; },
+    /** Frames shown in the plain drawing while the game's shading was wanted (room view; tests). */
+    get unshadedFrames() { return unshadedFrames; },
     get merged() { return merged; },
     get loadStats() { return loadStats; },
     visibleInstanceCount() {
@@ -6201,6 +6345,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         previewMeshes: (() => {
           let n = 0;
           preview?.spinner?.traverse((o: any) => { if (o.isMesh || o.isSkinnedMesh) n++; });
+          return n;
+        })(),
+        // pinned parts that name a texture but preview without one (the grey stand-in)
+        previewMissingTextures: (() => {
+          let n = 0;
+          preview?.spinner?.traverse((o: any) => { if (o.isMesh && o.userData.expectsTexture && !o.material?.map) n++; });
           return n;
         })(),
         group: pinnedCtx?.group ? {
@@ -6501,6 +6651,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       window.removeEventListener('keydown', onInspectKeyDown);
       window.removeEventListener('dblclick', onDblClickCapture, { capture: true });
       renderer.domElement.style.cursor = '';
+      renderer.domElement.style.visibility = '';   // (the shared canvas, hidden while the room's frame was built)
       disposeSpawnAnim(spawnAnim);
       spawnAnim = null;
       for (const parked of persistentAnims.values()) disposeSpawnAnim(parked);
