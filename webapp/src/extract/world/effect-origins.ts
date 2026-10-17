@@ -261,6 +261,9 @@ export interface CodedOrigin {
   grid?: OriginGrid;
   /** Equally likely points: a particle takes one at random. */
   table?: [number, number, number][];
+  /** The last variable, after the system's numbers: the particle's time on its system's clock (seconds from the
+   *  system's start) through this window, 0 before it and 1 after. */
+  time?: {from: number; to: number};
 }
 export interface OriginGrid { res: number[]; values: [number[], number[], number[]] }
 
@@ -328,6 +331,25 @@ export function validEffectOriginsCoded(v: any): v is CodedOriginBinding[] {
   }) && new Set(v.map((b: any) => `${b.instance}|${b.owner}`)).size === v.length;
 }
 
+// An origin like a coded one that also moves with the particle's time on its system's clock (from 2026-10): its last
+// variable, after the system's numbers, is that time (seconds from the system's start) through the window [from, to],
+// 0 before it and 1 after (rocks falling from a point that slides along a ledge as the burst goes on, say). Per shape
+// and owner instance, or per shape record (`slot`). Kept apart.
+export interface TimedOriginBinding extends CodedOriginBinding { time: {from: number; to: number}; slot?: number }
+export function validEffectOriginsTimed(v: any): v is TimedOriginBinding[] {
+  return Array.isArray(v) && v.length <= 65536 && v.every((b: any) => {
+    const t = b?.time;
+    if (!t || Object.keys(t).length !== 2 || !Number.isFinite(t.from) || !Number.isFinite(t.to) || t.from < 0
+      || t.to <= t.from || t.to > 3600) return false;
+    if (b.slot !== undefined && (!Number.isInteger(b.slot) || b.slot < 0 || b.slot >= 2 ** 31)) return false;
+    if (!Array.isArray(b.axes) || b.axes.length !== 3 || !b.axes.every((a: any) => Array.isArray(a) && a.length >= 2)) return false;
+    // (without its time, a coded row over half the terms)
+    const {time, slot, axes, ...rest} = b;
+    return axes.every((a: any) => a.every(Number.isFinite))
+      && validEffectOriginsCoded([{...rest, axes: axes.map((a: any) => a.slice(0, a.length / 2))}]);
+  }) && new Set(v.map((b: any) => b.slot !== undefined ? `s${b.slot}` : `${b.instance}|${b.owner}`)).size === v.length;
+}
+
 // A wandering source (from 2026-10): each batch of `period` particles spawns about one seeded spot along a tilted
 // streak (angle round the centre, tilt, half length and sign, height, base radius). Each value is a multilinear
 // polynomial over seeded draws (the batch's or the particle's place in it, with a salt); its terms name the draws by
@@ -390,19 +412,23 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
   objects: ConstructorRecord[], cylinders?: CylinderOriginBinding[], discs?: DiscOriginBinding[], lines?: LineOriginBinding[],
   boxes?: BoxOriginBinding[], wanders?: WanderOriginBinding[], codedRadials?: RadialCodedBinding[],
   codedOrigins?: CodedOriginBinding[], directions?: OriginDirectionBinding[], sourced?: RadialSourcedBinding[],
-  tabulated?: TabulatedOriginBinding[], perRecord?: PerRecordOriginBinding[], cones?: ConeDirectionBinding[]) {
+  tabulated?: TabulatedOriginBinding[], perRecord?: PerRecordOriginBinding[], cones?: ConeDirectionBinding[],
+  timed?: TimedOriginBinding[]) {
   if (cones !== undefined && !validEffectDirections(cones)) throw Error('invalid effect direction bindings');
   const coneOf = instanceLookup((cones || []).map(b => [b.instance, b] as const), objects);
   if (perRecord !== undefined && !validEffectOriginsPerRecord(perRecord)) throw Error('invalid effect per-record origin bindings');
-  const recordRows = new Map<number, CodedOriginBinding | TabulatedOriginBinding>((perRecord || []).map(b => [b.slot, b] as const));
+  if (timed !== undefined && !validEffectOriginsTimed(timed)) throw Error('invalid effect timed origin bindings');
+  const recordRows = new Map<number, CodedOriginBinding | TabulatedOriginBinding | TimedOriginBinding>(
+    [...(perRecord || []), ...(timed || []).filter(b => b.slot !== undefined)].map(b => [b.slot!, b] as const));
   if (tabulated !== undefined && !validEffectOriginsTabulated(tabulated)) throw Error('invalid effect tabulated origin bindings');
   if (sourced !== undefined && !validEffectRadialsSourced(sourced)) throw Error('invalid effect sourced radial bindings');
   const sourcedOf = instanceLookup((sourced || []).map(b => [b.instance, b] as const), objects);
   if (directions !== undefined && !validEffectOriginDirections(directions)) throw Error('invalid effect origin direction bindings');
   const directionOf = instanceLookup((directions || []).map(b => [b.instance, b] as const), objects);
   if (codedOrigins !== undefined && !validEffectOriginsCoded(codedOrigins)) throw Error('invalid effect coded origin bindings');
-  const coded = new Map<string, CodedOriginBinding | TabulatedOriginBinding>(
-    [...(codedOrigins || []), ...(tabulated || [])].map(b => [`${b.instance}|${b.owner}`, b] as const));
+  const coded = new Map<string, CodedOriginBinding | TabulatedOriginBinding | TimedOriginBinding>(
+    [...(codedOrigins || []), ...(tabulated || []), ...(timed || []).filter(b => b.slot === undefined)]
+      .map(b => [`${b.instance}|${b.owner}`, b] as const));
   // (the shape's own instance, and its owner's: the record its op 0 names)
   const instanceOf = (slot: number): number | null => {
     const v = objects[slot]?.values?.[1];
@@ -444,8 +470,8 @@ export function createEffectOriginReader(bindings: EffectOriginBinding[] | undef
         if (values.some(n => n === null)) return null;
         fieldValues = values as number[];
       }
-      const t = got as TabulatedOriginBinding;
-      return {kind: 'coded', coded: {draws: got.draws,
+      const t = got as TabulatedOriginBinding, window = (got as TimedOriginBinding).time;
+      return {kind: 'coded', coded: {draws: got.draws, ...(window ? {time: {from: window.from, to: window.to}} : {}),
         ...(got.axes ? {axes: got.axes.map(a => [...a]) as [number[], number[], number[]]} : {}),
         ...(t.grid ? {grid: {res: [...t.grid.res], values: t.grid.values.map(a => [...a]) as [number[], number[], number[]]}} : {}),
         ...(t.table ? {table: t.table.map(p => [...p] as [number, number, number])} : {}),

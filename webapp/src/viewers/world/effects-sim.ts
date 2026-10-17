@@ -756,6 +756,8 @@ export class EmitterSim {
         const n = cd.steps?.[i] ?? 0;
         return n > 0 ? Math.min(n, Math.floor(f * (n + 1))) / n : f;
       }).concat(cd.fieldValues ?? []);
+      // (then the particle's time on its system's clock through its window, 0 before and 1 after)
+      if (cd.time) u.push(Math.min(1, Math.max(0, (tick / this.tickRate - cd.time.from) / (cd.time.to - cd.time.from))));
       if (cd.grid) return gridPoint(cd.grid, u);
       return (cd.axes ?? [[0], [0], [0]]).map((coef) => coef.reduce((sum, c, k) => {
         if (!c) return sum;

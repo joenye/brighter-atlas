@@ -8,7 +8,7 @@ import {validEffectSpeeds, type EffectSpeedBinding} from './effect-fields.js';
 import {validEffectColours, validEffectColourTables, validEffectColourTablesOwned, type EffectColourMixBinding,
   type EffectColourTableBinding, type EffectColourTableOwnedBinding} from './effect-properties.js';
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
-import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, validEffectOriginsCoded, validEffectOriginsTabulated, type TabulatedOriginBinding, validEffectOriginsPerRecord, type PerRecordOriginBinding, validEffectDirections, type ConeDirectionBinding, validEffectOriginsNoTarget, validEffectOriginDirections, validEffectRadialsSourced, type OriginDirectionBinding, type RadialSourcedBinding, type WanderOriginBinding, type RadialCodedBinding, type CodedOriginBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
+import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, validEffectOriginsCoded, validEffectOriginsTabulated, type TabulatedOriginBinding, validEffectOriginsPerRecord, validEffectOriginsTimed, type PerRecordOriginBinding, type TimedOriginBinding, validEffectDirections, type ConeDirectionBinding, validEffectOriginsNoTarget, validEffectOriginDirections, validEffectRadialsSourced, type OriginDirectionBinding, type RadialSourcedBinding, type WanderOriginBinding, type RadialCodedBinding, type CodedOriginBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
 import {validEffectBurstGates, type EffectGateBinding} from './effect-gates.js';
 import {validEffectFields, validEffectPropertySources, type EffectFieldData, type PropertySourceBinding} from './effect-fields.js';
@@ -25,6 +25,7 @@ import type {WorldProfile} from './profile.js';
 import type {RoomRowRef, SpawnRecord} from './spawns.js';
 import {PoolDecoder, profileArities} from './value-pool.js';
 import {readAppearanceControllers} from './default-appearance.js';
+import {validStateRecords, type StateRecordBinding} from './state-records.js';
 import type {EffectMotion} from './effect-motion.js';
 
 export interface PlacementDecodeData {
@@ -36,6 +37,8 @@ export interface PlacementDecodeData {
   defaultAppearances?: {runtime:number; start:number; end:number}[];
   appearanceCandidates?: {runtime:number; fields:number[]}[];
   appearanceGlobals?: {runtime:number; spans:[number,number][]}[];
+  /** Classes whose named record the game picks by story progress (state-records.ts). */
+  stateRecords?: StateRecordBinding[];
   effectScales?: EffectScaleBinding[];
   effectWindows?: EffectWindowBinding[];
   effectSprites?: EffectSpriteBinding[];
@@ -50,6 +53,8 @@ export interface PlacementDecodeData {
   effectOriginsCoded?: CodedOriginBinding[];
   effectOriginsTabulated?: TabulatedOriginBinding[];
   effectOriginsPerRecord?: PerRecordOriginBinding[];
+  /** Coded start points that also move with the particle's time on its system's clock. */
+  effectOriginsTimed?: TimedOriginBinding[];
   effectDirections?: ConeDirectionBinding[];
   /** Shape instances whose start point needs something targeted: nothing is drawn for them with nobody acting. */
   effectOriginsNoTarget?: number[];
@@ -115,6 +120,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
       ||new Set(values.map(v=>v.runtime)).size!==values.length)
       throw Error('invalid appearance global bindings');
   }
+  if(data.stateRecords!==undefined&&!validStateRecords(data.stateRecords))throw Error('invalid state record bindings');
   if(data.effectMotion!==undefined){
     const {controllers,settings}=data.effectMotion??{};
     const unique=(values:any)=>Array.isArray(values)&&values.length<=65536
@@ -137,6 +143,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectOriginsCoded!==undefined&&!validEffectOriginsCoded(data.effectOriginsCoded))throw Error('invalid effect coded origin bindings');
   if(data.effectOriginsTabulated!==undefined&&!validEffectOriginsTabulated(data.effectOriginsTabulated))throw Error('invalid effect tabulated origin bindings');
   if(data.effectOriginsPerRecord!==undefined&&!validEffectOriginsPerRecord(data.effectOriginsPerRecord))throw Error('invalid effect per-record origin bindings');
+  if(data.effectOriginsTimed!==undefined&&!validEffectOriginsTimed(data.effectOriginsTimed))throw Error('invalid effect timed origin bindings');
   if(data.effectDirections!==undefined&&!validEffectDirections(data.effectDirections))throw Error('invalid effect direction bindings');
   if(data.effectOriginsNoTarget!==undefined&&!validEffectOriginsNoTarget(data.effectOriginsNoTarget))throw Error('invalid effect no-target shapes');
   if(data.effectBurstGates!==undefined&&!validEffectBurstGates(data.effectBurstGates))throw Error('invalid effect burst gate bindings');

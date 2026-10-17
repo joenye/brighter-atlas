@@ -823,7 +823,7 @@ export async function extractWorld({
         placementBindings?.effectRadialsSourced || placementBindings?.effectRadialsYaw
           ? [...(placementBindings?.effectRadialsSourced ?? []), ...(placementBindings?.effectRadialsYaw ?? [])] : undefined,
         placementBindings?.effectOriginsTabulated, placementBindings?.effectOriginsPerRecord,
-        placementBindings?.effectDirections),
+        placementBindings?.effectDirections, placementBindings?.effectOriginsTimed),
       effectNoTarget: createEffectNoTargetReader(placementBindings?.effectOriginsNoTarget, objects),
       effectSpeed: createEffectSpeedReader(placementBindings?.effectSpeeds, objects),
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
