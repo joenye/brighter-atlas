@@ -452,6 +452,9 @@ export class WorldEffectsLayer {
       // child rigs and older documents still need their own resolved frames.
       const animationSetters: ((animation: EffectBoneAnimation | null) => void)[] = [];
       system.emitters.forEach((emitter, index) => {
+        // A shape the game places only once something is targeted: shown with nobody acting (an action, a one-off, another
+        // state), the game spawns none of its particles.
+        if (kind !== 'rest' && kind !== 'extras' && (this.doc.configs || {})[String(emitter.shape)]?.no_target) return;
         // A burst that emits only in some states of a quest: as the room's story stands (its end by default).
         const gate = (this.doc.configs || {})[String(emitter.burst)]?.gate;
         if (gate && !gateOpen(gate, opts.storyPosition?.(gate.variable) ?? null)) return;

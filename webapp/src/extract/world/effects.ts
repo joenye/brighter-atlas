@@ -118,6 +118,8 @@ export interface EffectConfig {
   wander?: WanderShapeValues;
   // An origin the code makes from draws alone: each particle's point (the centre is zero).
   coded?: CodedOrigin;
+  // The game places this shape's particles only once something is targeted: with nobody acting it spawns none.
+  no_target?: boolean;
   // 'bound': origin and direction come from verified per-build decode
   // data rather than the structural shape guess.
   origin?: 'bound';
@@ -315,6 +317,7 @@ export interface WorldEffectsShared {
   effectSprites?: ReturnType<typeof createEffectSpriteReader>;
   effectFacing?: ReturnType<typeof createEffectFacingReader>;
   effectOrigin?: ReturnType<typeof createEffectOriginReader>;
+  effectNoTarget?: (slot: number) => boolean;
   effectProperties?: ReturnType<typeof createEffectPropertyReader>;
   effectColour?: ReturnType<typeof createEffectColourReader>;
   effectColourTable?: ReturnType<typeof createEffectColourTableReader>;
@@ -1617,6 +1620,7 @@ function extractEffects(
       cfg.windows = emissionWindow.windows; cfg.emission_window = emissionWindow;
     }
     const origin = shared.effectOrigin?.(slot, decoded.get(slot) || [], (s) => decoded.get(s) ?? null);
+    if (shared.effectNoTarget?.(slot)) cfg.no_target = true;
     if (origin?.kind === 'radial') {
       cfg.kind = 'shape'; cfg.shape_kind = 'radial'; cfg.center = origin.radial.center;
       cfg.radial = origin.radial; cfg.origin = 'bound';

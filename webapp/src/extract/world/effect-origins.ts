@@ -222,6 +222,18 @@ export interface ConeDirectionBinding {
   instance: number; axis: number; yaw: [number, number]; pitch: [number, number];
   samples: [number | {seeded: number}, number | {seeded: number}]; uniformClass: number;
 }
+// Shapes whose start point the game cannot place with nobody acting (from 2026-10): it needs something targeted, and
+// without it the game spawns none of the shape's particles. A list of shape instances, kept apart.
+export function validEffectOriginsNoTarget(v: any): v is number[] {
+  return Array.isArray(v) && v.length <= 65536 && v.every(bindingIndex) && new Set(v).size === v.length;
+}
+/** Whether a shape's start point needs something targeted (see validEffectOriginsNoTarget). */
+export function createEffectNoTargetReader(list: number[] | undefined, objects: ConstructorRecord[]) {
+  if (list !== undefined && !validEffectOriginsNoTarget(list)) throw Error('invalid effect no-target shapes');
+  const of = instanceLookup((list || []).map(i => [i, true] as const), objects);
+  return (slot: number): boolean => !!of(slot);
+}
+
 export function validEffectDirections(v: any): v is ConeDirectionBinding[] {
   const pair = (p: any) => Array.isArray(p) && p.length === 2 && p.every(bindingIndex);
   const sample = (x: any) => bindingIndex(x) || (x && Number.isInteger(x.seeded) && x.seeded >= 0 && x.seeded < 2 ** 32);

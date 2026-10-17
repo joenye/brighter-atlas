@@ -8,7 +8,7 @@ import {validEffectSpeeds, type EffectSpeedBinding} from './effect-fields.js';
 import {validEffectColours, validEffectColourTables, validEffectColourTablesOwned, type EffectColourMixBinding,
   type EffectColourTableBinding, type EffectColourTableOwnedBinding} from './effect-properties.js';
 import {validEffectFacings, type EffectFacingBinding} from './effect-facing.js';
-import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, validEffectOriginsCoded, validEffectOriginsTabulated, type TabulatedOriginBinding, validEffectOriginsPerRecord, type PerRecordOriginBinding, validEffectDirections, type ConeDirectionBinding, validEffectOriginDirections, validEffectRadialsSourced, type OriginDirectionBinding, type RadialSourcedBinding, type WanderOriginBinding, type RadialCodedBinding, type CodedOriginBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
+import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectSegments, validEffectBoxes, validEffectWanders, validEffectRadialsCoded, validEffectOriginsCoded, validEffectOriginsTabulated, type TabulatedOriginBinding, validEffectOriginsPerRecord, type PerRecordOriginBinding, validEffectDirections, type ConeDirectionBinding, validEffectOriginsNoTarget, validEffectOriginDirections, validEffectRadialsSourced, type OriginDirectionBinding, type RadialSourcedBinding, type WanderOriginBinding, type RadialCodedBinding, type CodedOriginBinding, type BoxOriginBinding, type EffectOriginBinding, type CylinderOriginBinding, type DiscOriginBinding, type LineOriginBinding} from './effect-origins.js';
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
 import {validEffectBurstGates, type EffectGateBinding} from './effect-gates.js';
 import {validEffectFields, validEffectPropertySources, type EffectFieldData, type PropertySourceBinding} from './effect-fields.js';
@@ -51,6 +51,8 @@ export interface PlacementDecodeData {
   effectOriginsTabulated?: TabulatedOriginBinding[];
   effectOriginsPerRecord?: PerRecordOriginBinding[];
   effectDirections?: ConeDirectionBinding[];
+  /** Shape instances whose start point needs something targeted: nothing is drawn for them with nobody acting. */
+  effectOriginsNoTarget?: number[];
   effectBurstGates?: EffectGateBinding[];
   effectOriginDirections?: OriginDirectionBinding[];
   effectRadialsSourced?: RadialSourcedBinding[];
@@ -134,6 +136,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectOriginsTabulated!==undefined&&!validEffectOriginsTabulated(data.effectOriginsTabulated))throw Error('invalid effect tabulated origin bindings');
   if(data.effectOriginsPerRecord!==undefined&&!validEffectOriginsPerRecord(data.effectOriginsPerRecord))throw Error('invalid effect per-record origin bindings');
   if(data.effectDirections!==undefined&&!validEffectDirections(data.effectDirections))throw Error('invalid effect direction bindings');
+  if(data.effectOriginsNoTarget!==undefined&&!validEffectOriginsNoTarget(data.effectOriginsNoTarget))throw Error('invalid effect no-target shapes');
   if(data.effectBurstGates!==undefined&&!validEffectBurstGates(data.effectBurstGates))throw Error('invalid effect burst gate bindings');
   if(data.effectOriginDirections!==undefined&&!validEffectOriginDirections(data.effectOriginDirections))throw Error('invalid effect origin direction bindings');
   if(data.effectRadialsSourced!==undefined&&!validEffectRadialsSourced(data.effectRadialsSourced))throw Error('invalid effect sourced radial bindings');

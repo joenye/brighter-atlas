@@ -16,7 +16,7 @@ import {createEffectScaleReader} from './effect-scales.js';
 import {createEffectWindowReader} from './effect-windows.js';
 import {createEffectSpriteReader} from './effect-sprites.js';
 import {createEffectFacingReader} from './effect-facing.js';
-import {createEffectOriginReader} from './effect-origins.js';
+import {createEffectOriginReader, createEffectNoTargetReader} from './effect-origins.js';
 import {createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import {createEffectWaveReader} from './effect-waves.js';
 import {readWorldWater, type WorldWater, type WaterDecodeData} from './water-materials.js';
@@ -823,6 +823,7 @@ export async function extractWorld({
           ? [...(placementBindings?.effectRadialsSourced ?? []), ...(placementBindings?.effectRadialsYaw ?? [])] : undefined,
         placementBindings?.effectOriginsTabulated, placementBindings?.effectOriginsPerRecord,
         placementBindings?.effectDirections),
+      effectNoTarget: createEffectNoTargetReader(placementBindings?.effectOriginsNoTarget, objects),
       effectSpeed: createEffectSpeedReader(placementBindings?.effectSpeeds, objects),
       effectProperties: createEffectPropertyReader(placementBindings?.effectProperties,objects,ab0,profile,pool.values),
       effectColour: createEffectColourReader(placementBindings?.effectColours, objects, ab0, profile, pool.values),

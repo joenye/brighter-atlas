@@ -403,5 +403,17 @@ try {
     up.evaluate(30, (...p: number[]) => risen.push(p));
     assert(risen.some(p => p[2] > 1001));
   }
+  // Shapes the game places only once something is targeted: listed by instance, read per slot
+  {
+    assert(T.validEffectOriginsNoTarget([12, 40]));
+    assert(!T.validEffectOriginsNoTarget([12, 12]), 'each instance once');
+    assert(!T.validEffectOriginsNoTarget([-1]));
+    assert(!T.validEffectOriginsNoTarget({12: true}));
+    const needs = T.createEffectNoTargetReader([12], [{values: [0, 12]}, {values: [0, 40]}]);
+    assert.equal(needs(0), true);
+    assert.equal(needs(1), false);
+    assert.equal(T.createEffectNoTargetReader(undefined, [{values: [0, 12]}])(0), false);
+    assert.throws(() => T.createEffectNoTargetReader([12, 12] as any, []));
+  }
   console.log('effect origin extraction, sampled radius, point, position, segment (both routes), disc and box sources, elliptical geometry, direction and seek checks passed');
 } finally { await rm(tmp, {recursive: true, force: true}); }
