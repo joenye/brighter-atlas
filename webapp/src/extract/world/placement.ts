@@ -12,7 +12,7 @@ import {validEffectOrigins, validEffectCylinders, validEffectDiscs, validEffectS
 import {validEffectProperties, type EffectPropertyBinding} from './effect-properties.js';
 import {validEffectBurstGates, type EffectGateBinding} from './effect-gates.js';
 import {validEffectFields, validEffectPropertySources, type EffectFieldData, type PropertySourceBinding} from './effect-fields.js';
-import {validEffectWaves, type EffectWaveData} from './effect-waves.js';
+import {validEffectWaves, validEffectCountDelegates, type EffectWaveData, type EffectCountDelegate} from './effect-waves.js';
 import {validWaterData, type WaterDecodeData} from './water-materials.js';
 import {validRenderBuildData, type RenderBuildData} from './render-data.js';
 import {validTileData, type TileDecodeData} from './tile-colour.js';
@@ -54,6 +54,8 @@ export interface PlacementDecodeData {
   /** Shape instances whose start point needs something targeted: nothing is drawn for them with nobody acting. */
   effectOriginsNoTarget?: number[];
   effectBurstGates?: EffectGateBinding[];
+  /** Bursts whose count asks another burst's (one that follows another's water crests, held back by its emitter). */
+  effectCountDelegates?: EffectCountDelegate[];
   effectOriginDirections?: OriginDirectionBinding[];
   effectRadialsSourced?: RadialSourcedBinding[];
   /** Rings with yaw bounds only (older builds' flat rings): the same form, no pitch or samples. */
@@ -138,6 +140,7 @@ export function validatePlacementData(data:any,hash:string):PlacementDecodeData 
   if(data.effectDirections!==undefined&&!validEffectDirections(data.effectDirections))throw Error('invalid effect direction bindings');
   if(data.effectOriginsNoTarget!==undefined&&!validEffectOriginsNoTarget(data.effectOriginsNoTarget))throw Error('invalid effect no-target shapes');
   if(data.effectBurstGates!==undefined&&!validEffectBurstGates(data.effectBurstGates))throw Error('invalid effect burst gate bindings');
+  if(data.effectCountDelegates!==undefined&&!validEffectCountDelegates(data.effectCountDelegates))throw Error('invalid effect count delegates');
   if(data.effectOriginDirections!==undefined&&!validEffectOriginDirections(data.effectOriginDirections))throw Error('invalid effect origin direction bindings');
   if(data.effectRadialsSourced!==undefined&&!validEffectRadialsSourced(data.effectRadialsSourced))throw Error('invalid effect sourced radial bindings');
   if(data.effectRadialsYaw!==undefined&&(!validEffectRadialsSourced(data.effectRadialsYaw)

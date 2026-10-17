@@ -68,6 +68,13 @@ const WINDOW_SPAWN_CAP = 1e6;
 // Samples further back than this cannot change the state (the waves are
 // bounded sines); a field that never dips below zero simply never fires.
 const WAVE_LOOKBACK_SAMPLES = 4096;
+/** Ticks a gap-timed burst's wait is counted in: the drawn wait, divided by this and cut to a whole number, is how
+ *  many steps after the next one the following burst comes (a step at thirty a second). */
+export const EFFECT_GAP_STEP = 20;
+/** Wave bursts sample the water once per emission step, this many a second. */
+const WAVE_SAMPLES_PER_SECOND = 30;
+// Gap-timed bursts keep the step of every this-many-th burst, so a seek walks at most this many waits.
+const GAP_MARK = 256;
 
 const finite = (value: any, fallback: number): number => (
   Number.isFinite(Number(value)) ? Number(value) : fallback);
@@ -369,7 +376,17 @@ export class EmitterSim {
   private _wavePoint: [number, number] = [0, 0];
   private _waveArmed = false;
   private _waveNext = 0;
+  // A crest held back (`delay` steps): the step it is released at, else -1.
+  private _waveDue = -1;
   private _windowNext = 0;
+  // A continuous stream's steps a second and the particles each releases at once.
+  private _stepRate = 0;
+  private _perStep = 1;
+  // Gap-timed bursts: their waits and count, the next burst (its number and step) and every GAP_MARK-th one's step.
+  private _gaps: { min: number; max: number; count: number } | null = null;
+  private _gapNext = 0;
+  private _gapStep = 0;
+  private _gapMarks: number[] = [0];
   private _lastT = NaN;
   private _dirty = true;
   private _birthPosition: readonly number[] | null = null;
@@ -383,6 +400,7 @@ export class EmitterSim {
    *  separate copies of the same effect never repeat each other's particles. */
   setInstanceSeed(instance: number): void {
     this.seed = hash32(this._baseSeed, instance | 0);
+    this._gapMarks = [0];
     this._dirty = true;
   }
 
@@ -481,7 +499,22 @@ export class EmitterSim {
     // A wave burst's steady density: its count once per crest of the faster wave.
     this._waveCrestRate = this._wave ? Math.max(...this._wave.water.rate.map(Math.abs)) : 0;
     const waveRate = this._wave ? this._wave.count * this._waveCrestRate * tickRate / TWO_PI : 0;
-    const rate = this._wave ? waveRate : Math.max(0, finite(this._eventWindow?.rate ?? burst?.per_second, 0));
+    let rate = this._wave ? waveRate : Math.max(0, finite(this._eventWindow?.rate ?? burst?.per_second, 0));
+    this._stepRate = rate;
+    // Steps that release several particles at once; gap-timed bursts, whose rate is their steps' and whose density
+    // is their count over the mean wait.
+    const plain = !this._wave && !this._eventWindow;
+    // (malformed counts and waits never reach the schedule: a count outside 1 to 65535 is one, bad waits leave the
+    // emitter inert)
+    const perStep = plain && burst?.kind === 'burst_continuous' ? Math.floor(finite(burst.per_step, 1)) : 1;
+    this._perStep = perStep >= 1 && perStep <= 0xffff ? perStep : 1;
+    const gaps = plain && burst?.kind === 'burst_gaps' ? burst.gaps : null;
+    const whole = (v: unknown, hi: number) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= hi;
+    this._gaps = gaps && rate > 0 && whole(gaps.min, 1e7) && whole(gaps.max, 1e7) && gaps.max >= gaps.min
+      && whole(gaps.count, 0xffff) && gaps.count >= 1 ? { min: gaps.min, max: gaps.max, count: gaps.count } : null;
+    if (plain && burst?.kind === 'burst_gaps' && !this._gaps) rate = 0;
+    if (this._gaps) rate = this._gaps.count * tickRate / (this._gapWait((this._gaps.min + this._gaps.max) / 2) * tickRate / rate);
+    else rate *= this._perStep;
     this.rate = rate;
     this.step = rate > 0 ? tickRate / rate : Infinity;
     this.windows = null;
@@ -556,6 +589,9 @@ export class EmitterSim {
     // A crest releases a whole burst at once; hold every burst one life can span.
     if (this._wave) capacity = Math.round(clamp(Math.max(capacity, Math.ceil(this._wave.count / next)
       * (Math.ceil(this.life * this._waveCrestRate / Math.PI) + 2)), 4, PER_EMITTER_CAP));
+    // (every burst one life can span, at the shortest wait)
+    if (this._gaps) capacity = Math.round(clamp(Math.max(capacity, Math.ceil(this._gaps.count / next)
+      * (Math.ceil(this.life / (this._gapWait(this._gaps.min) * this.tickRate / this._stepRate)) + 1)), 4, PER_EMITTER_CAP));
     if (next === this.k && capacity === this.capacity && this.birth) return;
     this.k = next;
     this.capacity = capacity;
@@ -612,9 +648,10 @@ export class EmitterSim {
    *  a one-shot schedule. */
   spawnTick(j: number): number {
     if (!(this.rate > 0) || j < 0) return Infinity;
-    if (this._eventWindow || this._wave) return j >= this.tail && j < this.head ? this.birth[j % this.capacity] : Infinity;
+    if (this._eventWindow || this._wave || this._gaps) return j >= this.tail && j < this.head ? this.birth[j % this.capacity] : Infinity;
     const n = j * this.k;
     if (n >= this.totalCount) return Infinity;
+    if (!this.windows && this._perStep > 1) return Math.trunc(Math.floor(n / this._perStep) * this.tickRate / this._stepRate);
     // Birth timestamps use integral ticks. Eligibility still follows the
     // emission counter: several particles may share a timestamp without
     // all becoming eligible at that rounded-down time.
@@ -632,8 +669,10 @@ export class EmitterSim {
 
   private _continuousEnd(T: number): number {
     if (T < 0) return 0;
-    const counter = Math.min(0x7fffffff,
-      Math.trunc(Math.fround(Math.fround(T * this.rate) / Math.fround(this.tickRate))));
+    const steps = Math.min(0x7fffffff,
+      Math.trunc(Math.fround(Math.fround(T * this._stepRate) / Math.fround(this.tickRate))));
+    // (the last particle of the step at T: steps release _perStep each)
+    const counter = Math.min(0x7fffffff, (steps + 1) * this._perStep - 1);
     return Math.max(0, Math.floor(Math.min(counter, this.totalCount - 1) / this.k) + 1);
   }
 
@@ -910,12 +949,15 @@ export class EmitterSim {
   // below zero re-arms it. The ring stores birth ticks like event windows.
   private _ensureWave(T: number): void {
     const w = this._wave!;
-    const step = w.step;
+    // (the game's thirty samples a second, whatever step an older stored extraction carries)
+    const step = this.tickRate / WAVE_SAMPLES_PER_SECOND;
     const last = Math.floor(T / step);
+    const delay = Math.max(0, Math.floor(finite(w.delay, 0)));
     const dt = T - this._lastT;
     if (this._dirty || !(dt >= 0 && dt <= MAX_CATCHUP_TICKS)) {
       this.tail = this.head = 0;
-      const first = Math.floor((T - this.life) / step) + 1;
+      // (a crest held back fires its particles `delay` steps late: the samples start that much earlier)
+      const first = Math.floor((T - this.life) / step) + 1 - delay;
       let armed = false;
       for (let n = first - 1; n > first - 1 - WAVE_LOOKBACK_SAMPLES; n--) {
         const r = this._waveRatio(n * step);
@@ -924,20 +966,78 @@ export class EmitterSim {
       }
       this._waveArmed = armed;
       this._waveNext = first;
+      this._waveDue = -1;
     }
+    const release = (n: number) => {
+      for (let k = 0; k < w.count; k++) {
+        const counter = n * w.count + k;
+        if (counter % this.k) continue;
+        this._spawn(this.head++, counter, n * step);
+        if (this.head - this.tail > this.capacity) this.tail = this.head - this.capacity;
+      }
+    };
     for (let n = this._waveNext; n <= last; n++) {
       const r = this._waveRatio(n * step);
       if (r >= 1 && this._waveArmed) {
         this._waveArmed = false;
-        for (let k = 0; k < w.count; k++) {
-          const counter = n * w.count + k;
-          if (counter % this.k) continue;
-          this._spawn(this.head++, counter, n * step);
-          if (this.head - this.tail > this.capacity) this.tail = this.head - this.capacity;
-        }
-      } else if (r < 0) this._waveArmed = true;
+        // (a held-back crest is released `delay` steps on, at the first step that does not fire again)
+        if (delay > 0) this._waveDue = n + delay;
+        else release(n);
+      } else {
+        if (r < 0) this._waveArmed = true;
+        if (this._waveDue >= 0 && n >= this._waveDue) { release(n); this._waveDue = -1; }
+      }
     }
     this._waveNext = Math.max(this._waveNext, last + 1);
+    while (this.tail < this.head && this.birth[this.tail % this.capacity] + this.life <= T) this.tail++;
+    this._dirty = false;
+    this._lastT = T;
+  }
+
+  /** Steps from one gap-timed burst to the next for a drawn wait of `ticks`. */
+  private _gapWait(ticks: number): number {
+    return Math.trunc(Math.fround(Math.fround(ticks) / EFFECT_GAP_STEP)) + 1;
+  }
+
+  /** The wait after gap-timed burst `i`, in steps: a whole number of ticks drawn between the two bounds. */
+  private _gapAfter(i: number): number {
+    const g = this._gaps!;
+    const u = hash32(hash32(this.seed, 0x67617073), i | 0) / 4294967296;
+    return this._gapWait(g.min + Math.floor(u * (g.max - g.min + 1)));
+  }
+
+  // Gap-timed bursts: the first at step 0, each next one its drawn wait later. The ring stores birth ticks like
+  // wave bursts; a rebuild starts from the last kept burst step at or before the oldest particle still alive.
+  private _ensureGaps(T: number): void {
+    const g = this._gaps!;
+    const born = (step: number) => Math.trunc(step * this.tickRate / this._stepRate);
+    const dt = T - this._lastT;
+    if (this._dirty || !(dt >= 0 && dt <= MAX_CATCHUP_TICKS)) {
+      this.tail = this.head = 0;
+      const from = T - this.life, marks = this._gapMarks;
+      while (born(marks[marks.length - 1]) <= from) {
+        const m = marks.length - 1;
+        let step = marks[m];
+        for (let i = m * GAP_MARK; i < (m + 1) * GAP_MARK; i++) step += this._gapAfter(i);
+        marks.push(step);
+      }
+      let m = marks.length - 1;
+      while (m > 0 && born(marks[m]) > from) m--;
+      this._gapNext = m * GAP_MARK;
+      this._gapStep = marks[m];
+    }
+    for (let at = born(this._gapStep); at <= T; at = born(this._gapStep)) {
+      if (at + this.life > T) {
+        for (let c = 0; c < g.count; c++) {
+          const counter = this._gapNext * g.count + c;
+          if (counter % this.k) continue;
+          this._spawn(this.head++, counter, at);
+          if (this.head - this.tail > this.capacity) this.tail = this.head - this.capacity;
+        }
+      }
+      this._gapStep += this._gapAfter(this._gapNext);
+      this._gapNext++;
+    }
     while (this.tail < this.head && this.birth[this.tail % this.capacity] + this.life <= T) this.tail++;
     this._dirty = false;
     this._lastT = T;
@@ -971,6 +1071,7 @@ export class EmitterSim {
   ensure(T: number): void {
     if (!(this.rate > 0)) { this._lastT = T; return; }
     if (this._wave) { this._ensureWave(T); return; }
+    if (this._gaps) { this._ensureGaps(T); return; }
     if (this._eventWindow) { this._ensureWindow(T); return; }
     const dt = T - this._lastT;
     if (this._dirty || !(dt >= 0 && dt <= MAX_CATCHUP_TICKS)) {

@@ -31,13 +31,14 @@ import type { EffectFieldBinding, EffectFieldData } from './effect-fields.js';
 import { validEffectFields } from './effect-fields.js';
 import { validEffectFacings, type EffectFacingBinding } from './effect-facing.js';
 import { validEffectWindows, type EffectWindowBinding } from './effect-windows.js';
-import { validEffectWaves, type EffectWaveData } from './effect-waves.js';
+import { validEffectWaves, type EffectWaveData, type EffectCountDelegate } from './effect-waves.js';
 import { validEffectOrigins, type EffectOriginBinding } from './effect-origins.js';
 import type { WaterDecodeData } from './water-materials.js';
 import type { PlacementDecodeData } from './placement.js';
 
-/** Ticks between the water height samples of a wave burst. */
-export const EFFECT_WAVE_STEP = 12;
+/** Ticks between the water height samples of a wave burst: one sample per emission step, thirty a second (the game's
+ *  update batches its work in shorter slices, but samples the water only at each step's own time). */
+export const EFFECT_WAVE_STEP = 20;
 /** Controllers: the record type whose subtree holds them. */
 const CONTROLLER_TYPE = '34f28ba2595bcb34';
 /** Constructor values holding a record's instance and its type. */
@@ -56,6 +57,7 @@ const MARKERS = { speed: '$speed0', color: '$color0', scale: '$scale0', accelera
 const FACING = new Set(['$screen', '$direction_single', '$direction_plus', '$direction_screen', '$velocity_single', '$velocity_screen']
   .map((s) => `symbol:${s}`));
 const FLAGS = new Set(['other:12', 'other:13']);
+const FLAGS_OR_INT = new Set(['other:12', 'other:13', 'int']);
 
 /** One value's kind: class, symbol and tag spelled out. */
 function kindOf(e: EffectExtra): string {
@@ -266,8 +268,12 @@ function windowBindings(configs: Family[], none: number): EffectWindowBinding[] 
 
 /** Wave bursts: a reference to a water style, then its point, count,
  *  threshold and translation-only flag, then only further flags. */
-function waveBindings(reg: EffectRegistry, configs: Family[], styleRuntime: number, water: WaterDecodeData): EffectWaveData['bindings'] {
+function waveBindings(reg: EffectRegistry, configs: Family[], styleRuntime: number, water: WaterDecodeData,
+  delegates: EffectCountDelegate[] = []): EffectWaveData['bindings'] {
   const out: EffectWaveData['bindings'] = [];
+  // (bursts the per-build decode data says follow another burst's crests may carry whole numbers after the flags;
+  // bound once the bursts they follow are)
+  const followers: [Family, number][] = [];
   const only = (op: number, kinds: Set<string> | string) => {
     const set = typeof kinds === 'string' ? new Set([kinds]) : kinds;
     return (f: Family) => f.census[op]?.size > 0 && [...f.census[op]].every((k) => set.has(k));
@@ -280,12 +286,27 @@ function waveBindings(reg: EffectRegistry, configs: Family[], styleRuntime: numb
     if (refs.length !== 1) continue;
     const w = refs[0], n = f.census.length;
     if (!(only(w + 1, 'other:24')(f) && only(w + 2, 'int')(f) && only(w + 3, 'float')(f) && only(w + 4, FLAGS)(f))) continue;
-    if ([...Array(n - w - 5)].some((_, i) => !only(w + 5 + i, FLAGS)(f))) continue;
     if ([...Array(w - 1)].some((_, i) => !only(1 + i, 'int')(f))) continue;
+    if ([...Array(n - w - 5)].some((_, i) => !only(w + 5 + i, FLAGS)(f))) {
+      if (![...Array(n - w - 5)].some((_, i) => !only(w + 5 + i, FLAGS_OR_INT)(f))) followers.push([f, w]);
+      continue;
+    }
     const { amplitude, frequency, rate } = water.styleFields;
     for (const instance of new Set(f.rows.map((r) => r.instance))) {
       out.push({ instance, water: w, point: w + 1, count: w + 2, threshold: w + 3, translation: w + 4,
         waterFields: { amplitude: [...amplitude], frequency: [...frequency], rate: [...rate] } });
+    }
+  }
+  const bound = new Set(out.map((b) => b.instance));
+  const following = new Map(delegates.filter((d) => d.as.some((i) => bound.has(i))).map((d) => [d.instance, d] as const));
+  for (const [f, w] of followers) {
+    const { amplitude, frequency, rate } = water.styleFields;
+    for (const instance of new Set(f.rows.map((r) => r.instance))) {
+      const d = following.get(instance);
+      if (!d || ('field' in d.count && d.count.field !== w + 2)) continue;
+      out.push({ instance, water: w, point: w + 1, count: w + 2, threshold: w + 3, translation: w + 4,
+        waterFields: { amplitude: [...amplitude], frequency: [...frequency], rate: [...rate] },
+        ...('value' in d.count ? { countValue: d.count.value } : {}), ...(d.delay ? { delay: { ...d.delay } } : {}) });
     }
   }
   return out;
@@ -361,7 +382,8 @@ function motionBindings(reg: EffectRegistry, byRuntime: Map<number, number[]>, s
 
 /** Every effect binding found by shape; sections that do not resolve, or do
  *  not pass their reader's checks, are left out. */
-export function effectLayout(reg: EffectRegistry, water: WaterDecodeData | null): EffectBindings {
+export function effectLayout(reg: EffectRegistry, water: WaterDecodeData | null,
+  countDelegates?: EffectCountDelegate[]): EffectBindings {
   const out: EffectBindings = {};
   const byRuntime = slotsByRuntime(reg.rows);
   const markers = new Set(Object.values(MARKERS).map((m) => `symbol:${m}`));
@@ -418,7 +440,7 @@ export function effectLayout(reg: EffectRegistry, water: WaterDecodeData | null)
   }
   const styleRuntime = water ? waterStyleRuntime(reg, byRuntime, water) : null;
   if (water && styleRuntime !== null) {
-    const waves: EffectWaveData = { step: EFFECT_WAVE_STEP, bindings: waveBindings(reg, configs, styleRuntime, water).sort((a, b) => a.instance - b.instance) };
+    const waves: EffectWaveData = { step: EFFECT_WAVE_STEP, bindings: waveBindings(reg, configs, styleRuntime, water, countDelegates).sort((a, b) => a.instance - b.instance) };
     if (waves.bindings.length && validEffectWaves(waves)) out.effectWaves = waves;
     const motion = motionBindings(reg, byRuntime, styleRuntime, water);
     if (motion?.controllers.length) out.effectMotion = motion;

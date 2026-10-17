@@ -100,10 +100,50 @@ export type EffectExtra =        // unknown/unclassified ops ONLY
   | { op: number; kind: 'box'; a: [number, number, number]; b: [number, number, number] }
   | { op: number; kind: 'other'; tag: number };
 
+/** A four-byte field read as one float: its bits as a whole number, else null. */
+function laneInt(floats: number[] | null): number | null {
+  if (!floats || floats.length !== 1 || !Number.isFinite(floats[0])) return null;
+  const view = new DataView(new ArrayBuffer(4));
+  view.setFloat32(0, floats[0]);
+  return view.getInt32(0);
+}
+
+/** Emission records timed by steps, by their values (the owner's back reference left out):
+ *  - a rate and then, in a four-byte field, how many particles each step releases: `rate` steps a second, as a
+ *    continuous stream's, each releasing that many at once (read as a float the count is a tiny denormal);
+ *  - a rate, two waits and a count, then one more whole number: a burst of `count` at the first step, then the next
+ *    after a wait drawn between the two (each wait ends on a step).
+ *  `used`: the values read. */
+export function steppedEmission(ops: EffectExtra[]): { kind: 'burst_continuous' | 'burst_gaps'; perSecond: number;
+  perStep?: number; gaps?: { min: number; max: number; count: number }; used: EffectExtra[] } | null {
+  const own = ops.filter((e) => !(e.kind === 'scalar' && e.tag === -85));
+  const int = (e: EffectExtra) => (e.kind === 'int' ? e.value : null);
+  const ticks = (e: EffectExtra) => (e.kind === 'duration' ? e.ticks : null);
+  const rate = own.length ? int(own[0]) : null;
+  if (rate === null || rate <= 0) return null;
+  if (own.length === 2 && own[1].kind === 'fixed') {
+    const count = laneInt(own[1].floats);
+    return count !== null && count >= 1 && count <= 0xffff
+      ? { kind: 'burst_continuous', perSecond: rate, perStep: count, used: own } : null;
+  }
+  if (own.length === 5) {
+    const [min, max, count, last] = [ticks(own[1]), ticks(own[2]), int(own[3]), int(own[4])];
+    if (min !== null && max !== null && count !== null && last !== null && min <= max && count >= 0) {
+      return { kind: 'burst_gaps', perSecond: rate, gaps: { min, max, count }, used: own.slice(0, 4) };
+    }
+  }
+  return null;
+}
+
 export interface EffectConfig {
   slot: number; family: number;
-  kind: 'burst_continuous' | 'burst_windowed' | 'burst_wave' | 'shape' | 'unknown';
+  kind: 'burst_continuous' | 'burst_windowed' | 'burst_wave' | 'burst_gaps' | 'shape' | 'unknown';
   emission_window?: EffectWindow;
+  // A continuous stream's steps each release this many particles at once (absent: one).
+  per_step?: number;
+  // 'burst_gaps': at its first step and then after a wait drawn between `min` and `max` ticks, `count` particles at
+  // once (the steps come `per_second` times a second; see EFFECT_GAP_STEP).
+  gaps?: { min: number; max: number; count: number };
   // 'burst_wave': fires when the water height at its point crests.
   wave?: EffectWave;
   // A burst that emits only while a quest variable is in some of its states.
@@ -936,6 +976,8 @@ function extractEffects(
     slot: number; family: number;
     kind: EffectConfig['kind'];
     perSecond: number | null;
+    perStep?: number;
+    gaps?: { min: number; max: number; count: number };
     windows: [number, number][] | null;
     shapeKind: 'point' | 'ring' | 'spiral' | 'segment' | 'radial' | 'arc' | 'other' | null;
     center: [number, number, number] | null;
@@ -997,7 +1039,14 @@ function extractEffects(
       else if (e.kind === 'fixed' && e.floats) for (const value of e.floats) topFloats.push({ value, i });
       else if (e.kind === 'rate') topRates.push({ value: e.value, den: e.den, i });
     }
-    if (topInts.length >= 1 && topInts.length <= 2 && topInts[topInts.length - 1].value >= 0
+    const stepped = steppedEmission(ops);
+    if (stepped) {
+      info.kind = stepped.kind;
+      info.perSecond = stepped.perSecond;
+      if (stepped.perStep !== undefined) info.perStep = stepped.perStep;
+      if (stepped.gaps) info.gaps = stepped.gaps;
+      for (const e of stepped.used) consumed.add(ops.indexOf(e));
+    } else if (topInts.length >= 1 && topInts.length <= 2 && topInts[topInts.length - 1].value >= 0
       && !windows.length && vec3Count === 0 && fixedLaneCount === 0) {
       // One or two non-negative top-level ints, nothing window or shape typed.
       // The rate is the LAST of them. A second, leading int belongs to a
@@ -1177,6 +1226,9 @@ function extractEffects(
         }
       }
     }
+    // A burst that follows another's water crests, bound by the per-build decode data (the whole numbers after its
+    // flags keep it out of every rule above): a burst, timed by the crests (see effectWave below).
+    if (info.kind === 'unknown' && shared.effectWave?.(slot)) info.kind = 'burst_continuous';
     for (let i = 0; i < ops.length; i++) if (!consumed.has(i)) info.extra.push(ops[i]);
     configInfo.set(slot, info);
     return info;
@@ -1202,7 +1254,7 @@ function extractEffects(
       if (!isInt(ref) || ref < 0 || ref >= rows.length) continue;
       const info = classifyConfig(ref);
       if (!info) continue;
-      if (info.kind === 'burst_continuous' || info.kind === 'burst_windowed') hasBurst = true;
+      if (info.kind === 'burst_continuous' || info.kind === 'burst_windowed' || info.kind === 'burst_gaps') hasBurst = true;
       else if (info.kind === 'shape') hasShape = true;
     }
     let hasTiming = false; let hasImage = false;
@@ -1598,8 +1650,10 @@ function extractEffects(
     const info = configInfo.get(slot);
     if (!info) continue;
     const cfg = { slot: info.slot, family: info.family, kind: info.kind } as EffectConfig;
-    if (info.kind === 'burst_continuous' || info.kind === 'burst_windowed') {
+    if (info.kind === 'burst_continuous' || info.kind === 'burst_windowed' || info.kind === 'burst_gaps') {
       cfg.per_second = info.perSecond;
+      if (info.perStep !== undefined && info.perStep !== 1) cfg.per_step = info.perStep;
+      if (info.gaps) cfg.gaps = info.gaps;
       if (info.kind === 'burst_windowed') cfg.windows = info.windows;
     } else if (info.kind === 'shape') {
       cfg.shape_kind = info.shapeKind ?? 'other';
@@ -1674,7 +1728,7 @@ function extractEffects(
     cfg.extra = info.extra;   // assigned last so the retained-extras key lands last
     configs[String(slot)] = cfg;
   }
-  for (const kind of ['burst_continuous', 'burst_windowed', 'burst_wave', 'shape', 'unknown'] as const) {
+  for (const kind of ['burst_continuous', 'burst_windowed', 'burst_wave', 'burst_gaps', 'shape', 'unknown'] as const) {
     let count = 0;
     for (const key in configs) if (configs[key].kind === kind) count++;
     if (count) audit.config_kinds[kind] = count;
@@ -1989,7 +2043,7 @@ function buildEmitter(
     const info = classifyConfig(target);
     if (!info) continue;
     shippedConfigs.add(target);
-    if ((info.kind === 'burst_continuous' || info.kind === 'burst_windowed') && burst === null) {
+    if ((info.kind === 'burst_continuous' || info.kind === 'burst_windowed' || info.kind === 'burst_gaps') && burst === null) {
       burst = target;
       const at = refIndexByOp.get(op);
       if (at !== undefined) consumed.add(at);

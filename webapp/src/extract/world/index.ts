@@ -341,7 +341,8 @@ export async function extractWorld({
   let effectShapes: ReturnType<typeof effectLayout> = {};
   try {
     effectShapes = effectLayout({ rows, objects, symbols: dt.symbols, types: dt.types,
-      extras: effectsMod.makeRowDecoder(rows, pool.values, ab0, profile, dt.charset, dt.symbols) }, waterFields);
+      extras: effectsMod.makeRowDecoder(rows, pool.values, ab0, profile, dt.charset, dt.symbols) }, waterFields,
+      placementData?.effectCountDelegates);
   } catch { /* no derived effect fields: the decode data's, if any */ }
   await breathe();
   const fileOrigins = (placementData?.effectOrigins ?? []).filter((b) => b.kind === 'radial' || b.kind === 'segment');

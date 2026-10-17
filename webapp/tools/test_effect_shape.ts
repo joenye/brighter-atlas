@@ -94,8 +94,20 @@ try {
  assert.equal(facings.has(6),false,'no facing field, no facing');
 
  assert.deepEqual(out.effectWindows,[{instance:9,rate:1,windows:2,period:3,rangeClass:42,noneSymbol:2}]);
- assert.deepEqual(out.effectWaves,{step:12,bindings:[{instance:11,water:2,point:3,count:4,threshold:5,translation:6,
+ assert.deepEqual(out.effectWaves,{step:20,bindings:[{instance:11,water:2,point:3,count:4,threshold:5,translation:6,
   waterFields:{amplitude:[8,12],frequency:[9,13],rate:[10,14]}}]},'a burst with a trailing count is not a wave burst');
+ // The same trailing count, when the per-build decode data says that burst follows another's crests: bound, with the
+ // hold-back read from its emitter; never when what it follows is no wave burst, or its count field is elsewhere.
+ const withFollowers=(delegates:any[])=>T.effectLayout({rows,objects,symbols,types,extras},water,delegates).effectWaves.bindings;
+ const plainWave={instance:11,water:2,point:3,count:4,threshold:5,translation:6,waterFields:{amplitude:[8,12],frequency:[9,13],rate:[10,14]}};
+ assert.deepEqual(withFollowers([{instance:12,as:[11],count:{field:4},delay:{steps:8,flag:37}}]),[plainWave,
+  {...plainWave,instance:12,delay:{steps:8,flag:37}}],'a follower of a wave burst is bound with its hold-back');
+ assert.deepEqual(withFollowers([{instance:12,as:[11],count:{value:100}}]),[plainWave,{...plainWave,instance:12,countValue:100}],
+  'a follower releasing a fixed count');
+ assert.deepEqual(withFollowers([{instance:12,as:[13],count:{field:4}}]),[plainWave],'following no wave burst');
+ assert.deepEqual(withFollowers([{instance:12,as:[11],count:{field:5}}]),[plainWave],'its count elsewhere');
+ assert.deepEqual(withFollowers([{instance:11,as:[12],count:{field:4},delay:{steps:8,flag:37}}]),[plainWave],
+  'a plain wave burst keeps its own reading');
  assert.deepEqual(out.effectOrigins,[
   {instance:13,kind:'point',position:2,axis:6,yaw:[7,8],pitch:[9,10],samples:[4,5],uniformClass:40},
   {instance:15,kind:'position',position:1,axis:3,yaw:[4,5],pitch:[6,7],uniformClass:40},

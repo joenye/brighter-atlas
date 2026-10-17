@@ -40,7 +40,7 @@ try {
  // Height field.
  const h=(x:number,y:number,t:number)=>20*Math.sin(0.0017*x+0.004*t)+40*Math.sin(0.0011*y+0.007*t);
  for(const [x,y,t] of [[0,0,0],[100,-512,600],[-3000,250,12345]])ok(Math.abs(T.waterHeight(wave.water,x,y,t)-h(x,y,t))<1e-9,'height');
- // Crest schedule against an independent state machine on the 12-tick grid.
+ // Crest schedule against an independent state machine on the 20-tick grid (thirty samples a second).
  const emitter:any={life:{ticks:720},fade_in:{ticks:120},fade_out:{ticks:180},burst:1,shape:2,sprite:{material:1,images:[1]}};
  const configs:any={1:{kind:'burst_wave',wave},2:{kind:'shape',shape_kind:'point',center:[0,0,0],axis:[0,0,1],cone:{yaw:[0,0],pitch:[0,0]}}};
  const frame=[1,0,0,0, 0,1,0,0, 0,0,1,0, 1500,700,0,1];
@@ -48,8 +48,8 @@ try {
  const px=1500,py=700-512;
  const fires:number[]=[];let armed=false;
  for(let n=-4096;n<=5000;n++){
-  const r=Math.fround(Math.fround(h(px,py,n*12))/9);
-  if(r>=1&&armed){armed=false;fires.push(n*12);}else if(r<0)armed=true;
+  const r=Math.fround(Math.fround(h(px,py,n*20))/9);
+  if(r>=1&&armed){armed=false;fires.push(n*20);}else if(r<0)armed=true;
  }
  ok(fires.length>20,'the field crests repeatedly');
  const births=(s:any,t:number)=>{s.ensure(t);const out:number[]=[];for(let j=s.tail;j<s.head;j++)out.push(s.birth[j%s.capacity]);return out;};
@@ -72,5 +72,40 @@ try {
  const rotated=new T.EmitterSim({slot:9,loop:true},0,emitter,{...configs,1:{kind:'burst_wave',wave:{...wave,translation:true}}},600);
  rotated.setWaveFrame(turned);
  ok(JSON.stringify(births(rotated,20000))===JSON.stringify(births(make(),20000)),'translation-only point');
- console.log(`effect waves: ${checks} reader, field, crest schedule, seek and thinning checks passed`);
+ // Bursts that follow another's crests (per-build decode data): the list's checks, a fixed count, and a hold-back
+ // read from the owning emitter's record (the record's op-0 back reference).
+ const follower={instance:1,as:[3],count:{field:4},delay:{steps:8,flag:37}};
+ ok(T.validEffectCountDelegates([follower]),'valid follower');
+ ok(T.validEffectCountDelegates([{...follower,count:{value:100},delay:{field:37}}]),'fixed count, delay by field');
+ ok(!T.validEffectCountDelegates([{...follower,as:[]}]),'follows something');
+ ok(!T.validEffectCountDelegates([{...follower,count:{value:0}}]),'a count');
+ ok(!T.validEffectCountDelegates([{...follower,delay:{steps:8}}]),'a flag with the steps');
+ ok(!T.validEffectCountDelegates([follower,follower]),'one row per instance');
+ ok(!T.validEffectWaves({step:20,bindings:[{...binding,delay:{steps:0,flag:37}}]}),'a hold-back of no steps');
+ const owned=(own:any)=>(slot:number)=>slot===5?[{op:0,kind:'U',value:50},...rows[5]]:slot===50?own:rows[slot]??null;
+ const held=(own:any,b:any={delay:{steps:8,flag:37}})=>T.createEffectWaveReader({step:20,bindings:[{...binding,...b}]},objects,owned(own),pool)(5);
+ ok(held([G(37,{tag:0x0a,value:8})]).delay===8,'held back when the emitter says so');
+ ok(held([G(37,{tag:0x0a,value:0})]).delay===undefined,'not when it does not');
+ ok(held([G(37,{tag:0x0c})]).delay===8,'a true flag');
+ ok(held([])===null,'an emitter without the field: unread');
+ ok(held([G(37,{tag:0x0a,value:3})],{delay:{field:37}}).delay===3,'a hold-back of the field\'s steps');
+ ok(held([],{countValue:100,delay:undefined}).count===100,'a fixed count');
+ // The crest machine with a hold-back of 8 steps: a crest marks its burst due 8 steps on, released at the first step
+ // that does not fire again; a later crest before then replaces it.
+ const lateFires:number[]=[];let lateArmed=false,due=-1;
+ for(let n=-4096;n<=5000;n++){
+  const r=Math.fround(Math.fround(h(px,py,n*20))/9);
+  if(r>=1&&lateArmed){lateArmed=false;due=n+8;}
+  else{if(r<0)lateArmed=true;if(due>=0&&n>=due){lateFires.push(n*20);due=-1;}}
+ }
+ ok(JSON.stringify(lateFires)===JSON.stringify(fires.map(f=>f+160).filter(f=>f>=0&&f<=5000*20)),'each crest released 8 steps on');
+ const lateConfigs:any={...configs,1:{kind:'burst_wave',wave:{...wave,delay:8}}};
+ const makeLate=()=>{const s=new T.EmitterSim({slot:9,loop:true},0,emitter,lateConfigs,600);s.setWaveFrame(frame);return s;};
+ const lateAt=(t:number)=>lateFires.filter(f=>f<=t&&f+720>t).flatMap(f=>Array(15).fill(f));
+ for(const t of [0,500,2000,7777,20000,60000])ok(JSON.stringify(births(makeLate(),t))===JSON.stringify(lateAt(t)),'held-back schedule at '+t);
+ const lateWalk=makeLate();
+ for(const t of [0,10,24,300,301,1200,1250,900,20000,20010,5]){
+  ok(JSON.stringify(births(lateWalk,t))===JSON.stringify(births(makeLate(),t)),'held-back walk '+t);
+ }
+ console.log(`effect waves: ${checks} reader, field, crest schedule, seek, thinning and hold-back checks passed`);
 }finally{await rm(tmp,{recursive:true,force:true});}
