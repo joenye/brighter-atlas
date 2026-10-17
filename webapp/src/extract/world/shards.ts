@@ -17,6 +17,7 @@
 // last-plane channel ranges are the two additions the orchestrator needs).
 
 import { roomOccupancy, roomIndividualAnchors, groupFields, deref, signed32 } from './room.js';
+import type { StateRecordBinding } from './state-records.js';
 import { AssetGraph, type OccurrenceHit, type PartRecord, type PoolNode, type RegistryRow } from './graph.js';
 import { SpawnGraph, type RoomRowRef } from './spawns.js';
 import {createActorHeightReader, type PlacementDecodeData} from './placement.js';
@@ -151,8 +152,8 @@ export const COORDINATE_SYSTEM = {
   ground_plane_revision: 1,
   // 1: effects say why one is off at rest (an action or a state) and carry stepped, gap-timed and delayed crest
   // emission; solid parts with no picture are drawn; 2: and ground tables with a closing pair of colours (the
-  // giant crystals' materials)
-  world_effects_revision: 2,
+  // giant crystals' materials); 3: and faces whose colours follow the story (state_recolors)
+  world_effects_revision: 3,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,
   layer_units: LAYER_UNITS,
@@ -277,6 +278,8 @@ export interface ShardContext {
   recordType: (slot: number) => number | null;
   /** 1 when the element record is drawn through the scene's dynamic list. */
   dynamic: (slot: number) => number;
+  /** Classes whose named record the game picks by story progress, by class (state-records.ts). */
+  stateRecords: Map<number, StateRecordBinding[]>;
 }
 
 const inc = (counts: Record<string, number>, key: string, n = 1) => {
@@ -650,6 +653,15 @@ export function createShardContext({
     roomRows,
     actorHeight,
     tiles: placement?.tiles ?? null,
+    stateRecords: (() => {
+      const byClass = new Map<number, StateRecordBinding[]>();
+      for (const row of placement?.stateRecords ?? []) {
+        const list = byClass.get(row.runtime) ?? [];
+        list.push(row);
+        byClass.set(row.runtime, list);
+      }
+      return byClass;
+    })(),
     recordType: (slot: number) => {
       const typeValue = placement?.tiles?.variation.typeValue;
       const value = typeValue === undefined ? undefined : objects?.[slot]?.values?.[typeValue];
@@ -760,6 +772,8 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   const matrixLookup = new Map<string, number>();
   const recolors: number[][][] = [];
   const recolorLookup = new Map<string, number>();
+  // parts whose colours follow a story (state-records.ts): the colours entry each uses, and each step's entry
+  const stateRecolors: { recolor: number; variable: number; states: number; steps: [number, number][] }[] = [];
   // Part colours, per tile: the room's seed lives on its owner record.
   const partColours: number[][] = [];
   const partColourLookup = new Map<string, number>();
@@ -849,6 +863,32 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       recolorIndex = intern(
         recolors, recolorLookup, colors.map((row: number[]) => row.join(',')).join(';'), colors,
       );
+    }
+    // (a face whose colours come from a record the game picks by story progress: the colours of each step beside
+    // its own, which it then holds alone, as the step shown replaces them)
+    const storyRows = recolorIndex >= 0 && Number.isInteger(part.ground_resource) && Number.isInteger(part.face_index)
+      ? ctx.stateRecords.get(ctx.graph.rows[hit.resource]?.runtime as number) : undefined;
+    if (storyRows) {
+      const groundRuntime = ctx.graph.rows[part.ground_resource]?.runtime;
+      let own = false;
+      for (const row of storyRows) {
+        if (!row.steps.every(([, slot]) => ctx.graph.rows[slot]?.runtime === groundRuntime)) continue;
+        const steps: [number, number][] = [];
+        for (const [from, slot] of row.steps) {
+          const data = ctx.graph.groundRecolorData(slot, part.face_index);
+          if (data === null || data.recolor_schema !== part.recolor_schema) break;
+          const colors = data.recolors.map((r: number[]) => r.map(Number));
+          steps.push([from, intern(recolors, recolorLookup, colors.map((r: number[]) => r.join(',')).join(';'), colors)]);
+        }
+        if (steps.length !== row.steps.length) continue;
+        if (!own) {
+          recolors.push(recolors[recolorIndex].map((r: number[]) => r.slice()));
+          recolorIndex = recolors.length - 1;
+          own = true;
+        }
+        stateRecolors.push({ recolor: recolorIndex, variable: row.variable, states: row.states, steps });
+        inc(counts, 'story_recolors');
+      }
     }
 
     let category: 'terrain' | 'models' | 'components';
@@ -1031,6 +1071,7 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
     room_volumes: ctx.spawnGraph.roomVolumes(roomRow.record),
     matrices,
     recolors,
+    ...(stateRecolors.length ? { state_recolors: stateRecolors } : {}),
     part_colours: partColours,
     collision: collisions,
     counts,

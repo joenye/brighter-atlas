@@ -35,7 +35,7 @@ import { Scene3D, getRenderer, mountImmersiveControls } from './three-common.js'
 import * as THREE from '../../vendor/three.module.js';
 import { OrbitControls } from '../../vendor/OrbitControls.js';
 import WorldScene, {
-  WORLD_CATEGORIES, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection, GIZMO_SWATCH, gizmoMaterial,
+  WORLD_CATEGORIES, loadRoomsWithRetry, yieldToBrowser, unbakeGeometryReflection, GIZMO_SWATCH, gizmoMaterial, addGizmoGhost,
   GAME_DRAWN_LAYER, placeSkin,
 } from './world/scene.js';
 import { GameBakeWorker } from './world/game-geometry.js';
@@ -2226,6 +2226,12 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     const story = world.index?.render?.story?.[String(roomId)];
     return story?.variable === variable && storySteps.has(roomId) ? storySteps.get(roomId)! : null;
   };
+  // objects whose colours follow the room's own story (a giant crystal): the step its slider shows, else the end
+  world.storyPosition = (roomId: number) => (variable: number): number | null => {
+    const story = world.index?.render?.story?.[String(roomId)];
+    if (story?.variable !== variable || !Number.isInteger(story.states)) return null;
+    return storySteps.get(roomId) ?? story.states - 1;
+  };
   function setupStory(roomId: number): void {
     clear(storyBox);
     storyBox.hidden = true;
@@ -2245,6 +2251,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     input.addEventListener('input', apply);
     // (effects that play only at some steps of the story: the room's effects again at the new step)
     input.addEventListener('change', () => {
+      // (objects whose colours follow this story: the room drawn again at the new step)
+      if (!allMode && world.rooms.get(roomId)?.shard?.state_recolors) reloadHomeRoom();
       if (!effectsLayer || allMode) return;
       effectsLayer.removeRoom(roomId);
       effectsLayer.addRoom(roomId, spawnRoomOffset(roomId), { leftOut: world.roomLeftOut.get(roomId), storyPosition: storyPositionFor(roomId) });
@@ -5656,6 +5664,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         instanced.computeBoundingBox();
         instanced.computeBoundingSphere();
         instanced.userData.z = batch.z;
+        if (batch.category !== 'terrain') addGizmoGhost(instanced);
         instancedMeshes.push(instanced);
         emptyMeshes.push(instanced);
         emptyGroup.add(instanced);

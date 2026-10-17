@@ -20,6 +20,7 @@ import { placedLight, type ListedLight } from './point-lights.js';
 import { restWorldMatrices } from '../../extract/skeleton.js';
 import { emissionKey } from './draw-order.js';
 import { drawnShard, hiddenIndividuals } from './individuals.js';
+import { storyRecolors } from '../../extract/world/state-records.js';
 import {
   planeField, planeMaterial, planeMeshes, planeTiles, planeUniforms, setPlaneReach, showPlaneMesh, PLANE_FIELD_REACH,
   type PlaneUniforms,
@@ -147,6 +148,25 @@ export function gizmoMaterial(category: string): THREE.Material {
     return new THREE.MeshBasicMaterial({ color: CATEGORY_COLOURS.terrain, wireframe: true, transparent: true, opacity: 0.24, depthWrite: false });
   }
   return new THREE.MeshBasicMaterial({ color: GIZMO_SWATCH, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+}
+// A marker's faint copy, drawn over everything: many markers sit where nothing shows them (salvage spots under the
+// sea's surface, sound markers inside walls or below the floor), so the copy marks where they are while the marker
+// itself keeps its depth (solid where seen, faint where hidden).
+const GIZMO_GHOST = new THREE.MeshBasicMaterial({
+  color: GIZMO_SWATCH, transparent: true, opacity: 0.3, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+});
+/** Give a marker batch its see-through copy (a child: shown and hidden with it, never picked). */
+export function addGizmoGhost(mesh: THREE.InstancedMesh): THREE.InstancedMesh {
+  const ghost = new THREE.InstancedMesh(mesh.geometry, GIZMO_GHOST, mesh.count);
+  ghost.instanceMatrix = mesh.instanceMatrix;
+  ghost.boundingBox = mesh.boundingBox;
+  ghost.boundingSphere = mesh.boundingSphere;
+  ghost.name = `${mesh.name}-ghost`;
+  ghost.renderOrder = 1000;
+  ghost.raycast = () => {};
+  ghost.userData.gizmoGhost = true;
+  mesh.add(ghost);
+  return ghost;
 }
 
 export interface WorldPlacementFlags {
@@ -776,8 +796,14 @@ export class WorldScene {
   /** Loaded shards by room number (conditions that name another room's individuals). */
   private readonly shardsByNumber = new Map<number, any>();
 
-  /** A stored shard as the game draws it: its individuals' conditions evaluated (individuals.ts). */
-  drawnShard(shard: any): any {
+  /** Per room, the step of a quest it shows (null: a quest it does not follow); none: every object keeps the
+   *  colours it names (state-records.ts). */
+  storyPosition: ((roomId: number) => (variable: number) => number | null) | null = null;
+
+  /** A stored shard as the game draws it: colours that follow a story at the step shown (state-records.ts), and
+   *  its individuals' conditions evaluated (individuals.ts). */
+  drawnShard(stored: any): any {
+    const shard = stored && this.storyPosition ? storyRecolors(stored, this.storyPosition(Number(stored.room))) : stored;
     if (!shard || this.allIndividuals) return shard;
     const hidden = hiddenIndividuals(shard, {
       progress: (room, variable) => this.individualProgress.get(`${room}/${variable}`),
@@ -2058,6 +2084,7 @@ export class WorldScene {
           placementIndices: batch.entries.map((entry) => entry.placementIndex),
           placementRows: batch.entries.map((entry) => entry.row),
         };
+        if (authoredEmpty && !waterMaterial && batch.category !== 'terrain') addGizmoGhost(mesh);
         this._applyMeshVisibility(mesh);
         categoryGroups[batch.category].add(mesh);
         created.push(mesh);
