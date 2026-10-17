@@ -152,8 +152,9 @@ export const COORDINATE_SYSTEM = {
   ground_plane_revision: 1,
   // 1: effects say why one is off at rest (an action or a state) and carry stepped, gap-timed and delayed crest
   // emission; solid parts with no picture are drawn; 2: and ground tables with a closing pair of colours (the
-  // giant crystals' materials); 3: and faces whose colours follow the story (state_recolors)
-  world_effects_revision: 3,
+  // giant crystals' materials); 3: and faces whose colours follow the story (state_recolors); 4: and their colour and
+  // tints in the game's frame (state_recolors colour/colours)
+  world_effects_revision: 4,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,
   layer_units: LAYER_UNITS,
@@ -773,7 +774,8 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
   const recolors: number[][][] = [];
   const recolorLookup = new Map<string, number>();
   // parts whose colours follow a story (state-records.ts): the colours entry each uses, and each step's entry
-  const stateRecolors: { recolor: number; variable: number; states: number; steps: [number, number][] }[] = [];
+  const stateRecolors: { recolor: number; variable: number; states: number; steps: [number, number][];
+    grounds?: number[]; colour?: number; colours?: number[] }[] = [];
   // Part colours, per tile: the room's seed lives on its owner record.
   const partColours: number[][] = [];
   const partColourLookup = new Map<string, number>();
@@ -886,7 +888,8 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
           recolorIndex = recolors.length - 1;
           own = true;
         }
-        stateRecolors.push({ recolor: recolorIndex, variable: row.variable, states: row.states, steps });
+        stateRecolors.push({ recolor: recolorIndex, variable: row.variable, states: row.states, steps,
+          grounds: row.steps.map(([, slot]) => slot) });
         inc(counts, 'story_recolors');
       }
     }
@@ -908,12 +911,32 @@ export function buildRoomShard(ctx: ShardContext, roomId: number): { shard: any;
       : part.series_index !== undefined ? part.series_index : -1;
     let partColourIndex = -1;
     if (tiles && seed !== null) {
-      const rule = ctx.graph.partColourRule(part, hit.resource, tiles, ctx.recordType(hit.resource));
-      if (rule) {
-        const entry = [...partColour(rule, tileFraction(seed, hit.cell[0], hit.cell[1])), ...rule.tints[0], ...rule.tints[1]];
+      const colourOf = (ground: unknown) => {
+        const rule = ctx.graph.partColourRule(ground === undefined ? part : { ...part, ground_resource: ground },
+          hit.resource, tiles, ctx.recordType(hit.resource));
+        return rule ? [...partColour(rule, tileFraction(seed!, hit.cell[0], hit.cell[1])), ...rule.tints[0], ...rule.tints[1]] : null;
+      };
+      const entry = colourOf(undefined);
+      if (entry) {
         partColourIndex = intern(partColours, partColourLookup, entry.join(','), entry);
+        // (a part whose colours follow a story: its colour and tints at each step too, the game's frame drawing
+        // these; the part then holds its entry alone, as the step shown replaces it)
+        let own = false;
+        for (const story of stateRecolors) {
+          if (story.recolor !== recolorIndex || !story.grounds) continue;
+          const steps = story.grounds.map(colourOf);
+          if (steps.some((c) => c === null)) continue;
+          if (!own) {
+            partColours.push(entry.slice());
+            partColourIndex = partColours.length - 1;
+            own = true;
+          }
+          story.colour = partColourIndex;
+          story.colours = steps.map((c) => intern(partColours, partColourLookup, c!.join(','), c!));
+        }
       }
     }
+    for (const story of stateRecolors) if (story.recolor === recolorIndex) delete story.grounds;
     placementRows[category].push([
       index, meshId, part.material_slot, textureId, renderTexture,
       flags, matrixIndex, recolorIndex, PART_KIND[part.kind],

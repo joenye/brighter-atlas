@@ -39,6 +39,16 @@ try {
  ok(at(0)!==shard&&shard.recolors[1]===blue,'the stored shard is left as it is');
  ok(at(0).recolors[0]===shard.recolors[0],'other entries untouched');
  ok(storyRecolors({room:1,recolors:[red]},()=>3).recolors[0]===red,'a shard with nothing that follows a story');
+ // the game frame's colour and tints (part_colours) follow the step as the colours do
+ const pc={room:8465,recolors:[red,red,blue],part_colours:[[1],[0.88],[0.3],[0.88]],
+  state_recolors:[{recolor:0,variable:91127,states:36,steps:[[0,1],[31,2]],colour:3,colours:[1,2]}]};
+ const pcAt=(step:number)=>storyRecolors(pc,(variable:number)=>variable===91127?step:null);
+ ok(pcAt(35).part_colours[3]===pc.part_colours[2],'at the story\'s end: the green colour in the game frame');
+ ok(pcAt(35).recolors[0]===blue,'and the green colours');
+ ok(pcAt(30).part_colours[3]===pc.part_colours[1],'before the step: the red colour in the game frame');
+ ok(pcAt(30).part_colours!==pc.part_colours&&pc.part_colours[3][0]===0.88,'the stored shard is left as it is');
+ ok(storyRecolors({...pc,state_recolors:[{...pc.state_recolors[0],colour:undefined,colours:undefined}]},()=>35).part_colours===pc.part_colours,
+  'a part with no colour of its own in the game frame keeps the shard\'s');
  console.log(`state records: ${checks} binding and story colour checks passed`);
 } finally {
  await rm(tmp,{recursive:true,force:true});

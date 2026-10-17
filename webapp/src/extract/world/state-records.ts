@@ -41,12 +41,15 @@ export function validStateRecords(values: any): values is StateRecordBinding[] {
 }
 
 /** A shard's parts whose colours follow a story: the colours entry the part uses (`recolor`), and per quest variable
- *  the entry to use from each step on. */
+ *  the entry to use from each step on; the same for the part's colour and tints as the game's frame draws them
+ *  (`colour`, an index into the shard's `part_colours`, and `colours`, one per step), where the part has them. */
 export interface StoryRecolor {
   recolor: number;
   variable: number;
   states: number;
   steps: [number, number][];
+  colour?: number;
+  colours?: number[];
 }
 
 /** The shard with each story-dependent part's colours at the story's position: `position(variable)` is the step the
@@ -55,15 +58,26 @@ export function storyRecolors(shard: any, position: (variable: number) => number
   const entries: StoryRecolor[] | undefined = shard?.state_recolors;
   if (!Array.isArray(entries) || !entries.length || !Array.isArray(shard.recolors)) return shard;
   let recolors: any[] | null = null;
+  let partColours: any[] | null = null;
   for (const entry of entries) {
     const at = position(entry.variable);
     if (at === null || at === undefined || !Array.isArray(entry.steps) || !entry.steps.length) continue;
-    let pick = entry.steps[0][1];
-    for (const [from, index] of entry.steps) if (from <= at) pick = index;
+    let step = 0;
+    entry.steps.forEach(([from], k) => { if (from <= at) step = k; });
+    const pick = entry.steps[step][1];
     const colours = shard.recolors[pick];
-    if (!Array.isArray(colours) || pick === entry.recolor) continue;
-    const next: any[] = recolors ?? (recolors = shard.recolors.slice());
-    next[entry.recolor] = colours;
+    if (Array.isArray(colours) && pick !== entry.recolor) {
+      const next: any[] = recolors ?? (recolors = shard.recolors.slice());
+      next[entry.recolor] = colours;
+    }
+    // (the part's colour and tints in the game's frame, which reads them apart from the colours above)
+    const own = entry.colour, chosen = entry.colours?.[step];
+    if (Number.isInteger(own) && Number.isInteger(chosen) && own !== chosen && Array.isArray(shard.part_colours)
+      && Array.isArray(shard.part_colours[chosen!])) {
+      const next: any[] = partColours ?? (partColours = shard.part_colours.slice());
+      next[own!] = shard.part_colours[chosen!];
+    }
   }
-  return recolors ? { ...shard, recolors } : shard;
+  if (!recolors && !partColours) return shard;
+  return { ...shard, ...(recolors ? { recolors } : {}), ...(partColours ? { part_colours: partColours } : {}) };
 }

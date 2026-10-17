@@ -73,7 +73,7 @@ const WORLD_UPDATE = 'To update saved World data, open the version menu, choose 
 
 const NOTICES: Notice[] = [
   {
-    id: 'world-effects-3',
+    id: 'world-effects-4',
     title: 'Particle effects as the game plays them',
     paras: [
       'Effects now play the way the game does: each object shows only what it shows at rest, and the room panel lets you switch on its other kinds (other states, skill and use effects, one-off effects) to see everything. Effects that never started now play on the game’s own timing, and the giant crystals of Cave of the Crystal and Crystal Clearing are drawn, in their own colours, changing as the story moves on.',
@@ -81,7 +81,7 @@ const NOTICES: Notice[] = [
       'Your names, texture assignments and Models are keyed by stable ids, so they all survive the re-extraction.',
     ],
     // only for data no older World notice already sends to re-extract
-    when: async (app: any) => (await worldStale((s) => (s.world_effects_revision ?? 0) < 3)(app))
+    when: async (app: any) => (await worldStale((s) => (s.world_effects_revision ?? 0) < 4)(app))
       && !(await worldStale((s) => (s.ground_plane_revision ?? 0) < 1)(app)) && !(await world070Stale(app)),
   },
   {
