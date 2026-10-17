@@ -76,6 +76,7 @@ export class Scene3D {
   private _alive: boolean;
   private _lastT: number;
   private _ro: ResizeObserver;
+  private readonly _size = new THREE.Vector2();
 
   constructor(host: HTMLElement) {
     _aliveScenes++;
@@ -123,7 +124,12 @@ export class Scene3D {
 
   private _resize(): void {
     const w = Math.max(1, this.host.clientWidth), h = Math.max(1, this.host.clientHeight);
-    this.renderer.setSize(w, h, false);
+    // (resizing the shared canvas reallocates its drawing buffer and waits for the GPU: only when its size changes)
+    const canvas = this.renderer.domElement, ratio = this.renderer.getPixelRatio();
+    const size = this.renderer.getSize(this._size);
+    if (size.x !== w || size.y !== h || canvas.width !== Math.floor(w * ratio) || canvas.height !== Math.floor(h * ratio)) {
+      this.renderer.setSize(w, h, false);
+    }
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
     this.camera.aspect = w / h;

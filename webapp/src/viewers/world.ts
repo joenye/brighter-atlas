@@ -285,8 +285,15 @@ const GPU_WARN_INTEGRATED = (label: string): string =>
 
 // ---------------------------------------------------------------- room view
 
+// The room view's game frame, kept from one room view to the next of the same build: its compiled programs and the
+// textures it has met stay, so the next room's first shaded frame waits only for what is new to it. All rooms frees
+// its textures (it keeps its own) and keeps the programs.
+let keptRoomFrame: { frame: GameFrame; gl: WebGL2RenderingContext; version: string } | null = null;
+
 function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: boolean): WorldViewHandle {
   const state = loadState(allMode);
+  // (All rooms keeps textures of its own: the kept room frame's are freed, its programs stay)
+  if (allMode) keptRoomFrame?.frame.releaseTextures();
 
   const root = el('div', { class: 'viewer-pane world-view' });
   const toolbar = el('div', { class: 'viewer-toolbar' });
@@ -1132,13 +1139,30 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (!world.index?.render || !(gl instanceof WebGL2RenderingContext)) { gameUnavailable = true; return; }
     gameBuilds++;
     try {
-      const frame = new GameFrame(gl, (rel: string) => app.store.url(rel), world.index.render, world.tileUnits);
+      const version = app.store.versionId;
+      const kept = keptRoomFrame && version && keptRoomFrame.gl === gl && keptRoomFrame.version === version ? keptRoomFrame.frame : null;
+      if (kept) keptRoomFrame = null;
+      const frame = kept ?? new GameFrame(gl, (rel: string) => app.store.url(rel), world.index.render, world.tileUnits);
+      if (kept) {
+        // (what an earlier room view may have left set on it)
+        frame.environmentOverride = null;
+        frame.skipWater = false;
+        frame.holdOcclusion = false;
+        frame.timePasses = false;
+        frame.resetTemporal();
+        renderer.resetState();
+      }
       setCurtainProgress(0);
       frame.onBuildProgress = (fraction) => setCurtainProgress(fraction);
       await frame.setRoom(await world.gameRoomSource(room, world.neighbourRooms()));
       frame.onBuildProgress = null;
       renderer.resetState();
-      if (destroyed) return;
+      if (destroyed) {
+        // (left before it was shown: kept for the next room view all the same)
+        frame.releaseRoom();
+        if (version && !keptRoomFrame) keptRoomFrame = { frame, gl, version };
+        return;
+      }
       frame.showPlane = !!state.ground;
       frame.planeDistance = groundDistance();
       frame.planeBrightness = planeBrightness(state.groundb);
@@ -6698,6 +6722,14 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       overlay = null;
       disposeNameSprites();
       disposeSpawnNameSprites();
+      // (the room's frame kept for the next room view, its scene freed)
+      if (gameFrame && !allMode && app.store.versionId) {
+        gameFrame.releaseRoom();
+        gameFrame.onBuildProgress = null;
+        if (keptRoomFrame && keptRoomFrame.frame !== gameFrame) keptRoomFrame.frame.releaseTextures();
+        keptRoomFrame = { frame: gameFrame, gl: renderer.getContext() as WebGL2RenderingContext, version: app.store.versionId };
+      } else gameFrame?.releaseRoom();
+      gameFrame = null;
       stopWorldGame();
       worldGame?.releaseTextures();
       worldGame?.bakeWorker?.dispose();
@@ -6712,7 +6744,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       sheetMaterialCache.clear();
       // the renderer is shared across views: undo world-only settings
       renderer.shadowMap.enabled = false;
-      renderer.setPixelRatio(savedPixelRatio);
+      if (renderer.getPixelRatio() !== savedPixelRatio) renderer.setPixelRatio(savedPixelRatio);
       scene3d.destroy();
       if ((window as any).__bs?.worldView === api) delete (window as any).__bs.worldView;
     },
