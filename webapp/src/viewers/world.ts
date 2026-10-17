@@ -52,7 +52,7 @@ import { GameFrame, clusterSource, type GameScene, type GameRoomSource, type Sha
 import { progressVariables } from './world/individuals.js';
 import { doorNeighbours } from './world/neighbours.js';
 import {
-  PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_FIELD_REACH, PLANE_GAME_DISTANCE, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
+  PLANE_DISTANCE_MAX, PLANE_ENDLESS, PLANE_FIELD_REACH, PLANE_GAME_DISTANCE, planeBrightness, planeCount, planeDistance, planeField, planeMaterial, planeMeshes,
   planeUniforms, setPlaneReach, showPlaneMesh, planeTiles, type PlaneField, type PlaneSource, type PlaneTile,
 } from './world/ground-plane.js';
 import { renderCard, type CardSubject, type CardView } from './world/card.js';
@@ -134,6 +134,7 @@ const DEFAULT_STATE = Object.freeze({
   ground: true,
   groundd: PLANE_ENDLESS,           // a room's ground plane distance: endless
   groundw: PLANE_GAME_DISTANCE,     // all rooms: the game's ten tiles
+  groundb: 1,                       // the ground plane's brightness (1: the game's)
   neighbours: false,                // a room: also its neighbours
   neighbourfade: true,              // ... shaded as the game shades them
   names: true,
@@ -178,7 +179,7 @@ const PERSISTED = Object.keys(DEFAULT_STATE).filter((k) => !UNOFFERED.has(k));
 interface WorldState {
   terrain: boolean; models: boolean; spawns: boolean; components: boolean;
   untextured: boolean; collision: boolean; empty: boolean; names: boolean; ground: boolean;
-  groundd: number; groundw: number; neighbours: boolean; neighbourfade: boolean;
+  groundd: number; groundw: number; groundb: number; neighbours: boolean; neighbourfade: boolean;
   spawnnames: boolean;
   inspect: boolean; water: boolean; game: boolean; gamereach: number; gamesteady: boolean; effects: boolean; idle: boolean;
   wcolor: string; wopacity: number; ambient: number; sun: number;
@@ -593,6 +594,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     groundPlanes: !allMode,
     showGroundPlane: state.ground,
     groundPlaneDistance: planeDistance(state.groundd),
+    groundPlaneBrightness: planeBrightness(state.groundb),
     neighbourShade: state.neighbourfade,
     textureAnisotropy: TEXTURE_ANISOTROPY,
     assetConcurrency: 12,
@@ -860,8 +862,26 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // the ground plane's distance: one setting for a room, one for all rooms
   const groundKey = allMode ? 'groundw' : 'groundd';
   const groundDistance = () => planeDistance(state[groundKey]);
+  /** A floor that stops short ends softly into the view's background (output colour space); the room alone at
+   *  the game's own distance keeps the game's edge, tile by tile. */
+  const groundEdge = (single: boolean): [number, number, number] | null => {
+    const d = groundDistance();
+    if (!Number.isFinite(d) || (single && d === PLANE_GAME_DISTANCE)) return null;
+    const background = scene3d.scene.background as THREE.Color | null;
+    if (!background?.isColor) return null;
+    const c = background.clone().convertLinearToSRGB();
+    return [c.r, c.g, c.b];
+  };
+  const applyGroundBrightness = () => {
+    const b = planeBrightness(state.groundb);
+    world.setGroundPlaneBrightness(b);
+    worldPlaneUniforms.planeBrightness.value = b;
+    if (gameFrame) gameFrame.planeBrightness = b;
+    applyWorldGameSettings();
+  };
   const applyGround = () => {
     groundRange.hidden = !state.ground;
+    groundBrightnessRange.hidden = !state.ground;
     world.setGroundPlaneVisible(state.ground);
     if (gameFrame) gameFrame.showPlane = !!state.ground;
     applyWorldGameSettings();
@@ -871,7 +891,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let homeReload: Promise<void> = Promise.resolve();
   const applyGroundDistance = () => {
     world.setGroundPlaneDistance(groundDistance());
-    if (gameFrame) gameFrame.planeDistance = groundDistance();
+    if (gameFrame) { gameFrame.planeDistance = groundDistance(); gameFrame.planeEdge = groundEdge(true); }
     applyWorldGameSettings();
     applyWorldGroundPlane();
     // past the field (or no limit): the game frame's floor runs on for hundreds of tiles, and the camera sees it
@@ -902,6 +922,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   groundRange.title = `How far the floor reaches past each room. The game's is ${PLANE_GAME_DISTANCE} tiles; `
     + `past ${PLANE_DISTANCE_MAX} (the far end) it never ends.`;
   groundRange.hidden = !state.ground;
+  const groundBrightnessRange = range('groundb', 'Ground plane brightness', 0.25, 2, 0.05,
+    (v) => `${Math.round(planeBrightness(v) * 100)}%`, applyGroundBrightness);
+  groundBrightnessRange.title = 'How bright the floor is drawn (100%: as the game draws it)';
+  groundBrightnessRange.hidden = !state.ground;
+  groundBrightnessRange.classList.add('wp-sub');
   // a room's neighbours: the rooms directly through its doors
   const applyNeighbourFade = () => {
     world.setNeighbourShade(!!state.neighbourfade);
@@ -1075,6 +1100,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (destroyed) return;
       frame.showPlane = !!state.ground;
       frame.planeDistance = groundDistance();
+      frame.planeBrightness = planeBrightness(state.groundb);
+      frame.planeEdge = groundEdge(true);
       frame.neighbourFade = !!state.neighbourfade;
       frame.pointLightStrength = state.glights ? 1 : 0;
       frame.showFog = !!state.gfog;
@@ -1220,6 +1247,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     if (!worldGame) return;
     worldGame.showPlane = !!state.ground;
     worldGame.planeDistance = groundDistance();
+    worldGame.planeBrightness = planeBrightness(state.groundb);
+    worldGame.planeEdge = groundEdge(false);
     worldGame.pointLightStrength = state.glights ? 1 : 0;
     worldGame.showFog = !!state.gfog;
     worldGame.clusterDetailPixels = worldSteady() ? 0 : 10;
@@ -2347,6 +2376,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     check('ground', 'Ground plane', applyGround,
       { swatch: '#8c7b5e', title: 'The textured floor the game lays under and around each room. Each episode has its own; sea and river beds show through the water.' }),
     groundRange,
+    groundBrightnessRange,
     allMode ? null : check('neighbours', 'Neighbouring rooms', () => applyNeighbours(),
       { swatch: '#9aa7b8', title: 'Also show the rooms through its doors, in place around it' }),
     allMode ? null : neighbourFadeCheck);
@@ -5329,7 +5359,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   let worldPlaneBuild = 0;
   let worldPlaneTimer: ReturnType<typeof setTimeout> | null = null;
   const worldPlaneMaterials = new Map<string, THREE.MeshStandardMaterial>();
-  const worldPlaneUniforms = planeUniforms(new THREE.Color(0, 0, 0));
+  const worldPlaneUniforms = planeUniforms(new THREE.Color(0, 0, 0), PLANE_GAME_DISTANCE, planeBrightness(state.groundb));
   const planeStep = (distance: number) => (distance === Infinity ? Infinity
     : Math.min(PLANE_FIELD_REACH, Math.max(PLANE_GAME_DISTANCE, Math.ceil(distance / 10) * 10)));
   async function buildWorldGroundPlane(): Promise<void> {

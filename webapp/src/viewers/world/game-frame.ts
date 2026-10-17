@@ -20,7 +20,7 @@ import { bakeGameGeometry, bakeGameGeometryAsync, posePayload, type BakeInputs, 
 import { drawGroups, tieRanks, type DrawGroup, type EmissionKey } from './draw-order.js';
 import { styleColourBytes } from './game-water.js';
 import { detectChains } from '../../texture-roles.js';
-import { PLANE_GAME_DISTANCE, planeCount, planeGroups, TILE_QUAD, type PlaneTile } from './ground-plane.js';
+import { PLANE_GAME_DISTANCE, planeCount, planeEdgeData, planeEdgeWidth, planeGroups, TILE_QUAD, type PlaneTile } from './ground-plane.js';
 
 export interface GameRenderIndex extends GameRenderTables {
   waterPrograms: { surface: number[]; curtain: number[]; surfaceRing?: number[]; curtainLit?: number[] };
@@ -155,7 +155,13 @@ export interface GameActorLight {
 
 /** One scene's draws, by pass. `depthDraws`: the depth passes' own draws where a scene's opaque parts
  *  share them (all rooms: one per depth program, in place of each part's own). */
-interface SceneDraws { draws: Draw[]; actorDraws: Draw[]; waterDraws: Draw[]; planeDraws: Draw[]; depthDraws: Draw[]; arrays?: GameTexture[] }
+interface SceneDraws { draws: Draw[]; actorDraws: Draw[]; waterDraws: Draw[]; planeDraws: Draw[]; depthDraws: Draw[]; arrays?: GameTexture[];
+  /** The floor's soft edge (GameFrame.planeEdge): its pieces as the floor's, each corner's distance past the rooms. */
+  planeEdge?: PlaneEdgeDraw | null }
+
+/** The floor's soft edge on the GPU: a vertex array of the floor's pieces (corner, tiles beyond the rooms),
+ *  nearest first. */
+interface PlaneEdgeDraw { vao: WebGLVertexArrayObject; buffers: WebGLBuffer[]; covers: Float32Array }
 
 /** One room's draws on the GPU. A single room (with its neighbours) is the one scene, in its own frame; all
  *  rooms draw many, each built in its own room's frame and placed in the frame drawn at `origin` (native),
@@ -425,6 +431,13 @@ export class GameFrame {
   showPlane = true;
   /** How far the ground plane reaches (tiles, Infinity: endless); the game's is ten. */
   planeDistance = Infinity;
+  /** The ground plane's brightness, a scale on its colour (1: the game's; its height fade carries it, so the
+   *  vignette still fades it to the vignette colour). */
+  planeBrightness = 1;
+  /** A floor that stops short ends softly: across its last tiles before the distance it blends into this colour
+   *  (output colour space; the view's background, what shows past the floor), or null: it ends as the game's
+   *  does, tile by tile. */
+  planeEdge: [number, number, number] | null = null;
   /** The interactive view: the room's fade follows the floor's reach and the neighbours shown (sceneLook); off,
    *  the game's own (stills, parity). */
   viewerReach = false;
@@ -717,6 +730,7 @@ export class GameFrame {
     } catch (error) {
       this.freeDraws([...next.draws, ...next.actorDraws, ...next.waterDraws, ...next.planeDraws, ...next.depthDraws], buffers);
       for (const t of next.arrays ?? []) this.context.deleteTexture(t.texture);
+      this.freePlaneEdge(next.planeEdge);
       throw error;
     } finally {
       this.buildingCluster = false;
@@ -765,6 +779,8 @@ export class GameFrame {
     for (const t of scene.arrays ?? []) this.context.deleteTexture(t.texture);
     scene.arrays = [];
     this.freeLights(scene.lights);
+    this.freePlaneEdge(scene.planeEdge);
+    scene.planeEdge = null;
     scene.draws = []; scene.actorDraws = []; scene.waterDraws = []; scene.planeDraws = []; scene.depthDraws = []; scene.buffers = []; scene.lights = null;
     for (const key of scene.textures) {
       const refs = (this.textureRefs.get(key) ?? 1) - 1;
@@ -888,6 +904,86 @@ export class GameFrame {
         next.planeDraws.push(draw);
       }
     }
+    if (room.plane?.length) next.planeEdge = this.planeEdgeOf(room.plane);
+  }
+
+  /** The floor's pieces as the soft edge draws them (a vertex array of its own). */
+  private planeEdgeOf(tiles: readonly PlaneTile[]): PlaneEdgeDraw {
+    const gl = this.context;
+    const { vertices, indices, covers } = planeEdgeData(tiles, this.tileUnits);
+    const vao = gl.createVertexArray()!, vbo = gl.createBuffer()!, ibo = gl.createBuffer()!;
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 16, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    this.gl.forgetState();
+    return { vao, buffers: [vbo, ibo], covers };
+  }
+
+  private freePlaneEdge(edge: PlaneEdgeDraw | null | undefined): void {
+    if (!edge) return;
+    this.context.deleteVertexArray(edge.vao);
+    for (const b of edge.buffers) this.context.deleteBuffer(b);
+  }
+
+  private planeEdgeProgram: { program: WebGLProgram; wvp: WebGLUniformLocation; flip: WebGLUniformLocation; zeroToOne: WebGLUniformLocation;
+    colour: WebGLUniformLocation; reach: WebGLUniformLocation; width: WebGLUniformLocation } | null = null;
+
+  /** Blend the background colour over the scene's floor across its last tiles: only where the floor drew (the
+   *  colour weighed by the target's alpha, which the floor writes and an empty pixel lacks), at the floor's depth,
+   *  writing neither depth nor alpha. `wvp` is the floor's own clip matrix; `y` its programs' convention. */
+  private drawPlaneEdge(edge: PlaneEdgeDraw, wvp: THREE.Matrix4, y: string, count: number): void {
+    const gl = this.context;
+    if (!this.planeEdgeProgram) {
+      const program = this.gl.linkSources(`#version 300 es
+layout(location = 0) in vec4 a_corner;
+uniform mat4 u_wvp;
+uniform float u_flip;
+uniform bool u_zeroToOne;
+out float v_beyond;
+void main() {
+  vec4 p = u_wvp * vec4(a_corner.xyz, 1.0);
+  v_beyond = a_corner.w;
+  gl_Position = vec4(p.x, p.y * u_flip, u_zeroToOne ? p.z : 2.0 * p.z - p.w, p.w);
+}`, `#version 300 es
+precision highp float;
+uniform vec3 u_colour;
+uniform float u_reach;
+uniform float u_width;
+in float v_beyond;
+out vec4 o;
+void main() {
+  float f = smoothstep(u_reach - u_width, u_reach, v_beyond);
+  if (f <= 0.0) discard;
+  o = vec4(u_colour * f, f);
+}`);
+      const at = (name: string) => gl.getUniformLocation(program, name)!;
+      this.planeEdgeProgram = { program, wvp: at('u_wvp'), flip: at('u_flip'), zeroToOne: at('u_zeroToOne'), colour: at('u_colour'),
+        reach: at('u_reach'), width: at('u_width') };
+    }
+    const p = this.planeEdgeProgram;
+    // (out = dst (1 - f) + colour f dst.a: an empty pixel, alpha and colour 0, stays empty; alpha kept)
+    this.gl.applyState({ depthTest: true, depthFunc: gl.LEQUAL, depthWrite: false, cull: null, colourWrite: true,
+      blend: [gl.FUNC_ADD, gl.DST_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.FUNC_ADD, gl.ZERO, gl.ONE] });
+    gl.useProgram(p.program);
+    gl.uniformMatrix4fv(p.wvp, false, wvp.elements);
+    gl.uniform1f(p.flip, y === 'clip' ? -1 : 1);
+    gl.uniform1i(p.zeroToOne, this.clipControl ? 1 : 0);
+    gl.uniform3f(p.colour, this.planeEdge![0], this.planeEdge![1], this.planeEdge![2]);
+    gl.uniform1f(p.reach, this.planeDistance);
+    gl.uniform1f(p.width, planeEdgeWidth(this.planeDistance));
+    // (a hair nearer than the floor, which drew this depth with the game's own rounding)
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(-1, -4);
+    gl.bindVertexArray(edge.vao);
+    gl.drawElements(gl.TRIANGLES, count * 6, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    this.gl.forgetState();   // (its program bound behind the cache)
   }
 
   /** One actor part: the skinned programs of its material, its mesh baked in
@@ -1786,7 +1882,10 @@ export class GameFrame {
       } else {
         putFloats(words, 240, [f32(f32(rect[0] + rect[2]) * 0.5), f32(f32(rect[1] + rect[3]) * 0.5), f32(1 / hx), f32(1 / hy)]);
         putFloats(words, 256, [vignetteColour[0] * idx.lighting.fade, vignetteColour[1] * idx.lighting.fade, vignetteColour[2] * idx.lighting.fade, plane ? kPlane : k]);
-        putFloats(words, 272, plane ? [offset, 0, 0, 1] : [offset, 0, height, floorValue]);
+        // (the floor's brightness through its height fade: hf = saturate((z - 0) / 1) (1 - b) + b = b at z = 0;
+        // at 1 the game's own words)
+        putFloats(words, 272, plane ? (this.planeBrightness === 1 ? [offset, 0, 0, 1] : [offset, 0, 1, f32(this.planeBrightness)])
+          : [offset, 0, height, floorValue]);
       }
       return words;
     };
@@ -2015,9 +2114,15 @@ export class GameFrame {
     };
     // the ground plane first, then the room (a cluster: without its parts too small to see from where it is)
     const pixelsPerUnitAt1 = camera.height / (2 * Math.tan(camera.fov * Math.PI / 360));
+    const edged = this.planeEdge && Number.isFinite(this.planeDistance) && this.showPlane && !card;
     for (const scene of scenes) {
       const sw = sceneWords.get(scene)!;
       for (const d of planeOf(scene)) drawMain(scene, d, null, sw.plane);
+      const edge = edged ? scene.planeEdge : null, floor = planeOf(scene)[0];
+      if (edge && floor) {
+        const n = planeCount(edge.covers, this.planeDistance);
+        if (n) this.drawPlaneEdge(edge, placed(viewProjection, looks.get(scene)!), floor.program.y, n);
+      }
       let minLargest = 0;
       if (scene.cluster && scene.bounds && this.clusterDetailPixels > 0) {
         const o = scene.origin ?? new THREE.Vector3(), b = scene.bounds, e = camera.eye;

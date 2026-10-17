@@ -226,6 +226,8 @@ export interface WorldSceneOptions {
   showGroundPlane?: boolean;
   /** How far the ground plane reaches (tiles, Infinity: endless). */
   groundPlaneDistance?: number;
+  /** The ground plane's brightness (a scale on its colour; 1: as the game draws it). */
+  groundPlaneBrightness?: number;
   /** Shade neighbouring rooms as the game does. */
   neighbourShade?: boolean;
 }
@@ -562,6 +564,7 @@ export class WorldScene {
     groundPlanes = true,
     showGroundPlane = true,
     groundPlaneDistance = Infinity,
+    groundPlaneBrightness = 1,
     neighbourShade = true,
   }: WorldSceneOptions = {} as WorldSceneOptions) {
     if (!scene?.add || !scene?.remove) throw new TypeError('WorldScene requires a Three.js scene');
@@ -584,7 +587,7 @@ export class WorldScene {
     this.groundPlaneVisible = showGroundPlane !== false;
     this.groundPlaneDistance = groundPlaneDistance;
     this.neighbourShade = neighbourShade !== false;
-    this.groundPlaneUniforms = planeUniforms(this.groundPlaneFade, groundPlaneDistance);
+    this.groundPlaneUniforms = planeUniforms(this.groundPlaneFade, groundPlaneDistance, groundPlaneBrightness);
     this.defaultZVisible = true;
     this.meshForwardQuarterTurns = DEFAULT_MESH_FORWARD_QUARTER_TURNS;
     this.roomYSign = 1;
@@ -1757,6 +1760,11 @@ export class WorldScene {
   /** The colour the ground plane fades into (the view's background). */
   setGroundPlaneFade(colour: THREE.Color): void {
     this.groundPlaneFade.copy(colour);
+  }
+
+  /** Every room's ground plane brightness (a scale on its colour; 1: as the game draws it). */
+  setGroundPlaneBrightness(brightness: number): void {
+    this.groundPlaneUniforms.planeBrightness.value = brightness;
   }
 
   /** How far every room's ground plane reaches (tiles, Infinity: endless). */

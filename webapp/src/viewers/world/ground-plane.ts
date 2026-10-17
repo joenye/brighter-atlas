@@ -643,16 +643,52 @@ export function planeMeshes(field: PlaneField, extent: number, far = 0): PlaneMe
   });
 }
 
-/** What every floor material of a view shares: the fade colour and reach. */
+/** What every floor material of a view shares: the fade colour and reach, and the floor's brightness (a scale
+ *  on its colour before the fade, so the fade still ends in the fade colour; 1: as the game draws it). */
 export interface PlaneUniforms {
   planeFadeColour: { value: THREE.Color };
   planeReach: { value: number };
+  planeBrightness: { value: number };
 }
 
-export function planeUniforms(fadeColour: THREE.Color, distance = PLANE_GAME_DISTANCE): PlaneUniforms {
-  const uniforms = { planeFadeColour: { value: fadeColour }, planeReach: { value: 0 } };
+export function planeUniforms(fadeColour: THREE.Color, distance = PLANE_GAME_DISTANCE, brightness = 1): PlaneUniforms {
+  const uniforms = { planeFadeColour: { value: fadeColour }, planeReach: { value: 0 }, planeBrightness: { value: brightness } };
   setPlaneReach(uniforms, distance);
   return uniforms;
+}
+
+/** The floor's brightness setting: a positive scale, 1 when unset or not a number. */
+export function planeBrightness(setting: unknown): number {
+  const b = Number(setting);
+  return Number.isFinite(b) && b > 0 ? b : 1;
+}
+
+/** How wide (tiles) the soft edge of a floor that stops short is: two tiles, or half a short floor. */
+export function planeEdgeWidth(distance: number): number {
+  return Math.min(2, Math.max(distance, 0) * 0.5);
+}
+
+/** The soft edge of a floor that stops short, over the pieces it is drawn with: per vertex the piece's corner
+ *  (native units, z = 0) and how far beyond the nearest room's ellipse it lies (tiles), so a pass can blend the
+ *  floor into what lies behind it across the last `planeEdgeWidth` tiles before the distance; the pieces
+ *  nearest first (`covers`), so a distance is a draw count as for the floor itself. */
+export function planeEdgeData(tiles: readonly PlaneTile[], tileUnits: number): { vertices: Float32Array; indices: Uint32Array; covers: Float32Array } {
+  const order = tiles.map((_, i) => i).sort((a, b) => tiles[a].cover - tiles[b].cover || a - b);
+  const vertices = new Float32Array(order.length * 16), indices = new Uint32Array(order.length * 6);
+  const covers = new Float32Array(order.length);
+  order.forEach((i, k) => {
+    const t = tiles[i];
+    covers[k] = t.cover;
+    for (let v = 0; v < 4; v++) {
+      const [dx, dy] = CORNERS[v], o = (k * 4 + v) * 4;
+      vertices[o] = (t.x + dx * t.size[0]) * tileUnits;
+      vertices[o + 1] = (t.y + dy * t.size[1]) * tileUnits;
+      vertices[o + 2] = 0;
+      vertices[o + 3] = t.beyond[v] ?? 0;
+    }
+    for (let j = 0; j < 6; j++) indices[k * 6 + j] = k * 4 + TILE_QUAD.indices[j];
+  });
+  return { vertices, indices, covers };
 }
 
 /** Fade across `distance` tiles (none when endless). */
@@ -681,13 +717,14 @@ export function planeMaterial(map: THREE.Texture | null, uniforms: PlaneUniforms
   material.onBeforeCompile = (shader) => {
     shader.uniforms.planeFadeColour = uniforms.planeFadeColour;
     shader.uniforms.planeReach = uniforms.planeReach;
+    shader.uniforms.planeBrightness = uniforms.planeBrightness;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float planeBeyond;\nvarying float vPlaneBeyond;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPlaneBeyond = planeBeyond;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 planeFadeColour;\nuniform float planeReach;\nvarying float vPlaneBeyond;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 planeFadeColour;\nuniform float planeReach;\nuniform float planeBrightness;\nvarying float vPlaneBeyond;')
       .replace('#include <fog_fragment>', 'float planeFade = smoothstep(0.0, 1.0, clamp(vPlaneBeyond / planeReach, 0.0, 1.0));\n'
-        + 'gl_FragColor.rgb = mix(gl_FragColor.rgb, planeFadeColour, planeFade);\n#include <fog_fragment>');
+        + 'gl_FragColor.rgb = mix(gl_FragColor.rgb * planeBrightness, planeFadeColour, planeFade);\n#include <fog_fragment>');
   };
   material.customProgramCacheKey = () => 'ground-plane';
   return material;
