@@ -47,6 +47,7 @@ import { bindRigBirthFrames } from './effects-frames.js';
 import type { EffectBoneAnimation } from './effects-animation.js';
 import { proceduralEffectFrame } from './effects-motion.js';
 import { gateOpen } from '../../extract/world/effect-gates.js';
+import { storyColoured } from '../../extract/world/effect-properties.js';
 import { FlourishSchedule } from './effects-flourish.js';
 import {
   EmitterSim, EffectsClock, hash32,
@@ -372,7 +373,8 @@ export class WorldEffectsLayer {
   // Omitted or absent leaves particles at their authored colour.
   addRoom(roomId: number, offset: [number, number],
     opts: { loopOnly?: boolean; modulation?: number[] | null; leftOut?: ReadonlySet<number> | null; extra?: any[];
-      storyPosition?: (variable: number) => number | null } = {}): void {
+      storyPosition?: (variable: number) => number | null;
+      colourPosition?: (variable: number) => number | null } = {}): void {
     const id = Number(roomId);
     if (this._disposed || this._rooms.has(id)) return;
     const recs: InstanceRec[] = [];
@@ -461,7 +463,8 @@ export class WorldEffectsLayer {
         // Nothing drawable: skip rather than invent a fallback dot.
         const draws = emitterSpriteDraws(emitter, this.doc.configs || {});
         if (!draws.length) return;
-        const sim = new EmitterSim(system, index, emitter, this.doc.configs || {}, this.clock.tickRate, att.color_override);
+        const sim = new EmitterSim(system, index, storyColoured(emitter, opts.colourPosition), this.doc.configs || {},
+          this.clock.tickRate, att.color_override);
         sim.setInstanceSeed(hash32(id, Number(att.occurrence)));
         // Wave-timed bursts sample the water at their placed point.
         sim.setWaveFrame(Array.from(anchorOriginal));

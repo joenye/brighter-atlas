@@ -33,7 +33,7 @@ import {roomLayout, roomOwners, tileLayout, waterLayout} from './placement-shape
 import {effectLayout} from './effect-shape.js';
 import {groundPlaneLayout, roomGroundPlane, type GroundPlaneLayout} from './ground-plane.js';
 import {lightCarrier, restingLights, roomPointLights, type ShardSpawnLights} from './point-lights.js';
-import {createEffectPropertyReader, createEffectColourReader, createEffectColourTableReader} from './effect-properties.js';
+import {createEffectPropertyReader, createEffectColourReader, createEffectColourTableReader, createEffectColourStateReader} from './effect-properties.js';
 import {createEffectGateReader} from './effect-gates.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
@@ -830,6 +830,7 @@ export async function extractWorld({
       effectColour: createEffectColourReader(placementBindings?.effectColours, objects, ab0, profile, pool.values),
       effectColourTable: createEffectColourTableReader(placementBindings?.effectColourTables, objects,
         placementBindings?.effectColourTablesOwned),
+      effectColourStates: createEffectColourStateReader(placementBindings?.effectColourStates, objects),
       effectFields: createEffectFieldReader(placementBindings?.effectFields, objects, placementBindings?.effectPropertySources),
       effectWave: createEffectWaveReader(placementBindings?.effectWaves, objects, rowDecoder, pool.values),
       effectGate: createEffectGateReader(placementBindings?.effectBurstGates, objects),

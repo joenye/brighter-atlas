@@ -73,7 +73,10 @@ export interface EffectRateSample { value: EffectSample; ticks: number }
  *  alpha), times `scale` channel by channel. */
 export type EffectColourSample = {rgba: [number, number, number, number]} | {ahsl: [EffectSample, EffectSample, EffectSample, EffectSample]}
   | {mix: [[number, number, number, number], [number, number, number, number]]; premultiplied: boolean; scale?: [number, number, number, number]}
-  | {table: [number, number, number, number][]};
+  | {table: [number, number, number, number][]; stories?: EffectColourStory[]};
+/** A colour table the game picks by a quest's state (a giant crystal's glow follows its story): from each state
+ *  position on, its table. A view shows the table of the room's story position when the room follows that quest. */
+export interface EffectColourStory { variable: number; states: number; steps: [number, [number, number, number, number][]][] }
 /** A second endpoint of 'start' repeats the first particle's own sample. */
 export interface EffectEndpoints<T> { start: T; end: T | 'start' }
 // Absent: no binding for this emitter. null: bound but not a supported value.

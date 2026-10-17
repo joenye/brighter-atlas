@@ -8,6 +8,7 @@ import type {WorldProfile} from './profile.js';
 import type {ConstructorRecord} from './replay.js';
 import type {EffectExtra} from './effects.js';
 import {bindingIndex, instanceLookup, validBindingList} from './effect-bindings.js';
+import type {EffectColourStory} from './effect-fields.js';
 
 const propertyRoles = ['scale', 'speed', 'acceleration'] as const;
 export type PropertyRole = typeof propertyRoles[number];
@@ -144,6 +145,72 @@ export function createEffectColourTableReader(bindings: EffectColourTableBinding
     }
     return byInstance(slot);
   };
+}
+
+// Colour tables a quest's state picks: per instance (and owning system record where owners differ) and quest variable,
+// [the first state position, its table from it on], every state with the other quests at their start.
+export interface EffectColourStateBinding { instance: number; owner?: number; variable: number; states: number;
+  steps: [number, [number, number, number, number][]][] }
+export function validEffectColourStates(values: any): values is EffectColourStateBinding[] {
+  if (!Array.isArray(values) || values.length > 65536) return false;
+  const seen = new Set<string>();
+  for (const v of values) {
+    if (!v || !bindingIndex(v.instance) || (v.owner !== undefined && (!Number.isInteger(v.owner) || v.owner < 0 || v.owner >= 2 ** 24))
+      || !Number.isInteger(v.variable) || v.variable < 0 || v.variable >= 2 ** 24
+      || !Number.isInteger(v.states) || v.states < 2 || v.states > 65536
+      || !Array.isArray(v.steps) || v.steps.length < 2 || v.steps.length > 256) return false;
+    let last = -1;
+    for (const step of v.steps) {
+      if (!Array.isArray(step) || step.length !== 2 || !Number.isInteger(step[0]) || step[0] <= last || step[0] >= v.states
+        || !validEffectColourTables([{instance: v.instance, colours: step[1]}])) return false;
+      last = step[0];
+    }
+    if (v.steps[0][0] !== 0) return false;
+    const key = `${v.instance}|${v.owner ?? ''}|${v.variable}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
+}
+/** An emitter record's story colour tables: its owner's rows (field 0 names the owning system's record), else its
+ *  instance's. */
+export function createEffectColourStateReader(bindings: EffectColourStateBinding[] | undefined, objects: ConstructorRecord[]) {
+  if (bindings !== undefined && !validEffectColourStates(bindings)) throw Error('invalid effect colour states');
+  const rows = new Map<string, EffectColourStory[]>();
+  for (const b of bindings ?? []) {
+    const key = `${b.instance}|${b.owner ?? ''}`;
+    const story: EffectColourStory = {variable: b.variable, states: b.states,
+      steps: b.steps.map(([from, colours]) => [from, colours.map(c => [...c] as [number, number, number, number])])};
+    rows.set(key, [...(rows.get(key) ?? []), story]);
+  }
+  return (slot: number, ops?: {op: number; kind: string; value?: unknown}[]): EffectColourStory[] | null => {
+    if (!rows.size) return null;
+    const instance = objects[slot]?.values[1];
+    const own = ops?.find(e => e.op === 0 && e.kind === 'scalar');
+    return (own && rows.get(`${instance}|${Number(own.value)}`)) || rows.get(`${instance}|`) || null;
+  };
+}
+/** The table a story's position picks (null position: the room follows another quest, and the table stays). */
+export function storyColourTable(stories: EffectColourStory[] | undefined, position: (variable: number) => number | null | undefined)
+  : [number, number, number, number][] | null {
+  for (const story of stories ?? []) {
+    const at = position(story.variable);
+    if (at === null || at === undefined) continue;
+    let pick = story.steps[0][1];
+    for (const [from, table] of story.steps) if (from <= at) pick = table;
+    return pick;
+  }
+  return null;
+}
+/** The emitter with its start colour table at the room's story position, where the game picks the table by a quest's
+ *  state (the room following that quest; otherwise the table it has). */
+export function storyColoured<T>(emitter: T, position: ((variable: number) => number | null) | undefined): T {
+  const start = (emitter as any)?.fields?.color?.start;
+  if (!position || !start || !Array.isArray(start.stories)) return emitter;
+  const table = storyColourTable(start.stories, position);
+  if (!table) return emitter;
+  const e = emitter as any;
+  return { ...e, fields: { ...e.fields, color: { ...e.fields.color, start: { ...start, table } } } };
 }
 
 export function createEffectColourReader(bindings: EffectColourMixBinding[] | undefined,

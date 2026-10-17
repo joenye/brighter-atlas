@@ -38,7 +38,7 @@ import type {EffectGate, createEffectGateReader} from './effect-gates.js';
 import type {EffectFieldValues, EffectSample, createEffectFieldReader, createEffectSpeedReader} from './effect-fields.js';
 import type {EffectWave, createEffectWaveReader} from './effect-waves.js';
 import { hasEmitterTimingHeader, inferEffectTransformLayout, readEffectTransformBinding, readEffectRigSelection, readEffectAccelerationFrame, inferEffectAccelerationFrameOp, type EffectAccelerationFrame, type EffectRigSelection, type EffectTransformBinding, type EffectTransformLayout } from './effect-transforms.js';
-import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader, type createEffectColourReader, type createEffectColourTableReader} from './effect-properties.js';
+import {effectTimingDurations, inferEffectPropertyPairs, readEffectPropertyPair, type EffectPropertyPairs, type EffectPropertyBinding, type PropertyRole, type createEffectPropertyReader, type createEffectColourReader, type createEffectColourTableReader, type createEffectColourStateReader} from './effect-properties.js';
 import { PoolDecoder } from './value-pool.js';
 import type { PoolNode } from './value-pool.js';
 import type { WorldProfile, WorldProfileSelector } from './profile.js';
@@ -361,6 +361,7 @@ export interface WorldEffectsShared {
   effectProperties?: ReturnType<typeof createEffectPropertyReader>;
   effectColour?: ReturnType<typeof createEffectColourReader>;
   effectColourTable?: ReturnType<typeof createEffectColourTableReader>;
+  effectColourStates?: ReturnType<typeof createEffectColourStateReader>;
   effectFields?: ReturnType<typeof createEffectFieldReader>;
   effectSpeed?: ReturnType<typeof createEffectSpeedReader>;
   effectWave?: ReturnType<typeof createEffectWaveReader>;
@@ -1583,7 +1584,10 @@ function extractEffects(
         // colour, where the record names none of its own, is the same)
         const table = !mix && !emitter.color0 ? shared.effectColourTable?.(ref, ops) : null;
         if (table) {
-          emitter.fields = {...(emitter.fields ?? blank), color: {start: {table}, end: emitter.color1 ? {rgba: emitter.color1.rgba} : 'start'}};
+          // (its table by a quest's state where the game picks it so: the room's story chooses, as the view draws it)
+          const stories = shared.effectColourStates?.(ref, ops);
+          emitter.fields = {...(emitter.fields ?? blank), color: {start: {table, ...(stories?.length ? {stories} : {})},
+            end: emitter.color1 ? {rgba: emitter.color1.rgba} : 'start'}};
           emitter.color1 = null;
         }
         const scales = fields?.scale ?? shared.effectScales?.(ref, ops);

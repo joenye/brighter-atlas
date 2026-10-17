@@ -2165,7 +2165,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       updateMergedEffectsActivation();   // re-rank immediately, don't wait for the next tick
     } else {
       for (const id of effectsRooms) {
-        effectsLayer.addRoom(id, spawnRoomOffset(id), { leftOut: world.roomLeftOut.get(id), storyPosition: storyPositionFor(id) });
+        effectsLayer.addRoom(id, spawnRoomOffset(id), { leftOut: world.roomLeftOut.get(id), storyPosition: storyPositionFor(id),
+          colourPosition: world.storyPosition?.(id) ?? undefined });
         if (!actorEffectRooms.has(id)) addActorEffects(id).catch(() => { /* the room keeps its other effects */ });
       }
     }
@@ -2250,7 +2251,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       }
       activeEffectRooms.add(id);
       effectsLayer!.addRoom(id, spawnRoomOffset(id),
-        { loopOnly: true, leftOut: world.roomLeftOut.get(id) });
+        { loopOnly: true, leftOut: world.roomLeftOut.get(id), colourPosition: world.storyPosition?.(id) ?? undefined });
       addActorEffects(id).catch(() => { /* the room keeps its other effects */ });
     }
   }
@@ -2355,7 +2356,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       if (!allMode && world.rooms.get(roomId)?.shard?.state_recolors) reloadHomeRoom();
       if (!effectsLayer || allMode) return;
       effectsLayer.removeRoom(roomId);
-      effectsLayer.addRoom(roomId, spawnRoomOffset(roomId), { leftOut: world.roomLeftOut.get(roomId), storyPosition: storyPositionFor(roomId) });
+      effectsLayer.addRoom(roomId, spawnRoomOffset(roomId), { leftOut: world.roomLeftOut.get(roomId), storyPosition: storyPositionFor(roomId),
+        colourPosition: world.storyPosition?.(roomId) ?? undefined });
     });
     apply();
     append(storyBox,
