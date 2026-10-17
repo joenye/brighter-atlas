@@ -624,6 +624,9 @@ export class MergedWorld {
       const group = new THREE.Group();
       group.name = `merged-cell-${key}`;
       group.matrixAutoUpdate = false;
+      // (a frozen node's world matrix is worked out only when flagged: a cell added after the root's last
+      // update would keep a world matrix of its own and draw its meshes outside the world, unseen)
+      group.matrixWorldNeedsUpdate = true;
       this.root.add(group);
       this._cells.set(key, cell = { group, box: new THREE.Box3() });
     }
