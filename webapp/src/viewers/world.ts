@@ -288,12 +288,36 @@ const GPU_WARN_INTEGRATED = (label: string): string =>
 // The room view's game frame, kept from one room view to the next of the same build: its compiled programs and the
 // textures it has met stay, so the next room's first shaded frame waits only for what is new to it. All rooms frees
 // its textures (it keeps its own) and keeps the programs.
+// Leaving All rooms: what it holds is freed after the next room's first shaded frame (or a few seconds on), a piece
+// per idle moment, so the room starts at once instead of waiting for the whole world to be torn down.
+const deferredTeardown: (() => void)[] = [];
+let teardownTimer: ReturnType<typeof setTimeout> | null = null;
+function flushDeferredTeardown(): void {
+  if (teardownTimer) { clearTimeout(teardownTimer); teardownTimer = null; }
+  for (const task of deferredTeardown.splice(0)) {
+    try { task(); } catch (error) { console.warn('world teardown step failed', error); }
+  }
+}
+function runDeferredTeardown(): void {
+  if (teardownTimer) { clearTimeout(teardownTimer); teardownTimer = null; }
+  const step = () => {
+    const task = deferredTeardown.shift();
+    if (!task) return;
+    try { task(); } catch (error) { console.warn('world teardown step failed', error); }
+    if (deferredTeardown.length) idle(step);
+  };
+  const idle = (fn: () => void) => ((window as any).requestIdleCallback ? (window as any).requestIdleCallback(fn, { timeout: 500 }) : setTimeout(fn, 0));
+  idle(step);
+}
+
 let keptRoomFrame: { frame: GameFrame; gl: WebGL2RenderingContext; version: string } | null = null;
 
 function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: boolean): WorldViewHandle {
   const state = loadState(allMode);
   // (All rooms keeps textures of its own: the kept room frame's are freed, its programs stay)
   if (allMode) keptRoomFrame?.frame.releaseTextures();
+  // (an earlier All rooms still held: freed before this one loads)
+  if (allMode) flushDeferredTeardown();
 
   const root = el('div', { class: 'viewer-pane world-view' });
   const toolbar = el('div', { class: 'viewer-toolbar' });
@@ -1174,9 +1198,11 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       gameFrame = frame;
       applyGameShading();
       setupStory(room.id);
+      runDeferredTeardown();
     } catch (error) {
       renderer.resetState();
       gameUnavailable = true;
+      runDeferredTeardown();
       console.warn('game shading unavailable for this room', error);
     } finally {
       gameBuilds--;
@@ -6730,22 +6756,32 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
         keptRoomFrame = { frame: gameFrame, gl: renderer.getContext() as WebGL2RenderingContext, version: app.store.versionId };
       } else gameFrame?.releaseRoom();
       gameFrame = null;
-      stopWorldGame();
-      worldGame?.releaseTextures();
+      // (the bakes stop now; drawing stops with the scene below)
       worldGame?.bakeWorker?.dispose();
-      worldGame = null;
-      disposeWorldGroundPlane();
-      wire?.dispose();
-      wire = null;
-      merged?.dispose();
-      world.dispose();
-      highlightMaterial.dispose();
-      for (const material of sheetMaterialCache.values()) material.dispose();
-      sheetMaterialCache.clear();
+      const heavy: (() => void)[] = [
+        () => { stopWorldGame(); worldGame?.releaseTextures(); worldGame = null; },
+        () => { disposeWorldGroundPlane(); wire?.dispose(); wire = null; },
+        () => merged?.dispose(),
+        () => world.dispose(),
+        () => {
+          highlightMaterial.dispose();
+          for (const material of sheetMaterialCache.values()) material.dispose();
+          sheetMaterialCache.clear();
+        },
+        () => scene3d.disposeScene(),
+      ].map((task) => () => { task(); renderer.resetState(); });
       // the renderer is shared across views: undo world-only settings
       renderer.shadowMap.enabled = false;
       if (renderer.getPixelRatio() !== savedPixelRatio) renderer.setPixelRatio(savedPixelRatio);
-      scene3d.destroy();
+      scene3d.stop();
+      if (allMode) {
+        // (freed once the next room is shown, or a few seconds on whatever comes next)
+        deferredTeardown.push(...heavy);
+        if (teardownTimer) clearTimeout(teardownTimer);
+        // (going on to a room: freed once it is shown, or after a few seconds at most; anywhere else: now)
+        if (/^#\/world\/\d+/.test(location.hash)) teardownTimer = setTimeout(runDeferredTeardown, 6000);
+        else flushDeferredTeardown();
+      } else for (const task of heavy) task();
       if ((window as any).__bs?.worldView === api) delete (window as any).__bs.worldView;
     },
   };

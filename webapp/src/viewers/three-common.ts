@@ -196,11 +196,22 @@ export class Scene3D {
   }
 
   destroy(): void {
+    this.stop();
+    this.disposeScene();
+  }
+
+  /** Stop drawing and give the shared canvas back (the scene's resources stay until disposeScene). */
+  stop(): void {
     if (this._alive) _aliveScenes--;
     this._alive = false;
     this._ro.disconnect();
     this.controls.dispose();
-    // dispose scene resources
+    this._camHint.remove();
+    this.renderer.domElement.remove(); // keep renderer/context for the next view
+  }
+
+  /** Free the scene's geometries, materials and textures. */
+  disposeScene(): void {
     this.scene.traverse((o: any) => {
       o.geometry?.dispose?.();
       const mats: any[] = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
@@ -209,8 +220,6 @@ export class Scene3D {
         m.dispose?.();
       }
     });
-    this._camHint.remove();
-    this.renderer.domElement.remove(); // keep renderer/context for the next view
   }
 }
 
