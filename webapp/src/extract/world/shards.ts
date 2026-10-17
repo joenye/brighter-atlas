@@ -150,8 +150,9 @@ export const COORDINATE_SYSTEM = {
   // 1: shards carry the room's ground plane (ground_plane)
   ground_plane_revision: 1,
   // 1: effects say why one is off at rest (an action or a state) and carry stepped, gap-timed and delayed crest
-  // emission; solid parts with no picture are drawn
-  world_effects_revision: 1,
+  // emission; solid parts with no picture are drawn; 2: and ground tables with a closing pair of colours (the
+  // giant crystals' materials)
+  world_effects_revision: 2,
   mesh_space: 'game x/y horizontal, z up',
   tile_units: TILE_UNITS,
   layer_units: LAYER_UNITS,
