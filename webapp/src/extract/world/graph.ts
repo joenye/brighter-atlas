@@ -836,16 +836,21 @@ export class AssetGraph {
     let base: number | null = null;
     if (colors.length) {
       if (colors.length >= 20 || colors[colors.length - 1] - colors[0] >= 20) {
-        const candidate = colors[colors.length - 1] - 33;
-        const colorMatches = colors.filter(
-          (op) => candidate + 8 <= op && op <= candidate + 33,
-        ).length;
-        const materialMatches = materials.filter(
-          (op) => candidate <= op && op <= candidate + 7,
-        ).length;
-        if (candidate >= 0 && colorMatches === colors.length
-          && (!materials.length || materialMatches >= 6)) {
-          base = candidate;
+        // The eight materials, the varied pair and the eight face triples end 33 fields after the base; a ground
+        // used as a block's own material table carries two more colours after them.
+        for (const tail of [33, 35]) {
+          const candidate = colors[colors.length - 1] - tail;
+          const colorMatches = colors.filter(
+            (op) => candidate + 8 <= op && op <= candidate + tail,
+          ).length;
+          const materialMatches = materials.filter(
+            (op) => candidate <= op && op <= candidate + 7,
+          ).length;
+          if (candidate >= 0 && colorMatches === colors.length
+            && (!materials.length || materialMatches >= 6)) {
+            base = candidate;
+            break;
+          }
         }
       } else {
         const candidate = colors[0] - 1;
