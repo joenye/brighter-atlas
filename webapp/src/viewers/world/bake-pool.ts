@@ -207,6 +207,7 @@ export class MergedBakePool {
         metaZ: item.metaZ,
         metaBits: item.metaBits,
         palette: item.palette,
+        ...(item.palettes ? { palettes: item.palettes } : {}),
         room: item.room ?? 0,
       });
     }

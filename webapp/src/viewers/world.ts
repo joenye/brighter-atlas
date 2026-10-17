@@ -3545,10 +3545,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // shared caches (async); a pin change before they land aborts.
   async function showPreviewModel(members: any[], guardKey: string): Promise<void> {
     if (!members?.length) return;
-    const mats = await Promise.all(members.map((member) => world._material(
-      member.info.category, member.info.material, Number(member.info.renderTexture),
-      member.info.flags | 0, member.info.recolors,
-    ).catch(() => null)));
+    const mats = await Promise.all(members.map((member) => world.lookMaterial(member.info).catch(() => null)));
     if (destroyed || inspectedKey !== guardKey) return;
     const p = ensurePreview();
     p.spinner?.removeFromParent();
@@ -4416,19 +4413,22 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
           let geometry = null;
           try { geometry = await world._batchGeometry(batch); } catch { continue; }
           if (destroyed) return;
+          const look = world.partLook(shard, batch);
           const classified = merged.classifyBucket({
             category: batch.category,
             renderTexture: batch.renderTexture,
             flags: batch.flags,
             recolors: batch.recolors,
+            ...(look ? { partTints: look.tints, partColours: look.colours } : {}),
             depthRank: batch.depthRank,
             z: batch.z,
           }, geometry);
           const key = merged.bucketKeyFor(cellX, cellY, classified);
           if (!defs.has(key)) continue;
           const array = new Float32Array(batch.entries.length * 16);
+          const liveColours: number[][] = [];
           let live = 0;
-          for (const entry of batch.entries) {
+          for (const [entryIndex, entry] of batch.entries.entries()) {
             const edit = edits.get({
               room: roomId, sourceKind: entry.sourceKind,
               category: batch.category, placementIndex: entry.placementIndex,
@@ -4451,6 +4451,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             } else {
               array.set(original.elements, live * 16);
             }
+            if (look) liveColours.push(look.colours[entryIndex]);
             live++;
           }
           if (!live) continue;
@@ -4480,6 +4481,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
             metaBits: classified.metaBits,
             recolors: batch.recolors,
             fullTint: !!(batch.flags & world.flags.uniformLuminanceTint),
+            ...(look ? { partTints: look.tints, partColours: liveColours } : {}),
           });
         }
       }
@@ -4642,10 +4644,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   async function attachIndexPreview(info: any, hit: any): Promise<void> {
     let material = null;
     try {
-      material = await world._material(
-        info.category, info.material, Number(info.renderTexture),
-        info.flags | 0, info.recolors,
-      );
+      material = await world.lookMaterial(info);
     } catch { material = null; }
     if (destroyed || pinnedCtx?.entryIndex !== hit.entryIndex) return;
     pickIndex.matrix(hit.entryIndex, pickMatrix);
@@ -5052,7 +5051,14 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     }
     if (pinned) {
       hitInstanceMatrix(hit, editScratch);
-      showPreviewMesh(hit.object.geometry, hit.object.material, editScratch, Number(info.renderTexture) >= 0);
+      const textured = Number(info.renderTexture) >= 0;
+      // (a part coloured per placement draws with a material of its own colour: the batch's material carries none)
+      if (world.placementLook(info)) {
+        const at = editScratch.clone(), geometry = hit.object.geometry;
+        world.lookMaterial(info).then((material) => {
+          if (!destroyed && inspectedKey === key) showPreviewMesh(geometry, material, at, textured);
+        }).catch(() => showPreviewMesh(geometry, hit.object.material, at, textured));
+      } else showPreviewMesh(hit.object.geometry, hit.object.material, editScratch, textured);
     }
     showReadout(info, inspectPinned);
     if (pinned) syncSpawnAnim();

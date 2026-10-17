@@ -169,6 +169,22 @@ export function addGizmoGhost(mesh: THREE.InstancedMesh): THREE.InstancedMesh {
   return ghost;
 }
 
+/** A placed part's look as the game's part builder gives it: its part colour entry (a colour, then two recolour
+ *  tints, half range), the colour multiplying the albedo and the tints recolouring the masked regions; without an
+ *  entry, the part's first recolour as its colour and no tints (as the game frame takes it). The record's own
+ *  recolour tuple is not a recolour for these parts: its colours are the ones the game picks between per tile. */
+export interface PartLook { colour: [number, number, number]; tints: number[][] | null }
+export function partLookOf(entry: ArrayLike<number> | null | undefined, recolors: number[][] | null | undefined): PartLook {
+  const rgb = (c: ArrayLike<number> | null | undefined, k = 0): [number, number, number] =>
+    c && c.length >= k + 3 && [0, 1, 2].every((i) => Number.isFinite(Number(c[k + i])))
+      ? [Number(c[k]), Number(c[k + 1]), Number(c[k + 2])] : [1, 1, 1];
+  if (entry && entry.length >= 4) {
+    const tints = entry.length >= 12 ? [Array.from(entry).slice(4, 8).map(Number), Array.from(entry).slice(8, 12).map(Number)] : null;
+    return { colour: rgb(entry), tints };
+  }
+  return { colour: rgb(Array.isArray(recolors?.[0]) ? recolors![0] : null), tints: null };
+}
+
 export interface WorldPlacementFlags {
   authoredEmpty: number;
   alpha: number;
@@ -1030,6 +1046,7 @@ export class WorldScene {
     flags: number,
     recolors: number[][] | null,
     depthRank = 0,
+    colour: [number, number, number] | null = null,
   ): Promise<THREE.Material> {
     const depthOffset = { polygonOffset: depthRank > 0, polygonOffsetFactor: 0, polygonOffsetUnits: depthRank };
     const authoredEmpty = !!(flags & this.flags.authoredEmpty);
@@ -1039,7 +1056,7 @@ export class WorldScene {
     const key = JSON.stringify([
       category, materialId, renderTexture, authoredEmpty ? 1 : 0,
       unrenderable ? 1 : 0, alpha ? 1 : 0,
-      uniformLuminanceTint ? 1 : 0, recolors, depthRank,
+      uniformLuminanceTint ? 1 : 0, recolors, depthRank, colour,
     ]);
     return cachedPromise(this._materialPromises, key, async () => {
       if (this.disposed) throw new Error('WorldScene is disposed');
@@ -1065,6 +1082,8 @@ export class WorldScene {
         ...depthOffset, color: 0xffffff, map: textures.map, normalMap: textures.normalMap,
         metalness: 0.02, roughness: 0.88, side: THREE.FrontSide,
       });
+      // (a part's own colour, multiplying the albedo as the game's vertex colour does)
+      if (colour) material.color.setRGB(colour[0], colour[1], colour[2]);
       if (alpha || textures.meta.alpha) {
         material.alphaTest = 0.35;
       }
@@ -1421,6 +1440,37 @@ export class WorldScene {
     const index = Number(row[column]);
     const entry = index >= 0 ? shard.part_colours?.[index] : null;
     return Array.isArray(entry) && entry.length >= 4 ? entry.map(Number) : null;
+  }
+
+  /** Each placement's look in a batch as the game gives it (see partLookOf), or null where the data carries no
+   *  part colours (older extractions) or for spawn parts, which keep their own recolours. The tints are the
+   *  batch's (they never differ within one); the colours can (the per-tile pick). */
+  partLook(shard: any, batch: any): { colours: [number, number, number][]; tints: number[][] | null } | null {
+    if (this.placementColumns?.part_colour === undefined || !shard?.part_colours || batch.sourceKind === 'spawn'
+      || !this._lookDrawn(batch.flags, batch.renderTexture)) return null;
+    const looks = batch.entries.map((entry: any) => partLookOf(this._partColourEntry(shard, entry.row), batch.recolors));
+    return { colours: looks.map((look: PartLook) => look.colour), tints: looks.find((look: PartLook) => look.tints)?.tints ?? null };
+  }
+
+  /** Whether a part draws with its look: textured, and not an editor marker (those keep their own colours). */
+  _lookDrawn(flags: any, renderTexture: any): boolean {
+    return !(Number(flags) & this.flags.authoredEmpty) && Number(renderTexture) >= 0;
+  }
+
+  /** A described placement's look (describeShardPlacement's info), or null as for partLook. */
+  placementLook(info: any): PartLook | null {
+    if (!info || info.sourceKind === 'spawn' || !Object.hasOwn(info, 'partColour')
+      || !this._lookDrawn(info.flags, info.renderTexture)) return null;
+    return partLookOf(info.partColour, info.recolors);
+  }
+
+  /** The material for a described placement, with the game's look where the data carries it: its tints as the
+   *  recolour and its colour on the material (a material of its own for that colour). */
+  lookMaterial(info: any, depthRank = 0): Promise<THREE.Material> {
+    const look = this.placementLook(info);
+    if (!look) return this._material(info.category, info.material, Number(info.renderTexture), info.flags | 0, info.recolors, depthRank);
+    return this._material(info.category, info.material, Number(info.renderTexture),
+      (info.flags | 0) & ~this.flags.uniformLuminanceTint, look.tints, depthRank, look.colour);
   }
 
   /** One loaded room's placed batches for the game's own programs: raw mesh
@@ -1866,11 +1916,16 @@ export class WorldScene {
    *  except the pieces the build marks lit (a building's frontage). */
   _shadeRoom(room: WorldSceneRoom): void {
     const scale = this.neighbourShade && this._neighbourIds.has(room.id) ? NEIGHBOUR_LIGHT : 1;
-    const colour = new THREE.Color(scale, scale, scale), full = new THREE.Color(1, 1, 1);
+    const colour = new THREE.Color(scale, scale, scale), full = new THREE.Color(1, 1, 1), part = new THREE.Color();
     for (const mesh of room.meshes as any[]) {
       if (!mesh.isInstancedMesh || (scale === 1 && !mesh.instanceColor)) continue;
       const lit: boolean[] | undefined = mesh.userData.lit;
-      for (let i = 0; i < mesh.count; i++) mesh.setColorAt(i, lit?.[i] ? full : colour);
+      const own: Float32Array | undefined = mesh.userData.partColours;
+      for (let i = 0; i < mesh.count; i++) {
+        const k = lit?.[i] ? 1 : scale;
+        if (own) mesh.setColorAt(i, part.setRGB(own[i * 3] * k, own[i * 3 + 1] * k, own[i * 3 + 2] * k));
+        else mesh.setColorAt(i, lit?.[i] ? full : colour);
+      }
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
   }
@@ -2029,11 +2084,14 @@ export class WorldScene {
         // Bail before requesting assets: after a cancel/dispose, hundreds of
         // queued batches must not keep fetching payloads and decoding textures.
         if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
+        // the game's look where the data carries it: the tints recolour, the colours multiply per placement
+        const look = this.partLook(shard, batch);
         const [geometry, material] = await Promise.all([
           this._batchGeometry(batch),
           this._material(
-            batch.category, batch.material, batch.renderTexture, batch.flags,
-            batch.recolors, batch.depthRank,
+            batch.category, batch.material, batch.renderTexture,
+            look ? batch.flags & ~this.flags.uniformLuminanceTint : batch.flags,
+            look ? look.tints : batch.recolors, batch.depthRank,
           ),
         ]);
         if (!this._roomLoadActive(meta.id, generation, roomGeneration)) return;
@@ -2049,6 +2107,16 @@ export class WorldScene {
           if (entry.sourceKind === 'spawn') this._spawnMatrix(shard, entry.row, matrix);
           else this._placementMatrix(shard, entry.row, matrix, batch.reflectLocalX);
           mesh.setMatrixAt(index, matrix);
+        }
+        if (look) {
+          const colours = new Float32Array(look.colours.length * 3);
+          const colour = new THREE.Color();
+          look.colours.forEach((c, index) => {
+            colours.set(c, index * 3);
+            mesh.setColorAt(index, colour.setRGB(c[0], c[1], c[2]));
+          });
+          mesh.userData.partColours = colours;
+          if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
         }
         // (per instance, lit at full as a neighbour: the build's lighting mark, a frontage or a piece at its own light)
         if (shard.individual_light) {
@@ -2077,6 +2145,7 @@ export class WorldScene {
           renderTexture: batch.renderTexture,
           recolorIndex: batch.recolorIndex,
           recolors: batch.recolors,
+          ...(look ? { partTints: look.tints, partColours: look.colours } : {}),
           flags: batch.flags,
           authoredEmpty,
           untextured: !authoredEmpty && Number(batch.renderTexture) < 0,
@@ -2509,6 +2578,8 @@ export class WorldScene {
       renderTexture: placement[pc.render_texture],
       recolorIndex,
       recolors,
+      // the colour and tints the game gives this part (null without an entry; absent in older data)
+      ...(pc.part_colour !== undefined && shard.part_colours ? { partColour: this._partColourEntry(shard, placement) } : {}),
       matrixIndex,
       localMatrix: Array.isArray(localMatrix)
         ? Object.freeze(localMatrix.map(Number))

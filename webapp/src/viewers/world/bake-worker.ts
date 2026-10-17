@@ -55,6 +55,8 @@ export interface BakeJobItem {
   metaZ: number;
   metaBits: number;
   palette: number;
+  /** Each instance's palette slot, where they differ. */
+  palettes?: number[];
   room: number;
 }
 
@@ -197,7 +199,7 @@ function bakeBucket(msg: BakeJobMessage): BakeBucketArrays {
       for (let v = 0; v < vertsPerInstance; v++) {
         metas[(vertexBase + v) * 2 + 1] = item.metaBits;
       }
-      recolors.fill(item.palette, vertexBase, vertexBase + vertsPerInstance);
+      recolors.fill(item.palettes ? item.palettes[instance] : item.palette, vertexBase, vertexBase + vertsPerInstance);
       rooms.fill(item.room, vertexBase, vertexBase + vertsPerInstance);
 
       // Winding is copied verbatim: total placement reflection is already

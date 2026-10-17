@@ -22,7 +22,7 @@ import type { WorldScene, WorldTextureSet } from './scene.js';
 import type { WorldWaterRegistry, WaterUniforms, WaterTile } from './water.js';
 import type { WorldPickIndex } from './pick-index.js';
 
-export const MERGED_SHADER_VERSION = 'brighter-merged-v2';
+export const MERGED_SHADER_VERSION = 'brighter-merged-v3';
 
 const _cellFrustum = new THREE.Frustum();
 const _cellMatrix = new THREE.Matrix4();
@@ -51,6 +51,13 @@ export function mergedPaletteTuple(recolors: any, uniformLuminanceTint = false):
     : recolors;
 }
 
+// A placement's palette tuple with the game's look (partLook): its two tints, a neutral modulation and its colour,
+// the fourth column, which multiplies the albedo as the game's vertex colour does.
+export function lookPaletteTuple(tints: number[][] | null | undefined, colour: ArrayLike<number>): any {
+  const white = [1, 1, 1];
+  return [tints?.[0] ?? white, tints?.[1] ?? white, [0.5, 0.5, 0.5], [Number(colour[0]), Number(colour[1]), Number(colour[2])]];
+}
+
 // One animation frame, with a timeout fallback so a suspended rAF (background
 // window) can never wedge the bake. Hidden tab: rAF never fires and background
 // timers clamp to ≥1s: resume via the never-throttled channel yield instead.
@@ -77,6 +84,7 @@ uniform sampler2D brighterPalette;
 varying vec3 vBrighterT1;
 varying vec3 vBrighterT2;
 varying vec3 vBrighterOverall;
+varying vec3 vBrighterColour;
 varying vec2 vBrighterRecFlags;`;
 
 // brighterMeta.x: biased z level (0..47). brighterMeta.y bit layout:
@@ -106,13 +114,15 @@ const MERGED_VERTEX_BODY = `
 
 const MERGED_VERTEX_COLOR_BODY = `
 {
-  int brighterIndex = 3 * int( brighterRecolor + 0.5 );
+  int brighterIndex = 4 * int( brighterRecolor + 0.5 );
   vBrighterT1 = texelFetch( brighterPalette,
     ivec2( brighterIndex % ${PALETTE_WIDTH}, brighterIndex / ${PALETTE_WIDTH} ), 0 ).rgb;
   vBrighterT2 = texelFetch( brighterPalette,
     ivec2( ( brighterIndex + 1 ) % ${PALETTE_WIDTH}, ( brighterIndex + 1 ) / ${PALETTE_WIDTH} ), 0 ).rgb;
   vBrighterOverall = texelFetch( brighterPalette,
     ivec2( ( brighterIndex + 2 ) % ${PALETTE_WIDTH}, ( brighterIndex + 2 ) / ${PALETTE_WIDTH} ), 0 ).rgb;
+  vBrighterColour = texelFetch( brighterPalette,
+    ivec2( ( brighterIndex + 3 ) % ${PALETTE_WIDTH}, ( brighterIndex + 3 ) / ${PALETTE_WIDTH} ), 0 ).rgb;
   vBrighterRecFlags = vec2(
     mod( floor( brighterMeta.y / 8.0 ), 2.0 ),
     mod( floor( brighterMeta.y / 16.0 ), 2.0 ) );
@@ -123,6 +133,7 @@ uniform sampler2D brighterParameterMap;
 varying vec3 vBrighterT1;
 varying vec3 vBrighterT2;
 varying vec3 vBrighterOverall;
+varying vec3 vBrighterColour;
 varying vec2 vBrighterRecFlags;`;
 
 // The exact two-mask formula from js/recolor.js (native-two-mask-v3), with the
@@ -144,7 +155,7 @@ const MERGED_MAP_FRAGMENT = `#ifdef USE_MAP
   vec3 brighterUniform = brighterLuminance * vBrighterT1;
   vec3 brighterMixed = mix( brighterMasked, brighterUniform, vBrighterRecFlags.y );
   vec3 brighterOutput = mix( brighterEncoded, brighterMixed, vBrighterRecFlags.x );
-  sampledDiffuseColor.rgb = pow( max( brighterOutput, vec3( 0.0 ) ), vec3( 2.2 ) );
+  sampledDiffuseColor.rgb = pow( max( brighterOutput, vec3( 0.0 ) ), vec3( 2.2 ) ) * vBrighterColour;
   diffuseColor *= sampledDiffuseColor;
 #endif`;
 
@@ -178,10 +189,15 @@ export interface MergedBucketItem {
   metaZ: number;
   metaBits: number;
   palette: number;
+  /** Each instance's palette slot, where they differ (a part colour per placement); else `palette` for all. */
+  palettes?: number[];
   /** The room's slot in the room mask (0: none). */
   room?: number;
   recolors?: any;
   fullTint?: boolean;
+  /** The game's look (partLook): the batch's tints and each instance's colour. */
+  partTints?: number[][] | null;
+  partColours?: number[][];
 }
 
 export interface MergedBucketDef {
@@ -498,15 +514,15 @@ export class MergedWorld {
   }
 
   _buildPalette(tuples: any[]): THREE.DataTexture {
-    const texels = Math.max(1, tuples.length) * 3;
+    const texels = Math.max(1, tuples.length) * 4;
     const rows = Math.max(1, Math.ceil(texels / PALETTE_WIDTH));
     const data = new Float32Array(PALETTE_WIDTH * rows * 4);
     for (let index = 0; index < tuples.length; index++) {
       const tuple = tuples[index];
-      const overall = tuple.length === 3 ? tuple[2] : [0.5, 0.5, 0.5];
-      const colors = [tuple[0], tuple[1], overall];
-      for (let slot = 0; slot < 3; slot++) {
-        const at = (index * 3 + slot) * 4;
+      const overall = tuple.length >= 3 ? tuple[2] : [0.5, 0.5, 0.5];
+      const colors = [tuple[0], tuple[1], overall, tuple.length >= 4 ? tuple[3] : [1, 1, 1]];
+      for (let slot = 0; slot < 4; slot++) {
+        const at = (index * 4 + slot) * 4;
         data[at] = Number(colors[slot][0]) || 0;
         data[at + 1] = Number(colors[slot][1]) || 0;
         data[at + 2] = Number(colors[slot][2]) || 0;
@@ -544,14 +560,18 @@ export class MergedWorld {
     const tangent = textured && meta?.normal != null
       && !!geometry.attributes.tangent;
     const materialToken = textured ? `t${renderTexture}` : `f${exact.category}`;
-    const hasRecolor = Array.isArray(exact.recolors) && !!exact.recolors.length;
-    const fullTint = !!(Number(exact.flags) & Number(flags.uniformLuminanceTint));
+    // With the game's look (partLook) the palette carries each placement's colour and the batch's tints, which
+    // recolour like any; without it, the record's recolours as before.
+    const look = Array.isArray(exact.partColours);
+    const tints = look ? exact.partTints : exact.recolors;
+    const hasRecolor = look || (Array.isArray(exact.recolors) && !!exact.recolors.length);
+    const fullTint = !look && !!(Number(exact.flags) & Number(flags.uniformLuminanceTint));
     // White tints are the native identity (see recolor.js); the extraction-
     // guarded uniform-luminance-tint mode stays live.
-    const recolorEnabled = hasRecolor && textured
+    const recolorEnabled = hasRecolor && textured && (look ? Array.isArray(tints) && !!tints.length : true)
       && (fullTint
         ? true   // uniform tint never reads the packed plane (black fallback binds)
-        : meta?.parameter != null && !isIdentityRecolor(exact.recolors));
+        : meta?.parameter != null && !isIdentityRecolor(tints));
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
     const small = geometry.boundingSphere!.radius * 2
       < SMALL_DIAMETER_TILES * world.tileUnits;
@@ -710,6 +730,16 @@ export class MergedWorld {
     return this._cellRooms.get(`${cellX},${cellY}`) || [];
   }
 
+  /** An item's palette slot, and each instance's where the game's look gives them colours of their own. */
+  _itemPalettes(recolors: any, classified: { hasRecolor: boolean; fullTint: boolean }, partTints?: number[][] | null,
+    partColours?: number[][]): { palette: number; palettes?: number[] } {
+    if (Array.isArray(partColours) && partColours.length) {
+      const palettes = partColours.map((colour) => this._internTuple(lookPaletteTuple(partTints, colour)));
+      return palettes.every((slot) => slot === palettes[0]) ? { palette: palettes[0] } : { palette: palettes[0], palettes };
+    }
+    return { palette: classified.hasRecolor ? this._internTuple(mergedPaletteTuple(recolors, classified.fullTint)) : 0 };
+  }
+
   /**
    * Intern one recolor tuple into the GPU palette. During the bake the
    * texture is built once afterwards; a post-build intern (cell re-bake met
@@ -834,9 +864,7 @@ export class MergedWorld {
           metaZ: classified.metaZ,
           metaBits: classified.metaBits,
           room: roomSlot,
-          palette: classified.hasRecolor
-            ? this._internTuple(mergedPaletteTuple(exact.recolors, classified.fullTint))
-            : 0,
+          ...this._itemPalettes(exact.recolors, classified, exact.partTints, exact.partColours),
         });
         if (this.pickIndex) {
           this.pickIndex.addBatch({
@@ -992,7 +1020,7 @@ export class MergedWorld {
         for (let v = 0; v < vertsPerInstance; v++) {
           metas[(vertexBase + v) * 2 + 1] = item.metaBits;
         }
-        recolors.fill(item.palette, vertexBase, vertexBase + vertsPerInstance);
+        recolors.fill(item.palettes ? item.palettes[instance] : item.palette, vertexBase, vertexBase + vertsPerInstance);
         rooms.fill(item.room ?? 0, vertexBase, vertexBase + vertsPerInstance);
 
         // Winding is copied verbatim: total placement reflection is already
@@ -1404,9 +1432,9 @@ export class MergedWorld {
       def.vertices = 0;
       def.indices = 0;
       for (const item of def.items) {
-        item.palette = Array.isArray(item.recolors) && item.recolors.length
-          ? this._internTuple(mergedPaletteTuple(item.recolors, item.fullTint))
-          : 0;
+        Object.assign(item, this._itemPalettes(item.recolors,
+          { hasRecolor: Array.isArray(item.partColours) || (Array.isArray(item.recolors) && !!item.recolors.length), fullTint: !!item.fullTint },
+          item.partTints, item.partColours));
         def.vertices += item.geometry.attributes.position.count * item.count;
         def.indices += item.geometry.index.count * item.count;
       }
