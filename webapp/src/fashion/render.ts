@@ -489,6 +489,8 @@ const HEAD_BONE = 6;
 const FOOT_LIFT = 8;
 // the lens over a place drawn by the game (degrees, vertical)
 const GAME_FOV = 16;
+/** How far above whatever is under it a place's camera keeps (native units). */
+const CAMERA_CLEAR = 300;
 
 // A box's corners, and the box cut by a frustum: every face clipped by every plane (Sutherland-Hodgman), the
 // vertices of the solid they share (the view is always outside the figure's box here, so no frustum corner falls
@@ -835,7 +837,9 @@ export class Preview {
   zoomBy(factor: number) {
     // slide between the full-body and face framings along the distance
     const {full, face} = FRAMES;
-    const d = Math.max(face.dist, Math.min(full.dist * (this.roomPlace ? 1.8 : 2.2), this.want.dist * factor));   // (back to see a long animation whole; a place no further: past that its edge shows, the sky under the ground)
+    // (back to see a long animation whole; a place no further than it lets the camera go (`look.zoomOut`): past that its
+    // edge shows, the sky under the ground)
+    const d = Math.max(face.dist, Math.min(full.dist * (this.roomPlace ? this.game?.look.zoomOut ?? 1.8 : 2.2), this.want.dist * factor));
     const t = (d - face.dist) / (full.dist - face.dist);
     this.want = {dist: d, target: face.target + (full.target - face.target) * Math.max(0, Math.min(1, t))};
   }
@@ -1225,6 +1229,7 @@ export class Preview {
   // in a place the lights turn with the camera too, so the room stays lit the same way
   private lights = new THREE.Group();
   private roomTurn = 0;
+  private camRaise = 0; private camRoom = new THREE.Vector3(); private camInv = new THREE.Matrix4();
   private placeRoom(yaw: number) {
     const p = this.roomPlace; if (!p) return;
     this.roomGroup.matrix.makeRotationZ(p.face - yaw).multiply(new THREE.Matrix4().makeTranslation(-p.sx, -p.sy, -p.z - FOOT_LIFT));
@@ -1373,6 +1378,18 @@ export class Preview {
     this.camera.updateMatrixWorld();
     this.roomTurn = this.roomPlace ? a - this.viewTurn : 0;
     this.placeRoom(this.roomTurn);
+    // (in a place the camera keeps above whatever is under it, the sand or a log, however it is turned, lowered or
+    // drawn back: it rises at once and settles back gently)
+    if (this.roomPlace && this.game) {
+      this.roomGroup.updateWorldMatrix(true, false);
+      const e = this.camRoom.copy(this.camera.position).applyMatrix4(this.camInv.copy(this.roomGroup.matrixWorld).invert());
+      const want = Math.max(0, this.game.clearanceAt(e.x, e.y) + CAMERA_CLEAR - e.z);
+      this.camRaise = Math.max(want, this.camRaise + (want - this.camRaise) * k);
+      if (this.camRaise > 1) {
+        e.z += this.camRaise;
+        this.camera.position.copy(e.applyMatrix4(this.roomGroup.matrixWorld)); this.camera.lookAt(f); this.camera.updateMatrixWorld();
+      }
+    } else this.camRaise = 0;
     this.lights.rotation.y = this.roomTurn;
     this.tickEffects(this.paused ? 0 : dt * 1000);
     const r = this.renderer;

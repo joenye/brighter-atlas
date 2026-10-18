@@ -203,7 +203,7 @@ export class GameRoom {
     const render = {...index.render, camera: {...index.render.camera, near: NEAR, far}, vignette: {...index.render.vignette, radius: reach}};
     const g = new GameRoom(id, gl, world, render, source);
     g.view = scene.view ?? null;
-    g.look = {sky: scene.sky ?? null, haze: scene.haze ?? null, turn: scene.view?.turn ?? null};
+    g.look = {sky: scene.sky ?? null, haze: scene.haze ?? null, turn: scene.view?.turn ?? null, zoomOut: scene.view?.zoomOut ?? null};
     if (scene.floor === 'game') { const f = g.frame as any; f.planeDistance = scene.floorReach ?? Infinity; }
     // the place's own scene: a ship out at sea, shells by the character's feet, a crab about the sand
     await g.addProps(scene.props ?? []);
@@ -280,6 +280,20 @@ export class GameRoom {
       return hit ? hit.point.z : -Infinity;
     };
   }
+  /** How high anything stands about (x, y) (native units, within half a tile: the sand, a rock, a log), for the camera
+   *  to keep above; worked out once a quarter of a tile. -Infinity where nothing does. */
+  clearanceAt(x: number, y: number): number {
+    const q = 256, key = `${Math.round(x / q)},${Math.round(y / q)}`;
+    let h = this.clearance.get(key);
+    if (h === undefined) {
+      const cx = Math.round(x / q) * q, cy = Math.round(y / q) * q, probe = this.groundProbe(cx, cy, 768);
+      h = Math.max(...[[0, 0], [512, 0], [-512, 0], [0, 512], [0, -512]].map(([dx, dy]) => probe(cx + dx, cy + dy)));
+      if (this.clearance.size > 4000) this.clearance.clear();
+      this.clearance.set(key, h);
+    }
+    return h;
+  }
+  private clearance = new Map<string, number>();
   /** The ground at (x, y): the terrain there, else (ground built of blocks, or none: past the room's edge) the level
    *  the character stands on. */
   groundAt(x: number, y: number): number {
@@ -543,7 +557,7 @@ export class GameRoom {
     await this.addActor(new Posed(rig, clip, at, spec.hover ? {height: spec.hover, period: spec.period ?? 4000} : null, reveal), spec.parts, rig.bones.length);
   }
   /** How the place's sky looks beyond the frame (render.ts draws it): the scene's own, or null for the day's. */
-  look: {sky: any, haze: any, turn: number | 'full' | null} = {sky: null, haze: null, turn: null};
+  look: {sky: any, haze: any, turn: number | 'full' | null, zoomOut: number | null} = {sky: null, haze: null, turn: null, zoomOut: null};
 
   /** The character's parts as the frame's actors (their programs by material row), posed by `rig`. */
   async setActors(parts: DrawPart[], rig: Rig) {
