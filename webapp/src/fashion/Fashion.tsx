@@ -13,7 +13,7 @@ import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, dy
 import {Mp4Writer, avcCodec} from './mp4-mux.js';
 import {gifHead, gifJoin, gifPalette} from '../viewers/gif-encoder.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose, withShot, lookShot, type Shot} from './look-code.js';
-import {BACKDROPS, DEFAULT_BACKDROP, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
+import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
 import {NAMEPLATE_DEFAULTS, PLATE_FACTIONS, PLATE_GUILDS, NAME_MAX, LEVEL_MAX, TAG_MAX, SCALE_MIN, SCALE_MAX, CROWN, plateName, crowned, readNameplate, type Nameplate} from './nameplate.js';
 import {attachTurning} from './turning.js';
@@ -283,8 +283,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // (the picture of a shared moment: the view Share had, and the animation stopped where it was)
   const pictureShot = useMemo(() => PICTURE ? lookShot(addressLook().code) : null, []);
   const [showEffects, setShowEffects] = useState(store.get('fx') !== '0');
-  // (a visitor who has picked nothing starts in the default place; a link's picture, on the plain colour)
-  const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? (PICTURE ? BACKDROPS[0] : DEFAULT_BACKDROP));
+  const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? BACKDROPS[0]);
   const [floor, setFloorState] = useState<Floor>(PICTURE ? 'shadow' : (FLOORS.map(f => f[0]).find(m => m === store.get('floor')) ?? 'shadow'));   // (the shadow alone by default)
   const [panelCollapsed, setPanelCollapsedState] = useState(store.get('panel') === '1');
   const [bgMode, setBgModeState] = useState(false);
@@ -389,6 +388,14 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     if (live.current.animMode && !sharing) { setAnimMode(false); return; }
     if (live.current.designing) leaveDesigner();
     setPanelCollapsed(false); setAnimMode(true);
+  };
+  // the pumpkin: into Halloween, the settings open on the backgrounds
+  const openHalloween = () => {
+    const b = BACKDROPS.find(x => x.id === 'graveyard'); if (!b) return;
+    setBackdrop(b);
+    if (live.current.designing) leaveDesigner();
+    setPanelCollapsed(false); setBgMode(true);
+    requestAnimationFrame(() => { const d = document.querySelector('.of-bgsec[data-sec=background]') as HTMLDetailsElement | null; if (d) d.open = true; });
   };
   const toggleBgMode = () => {
     const sharing = shareGives();
@@ -1368,9 +1375,14 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance';
   const TIPS = {character: 'Design your face, body and hair', equipment: 'What your character wears', effect: 'Show or hide the particle effect this outfit gives off',
     animations: "Play the game's emotes and other animations on your character", settings: 'Background, ground, the random outfit, rendering and the nameplate',
-    looks: 'Save this look, wear a saved one, share a link', download: 'A picture, GIF or video of your look'};
+    looks: 'Save this look, wear a saved one, share a link', download: 'A picture, GIF or video of your look', halloween: 'Step into the Halloween graveyard'};
   const controls = (
     <div className="of-controls" style={columnBottom ? {bottom: columnBottom} : undefined}>
+      {/* (at the top while the view is anywhere but Halloween: glowing, and now and then a jiggle) */}
+      {backdrop.id !== 'graveyard' && !PICTURE && <>
+        <button className="btn of-pose of-pumpkin" aria-label="Halloween" aria-description={TIPS.halloween} onClick={openHalloween}><Icon name="pumpkin" /><Tip name="Halloween">{TIPS.halloween}</Tip></button>
+        <span className="of-sep" aria-hidden="true" />
+      </>}
       <button className={`btn of-pose of-mode-btn${designing ? ' active' : ''}`} aria-pressed={designing} aria-label="Character" aria-description={TIPS.character} onClick={() => modeClick(true)}><Icon name="mask" /><Tip name="Character">{TIPS.character}</Tip></button>
       <button className={`btn of-pose of-mode-btn${equipOn ? ' active' : ''}`} aria-pressed={equipOn} aria-label="Equipment" aria-description={TIPS.equipment} onClick={() => modeClick(false)}><Icon name="torso" /><Tip name="Equipment">{TIPS.equipment}</Tip></button>
       <span className="of-sep" aria-hidden="true" />

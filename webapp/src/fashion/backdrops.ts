@@ -13,8 +13,6 @@ export const BACKDROPS: Backdrop[] = [
   {id: 'graveyard', name: 'Halloween', stops: ['#1d3346', '#0f1c28', '#070d13'], room: {id: 1683}, icon: ['pumpkin', '#f0923a']},
   {id: 'beach', name: 'Beach', stops: ['#2a3a48', '#18222c', '#0d1116'], room: {id: 8996}, icon: ['shell', '#ead7b3']},
 ];
-/** Where a visitor who has picked nothing starts. */
-export const DEFAULT_BACKDROP = BACKDROPS.find(b => b.id === 'graveyard')!;
 
 /** Its colours as a CSS background (transparent: the checkerboard): a menu's swatch. */
 export const swatchOf = (b: Backdrop) => b.stops.length ? `radial-gradient(ellipse at 50% 40%, ${b.stops[0]} 0%, ${b.stops[1]} 55%, ${b.stops[2]} 100%)`

@@ -76,8 +76,8 @@ try {
   // (18-Oct-2026), and the label stood on the shoulders
   ok(['1/2/a/b/face', '3/null/a/b/jaw', '4/5/a/b/hair'].every(N.isHeadPart) && !['1/2/a/b/torso', '6/7/a/b/w123', '8/9/a/b/h45', '1/2/a/b/legs', '1/2/a/b/prop0'].some(N.isHeadPart),
     'the nameplate measures the head alone');
-  // a visitor who has picked nothing starts in Halloween; the places are listed first
-  ok(L.B.DEFAULT_BACKDROP.id === 'graveyard' && !!L.B.DEFAULT_BACKDROP.room, 'the default background is Halloween');
+  // the places come first in the picker, Halloween first of them
+  ok(L.B.BACKDROPS.filter((b: any) => b.room)[0]?.id === 'graveyard', 'Halloween is the first place');
   console.log(`fashion looks: ${checks} checks passed`);
 } finally {
   await rm(tmp, { recursive: true, force: true });

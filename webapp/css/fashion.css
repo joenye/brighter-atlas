@@ -84,6 +84,13 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-controls .of-pose.active, .of-controls .of-bgbtn.active { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }
 .of-controls .of-pose svg.ic, .of-controls .of-bgbtn svg.ic { width: 1.125rem; height: 1.125rem; }
 .of-controls .fx-glyph { display: grid; }
+/* the pumpkin: into Halloween; it glows, and now and then gives a jiggle (not where motion is turned down) */
+.of-controls .of-pumpkin { color: #f39a3e; border-color: rgba(243, 154, 62, .5); animation: of-pumpkin-glow 2.6s ease-in-out infinite; }
+.of-controls .of-pumpkin svg.ic { animation: of-pumpkin-jiggle 7s ease-in-out infinite; transform-origin: 50% 85%; }
+.of-controls .of-pumpkin:hover { color: #ffb257; }
+@keyframes of-pumpkin-glow { 0%, 100% { box-shadow: 0 0 6px 1px rgba(243, 140, 40, .35); } 50% { box-shadow: 0 0 16px 4px rgba(243, 140, 40, .7); } }
+@keyframes of-pumpkin-jiggle { 0%, 84%, 100% { transform: rotate(0); } 86% { transform: rotate(-16deg); } 88% { transform: rotate(13deg); } 90% { transform: rotate(-10deg); } 92% { transform: rotate(6deg); } 94% { transform: rotate(-3deg); } }
+@media (prefers-reduced-motion: reduce) { .of-controls .of-pumpkin, .of-controls .of-pumpkin svg.ic { animation: none; } .of-controls .of-pumpkin { box-shadow: 0 0 10px 2px rgba(243, 140, 40, .5); } }
 .of-round { width: 1.875rem; height: 1.875rem; border-radius: 50%; padding: 0; display: inline-grid; place-items: center; }
 .of-pose:disabled { opacity: .45; }
 .of-controls [hidden] { display: none; }
