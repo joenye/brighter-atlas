@@ -13,7 +13,6 @@ export function attachTurning(target: HTMLElement, pv: Preview, onZoom?: () => v
   const pointers = new Map<number, {x: number, y: number}>();
   let drag: {view: boolean, around: boolean, samples: {t: number, a: number}[]} | null = null, pinch = 0;
   const angle = (view: boolean) => view ? pv.viewTurn : pv.yaw;
-  const viewAt = (x: number, y: number) => !!pv.viewReach && !pv.onCharacter(x, y);
   target.addEventListener('pointerdown', e => {
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY}); target.setPointerCapture(e.pointerId);
     if (pointers.size === 1) {
@@ -27,7 +26,7 @@ export function attachTurning(target: HTMLElement, pv: Preview, onZoom?: () => v
   target.addEventListener('pointermove', e => {
     const prev = pointers.get(e.pointerId);
     // (a mouse over the canvas, no button: which a drag from here would turn)
-    if (!prev) { if (e.pointerType === 'mouse') target.dataset.turn = viewAt(e.clientX, e.clientY) ? 'view' : ''; return; }
+    if (!prev) { if (e.pointerType === 'mouse') target.dataset.turn = pv.onCharacter(e.clientX, e.clientY) ? '' : 'around'; return; }
     const cur = {x: e.clientX, y: e.clientY}; pointers.set(e.pointerId, cur);
     if (pointers.size === 2 && onZoom) {
       const [a, b] = [...pointers.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y);

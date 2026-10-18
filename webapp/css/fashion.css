@@ -56,8 +56,8 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .of-viewer .of-viewhint { position: absolute; left: 50%; bottom: .75rem; transform: translateX(-50%); z-index: 3; max-width: calc(100% - 2rem); padding: .5rem .875rem;
   border-radius: .5rem; background: rgba(13, 15, 19, .78); color: var(--fg0); font-size: .8125rem; text-align: center; pointer-events: none; animation: of-hint 7s ease forwards; }
 @keyframes of-hint { 0% { opacity: 0; } 8% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; } }
-/* (over the scene of a place whose view turns: a drag from there turns the view) */
-.of-viewer canvas[data-turn=view] { cursor: ew-resize; }
+/* (beside the character: a drag from there turns the view and takes it up and down, the four-way cursor) */
+.of-viewer canvas[data-turn=around], .of-viewer canvas[data-turn=around].dragging { cursor: move; }
 .of-iconbtn svg.ic { width: 1rem; height: 1rem; }
 .of-link { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; padding: .375rem .5rem; border-radius: .375rem; cursor: pointer; }
 .of-link:hover { background: var(--bg3); }
