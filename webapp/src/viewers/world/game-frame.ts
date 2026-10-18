@@ -2160,13 +2160,17 @@ void main() {
     // then the water (all rooms: the farthest room's first, as it blends over what is behind it)
     for (const scene of worldBox ? [...scenes].reverse() : scenes) {
       const water = scene.source.water;
+      // (the programs take the position within the scene: a scene set down away from the origin (a neighbouring room,
+      // all rooms) has its waves and ripples moved on by its place, so they run on across the rooms' edges unbroken;
+      // summed before rounding to the program's floats, so a scene at the origin sends the very words it did)
+      const ox = scene.origin?.x ?? 0, oy = scene.origin?.y ?? 0;
       for (const d of this.skipWater ? [] : scene.waterDraws) {
         const style = water.styles[d.water!.style];
         const [l0, l1] = style.layers;
         const words = new Uint32Array(d.water!.kind === 'surface' ? 20 : 12);
         const sine = [
-          style.waves.amplitude[0], style.waves.frequency[0], f32(style.waves.rate[0] * ticks), style.waves.tilt[0],
-          style.waves.amplitude[1], style.waves.frequency[1], f32(style.waves.rate[1] * ticks), style.waves.tilt[1],
+          style.waves.amplitude[0], style.waves.frequency[0], f32(style.waves.rate[0] * ticks + style.waves.frequency[0] * ox), style.waves.tilt[0],
+          style.waves.amplitude[1], style.waves.frequency[1], f32(style.waves.rate[1] * ticks + style.waves.frequency[1] * oy), style.waves.tilt[1],
           water.level, style.level, 0, 0,
         ];
         // From 07-Oct-2026 the surface's buffer goes on: the outer fade (start, radius) in the level's
@@ -2181,7 +2185,8 @@ void main() {
           putFloats(ringWords, 80, r ? [r.amplitude, r.frequency, phase < 0 ? phase + 1 : phase, Math.max(r.inner, 1)] : [0, 0, 0, 1]);
         }
         if (d.water!.kind === 'surface') {
-          putFloats(ringWords ?? words, 0, [l0[0], l0[1], f32(l0[2] * ticks), f32(l0[3] * ticks), l1[0], l1[1], f32(l1[2] * ticks), f32(l1[3] * ticks), ...sine]);
+          putFloats(ringWords ?? words, 0, [l0[0], l0[1], f32(l0[2] * ticks + l0[0] * ox), f32(l0[3] * ticks + l0[1] * oy),
+            l1[0], l1[1], f32(l1[2] * ticks + l1[0] * ox), f32(l1[3] * ticks + l1[1] * oy), ...sine]);
         } else putFloats(words, 0, sine);
         drawMain(scene, d, ringWords ?? words);
       }
