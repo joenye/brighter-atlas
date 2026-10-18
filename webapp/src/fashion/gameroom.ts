@@ -429,8 +429,9 @@ export class GameRoom {
       for (const p of parts) {
         const payload = await getJson(meshUrl(p.mesh)).catch(() => null);
         if (!payload?.skinned || !f.index.materials[String(p.material)]) continue;
+        // (the pose as a fresh view each time: the frame sends a palette to the GPU only when handed a new one)
         const d = await f.buildActorDraw({mesh: p.mesh, material: p.material, renderTexture: p.renderTexture, payload, bones, tint: null,
-          recolours: p.recolours, palette: () => actor.ready ? actor.palette : null}).catch(() => null);
+          recolours: p.recolours, palette: () => actor.ready ? actor.palette.subarray(0) : null}).catch(() => null);
         if (d) { d.scene = 0; draws.push(d); }
       }
     } finally { f.gl.collect = null; }
@@ -503,8 +504,9 @@ export class GameRoom {
       if (p.material == null || !f.index.materials[String(p.material)]) continue;
       const payload = await getJson(meshUrl(p.mesh)).catch(() => null);
       if (!payload?.skinned) continue;
+      // (a fresh view of the pose each time, as for the scene's actors)
       actors.push({mesh: p.mesh, material: p.material, renderTexture: p.mat ?? -1, payload, bones, tint: null,
-        recolours: [[...p.t1, 1], [...p.t2, 1]], palette: () => this.paletteLive ? this.palette : null});
+        recolours: [[...p.t1, 1], [...p.t2, 1]], palette: () => this.paletteLive ? this.palette.subarray(0) : null});
     }
     if (gen !== this.actorGen) return;
     // build the new actor draws beside the old, then swap (the frame keeps drawing the old meanwhile)
