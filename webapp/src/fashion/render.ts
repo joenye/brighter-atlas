@@ -1421,13 +1421,14 @@ export class Preview {
     const at = this.plateAt.setFromMatrixPosition(head.matrixWorld);
     return at.setY(at.y + (this.plateTop ?? 260));
   }
-  // the top of the figure's own head above its head bone, from the body's parts' skinned bounds (worked out again
-  // every few frames)
+  // the top of the figure's own head above its head bone, from the head's own parts' skinned bounds (face, jaw, hair),
+  // worked out again every few frames as an animation moves it; while headgear hides all of them, the last height
+  // stands (never the shoulders: a helmet that takes the whole head)
   private measurePlateTop() {
     if (this.plateTop != null && this.frameNo % 8) return;
     const box = this.plateBox.makeEmpty();
     for (const [key, m] of this.active) {
-      if (/\/(h|w|prop)\d+(-cover)?$/.test(key)) continue;
+      if (!/\/(face|jaw|hair)$/.test(key)) continue;
       const sk = m as unknown as THREE.SkinnedMesh;
       if (sk.isSkinnedMesh) { sk.computeBoundingBox(); box.union(this.platePart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
     }
