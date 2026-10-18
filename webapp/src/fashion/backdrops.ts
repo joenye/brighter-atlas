@@ -11,7 +11,7 @@ export const BACKDROPS: Backdrop[] = [
   {id: 'studio', name: 'Studio grey', stops: ['#8a8f99', '#5b6068', '#33363c']},
   {id: 'none', name: 'Transparent', stops: []},
   {id: 'beach', name: 'Beach', stops: ['#2a3a48', '#18222c', '#0d1116'], room: {id: 8996}},
-  {id: 'graveyard', name: 'Moonlit Graveyard', stops: ['#1d3346', '#0f1c28', '#070d13'], room: {id: 1683}},
+  {id: 'graveyard', name: 'Halloween', stops: ['#1d3346', '#0f1c28', '#070d13'], room: {id: 1683}},
 ];
 
 /** Its colours as a CSS background (transparent: the checkerboard): a menu's swatch. */
