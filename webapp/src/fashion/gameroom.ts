@@ -119,7 +119,8 @@ export class GameRoom {
     // page decodes them (levels-worker.ts), the signed normal maps as signed bytes. One file per texture.
     const blocks = !/[?&]nobc\b/.test(location.search) && !!gl.getExtension('WEBGL_compressed_texture_s3tc') && !!gl.getExtension('EXT_texture_compression_rgtc');
     this.levels = new TextureLevels((i) => gf(`images/${pad5(i)}.img`), !blocks, (i) => gf(`web/${pad5(i)}.img`));
-    this.frame = new GameFrame(gl, gf, render, world.tileUnits, this.levels.level);
+    // (with the slot mask: the scene's pieces near the character can be left out, as the camera comes round them)
+    this.frame = new GameFrame(gl, gf, render, world.tileUnits, this.levels.level, {roomMask: true});
     if (!blocks) acceptSignedRG((this.frame as any).gl, gl);
     this.near = render.camera.near; this.far = render.camera.far;
   }
@@ -353,7 +354,13 @@ export class GameRoom {
       }
       // one piece set down once, or many times (`copies`: each its own place, turn and size; a scattered wood)
       const copies: any[] = pr.copies ?? [pr];
-      const lays: THREE.Matrix4[] = [];
+      const lays: THREE.Matrix4[] = [], slots: number[] = [];
+      // (how far the piece reaches from its middle, across the ground, in its own units)
+      let reach = 0;
+      for (const b of solid) for (const m of b.matrices) {
+        const bb = b.payload?.bbox, half = bb ? Math.hypot(bb[3] - bb[0], bb[4] - bb[1]) / 2 : 0;
+        reach = Math.max(reach, Math.hypot(m.elements[12] - cx / n, m.elements[13] - cy / n) + half);
+      }
       for (const c of copies) {
         // (placed from the view, as the shells are, or at `at` in the room's tiles)
         const [ax, ay] = Array.isArray(c.place) && this.view ? viewPoint(this.view, c.place) : c.at!;
@@ -366,6 +373,10 @@ export class GameRoom {
         // off: a jack-o'-lantern's carved face; `tilt` about its own x, a cobweb stood up or a tree leaning; `scale`
         // about its lowest middle point, or [x, y, z]: a pillar squashed into a headstone)
         const turn = c.facing != null && this.view ? c.facing - this.view.face : c.turn ?? 0, k = Array.isArray(c.scale) ? c.scale : [c.scale ?? 1, c.scale ?? 1, c.scale ?? 1];
+        // (near the character, a slot of its own: left out while it stands between the camera and the character)
+        const near = this.view && Math.hypot(ax - this.view.spot[0], ay - this.view.spot[1]) < 12;
+        slots.push(near ? this.blockers.push({slot: this.blockers.length + 1, x: ax * T, y: ay * T, r: reach * Math.max(Math.abs(k[0]), Math.abs(k[1])),
+          fx: PROP_EFFECTS + this.propIndex * 1000 + lays.length}) : 0);
         lays.push(new THREE.Matrix4().makeTranslation(ax * T, ay * T, Number.isFinite(dz) ? dz + base : base)
           .multiply(new THREE.Matrix4().makeRotationZ(turn)).multiply(new THREE.Matrix4().makeRotationX(c.tilt ?? 0))
           .multiply(new THREE.Matrix4().makeScale(k[0], k[1], k[2])).multiply(new THREE.Matrix4().makeTranslation(-cx / n, -cy / n, -base)));
@@ -373,7 +384,8 @@ export class GameRoom {
       lays.forEach((place, c) => this.props.push({name: pr.name, level, own, centre: [cx / n, cy / n], base, place, effects: PROP_EFFECTS + this.propIndex * 1000 + c}));
       this.propIndex++;
       for (const b of solid) this.source.batches.push({...b, matrices: lays.flatMap(l => b.matrices.map(m => l.clone().multiply(m))),
-        tints: lays.flatMap(() => b.tints), recolours: b.recolours ? lays.flatMap(() => b.recolours!) : undefined, order: b.order ? lays.flatMap(() => b.order!) : undefined});
+        tints: lays.flatMap(() => b.tints), recolours: b.recolours ? lays.flatMap(() => b.recolours!) : undefined, order: b.order ? lays.flatMap(() => b.order!) : undefined,
+        ...(slots.some(x => x) ? {slots: slots.flatMap(sl => b.matrices.map(() => sl))} : {})});
       // its lamps and candles come with it
       for (const place of lays) for (const l of parts.lights ?? []) this.source.lights = [...(this.source.lights ?? []), movedLight(l, place)];
     }
@@ -381,6 +393,19 @@ export class GameRoom {
 
   props: any[] = [];
   private propIndex = 0;
+  /** The scene's pieces near the character, each with its slot, its middle and its reach across the ground (native
+   *  units), and the key of its effects (a candle's flame goes with its candle). */
+  private blockers: {slot: number, x: number, y: number, r: number, fx: number}[] = [];
+  // each frame: leave out whatever stands between the camera and the character (the character's own width to spare)
+  private clearSightLine(eye: THREE.Vector3, target: THREE.Vector3) {
+    const dx = target.x - eye.x, dy = target.y - eye.y, len2 = dx * dx + dy * dy, T = this.world.tileUnits;
+    for (const b of this.blockers) {
+      const u = len2 ? ((b.x - eye.x) * dx + (b.y - eye.y) * dy) / len2 : 0;
+      const off = Math.abs((b.x - eye.x) * dy - (b.y - eye.y) * dx) / Math.sqrt(len2 || 1);
+      const hide = u > 0 && u < 1 && off < b.r + 0.45 * T;
+      this.frame.setRoomHidden(b.slot, hide); this.effects?.setRoomHidden(b.fx, hide);
+    }
+  }
 
   /** The scene's own lights (a campfire's glow): point lights as the game's scenery carries them, at `at` (the
    *  room's tiles) or `place` (from the view), `height` units above the ground there, flickering as the game's do. */
@@ -552,6 +577,7 @@ export class GameRoom {
   render(camera: {eye: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3, fov: number, width: number, height: number}, dtMs: number, avatarZ: number, three: THREE.Camera) {
     this.effects?.tick(dtMs, three);
     for (const e of this.extras) e.actor.step(dtMs, camera.eye);
+    if (this.blockers.length) this.clearSightLine(camera.eye, camera.target);
     const ticks = this.effects ? this.effects.clock.t : (this.ticks += dtMs * 0.6);
     this.frame.render(camera, ticks, avatarZ);
     // the frame's alpha is the programs' own; the canvas shows it opaque

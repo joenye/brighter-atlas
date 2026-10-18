@@ -584,6 +584,11 @@ export class WorldEffectsLayer {
     return { schedule, pick, duration: durations[pick], span: durations[pick] + life };
   }
 
+  /** Hide/show every instance attached under `roomId` (as setInstanceHidden does one). */
+  setRoomHidden(roomId: number, hidden: boolean): void {
+    for (const rec of this._rooms.get(Number(roomId)) || []) rec.edit.hidden = !!hidden;
+  }
+
   removeRoom(roomId: number): void {
     const recs = this._rooms.get(Number(roomId));
     if (!recs) return;

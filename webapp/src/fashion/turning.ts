@@ -2,7 +2,8 @@
 // follows the finger), a flick keeps it spinning with the speed of the drag's last ~100 ms, slowing gradually;
 // two fingers pinch to zoom (`onZoom`: the view's framing is the visitor's own from then on). In a place whose view
 // turns, a drag begun on the scene rather than the character turns the view about the place instead (the camera
-// and the character going round it together), flicked the same way; the pointer shows which over each.
+// and the character going round it together; up and down, the camera a little up or down round the character),
+// flicked the same way; the pointer shows which over each.
 import type {Preview} from './render.js';
 
 const K = 0.012;   // radians per pixel
@@ -34,7 +35,8 @@ export function attachTurning(target: HTMLElement, pv: Preview, onZoom?: () => v
     }
     if (!drag) return;
     const now = performance.now(), d = -(cur.x - prev.x) * K;
-    if (drag.view) pv.turnView(d); else pv.yaw += d;
+    // (the view: across turns it about the place, down takes the camera up round the character)
+    if (drag.view) pv.turnView(d, (cur.y - prev.y) * K * 0.5); else pv.yaw += d;
     drag.samples.push({t: now, a: angle(drag.view)});
     while (drag.samples.length > 2 && now - drag.samples[0].t > 100) drag.samples.shift();
   });

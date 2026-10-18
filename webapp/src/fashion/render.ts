@@ -489,9 +489,6 @@ const HEAD_BONE = 6;
 const FOOT_LIFT = 8;
 // the lens over a place drawn by the game (degrees, vertical)
 const GAME_FOV = 16;
-// (the view turned round a place: the camera comes in close with a wider lens, the character kept its size, so what
-// the place set between its own far camera and the character stands behind the camera)
-const TURN_FOV = 45;
 
 // A box's corners, and the box cut by a frustum: every face clipped by every plane (Sutherland-Hodgman), the
 // vertices of the solid they share (the view is always outside the figure's box here, so no frustum corner falls
@@ -792,15 +789,20 @@ export class Preview {
   private viewTurnedNow = false;
   /** How far the view may turn about the place shown: radians either way, 'full' all round, 0 not at all. */
   get viewReach(): number | 'full' { const t = this.roomPlace ? this.game?.look.turn : null; return t === 'full' ? 'full' : typeof t === 'number' ? t : 0; }
-  /** Turn the view about the place by `d` radians (the camera goes round the character and the place together). */
-  turnView(d: number) {
+  /** How far the camera has gone up (or down) round the character from the place's own height (radians). */
+  viewPitch = 0;
+  private pitchGoal: number | null = null;
+  /** Turn the view about the place by `d` radians (the camera goes round the character and the place together), and
+   *  the camera up round the character by `up` (a little either way). */
+  turnView(d: number, up = 0) {
     const r = this.viewReach;
     if (!r) return;
     const to = r === 'full' ? this.viewTurn + d : Math.max(-r, Math.min(r, this.viewTurn + d));
     this.yaw += to - this.viewTurn; this.viewTurn = to;
+    this.viewPitch = Math.max(-0.06, Math.min(0.5, this.viewPitch + up));
   }
   /** Back to the place's own view, eased. */
-  resetView() { this.viewVel = 0; this.viewGoal = Math.round(this.viewTurn / (2 * Math.PI)) * 2 * Math.PI; }
+  resetView() { this.viewVel = 0; this.viewGoal = Math.round(this.viewTurn / (2 * Math.PI)) * 2 * Math.PI; this.pitchGoal = 0; }
   /** Whether a point of the page (client pixels) is on the character, as drawn now (a little to spare). */
   private charRect: {at: number, r: number[] | null} = {at: -1e9, r: null};
   onCharacter(x: number, y: number) {
@@ -1202,7 +1204,7 @@ export class Preview {
       this.onRoomProgress(1);
       this.renderer.resetState();
       this.showFloor();
-      this.yaw = 0; this.yawGoal = null; this.yawVel = 0; this.viewTurn = 0; this.viewVel = 0; this.viewGoal = null;
+      this.yaw = 0; this.yawGoal = null; this.yawVel = 0; this.viewTurn = 0; this.viewVel = 0; this.viewGoal = null; this.viewPitch = 0; this.pitchGoal = null;
       this.setWide(true);
       return;
     } catch (e) {
@@ -1334,17 +1336,15 @@ export class Preview {
     // (the view's own turn: a flick coasts as the character's does; back to the place's view eased)
     if (this.viewGoal != null) { const step = (this.viewGoal - this.viewTurn) * (1 - Math.pow(0.004, dt)); this.turnView(step); if (Math.abs(this.viewGoal - this.viewTurn) < 0.002 || this.viewVel) this.viewGoal = null; }
     if (this.viewVel) { this.turnView(this.viewVel * dt); this.viewVel *= Math.pow(Math.abs(this.viewVel) > 1.5 ? 0.35 : 0.05, dt); if (Math.abs(this.viewVel) < 0.02) this.viewVel = 0; }
-    if (!this.roomPlace) this.viewTurn = 0;
-    const turned = Math.abs(Math.atan2(Math.sin(this.viewTurn), Math.cos(this.viewTurn))) > 0.05;
+    if (this.pitchGoal != null) { this.viewPitch += (this.pitchGoal - this.viewPitch) * (1 - Math.pow(0.004, dt)); if (Math.abs(this.pitchGoal - this.viewPitch) < 0.002) { this.viewPitch = this.pitchGoal; this.pitchGoal = null; } }
+    if (!this.roomPlace) { this.viewTurn = 0; this.viewPitch = 0; }
+    const turned = Math.abs(Math.atan2(Math.sin(this.viewTurn), Math.cos(this.viewTurn))) > 0.05 || Math.abs(this.viewPitch) > 0.02;
     if (turned !== this.viewTurnedNow) { this.viewTurnedNow = turned; this.onViewTurned(turned); }
     const k = 1 - Math.pow(0.0015, dt);
     this.dist += (this.want.dist - this.dist) * k; this.target += (this.want.target - this.target) * k;
-    if (this.roomPlace && this.game) {
-      const round = Math.abs(Math.atan2(Math.sin(this.viewTurn), Math.cos(this.viewTurn))), w0 = Math.max(0, Math.min(1, (round - 0.25) / 0.5)), w = w0 * w0 * (3 - 2 * w0);
-      const fov = GAME_FOV + (TURN_FOV - GAME_FOV) * w;
-      if (this.camera.fov !== fov) { this.camera.fov = fov; this.wide = Math.tan(this.baseFov * Math.PI / 360) / Math.tan(fov * Math.PI / 360); this.camera.updateProjectionMatrix(); }
-    }
-    const a = this.yaw, d = this.dist * this.wide, lift = Math.sin(this.roomPlace ? (this.game ? this.gamePitch : this.roomPitch) : this.pitch) * d;   // a little more of the place's ground than sky
+    // (in a place the camera goes up round the character by `viewPitch`, keeping its distance)
+    const p0 = this.roomPlace ? (this.game ? this.gamePitch : this.roomPitch) : this.pitch, p = p0 + (this.roomPlace ? this.viewPitch : 0);
+    const a = this.yaw, d = this.dist * this.wide * Math.cos(p) / Math.cos(p0), lift = Math.sin(p) * this.dist * this.wide;   // a little more of the place's ground than sky
     // close framings follow the head: a combat stance crouches and leans it away from where it rests
     const f = this.focus.set(0, this.target, 0);
     if (this.rig) {
