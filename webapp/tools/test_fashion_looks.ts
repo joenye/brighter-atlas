@@ -76,6 +76,11 @@ try {
   // (18-Oct-2026), and the label stood on the shoulders
   ok(['1/2/a/b/face', '3/null/a/b/jaw', '4/5/a/b/hair'].every(N.isHeadPart) && !['1/2/a/b/torso', '6/7/a/b/w123', '8/9/a/b/h45', '1/2/a/b/legs', '1/2/a/b/prop0'].some(N.isHeadPart),
     'the nameplate measures the head alone');
+  // the label stands clear above a hat (18-Oct-2026: a hat's brim reached up into it), never on a torso piece or cape
+  const headY = 1500, plateParts = [{key: '1/2/a/b/hair', minY: 1400, maxY: 1700}, {key: '1/2/a/b/w11', minY: 1550, maxY: 1950},
+    {key: '1/2/a/b/w12', minY: 700, maxY: 1650}, {key: '1/2/a/b/w13', minY: 200, maxY: 1600}, {key: '1/2/a/b/h14', minY: 1000, maxY: 2600}];
+  ok(N.plateTopOf(plateParts, headY) === 1950 - headY + N.PLATE_CLEARANCE, 'the nameplate stands over the hat');
+  ok(N.plateTopOf(plateParts.filter((p: any) => p.key !== '1/2/a/b/w11'), headY) === 1700 - headY + N.PLATE_CLEARANCE && N.plateTopOf([], headY) === null, 'over the head without one');
   // the places come first in the picker, Halloween first of them
   ok(L.B.BACKDROPS.filter((b: any) => b.room)[0]?.id === 'graveyard', 'Halloween is the first place');
   console.log(`fashion looks: ${checks} checks passed`);

@@ -24,7 +24,7 @@ export function report(what: string, e?: unknown) {
 }
 // (the game's renderer is a chunk of its own, fetched when a place drawn by the game is picked)
 import type {GameRoom} from './gameroom.js';
-import {plateUnit, isHeadPart, type Nameplate} from './nameplate.js';
+import {plateUnit, isHeadPart, plateTopOf, type Nameplate} from './nameplate.js';
 import type {NameplateLayer} from './nameplate-layer.js';
 
 const loader = new THREE.TextureLoader();
@@ -1442,8 +1442,7 @@ export class Preview {
       .catch(e => report('the nameplate', e));
   }
   private plateShown() { return !!this.plate?.shown && !!this.rig && !this.designing && !this.ghost; }
-  // where it stands: over the head, at the top of the figure's own head (what is worn or held left out: the game's
-  // stands on the head under a hat, not on the hat), as the frame poses it
+  // where it stands: over the head and what is worn on it, a little clear of them (plateTopOf), as the frame poses it
   private plateAnchor(): THREE.Vector3 {
     const head = this.rig!.bones[HEAD_BONE];
     head.updateWorldMatrix(true, false);
@@ -1455,15 +1454,17 @@ export class Preview {
   // stands (never the shoulders: a helmet that takes the whole head)
   private measurePlateTop() {
     if (this.plateTop != null && this.frameNo % 8) return;
-    const box = this.plateBox.makeEmpty();
+    const parts: {key: string, minY: number, maxY: number}[] = [];
     for (const [key, m] of this.active) {
-      if (!isHeadPart(key)) continue;
+      if (!isHeadPart(key) && !/\/w\d+$/.test(key)) continue;
       const sk = m as unknown as THREE.SkinnedMesh;
-      if (sk.isSkinnedMesh) { sk.computeBoundingBox(); box.union(this.platePart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
+      if (!sk.isSkinnedMesh) continue;
+      sk.computeBoundingBox(); const b = this.platePart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld);
+      parts.push({key, minY: b.min.y, maxY: b.max.y});
     }
-    if (box.isEmpty()) return;
     const head = this.rig!.bones[HEAD_BONE];
-    this.plateTop = box.max.y - this.plateAt.setFromMatrixPosition(head.matrixWorld).y;
+    const top = plateTopOf(parts, this.plateAt.setFromMatrixPosition(head.matrixWorld).y);
+    if (top != null) this.plateTop = top;
   }
   /** One label unit as a share of the view's height. */
   private plateUnit() { return plateUnit(this.dist, this.baseFov, this.plateWant?.scale ?? 1); }

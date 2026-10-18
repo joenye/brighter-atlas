@@ -51,3 +51,18 @@ export function plateUnit(dist: number, fovDeg: number, scale = 1) {
 /** The parts the label stands on: the head's own (a part's key ends in its tag), never what is worn or held on it nor
  *  the rest of the body (headgear that hides the whole head would otherwise bring the label down to the shoulders). */
 export const isHeadPart = (key: string) => /\/(face|jaw|hair)$/.test(key);
+/** Headgear: a worn piece (a part's key ends `w<item>`) that stays about the head, its lowest point no more than
+ *  `HEADGEAR_DROP` below the head bone (a torso piece or a cape reaches far lower). */
+export const HEADGEAR_DROP = 250;
+/** Clear space between the top of the head (or what is worn on it) and the label, in the scene's units. */
+export const PLATE_CLEARANCE = 60;
+/** How far over the head bone the label stands: over the head's own parts and any headgear, with a little clear space
+ *  (`parts`: each part's key and its lowest and highest point; `headY` the head bone's height). Null with neither. */
+export function plateTopOf(parts: {key: string, minY: number, maxY: number}[], headY: number): number | null {
+  let top = -Infinity;
+  for (const p of parts) {
+    const headgear = /\/w\d+$/.test(p.key) && p.minY > headY - HEADGEAR_DROP;
+    if (isHeadPart(p.key) || headgear) top = Math.max(top, p.maxY);
+  }
+  return Number.isFinite(top) ? top - headY + PLATE_CLEARANCE : null;
+}
