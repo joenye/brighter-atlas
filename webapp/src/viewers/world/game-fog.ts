@@ -41,6 +41,11 @@ export const FOG = {
   maxDistance: 40000,
 };
 
+/** A place's own fog: any of the settings above, and the march's two haze terms the game leaves off, each
+ *  (density per unit, base above the ground, thickness, falloff): density x exp(-(height past the layer above,
+ *  or under it below) / falloff). The global haze reaches the whole march, a mist that deepens with distance. */
+export type FogSettings = Partial<typeof FOG> & { haze?: number[]; globalHaze?: number[] };
+
 /** What the march needs from the frame. */
 export interface FogFrame {
   /** The half-resolution target (unpadded size), its pad and focal length in pixels. */
@@ -63,13 +68,16 @@ export interface FogFrame {
   shadow: number[];
   /** The sun: direction (native, not normalised) and authored colour. */
   sunDirection: number[]; sunColour: number[];
+  /** The place's own fog settings over the game's. */
+  settings?: FogSettings;
 }
 
 const wrap256 = (x: number) => { const m = x % 256; return m < 0 ? m + 256 : m; };
 
 /** The march pass's constants (36 float4s, the layout of the fog programs' cb0). */
 export function fogMarchConstants(fr: FogFrame): number[] {
-  const S = FOG;
+  const S = { ...FOG, ...fr.settings };
+  const haze = (h: number[] | undefined) => (h ? [h[0], fr.ground + h[1], h[2], 1 / Math.max(h[3], 1)] : [0, fr.ground, 0, 1]);
   const b = S.base + fr.ground;
   const zMin = b - S.edgeDrop - 4.6 * S.falloffBelow;
   const zMax = b + S.thickness + 4.6 * S.falloffAbove;
@@ -112,8 +120,8 @@ export function fogMarchConstants(fr: FogFrame): number[] {
     ...S.wake,                                                                        // 24 wake shape
     ...(fr.lights ?? [0, 0, 0, 0]),                                                   // 25 point lights in the fog
     S.lightSamples, 0, S.steps, 0,                                                    // 26 light samples, steps
-    0, fr.ground, 0, 1,                                                               // 27 haze: none
-    0, fr.ground, 0, 1,                                                               // 28 global haze: none
+    ...haze(fr.settings?.haze),                                                       // 27 haze (the game's: none)
+    ...haze(fr.settings?.globalHaze),                                                 // 28 global haze (the game's: none)
     ...fr.shadow,                                                                     // 29-32 shadow matrix
     0, 0, 0, 0,                                                                       // 33 terrain box: none
     0, 0, 0, 0,                                                                       // 34 terrain shape

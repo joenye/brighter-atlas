@@ -13,7 +13,7 @@
 // canvas.
 import { THREE } from '../three-common.js';
 import { packPointLights, packLightData, flickers, lightMultiplier, placedLight, type ListedLight, type GamePointLight, type LightDefinition } from './point-lights.js';
-import { fogMarchConstants } from './game-fog.js';
+import { fogMarchConstants, type FogSettings } from './game-fog.js';
 import { GameShaderLibrary, putFloats, ROOM_MASK_UNIFORM, ROOM_MASK_WIDTH, type GameProgram, type GameRenderTables } from './game-shaders.js';
 import { GameGL, blendToGL, D3D_COMPARE_GL, type GameGLProgram, type GameTexture, type DrawState } from './game-gl.js';
 import { bakeGameGeometry, bakeGameGeometryAsync, posePayload, type BakeInputs, type BakeInstance, type GameBakeWorker } from './game-geometry.js';
@@ -27,9 +27,10 @@ export interface GameRenderIndex extends GameRenderTables {
   /** The rooms an event haunts (07-Oct-2026 on): the environment each takes while it does. */
   haunted?: Record<string, GameRenderIndex['environments'][string]>;
   /** The volumetric fog's passes and the rooms that have it (07-Oct-2026 on): each one's fog area (room
-   *  frame), the ground it lies on and the room's place on the map (tiles). */
+   *  frame), the ground it lies on and the room's place on the map (tiles); a place may bring its own settings
+   *  and the colour of the light in it. */
   fog?: { programs: { noise: number; march: number; blurX: number; blurY: number; edge: number };
-    rooms: { id: number; rect: [number, number, number, number]; ground: number; origin: [number, number] }[] };
+    rooms: { id: number; rect: [number, number, number, number]; ground: number; origin: [number, number]; settings?: FogSettings; sunColour?: number[] }[] };
   materials: Record<string, { main: number[][]; lit?: number[][]; depth: number[][]; specular: [number, number, number]; opacity: number }>;
   environments: Record<string, {
     sky: number[]; ground: number[]; sun: number[]; vignette: number[];
@@ -2185,7 +2186,8 @@ void main() {
         ellipse: [f32(f32(rect[0] + rect[2]) * 0.5), f32(f32(rect[1] + rect[3]) * 0.5), f32(1 / hx), f32(1 / hy)],
         vignette: [vignetteColour[0] * idx.lighting.fade, vignetteColour[1] * idx.lighting.fade, vignetteColour[2] * idx.lighting.fade],
         reach: k, fade: [0, height, floorValue],
-        shadow: rows(placed(shadow.receiver, look)), sunDirection: idx.lighting.direction, sunColour: [1, 224 / 255, 144 / 255],
+        shadow: rows(placed(shadow.receiver, look)), sunDirection: idx.lighting.direction, sunColour: fogRoom.sunColour ?? [1, 224 / 255, 144 / 255],
+        settings: fogRoom.settings,
       });
       counts.fog++;
       this.renderFog(t, words, fullscreen, camera.width, camera.height, lights);

@@ -47,15 +47,15 @@ const FAR = 360 * 1024;
  *  box is a multiple of the next ring's square, so the rings meet without gaps. A bed stretched under all
  *  of it, a little lower, closes any hairline crack. The room becomes an island. */
 const SEA_RINGS: [number, [number, number]][] = [[1, [-8, 32]], [2, [-24, 48]], [4, [-56, 80]], [8, [-128, 160]], [16, [-256, 288]], [32, [-384, 416]]];
-function extendSea(source: GameRoomSource, [w, h]: number[], T: number): GameRoomSource {
+function extendSea(source: GameRoomSource, [w, h]: number[], T: number, given?: [number, number]): GameRoomSource {
   const tileOf = (m: THREE.Matrix4) => [Math.floor(m.elements[12] / T), Math.floor(m.elements[13] / T)];
   const wet = new Set<string>();
   for (const b of source.batches) if (b.water?.kind === 'surface') for (const m of b.matrices) wet.add(tileOf(m).join(','));
-  // the template: a wet corner, else any wet edge tile
+  // the template: a wet corner, else any wet edge tile (or the tile given: a sea brought from another room)
   const edge = [[w - 1, h - 1], [0, h - 1], [w - 1, 0], [0, 0]];
   for (let x = 0; x < w; x++) edge.push([x, h - 1], [x, 0]);
   for (let y = 0; y < h; y++) edge.push([w - 1, y], [0, y]);
-  const tile = edge.find(([x, y]) => wet.has(`${x},${y}`));
+  const tile = given ?? edge.find(([x, y]) => wet.has(`${x},${y}`));
   if (!tile) return source;
   const [tx, ty] = tile;
   // the pieces to lay: [x, y, width, height] in tiles
@@ -144,7 +144,8 @@ export class GameRoom {
     // stretch of the progress
     const mc = (index.columns.placement as string[]).indexOf('mesh'), meshes = new Set<number>();
     for (const sh of [shard, ...props]) for (const rows of Object.values(sh?.placements ?? {}) as any[][]) for (const r of rows) if (r[mc] >= 0) meshes.add(r[mc]);
-    for (const p of [scene.crab, ...(scene.bather?.parts ?? []), ...(scene.birds?.parts ?? [])]) if (p) meshes.add(p.mesh);
+    for (const p of [scene.crab, ...(scene.bather?.parts ?? []), ...(scene.birds?.parts ?? []),
+      ...(scene.flocks ?? []).flatMap((f: any) => f.parts ?? []), ...(scene.figures ?? []).flatMap((f: any) => f.parts ?? [])]) if (p) meshes.add(p.mesh);
     // (all of them in one file where the export made one: each mesh's own file is then never asked for)
     try {
       const r = await fetch(gf(`meshes/${id}.set`));
@@ -162,17 +163,49 @@ export class GameRoom {
     };
     await Promise.all(Array.from({length: 6}, next));
     const room = {id, meta: world.roomMeta(id), shard, worldRoom: null, origin: {x: 0, y: 0}, group: new THREE.Group()} as any;
-    const source = extendSea(await world.gameRoomSource(room, []), shard.size ?? [0, 0], world.tileUnits);
-    // (the game's floor around the room is a plain of soil: the sea and the sky take its place)
-    source.plane = [];
+    // A place by the sea (the Beach, and a scene that names no setting) looks out over it to the horizon: the room
+    // an island in a sea laid from its edge, the game's floor of soil left out, the fade far out. A place inland
+    // keeps the game's floor and names its own reach (`far`, `vignette`: tiles; the game's own fade by default).
+    const sea = scene.sea ?? true;
+    const base = await world.gameRoomSource(room, []);
+    // (a sea brought from another room, `seaFrom`: its open water tile, laid out to the horizon about this room with its
+    // surface at `level`; the tile itself set down at (-1, -1), inside the first ring, and taken out once copied)
+    let given: [number, number] | undefined, template: Map<any, number> | null = null;
+    if (scene.seaFrom) {
+      const tile = await getJson(gf(`props/${id}/${scene.seaFrom.name}.json${DATA}`)).catch(() => null);
+      if (tile) {
+        const parts = await world._gameRoomParts({id: scene.seaFrom.room, meta: world.roomMeta(scene.seaFrom.room), shard: tile, worldRoom: null, origin: {x: 0, y: 0}, group: new THREE.Group()} as any);
+        const T = world.tileUnits, own = GameRoom.waterLevel(parts.batches) ?? 0;
+        let cx = 0, cy = 0, n = 0;
+        for (const b of parts.batches) for (const m of b.matrices) { cx += m.elements[12]; cy += m.elements[13]; n++; }
+        const move = new THREE.Matrix4().makeTranslation(-0.5 * T - cx / n, -0.5 * T - cy / n, (scene.seaFrom.level ?? 0) - own);
+        template = new Map();
+        for (const b of parts.batches) { const moved = {...b, matrices: b.matrices.map(m => move.clone().multiply(m))}; template.set(moved, moved.matrices.length); base.batches.push(moved); }
+        given = [-1, -1];
+      }
+    }
+    let source = sea ? extendSea(base, shard.size ?? [0, 0], world.tileUnits, given) : base;
+    if (template) source = {...source, batches: source.batches.flatMap(b => {
+      const k = [...template!.entries()].find(([t]) => t.mesh === b.mesh && t.material === b.material && t.payload === b.payload)?.[1];
+      if (k == null) return [b];
+      const cut = (a: any[] | undefined) => a?.slice(k);
+      return b.matrices.length > k ? [{...b, matrices: b.matrices.slice(k), tints: cut(b.tints)!, recolours: cut(b.recolours), order: cut(b.order)}] : [];
+    })};
+    if (scene.floor !== 'game') source.plane = [];
     // (the game's view never reaches past the room, so its vignette fades everything beyond it to dark: this
     // view looks out to sea, so the fade starts far out instead)
-    const render = {...index.render, camera: {...index.render.camera, near: NEAR, far: FAR}, vignette: {...index.render.vignette, radius: VIGNETTE_REACH}};
+    const T = world.tileUnits;
+    const far = scene.far != null ? scene.far * T : sea ? FAR : index.render.camera.far;
+    const reach = scene.vignette != null ? scene.vignette * T : sea ? VIGNETTE_REACH : index.render.vignette.radius;
+    const render = {...index.render, camera: {...index.render.camera, near: NEAR, far}, vignette: {...index.render.vignette, radius: reach}};
     const g = new GameRoom(id, gl, world, render, source);
     g.view = scene.view ?? null;
+    g.look = {sky: scene.sky ?? null, haze: scene.haze ?? null};
+    if (scene.floor === 'game') { const f = g.frame as any; f.planeDistance = scene.floorReach ?? Infinity; }
     // the place's own scene: a ship out at sea, shells by the character's feet, a crab about the sand
     await g.addProps(scene.props ?? []);
     g.addShells(scene.shells ?? []);
+    g.addLights(scene.lights ?? []);
     // the frame's draws (their programs and textures fetched as each is built): the second stretch
     const f = g.frame as any, build = f.buildDraw.bind(f), groups = drawGroups(source.batches).length;
     let built = 0;
@@ -188,6 +221,8 @@ export class GameRoom {
     if (scene.crab) await g.addCrab(scene.crab).catch(e => console.warn('crab', e));
     if (scene.bather) await g.addBather(scene.bather).catch(e => console.warn('bather', e));
     if (scene.birds) await g.addBirds(scene.birds).catch(e => console.warn('birds', e));
+    for (const fl of scene.flocks ?? []) await g.addBirds(fl).catch(e => console.warn('flock', e));
+    for (const fg of scene.figures ?? []) await g.addFigure(fg).catch(e => console.warn('figure', e));
     // the room's ambient particles (the waves on the shore among them)
     const doc = await getJson(gf(`effects/${id}.json${DATA}`)).catch(() => null);
     if (doc?.systems?.length) {
@@ -195,6 +230,8 @@ export class GameRoom {
       g.effects = new WorldEffectsLayer({root: g.fxRoot, doc, url: at, textures: index.textures ?? {},
         tileUnits: world.tileUnits, layerUnits: world.layerUnits, meshForwardQuarterTurns: world.meshForwardQuarterTurns} as any);
       g.effects.addRoom(id, [0, 0]);
+      // (the props' own effects, a candle's flame, ride the props: their attachments come under a key of their own)
+      for (const p of g.props) g.effects.addRoom(p.effects, [0, 0], {place: p.place});
       // (the layer marks each instance with a pick target for the world viewer's inspector: not here)
       for (const {object} of g.effects.pickables()) object.visible = false;
     }
@@ -212,7 +249,9 @@ export class GameRoom {
       if (b.water || !b.payload || (terrainOnly && b.category !== 'terrain')) continue;
       const at = b.matrices.filter(m => Math.hypot(m.elements[12] - x, m.elements[13] - y) < near);
       if (!at.length) continue;
-      const {geo} = buildMeshGeometry(b.payload, {boneColors: false});
+      // (each mesh built once for every probe: a floor of a thousand tiles is a few meshes)
+      let geo = this.probeGeometry.get(b.payload);
+      if (!geo) this.probeGeometry.set(b.payload, geo = buildMeshGeometry(b.payload, {boneColors: false}).geo);
       for (const m of at) {
         const mesh = new THREE.Mesh(geo, material);
         mesh.matrixAutoUpdate = false; mesh.matrix.copy(m); mesh.matrixWorld.copy(m);
@@ -227,18 +266,29 @@ export class GameRoom {
       return hit ? hit.point.z : -Infinity;
     };
   }
+  /** The ground at (x, y): the terrain there, else (ground built of blocks, or none: past the room's edge) the level
+   *  the character stands on. */
+  groundAt(x: number, y: number): number {
+    const z = this.groundProbe(x, y, 0, true)(x, y);
+    if (Number.isFinite(z)) return z;
+    const T = this.world.tileUnits;
+    return this.viewGround ??= this.view ? this.standAt(this.view.spot[0] * T, this.view.spot[1] * T) : 0;
+  }
+  private viewGround: number | null = null;
+  private probeGeometry = new Map<unknown, THREE.BufferGeometry>();
   /** Where a figure stands at (x, y): the commonest ground height about it (a point on a seam between
    *  bevelled tiles, or on a shell, is not where the feet go). */
-  standAt(x: number, y: number): number {
-    const ground = this.groundProbe(x, y, 512), n = new Map<number, number>();
+  standAt(x: number, y: number, terrainOnly = false): number {
+    const ground = this.groundProbe(x, y, 512, terrainOnly), n = new Map<number, number>();
     for (let u = -384; u <= 384; u += 64) for (let v = -384; v <= 384; v += 64) {
       const z = ground(x + u, y + v);
       if (Number.isFinite(z)) n.set(Math.round(z / 4) * 4, (n.get(Math.round(z / 4) * 4) ?? 0) + 1);
     }
     return n.size ? [...n].sort((a, b) => b[1] - a[1])[0][0] : 0;
   }
-  /** The scene's view (from the place's scene data), when it names one: the character's spot (tiles) and turn. */
-  view: {spot: [number, number], face: number} | null = null;
+  /** The scene's view (from the place's scene data), when it names one: the character's spot (tiles) and turn, and
+   *  whether they stand on the ground alone (`terrain`: not on a branch overhead). */
+  view: {spot: [number, number], face: number, terrain?: boolean} | null = null;
   private crabSpec: any = null;
   /** The character stands at `place` (native units, turned by `face`): the crab settles in view, in front and
    *  to the right, facing the camera. */
@@ -263,7 +313,7 @@ export class GameRoom {
    *  their solid parts floated at this room's water level (their own water left behind), or, given `float`, all
    *  of them (a tub's bathwater too) with their lowest point `float` units below it. Their placements are kept
    *  (`place`, the prop's room to this one) for what rides in them. */
-  private async addProps(props: {name: string, room: number, at: [number, number], turn: number, float?: number}[]) {
+  private async addProps(props: {name: string, room: number, at?: [number, number], place?: [number, number], turn: number, facing?: number, scale?: number | number[], tilt?: number, cells?: number[][], size?: number, spin?: 'none' | 'half', shade?: [number, number], z?: number, float?: number, ground?: boolean, onTop?: boolean, lift?: number, copies?: any[]}[]) {
     const T = this.world.tileUnits, level = GameRoom.waterLevel(this.source.batches);
     for (const pr of props) {
       const shard = await getJson(gf(`props/${this.id}/${pr.name}.json${DATA}`)).catch(() => null);
@@ -276,15 +326,76 @@ export class GameRoom {
       let cx = 0, cy = 0, n = 0, base = Infinity;
       for (const b of solid) for (const m of b.matrices) { cx += m.elements[12]; cy += m.elements[13]; n++; base = Math.min(base, m.elements[14] + (b.payload?.bbox?.[2] ?? 0)); }
       if (!n) continue;
-      const dz = level == null ? 0 : floated ? level - pr.float! - base : own != null ? level - own : 0;
-      const place = new THREE.Matrix4().makeTranslation(pr.at[0] * T, pr.at[1] * T, dz)
-        .multiply(new THREE.Matrix4().makeRotationZ(pr.turn)).multiply(new THREE.Matrix4().makeTranslation(-cx / n, -cy / n, 0));
-      this.props.push({name: pr.name, level, own, centre: [cx / n, cy / n], base, place});
-      for (const b of solid) this.source.batches.push({...b, matrices: b.matrices.map(m => place.clone().multiply(m))});
+      // a tile laid over cells (`cells`: [x0, y0, x1, y1] of the room's tiles, ends excluded), its top at `z` (a floor
+      // built from scratch: a road, the leaves either side), each copy turned a quarter turn or more by its place
+      // (`spin`: 'half', only ever a half turn; 'none', never: a tile with a margin on two sides)
+      if (pr.cells) {
+        let top = -Infinity;
+        for (const b of solid) for (const m of b.matrices) top = Math.max(top, m.elements[14] + (b.payload?.bbox?.[5] ?? 0));
+        const lays: THREE.Matrix4[] = [], spots: [number, number][] = [];
+        // (`size`: a tile stretched over size x size cells, from cells whose corner is on that grid: fewer seams)
+        const k = pr.size ?? 1;
+        for (const [x0, y0, x1, y1] of pr.cells) for (let x = x0; x < x1; x++) for (let y = y0; y < y1; y++) {
+          if (k > 1 && (x % k !== 0 || y % k !== 0)) continue;
+          const q = ((x * 73856093) ^ (y * 19349663)) >>> 0;
+          spots.push([x, y]);
+          lays.push(new THREE.Matrix4().makeTranslation((x + k / 2) * T, (y + k / 2) * T, (pr.z ?? 0) - top).multiply(new THREE.Matrix4().makeScale(k, k, 1))
+            .multiply(new THREE.Matrix4().makeRotationZ((pr.spin === 'none' ? 0 : pr.spin === 'half' ? (q % 2) * 2 : q % 4) * Math.PI / 2)).multiply(new THREE.Matrix4().makeTranslation(-cx / n, -cy / n, 0)));
+        }
+        // (`shade`: each tile's colour darkened by a factor between the two, by its place: a mottled floor)
+        // (smooth over the ground, never tile by tile: a chequer would show every seam)
+        const shades = spots.map(([x, y]) => pr.shade ? pr.shade[0] + (pr.shade[1] - pr.shade[0]) * (0.5 + 0.5 * Math.sin(x * 0.37 + y * 0.23) * Math.cos(y * 0.29 - x * 0.17)) : 1);
+        const shaded = (t: number[] | null, k: number) => k === 1 ? t : (t ?? [1, 1, 1]).map((c, j) => j < 3 ? c * k : c);
+        for (const b of solid) this.source.batches.push({...b, matrices: lays.flatMap(l => b.matrices.map(m => l.clone().multiply(m))),
+          tints: lays.flatMap((_, i) => b.tints.map(t => shaded(t, shades[i]))), recolours: b.recolours ? lays.flatMap(() => b.recolours!) : undefined, order: b.order ? lays.flatMap(() => b.order!) : undefined});
+        this.propIndex++;
+        continue;
+      }
+      // one piece set down once, or many times (`copies`: each its own place, turn and size; a scattered wood)
+      const copies: any[] = pr.copies ?? [pr];
+      const lays: THREE.Matrix4[] = [];
+      for (const c of copies) {
+        // (placed from the view, as the shells are, or at `at` in the room's tiles)
+        const [ax, ay] = Array.isArray(c.place) && this.view ? viewPoint(this.view, c.place) : c.at!;
+        // set on the ground there (its lowest point on it, `lift` above), on whatever stands there (`onTop`: a hay bale),
+        // floated, or at the water's level
+        const dz = c.onTop ? this.groundProbe(ax * T, ay * T, 0)(ax * T, ay * T) - base + (c.lift ?? 0)
+          : (c.ground ?? pr.ground) ? this.groundAt(ax * T, ay * T) - base + (c.lift ?? 0)
+          : level == null ? 0 : floated ? level - pr.float! - base : own != null ? level - own : 0;
+        // (`facing`: its turn that shows its front to the camera when the view is unturned, the view's own turn taken
+        // off: a jack-o'-lantern's carved face; `tilt` about its own x, a cobweb stood up or a tree leaning; `scale`
+        // about its lowest middle point, or [x, y, z]: a pillar squashed into a headstone)
+        const turn = c.facing != null && this.view ? c.facing - this.view.face : c.turn ?? 0, k = Array.isArray(c.scale) ? c.scale : [c.scale ?? 1, c.scale ?? 1, c.scale ?? 1];
+        lays.push(new THREE.Matrix4().makeTranslation(ax * T, ay * T, Number.isFinite(dz) ? dz + base : base)
+          .multiply(new THREE.Matrix4().makeRotationZ(turn)).multiply(new THREE.Matrix4().makeRotationX(c.tilt ?? 0))
+          .multiply(new THREE.Matrix4().makeScale(k[0], k[1], k[2])).multiply(new THREE.Matrix4().makeTranslation(-cx / n, -cy / n, -base)));
+      }
+      lays.forEach((place, c) => this.props.push({name: pr.name, level, own, centre: [cx / n, cy / n], base, place, effects: PROP_EFFECTS + this.propIndex * 1000 + c}));
+      this.propIndex++;
+      for (const b of solid) this.source.batches.push({...b, matrices: lays.flatMap(l => b.matrices.map(m => l.clone().multiply(m))),
+        tints: lays.flatMap(() => b.tints), recolours: b.recolours ? lays.flatMap(() => b.recolours!) : undefined, order: b.order ? lays.flatMap(() => b.order!) : undefined});
+      // its lamps and candles come with it
+      for (const place of lays) for (const l of parts.lights ?? []) this.source.lights = [...(this.source.lights ?? []), movedLight(l, place)];
     }
   }
 
   props: any[] = [];
+  private propIndex = 0;
+
+  /** The scene's own lights (a campfire's glow): point lights as the game's scenery carries them, at `at` (the
+   *  room's tiles) or `place` (from the view), `height` units above the ground there, flickering as the game's do. */
+  private addLights(lights: {at?: [number, number], place?: [number, number], height: number, colour: number[], intensity: number, range: number,
+    falloff?: number, flicker?: {depth: number, rate: number}}[]) {
+    const T = this.world.tileUnits;
+    lights.forEach((l, k) => {
+      const [x, y] = (Array.isArray(l.place) && this.view ? viewPoint(this.view, l.place) : l.at!).map(c => c * T);
+      const z = this.groundAt(x, y);
+      const light = {position: [x, y, (Number.isFinite(z) ? z : 0) + l.height], range: l.range, colour: l.colour, intensity: l.intensity,
+        falloff: l.falloff ?? 2, specular: 1, direction: null, cone: 45, feather: 10, start: 0,
+        flicker: {depth: l.flicker?.depth ?? 0, rate: l.flicker?.rate ?? 6, seed: (0x5ce7e + k * 977) >>> 0, colour: null}};
+      this.source.lights = [...(this.source.lights ?? []), {light, group: 'own', brightness: Math.max(...l.colour) * l.intensity, extra: 0, margin: 0, spread: 0} as any];
+    });
+  }
 
   /** Copies of the room's own models (shells) laid at `at` (tiles), turned by `turn`, on the ground there. */
   private addShells(shells: {mesh: number, place: [number, number], turn: number}[]) {
@@ -348,15 +459,38 @@ export class GameRoom {
       .multiply(new THREE.Matrix4().makeRotationZ((spec.quarters & 3) * Math.PI / 2));
     await this.addActor(new Posed(rig, spec.clip != null ? await this.clip(spec.clip) : null, at), spec.parts, rig.bones.length);
   }
-  /** Gulls circling out over the sea. */
+  /** Gulls circling out over the sea (or bats, crows: a flock's circles are above the water, else above where the
+   *  character stands; a circle given by `place` is placed from the view, as the shells are). */
   private async addBirds(spec: any) {
     if (!spec.parts?.length) return;
-    const clip = await this.clip(spec.clip), T = this.world.tileUnits, level = GameRoom.waterLevel(this.source.batches) ?? 0;
+    const clip = await this.clip(spec.clip), T = this.world.tileUnits;
+    const level = GameRoom.waterLevel(this.source.batches) ?? (this.view ? this.standAt(this.view.spot[0] * T, this.view.spot[1] * T) : 0);
     for (const b of spec.flock) {
       const rig = await this.rigOf(spec.parts[0].mesh);
-      await this.addActor(new Bird(rig, clip, [b.centre[0] * T, b.centre[1] * T, level + b.height], b.radius * T, b.speed, b.phase), spec.parts, rig.bones.length);
+      const [cx, cy] = Array.isArray(b.place) && this.view ? viewPoint(this.view, b.place) : b.centre;
+      await this.addActor(new Bird(rig, clip, [cx * T, cy * T, level + b.height], b.radius * T, b.speed, b.phase, b.bank ?? 0.35, b.bob ?? 180, spec.scale ?? 1), spec.parts, rig.bones.length);
     }
   }
+  /** Someone of another room standing (or hovering, `lift` units up) in the scene: placed from the view, on the
+   *  ground there, facing the camera turned by `turn`, playing their own resting clip (or `clip`) over and over. */
+  private async addFigure(spec: any) {
+    const v = this.view;
+    if (!v || !spec.parts?.length) return;
+    const rig = await this.rigOf(spec.parts[0].mesh), T = this.world.tileUnits;
+    // (placed from the view, or where its own room has it: `at`, tiles and height, turned a quarter a step)
+    const own = !Array.isArray(spec.place);
+    const [x, y] = own ? [spec.at[0] * T, spec.at[1] * T] : viewPoint(v, spec.place).map(c => c * T);
+    // (on the ground: the terrain's commonest height about it, not a treetop; `probe`: on whatever is there, a crate)
+    const z = (own ? spec.at[2] : spec.ground === 'probe' ? this.groundProbe(x, y, 0)(x, y) : this.groundAt(x, y)) + (spec.lift ?? 0);
+    // (facing the camera, `turn` from there)
+    const turn = own ? (spec.quarters & 3) * Math.PI / 2 : -v.face + (spec.turn ?? 0);
+    const at = new THREE.Matrix4().makeTranslation(x, y, Number.isFinite(z) ? z : 0)
+      .multiply(new THREE.Matrix4().makeRotationZ(turn)).multiply(new THREE.Matrix4().makeScale(spec.scale ?? 1, spec.scale ?? 1, spec.scale ?? 1));
+    const clip = spec.clip != null ? await this.clip(spec.clip).catch(() => null) : null;
+    await this.addActor(new Posed(rig, clip, at, spec.hover ? {height: spec.hover, period: spec.period ?? 4000} : null), spec.parts, rig.bones.length);
+  }
+  /** How the place's sky looks beyond the frame (render.ts draws it): the scene's own, or null for the day's. */
+  look: {sky: any, haze: any} = {sky: null, haze: null};
 
   /** The character's parts as the frame's actors (their programs by material row), posed by `rig`. */
   async setActors(parts: DrawPart[], rig: Rig) {
@@ -428,6 +562,19 @@ export class GameRoom {
   }
 }
 
+/** Where a prop's effects are keyed in its place's effects (the server's gfEffects): one key per prop and copy, in
+ *  order (prop k's copy c: PROP_EFFECTS + 1000 k + c). */
+const PROP_EFFECTS = 1_000_000;
+
+/** A point light of a piece of another room, moved with it by `m`. */
+function movedLight(l: any, m: THREE.Matrix4) {
+  const p = new THREE.Vector3(...(l.light.position as [number, number, number])).applyMatrix4(m);
+  const dir = (d: number[] | null | undefined) => d ? new THREE.Vector3(d[0], d[1], d[2]).transformDirection(m).toArray() : d;
+  const c = Array.isArray(l.centre) ? new THREE.Vector3(l.centre[0], l.centre[1], 0).applyMatrix4(m) : null;
+  return {...l, light: {...l.light, position: p.toArray(), direction: dir(l.light.direction) ?? null},
+    ...(c ? {centre: [c.x, c.y]} : {}), ...(l.axis ? {axis: dir(l.axis)} : {})};
+}
+
 /** A point placed from the view (tiles): `right` of the character as the camera sees it, `toward` the camera. */
 function viewPoint(v: {spot: [number, number], face: number}, [right, toward]: [number, number]): [number, number] {
   const f = v.face;
@@ -490,14 +637,18 @@ const TICKS_PER_MS = 0.6;
 /** Someone in one place, playing one clip over and over. */
 class Posed implements SceneActor {
   palette: Float32Array; ready = true;
-  private t = Math.random() * 5000; private s = new THREE.Matrix4();
-  constructor(private rig: Rig, private clip: ClipSampler | null, private at: THREE.Matrix4) { this.palette = new Float32Array(rig.bones.length * 12); }
+  private t = Math.random() * 5000; private s = new THREE.Matrix4(); private m = new THREE.Matrix4();
+  constructor(private rig: Rig, private clip: ClipSampler | null, private at: THREE.Matrix4, private hover: {height: number, period: number} | null = null) {
+    this.palette = new Float32Array(rig.bones.length * 12);
+  }
   step(dtMs: number) {
     this.t += Math.min(100, dtMs);
     // (no clip: the model as it was made, its bind pose)
     if (this.clip) this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
     for (const r of this.rig.roots) r.updateMatrixWorld(true);
-    skinInto(this.palette, this.rig, this.at, this.s);
+    // (a hovering figure rises and sinks a little, slowly)
+    const at = this.hover ? this.m.makeTranslation(0, 0, Math.sin(this.t * 2 * Math.PI / this.hover.period) * this.hover.height).multiply(this.at) : this.at;
+    skinInto(this.palette, this.rig, at, this.s);
   }
 }
 
@@ -506,7 +657,9 @@ class Posed implements SceneActor {
 class Bird implements SceneActor {
   palette: Float32Array; ready = true;
   private t = Math.random() * 4000; private m = new THREE.Matrix4(); private s = new THREE.Matrix4(); private r = new THREE.Matrix4();
-  constructor(private rig: Rig, private clip: ClipSampler, private centre: number[], private radius: number, private speed: number, private angle: number) {
+  private k = new THREE.Matrix4();
+  constructor(private rig: Rig, private clip: ClipSampler, private centre: number[], private radius: number, private speed: number, private angle: number,
+    private bank = 0.35, private bob = 180, private scale = 1) {
     this.palette = new Float32Array(rig.bones.length * 12);
   }
   step(dtMs: number) {
@@ -515,9 +668,9 @@ class Bird implements SceneActor {
     this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
     for (const r of this.rig.roots) r.updateMatrixWorld(true);
     const a = this.angle, x = this.centre[0] + Math.cos(a) * this.radius, y = this.centre[1] + Math.sin(a) * this.radius;
-    const z = this.centre[2] + Math.sin(a * 2.3) * 180;   // (rising and falling a little as it goes round)
+    const z = this.centre[2] + Math.sin(a * 2.3) * this.bob;   // (rising and falling a little as it goes round)
     // heading: along the circle (counter-clockwise), +y forward; banked toward the middle
-    this.m.makeRotationZ(a).setPosition(x, y, z).multiply(this.r.makeRotationY(0.35));
+    this.m.makeRotationZ(a).setPosition(x, y, z).multiply(this.r.makeRotationY(this.bank)).multiply(this.k.makeScale(this.scale, this.scale, this.scale));
     skinInto(this.palette, this.rig, this.m, this.s);
   }
 }

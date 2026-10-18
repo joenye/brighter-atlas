@@ -374,7 +374,10 @@ export class WorldEffectsLayer {
   addRoom(roomId: number, offset: [number, number],
     opts: { loopOnly?: boolean; modulation?: number[] | null; leftOut?: ReadonlySet<number> | null; extra?: any[];
       storyPosition?: (variable: number) => number | null;
-      colourPosition?: (variable: number) => number | null } = {}): void {
+      colourPosition?: (variable: number) => number | null;
+      /** The room's frame placed whole (native units: turned, lifted, moved) before the offset: a piece of a
+       *  room set down elsewhere keeps its effects on it. */
+      place?: THREE.Matrix4 | null } = {}): void {
     const id = Number(roomId);
     if (this._disposed || this._rooms.has(id)) return;
     const recs: InstanceRec[] = [];
@@ -427,6 +430,7 @@ export class WorldEffectsLayer {
       const rigWorld = typeof att.rig === 'number' ? this.doc.rigs?.[String(att.rig)] : undefined;
       const inverseOwner = _scratchObj.clone().invert().elements;
       const motionPosition: [number, number] = [_scratchObj.elements[12], _scratchObj.elements[13]];
+      if (opts.place) _scratchObj.premultiply(opts.place);
       _scratchObj.premultiply(_scratchOffset.makeTranslation(offset[0], offset[1], 0));
       const anchorOriginal = Float32Array.from(_scratchObj.elements);
       const anchor: Anchor = { m: Float32Array.from(anchorOriginal) };

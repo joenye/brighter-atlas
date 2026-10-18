@@ -1138,7 +1138,7 @@ export class Preview {
       if (this.roomId !== room.id || this.game) { g.dispose(); this.renderer.resetState(); return; }
       // (the scene names its own view: where the character stands, and the turn that puts the view behind)
       const [sx, sy] = [g.view!.spot[0] * 1024, g.view!.spot[1] * 1024];
-      this.roomPlace = {face: g.view!.face, sx, sy, z: g.standAt(sx, sy)};
+      this.roomPlace = {face: g.view!.face, sx, sy, z: g.standAt(sx, sy, g.view!.terrain)};
       g.aim(this.roomPlace);
       if (this.roomId !== room.id || this.game) { g.dispose(); this.renderer.resetState(); return; }
       // the character in it before it shows (the place never appears without them)
@@ -1146,6 +1146,7 @@ export class Preview {
       if (this.rig) { this.gameBuilds++; await g.setActors(dressed, this.rig).finally(() => this.gameBuilds--); }
       if (this.roomId !== room.id || this.game) { g.dispose(); this.renderer.resetState(); return; }
       this.game = g;
+      this.setLook(g.look);
       this.roomGroup.add(g.fxRoot);
       this.placeRoom(0);
       if (this.parts !== dressed && this.rig) void g.setActors(this.parts, this.rig);   // (changed meanwhile)
@@ -1402,8 +1403,11 @@ export class Preview {
     this.sky.position.copy(this.camera.position); this.sky.rotation.y = this.yaw; this.sky.scale.setScalar(this.camera.far * 0.9); this.sky.updateMatrixWorld(); this.sky.visible = true;
     (this.sky.material as THREE.ShaderMaterial).uniforms.time.value = (performance.now() - this.t0) / 1000;
     this.haze.position.copy(this.camera.position); this.haze.updateMatrixWorld(); this.haze.visible = true;
-    const height = Math.max(200, eye.z - this.roomPlace!.z), u = (this.haze.material as THREE.ShaderMaterial).uniforms;
-    u.lo.value = -height / Preview.HAZE_FROM; u.hi.value = -height / Preview.HAZE_TO;
+    const hz = g.look.haze;
+    // (from the ground the character stands on, or the scene's own level: the sea far below a tower)
+    const height = Math.max(200, eye.z - (hz?.base ?? this.roomPlace!.z)), u = (this.haze.material as THREE.ShaderMaterial).uniforms;
+    this.haze.scale.setScalar(hz?.from != null ? hz.from * 1024 / Preview.HAZE_FROM : 1); this.haze.updateMatrixWorld();
+    u.lo.value = -height / (hz?.from != null ? hz.from * 1024 : Preview.HAZE_FROM); u.hi.value = -height / (hz?.to != null ? hz.to * 1024 : Preview.HAZE_TO);
     r.render(this.scene, this.camera);
     this.sky.visible = this.haze.visible = false;
     this.scene.fog = fog;
@@ -1423,7 +1427,7 @@ export class Preview {
     const R = Preview.HAZE_FROM;
     const m = new THREE.Mesh(new THREE.CylinderGeometry(R, R, 0.6 * R, 64, 1, true), new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, transparent: true,
-      uniforms: {horizon: {value: Preview.HORIZON}, lo: {value: -0.08}, hi: {value: -0.04}},
+      uniforms: {horizon: {value: Preview.HORIZON.clone()}, lo: {value: -0.08}, hi: {value: -0.04}},
       vertexShader: `varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       // (below the horizon the band crosses the sea at lo: clear there, the haze thickening with the
       // distance out to the sea's end at hi)
@@ -1431,20 +1435,25 @@ export class Preview {
         void main() { float e = normalize(vDir).y; float a = e < 0.0 ? smoothstep(lo, hi, e) : 1.0 - smoothstep(0.0, 0.04, e);
           gl_FragColor = vec4(horizon, a); }`,
     }));
-    m.visible = false; m.frustumCulled = false; m.renderOrder = 10;
+    // (before the place's particles, which write no depth: everything in the place stands nearer than the band, so a
+    // flame against the sky at eye level is never hazed over)
+    m.visible = false; m.frustumCulled = false; m.renderOrder = -5;
     this.scene.add(m);
     return m;
   })();
   private sky = (() => {
     const m = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false,
-      uniforms: {horizon: {value: Preview.HORIZON}, zenith: {value: new THREE.Color(0.36, 0.55, 0.78)}, time: {value: 0}},
+      uniforms: {horizon: {value: Preview.HORIZON.clone()}, zenith: {value: new THREE.Color(0.36, 0.55, 0.78)}, time: {value: 0},
+        cloudDark: {value: new THREE.Color(0.70, 0.74, 0.80)}, cloudLit: {value: new THREE.Color(1.0, 0.985, 0.95)}, cloudCover: {value: 0.95},
+        moon: {value: new THREE.Vector4(0, 1, 0, 0)}, moonColour: {value: new THREE.Color(1, 1, 1)}, stars: {value: 0}},
       vertexShader: `varying vec3 vDir; void main() { vDir = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p; }`,
       // Clouds: a layer overhead (the view ray met with a plane above, so they crowd and flatten toward the
       // horizon), its cover from layered noise, drifting on the wind; lit from above, their undersides and
       // thick middles greyer, and thinning into the haze near the horizon.
       fragmentShader: `precision highp float;
         uniform vec3 horizon; uniform vec3 zenith; uniform float time; varying vec3 vDir;
+        uniform vec3 cloudDark; uniform vec3 cloudLit; uniform float cloudCover; uniform vec4 moon; uniform vec3 moonColour; uniform float stars;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float noise(vec2 p) {
           vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -1459,12 +1468,26 @@ export class Preview {
           vec3 d = normalize(vDir);
           float h = clamp(d.y, 0.0, 1.0);
           vec3 sky = mix(horizon, zenith, pow(h, 0.6));
+          // (a night's sky: stars, a moon and its glow, behind the clouds)
+          if (stars > 0.0 && d.y > 0.0) {
+            vec3 q = d * 420.0; vec3 c = floor(q); float r = hash(c.xy + c.z * 17.31);
+            float s = step(0.9965, r) * smoothstep(0.42, 0.0, length(fract(q) - 0.5)) * (0.5 + 0.5 * sin(time * (1.0 + r * 3.0) + r * 40.0));
+            sky += vec3(0.85, 0.88, 1.0) * s * stars * smoothstep(0.02, 0.25, d.y);
+          }
+          if (moon.w > 0.0) {
+            float m = dot(d, normalize(moon.xyz));
+            float disc = smoothstep(cos(moon.w), cos(moon.w * 0.92), m);
+            // (its face a little mottled)
+            float mare = fbm(d.xz * 90.0 + d.y * 40.0);
+            sky = mix(sky, moonColour * (0.82 + 0.25 * mare), disc);
+            sky += moonColour * (pow(max(m, 0.0), 900.0) * 0.55 + pow(max(m, 0.0), 40.0) * 0.12);
+          }
           if (d.y > 0.0) {
             vec2 uv = d.xz / (d.y + 0.1) * 1.6 + vec2(time * 0.006, time * 0.002);
             float n = fbm(uv), cover = smoothstep(0.5, 0.78, n);
             float lit = clamp(0.75 - (fbm(uv + vec2(0.05, 0.08)) - n) * 5.0 - cover * 0.3, 0.0, 1.0);
-            vec3 cloud = mix(vec3(0.70, 0.74, 0.80), vec3(1.0, 0.985, 0.95), lit);
-            sky = mix(sky, cloud, cover * smoothstep(0.0, 0.1, d.y) * 0.95);
+            vec3 cloud = mix(cloudDark, cloudLit, lit);
+            sky = mix(sky, cloud, cover * smoothstep(0.0, 0.1, d.y) * cloudCover);
           }
           gl_FragColor = vec4(sky, 1.0);
         }`,
@@ -1473,6 +1496,18 @@ export class Preview {
     this.scene.add(m);
     return m;
   })();
+
+  /** The place's sky (its colours, clouds, moon and stars) and the haze's colour: the scene's, or the day's. */
+  private setLook(look: {sky: any, haze: any}) {
+    const u = (this.sky.material as THREE.ShaderMaterial).uniforms, k = look.sky ?? {};
+    const c = (v: number[] | undefined, d: number[]) => new THREE.Color(...(v ?? d) as [number, number, number]);
+    u.horizon.value = c(k.horizon, [0.80, 0.87, 0.94]); u.zenith.value = c(k.zenith, [0.36, 0.55, 0.78]);
+    u.cloudDark.value = c(k.cloudDark, [0.70, 0.74, 0.80]); u.cloudLit.value = c(k.cloudLit, [1.0, 0.985, 0.95]); u.cloudCover.value = k.cloudCover ?? 0.95;
+    // (the moon's direction from the view, in the sky's frame: y up, z toward the camera's back; its radius in degrees)
+    u.moon.value = k.moon ? new THREE.Vector4(k.moon.dir[0], k.moon.dir[1], k.moon.dir[2], k.moon.size * Math.PI / 180) : new THREE.Vector4(0, 1, 0, 0);
+    u.moonColour.value = c(k.moon?.colour, [1, 1, 1]); u.stars.value = k.stars ?? 0;
+    (this.haze.material as THREE.ShaderMaterial).uniforms.horizon.value = c(look.haze?.colour ?? k.horizon, [0.80, 0.87, 0.94]);
+  }
 
   private tickEffects(dtMs: number) {
     if (!this.effects || (!this.wantEffects.size && !this.animFx && !this.fading.length)) return;
