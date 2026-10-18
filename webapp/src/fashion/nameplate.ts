@@ -14,8 +14,12 @@ export const NAMEPLATE_DEFAULTS: Nameplate = {on: false, name: 'Adventurer', fac
 export const PLATE_FACTIONS: [PlateFaction, string][] = [['none', 'None'], ['cryoknight', 'Cryoknight'], ['guardian', 'Guardian'], ['hammermage', 'Hammermage']];
 export const PLATE_GUILDS: [PlateGuild, string, string][] = [['none', 'None', 'No guild badge'], ['guild', 'Guild', 'The guild member’s shield'], ['wolf', 'Lone wolf', 'The lone wolf’s badge']];
 export const NAME_MAX = 20, LEVEL_MAX = 99999, TAG_MAX = 9999;
-/** A name as the label can set it: the printable characters of the game's font, at most NAME_MAX. */
-export const plateName = (s: string) => s.replace(/[^\x20-\x7e]/g, '').slice(0, NAME_MAX);
+/** The crown the game's own team carry in their names (the one picture a name holds). */
+export const CROWN = '\u{1F451}';
+/** A name as the label can set it: the printable characters of the game's font and the crown, at most NAME_MAX. */
+export const plateName = (s: string) => Array.from(s.replace(/[^\x20-\x7e\u{1F451}]/gu, '')).slice(0, NAME_MAX).join('');
+/** The name with the crown before it (and a space), or without it. */
+export const crowned = (s: string, on: boolean) => { const bare = s.replace(new RegExp(`^${CROWN} ?`, 'u'), ''); return plateName(on ? `${CROWN} ${bare}` : bare); };
 /** The setting from what was kept (or a link's), every field checked: the defaults where one is wrong. */
 export function readNameplate(v: any): Nameplate {
   const d = NAMEPLATE_DEFAULTS, int = (x: any, lo: number, hi: number) => Number.isInteger(x) && x >= lo && x <= hi ? x : null;

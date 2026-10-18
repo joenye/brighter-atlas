@@ -15,7 +15,7 @@ import {gifHead, gifJoin, gifPalette} from '../viewers/gif-encoder.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose, withShot, lookShot, type Shot} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
-import {NAMEPLATE_DEFAULTS, PLATE_FACTIONS, PLATE_GUILDS, NAME_MAX, LEVEL_MAX, TAG_MAX, plateName, readNameplate, type Nameplate} from './nameplate.js';
+import {NAMEPLATE_DEFAULTS, PLATE_FACTIONS, PLATE_GUILDS, NAME_MAX, LEVEL_MAX, TAG_MAX, CROWN, plateName, crowned, readNameplate, type Nameplate} from './nameplate.js';
 import {attachTurning} from './turning.js';
 import {el, makeResizable} from '../ui.js';
 import {rem} from '../ui-scale.js';
@@ -1319,7 +1319,11 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
           <label className="of-check rs-check" title="The label the game shows over a player’s head: name, faction and total level"><input type="checkbox" checked={plate.on} onChange={e => setPlate({...plate, on: e.target.checked})} /><span>Show a nameplate</span></label>
         </div>
         <label className="np-field"><span className="rs-label">Name</span>
-          <input type="text" className="lk-name" value={plate.name} maxLength={NAME_MAX} spellCheck={false} autoComplete="off" disabled={!plate.on} onChange={e => setPlate({...plate, name: plateName(e.target.value)})} /></label>
+          <input type="text" className="lk-name" value={plate.name} maxLength={NAME_MAX + 2} spellCheck={false} autoComplete="off" disabled={!plate.on} onChange={e => setPlate({...plate, name: plateName(e.target.value)})} /></label>
+        <div className="chips np-chips" role="group" aria-label="Crown">
+          <button type="button" title="The crown the game’s own team carry before their names" disabled={!plate.on} className={plate.name.startsWith(CROWN) ? 'on' : undefined} aria-pressed={plate.name.startsWith(CROWN)}
+            onClick={() => setPlate({...plate, name: crowned(plate.name, !plate.name.startsWith(CROWN))})}>Crown</button>
+        </div>
         <div className="rs-label">Faction</div>
         <div className="chips np-chips" role="group" aria-label="Faction">
           {PLATE_FACTIONS.map(([k, label]) => <button key={k} type="button" disabled={!plate.on} className={plate.faction === k ? 'on' : undefined} aria-pressed={plate.faction === k} onClick={() => setPlate({...plate, faction: k})}>{label}</button>)}
