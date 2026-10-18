@@ -806,7 +806,12 @@ export class Preview {
   /** Take the camera up (or down) round the character by `up` radians, a little either way (any background). */
   orbitUp(up: number) { if (up) { this.pitchGoal = null; this.viewPitch = Math.max(-0.06, Math.min(0.5, this.viewPitch + up)); } }
   /** Back to the place's own view, eased. */
-  resetView() { this.viewVel = 0; this.viewGoal = Math.round(this.viewTurn / (2 * Math.PI)) * 2 * Math.PI; this.pitchGoal = 0; }
+  resetView() {
+    // (the character too, facing the camera again; the view eased back about the place without carrying it round)
+    const whole = (a: number) => Math.round(a / (2 * Math.PI)) * 2 * Math.PI;
+    this.viewVel = 0; this.yawVel = 0; this.viewGoal = whole(this.viewTurn); this.yawGoal = whole(this.yaw); this.resetting = true; this.pitchGoal = 0;
+  }
+  private resetting = false;
   /** Whether a point of the page (client pixels) is on the character, as drawn now (a little to spare). */
   private charRect: {at: number, r: number[] | null} = {at: -1e9, r: null};
   onCharacter(x: number, y: number) {
@@ -1342,11 +1347,16 @@ export class Preview {
     this.yaw += this.yawVel * dt; this.yawVel *= Math.pow(Math.abs(this.yawVel) > 1.5 ? 0.35 : 0.05, dt);
     if (Math.abs(this.yawVel) < 0.02) this.yawVel = 0;
     // (the view's own turn: a flick coasts as the character's does; back to the place's view eased)
-    if (this.viewGoal != null) { const step = (this.viewGoal - this.viewTurn) * (1 - Math.pow(0.004, dt)); this.turnView(step); if (Math.abs(this.viewGoal - this.viewTurn) < 0.002 || this.viewVel) this.viewGoal = null; }
+    if (this.viewGoal != null) {
+      const step = (this.viewGoal - this.viewTurn) * (1 - Math.pow(0.004, dt));
+      if (this.resetting) this.viewTurn += step; else this.turnView(step);
+      if (Math.abs(this.viewGoal - this.viewTurn) < 0.002 || this.viewVel) { if (this.resetting) this.viewTurn = this.viewGoal; this.viewGoal = null; this.resetting = false; }
+    }
     if (this.viewVel) { this.turnView(this.viewVel * dt); this.viewVel *= Math.pow(Math.abs(this.viewVel) > 1.5 ? 0.35 : 0.05, dt); if (Math.abs(this.viewVel) < 0.02) this.viewVel = 0; }
     if (this.pitchGoal != null) { this.viewPitch += (this.pitchGoal - this.viewPitch) * (1 - Math.pow(0.004, dt)); if (Math.abs(this.pitchGoal - this.viewPitch) < 0.002) { this.viewPitch = this.pitchGoal; this.pitchGoal = null; } }
     if (!this.roomPlace) this.viewTurn = 0;
-    const turned = Math.abs(Math.atan2(Math.sin(this.viewTurn), Math.cos(this.viewTurn))) > 0.05 || Math.abs(this.viewPitch) > 0.02;
+    const off = (a: number) => Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) > 0.05;
+    const turned = off(this.viewTurn) || off(this.yaw) || Math.abs(this.viewPitch) > 0.02;
     if (turned !== this.viewTurnedNow) { this.viewTurnedNow = turned; this.onViewTurned(turned); }
     const k = 1 - Math.pow(0.0015, dt);
     this.dist += (this.want.dist - this.dist) * k; this.target += (this.want.target - this.target) * k;
