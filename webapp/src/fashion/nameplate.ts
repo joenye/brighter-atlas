@@ -55,7 +55,7 @@ export const isHeadPart = (key: string) => /\/(face|jaw|hair)$/.test(key);
  *  `HEADGEAR_DROP` below the head bone (a torso piece or a cape reaches far lower). */
 export const HEADGEAR_DROP = 250;
 /** Clear space between the top of the head (or what is worn on it) and the label, in the scene's units. */
-export const PLATE_CLEARANCE = 60;
+export const PLATE_CLEARANCE = 30;
 /** How far over the head bone the label stands: over the head's own parts and any headgear, with a little clear space
  *  (`parts`: each part's key and its lowest and highest point; `headY` the head bone's height). Null with neither. */
 export function plateTopOf(parts: {key: string, minY: number, maxY: number}[], headY: number): number | null {
