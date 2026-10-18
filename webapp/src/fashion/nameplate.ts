@@ -1,5 +1,5 @@
 // The nameplate: the label the game draws over a player's head, drawn over the view as the game draws it.
-// Up to three lines, centred over the head, bottom to top: the faction's emblem and the combat level in the
+// Up to three lines, centred over the head, bottom to top: the faction's emblem and the total level in the
 // faction's colour (with a guild or lone-wolf badge after it), the name (a free account's number after it in grey),
 // and a laurel wreath. Set in the game's own font (a sheet of distance-field glyphs, outlined in black), its
 // pictures the game's own, from Fashion's data (nameplate.json and nameplate.png). Like the game's, it keeps one
@@ -13,7 +13,7 @@ export interface Nameplate { on: boolean; name: string; faction: PlateFaction; l
 export const NAMEPLATE_DEFAULTS: Nameplate = {on: false, name: 'Adventurer', faction: 'none', level: 3, tag: null, wreath: false, guild: 'none'};
 export const PLATE_FACTIONS: [PlateFaction, string][] = [['none', 'None'], ['cryoknight', 'Cryoknight'], ['guardian', 'Guardian'], ['hammermage', 'Hammermage']];
 export const PLATE_GUILDS: [PlateGuild, string, string][] = [['none', 'None', 'No guild badge'], ['guild', 'Guild', 'The guild member’s shield'], ['wolf', 'Lone wolf', 'The lone wolf’s badge']];
-export const NAME_MAX = 20, LEVEL_MAX = 9999, TAG_MAX = 9999;
+export const NAME_MAX = 20, LEVEL_MAX = 99999, TAG_MAX = 9999;
 /** A name as the label can set it: the printable characters of the game's font, at most NAME_MAX. */
 export const plateName = (s: string) => s.replace(/[^\x20-\x7e]/g, '').slice(0, NAME_MAX);
 /** The setting from what was kept (or a link's), every field checked: the defaults where one is wrong. */

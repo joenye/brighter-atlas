@@ -1316,7 +1316,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       <details className="of-bgsec" data-sec="nameplate">
         <summary><Icon name="person" />Nameplate</summary>
         <div className="rs-checks">
-          <label className="of-check rs-check" title="The label the game shows over a player’s head: name, faction and combat level"><input type="checkbox" checked={plate.on} onChange={e => setPlate({...plate, on: e.target.checked})} /><span>Show a nameplate</span></label>
+          <label className="of-check rs-check" title="The label the game shows over a player’s head: name, faction and total level"><input type="checkbox" checked={plate.on} onChange={e => setPlate({...plate, on: e.target.checked})} /><span>Show a nameplate</span></label>
         </div>
         <label className="np-field"><span className="rs-label">Name</span>
           <input type="text" className="lk-name" value={plate.name} maxLength={NAME_MAX} spellCheck={false} autoComplete="off" disabled={!plate.on} onChange={e => setPlate({...plate, name: plateName(e.target.value)})} /></label>
@@ -1324,7 +1324,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         <div className="chips np-chips" role="group" aria-label="Faction">
           {PLATE_FACTIONS.map(([k, label]) => <button key={k} type="button" disabled={!plate.on} className={plate.faction === k ? 'on' : undefined} aria-pressed={plate.faction === k} onClick={() => setPlate({...plate, faction: k})}>{label}</button>)}
         </div>
-        <label className="np-field"><span className="rs-label">Combat level</span>
+        <label className="np-field"><span className="rs-label">Total level</span>
           <input type="number" className="lk-name" min={0} max={LEVEL_MAX} step={1} value={plate.level} disabled={!plate.on}
             onChange={e => { const v = Math.round(Number(e.target.value)); if (Number.isFinite(v)) setPlate({...plate, level: Math.max(0, Math.min(LEVEL_MAX, v))}); }} /></label>
         <div className="rs-label">Guild</div>
