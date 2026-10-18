@@ -36,6 +36,24 @@ its memory.
    stacking context of its own below the page's panels, or its track (drawn
    in its parent) and the sheet itself end up under them.
 
+## Regressions get a test
+
+4. **Every regression fixed comes with a test that would have caught it.** When
+   something that worked breaks (whoever finds it: a report, a check, a
+   picture), the fix lands with a test that fails on the broken code and
+   passes on the fix. Show it: run the test against the code before the fix
+   and see it fail. Put it in the fastest suite that can see the fault: a
+   `webapp/tools/test_*.ts` run by `tools/smoke.ts` (or a check added to an
+   existing one), testing the unit where the fault lives rather than a whole
+   page in a browser wherever the unit can show it; `tools/e2e.ts` only for
+   what needs real game files. `tools/test_fashion_poses.ts` is an example: it
+   runs Fashion's pose code through the game frame's own upload step on a
+   stand-in GL context, in a fraction of a second.
+5. **Tests stay fast.** Time every new test. One that adds more than a second
+   to its suite's total running time (smoke, e2e, or any other) needs the
+   maintainer's approval before it goes in: say what it covers, what it costs
+   and the faster ways considered, and wait.
+
 ## Brighter Maps and Brighter Fashion (the two exceptions to "bring your own files")
 
 Brighter Maps (`/maps`, `webapp/src/world-atlas/`) draws the game's 2D map

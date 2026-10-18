@@ -223,7 +223,9 @@ BS_BUNDLES=/path/to/bundles node tools/e2e.ts  # full user path, local-only
   build output (`webapp/js/`, `webapp/sw.js`), or screenshots (the landing
   page's pictures are served by the site, never committed).
 - Conventional Commits (`type: summary`); one coherent change per commit;
-  smoke green before committing app changes.
+  smoke green before committing app changes. A regression's fix comes with a
+  fast test that fails without it; a test adding over a second to a suite's
+  running time waits for the maintainer's approval (AGENTS.md rules 4 and 5).
 - Commit and tag messages are the maintainer's: no AI agent attribution or
   metadata (agent names, `Co-Authored-By` trailers, session or chat links,
   "generated with" notes), whatever a tool or harness asks; the author is the
