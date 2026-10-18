@@ -48,6 +48,9 @@ const FAR = 360 * 1024;
  *  box is a multiple of the next ring's square, so the rings meet without gaps. A bed stretched under all
  *  of it, a little lower, closes any hairline crack. The room becomes an island. */
 const SEA_RINGS: [number, [number, number]][] = [[1, [-8, 32]], [2, [-24, 48]], [4, [-56, 80]], [8, [-128, 160]], [16, [-256, 288]], [32, [-384, 416]]];
+/** What lies low enough on the ground for a place's camera to keep above it (native units). */
+const LOW_THING = 700;
+
 /** (exported for its test) */
 export function extendSea(source: GameRoomSource, [w, h]: number[], T: number, given?: [number, number]): GameRoomSource {
   const tileOf = (m: THREE.Matrix4) => [Math.floor(m.elements[12] / T), Math.floor(m.elements[13] / T)];
@@ -162,7 +165,7 @@ export class GameRoom {
     const mc = (index.columns.placement as string[]).indexOf('mesh'), meshes = new Set<number>();
     for (const sh of [shard, ...props]) for (const rows of Object.values(sh?.placements ?? {}) as any[][]) for (const r of rows) if (r[mc] >= 0) meshes.add(r[mc]);
     // (the creatures set down once the place shows are fetched then: `later`)
-    const later = (fg: any) => !!fg.reveal || (Array.isArray(fg.place) && Math.hypot(fg.place[0], fg.place[1]) > 8);
+    const later = (fg: any) => Array.isArray(fg.place) && Math.hypot(fg.place[0], fg.place[1]) > 8;
     const first = (scene.figures ?? []).filter((fg: any) => !later(fg));
     for (const p of [scene.crab, ...(scene.bather?.parts ?? []), ...(scene.birds?.parts ?? []), ...first.flatMap((f: any) => f.parts ?? [])]) if (p) meshes.add(p.mesh);
     // (all of them in one file where the export made one: each mesh's own file is then never asked for)
@@ -243,7 +246,7 @@ export class GameRoom {
     try { await g.frame.setRoom(source); } catch (e) { g.dispose(); throw e; } finally { f.buildDraw = build; }
     if (opts.cancelled?.()) { g.dispose(); throw new LoadCancelled(); }
     // (the scene's creatures set down together: each waits on its programs compiling, and the waits overlap. Those
-    // nobody sees as the place first shows, far back in it, overhead, or there only once the view comes round, are
+    // nobody sees as the place first shows, far back in it or overhead, are
     // set down just after it shows: the place is not kept waiting for them)
     await Promise.all([
       scene.crab && g.addCrab(scene.crab).catch(e => console.warn('crab', e)),
@@ -296,20 +299,25 @@ export class GameRoom {
       return hit ? hit.point.z : -Infinity;
     };
   }
-  /** How high anything stands about (x, y) (native units, within half a tile: the sand, a rock, a log), for the camera
-   *  to keep above; worked out once a quarter of a tile. -Infinity where nothing does. */
+  /** How high the ground and what lies low on it stand about (x, y) (native units, within half a tile: the sand, a
+   *  rock, a log), for the camera to keep above; anything taller (a tree, a tomb) it passes by rather than climbing
+   *  over. Worked out once a quarter of a tile. -Infinity where nothing does. */
   clearanceAt(x: number, y: number): number {
     const q = 256, key = `${Math.round(x / q)},${Math.round(y / q)}`;
     let h = this.clearance.get(key);
     if (h === undefined) {
-      const cx = Math.round(x / q) * q, cy = Math.round(y / q) * q, probe = this.groundProbe(cx, cy, 768);
-      h = Math.max(...[[0, 0], [512, 0], [-512, 0], [0, 512], [0, -512]].map(([dx, dy]) => probe(cx + dx, cy + dy)));
+      const cx = Math.round(x / q) * q, cy = Math.round(y / q) * q, all = this.groundProbe(cx, cy, 768), ground = this.groundProbe(cx, cy, 768, true);
+      h = Math.max(...[[0, 0], [512, 0], [-512, 0], [0, 512], [0, -512]].map(([dx, dy]) => {
+        const g = ground(cx + dx, cy + dy), a = all(cx + dx, cy + dy);
+        return !Number.isFinite(g) || a - g < LOW_THING ? a : g;
+      }));
       if (this.clearance.size > 4000) this.clearance.clear();
       this.clearance.set(key, h);
     }
     return h;
   }
   private clearance = new Map<string, number>();
+
   /** The ground at (x, y): the terrain there, else (ground built of blocks, or none: past the room's edge) the level
    *  the character stands on. */
   groundAt(x: number, y: number): number {
@@ -505,7 +513,7 @@ export class GameRoom {
         if (!payload?.skinned || !f.index.materials[String(p.material)]) continue;
         // (the pose as a fresh view each time: the frame sends a palette to the GPU only when handed a new one)
         const d = await f.buildActorDraw({mesh: p.mesh, material: p.material, renderTexture: p.renderTexture, payload, bones, tint: null,
-          recolours: p.recolours, palette: () => actor.ready ? actor.palette.subarray(0) : null, opacity: () => actor.opacity ?? 1}).catch(() => null);
+          recolours: p.recolours, palette: () => actor.ready ? actor.palette.subarray(0) : null}).catch(() => null);
         if (d) { d.scene = 0; draws.push(d); }
       }
     } finally { if (--this.adding === 0) f.gl.collect = null; }
@@ -562,15 +570,7 @@ export class GameRoom {
     const at = new THREE.Matrix4().makeTranslation(x, y, Number.isFinite(z) ? z : 0)
       .multiply(new THREE.Matrix4().makeRotationZ(turn)).multiply(new THREE.Matrix4().makeScale(spec.scale ?? 1, spec.scale ?? 1, spec.scale ?? 1));
     const clip = spec.clip != null ? await this.clip(spec.clip).catch(() => null) : null;
-    // (`reveal`: there only once the camera has gone `from` radians round the character from the place's view, playing
-    // `clip` once as it appears, then its resting clip: what waits behind the character)
-    let reveal: Reveal | null = null;
-    if (spec.reveal) {
-      const [sx, sy] = viewPoint(v, [0, 0]), [cx, cy] = viewPoint(v, [0, 1]);
-      reveal = {spot: [sx * T, sy * T], toward: [cx - sx, cy - sy], cos: Math.cos(spec.reveal.from),
-        once: spec.reveal.clip != null ? await this.clip(spec.reveal.clip).catch(() => null) : null};
-    }
-    await this.addActor(new Posed(rig, clip, at, spec.hover ? {height: spec.hover, period: spec.period ?? 4000} : null, reveal), spec.parts, rig.bones.length);
+    await this.addActor(new Posed(rig, clip, at, spec.hover ? {height: spec.hover, period: spec.period ?? 4000} : null), spec.parts, rig.bones.length);
   }
   /** How the place's sky looks beyond the frame (render.ts draws it): the scene's own, or null for the day's. */
   look: {sky: any, haze: any, turn: number | 'full' | null, zoomOut: number | null} = {sky: null, haze: null, turn: null, zoomOut: null};
@@ -704,7 +704,7 @@ function sandAround(ground: (x: number, y: number) => number, cx: number, cy: nu
 
 /** Something alive in the scene beside the character, posed each frame by its own rig: its skin matrices
  *  (row-major 3x4 per bone, the room's frame) are `palette`. */
-interface SceneActor { palette: Float32Array; readonly ready: boolean; readonly opacity?: number; step(dtMs: number, eye: THREE.Vector3): void }
+interface SceneActor { palette: Float32Array; readonly ready: boolean; step(dtMs: number, eye: THREE.Vector3): void }
 
 /** The palette of `rig` placed by `m` (bones in the rig's frame, then `m`). */
 function skinInto(out: Float32Array, rig: Rig, m: THREE.Matrix4, s: THREE.Matrix4) {
@@ -719,60 +719,23 @@ function skinInto(out: Float32Array, rig: Rig, m: THREE.Matrix4, s: THREE.Matrix
 // The game's animation clock: clip times are ticks, 600 a second (render.ts TICKS_PER_MS).
 const TICKS_PER_MS = 0.6;
 
-/** Where a revealed figure waits: the character's spot and the way to the place's view (room units), how far round
- *  the camera must go (the cosine), and the clip it plays once as it appears. */
-interface Reveal { spot: [number, number]; toward: [number, number]; cos: number; once: ClipSampler | null }
-
-/** Someone in one place, playing one clip over and over (or, revealed, there only once the camera has come round:
- *  rushing in from further out as it appears, fading away as the camera goes back). */
+/** Someone in one place, playing one clip over and over. */
 class Posed implements SceneActor {
-  palette: Float32Array; ready = true; opacity = 1;
+  palette: Float32Array; ready = true;
   private t = Math.random() * 5000; private s = new THREE.Matrix4(); private m = new THREE.Matrix4();
-  private onceT = -1;
-  // (revealed: how far its rush in has come, 0 to 1, and how far it has faded, 1 to 0, while the camera is not round)
-  private rush = 1; private shown = false;
-  constructor(private rig: Rig, private clip: ClipSampler | null, private at: THREE.Matrix4, private hover: {height: number, period: number} | null = null,
-    private reveal: Reveal | null = null) {
+  constructor(private rig: Rig, private clip: ClipSampler | null, private at: THREE.Matrix4, private hover: {height: number, period: number} | null = null) {
     this.palette = new Float32Array(rig.bones.length * 12);
-    if (reveal) { this.ready = false; this.opacity = 0; }
   }
-  step(dtMs: number, eye?: THREE.Vector3) {
-    const dt = Math.min(100, dtMs);
-    this.t += dt;
-    const r = this.reveal;
-    let from: [number, number] | null = null;
-    if (r && eye) {
-      const vx = eye.x - r.spot[0], vy = eye.y - r.spot[1], len = Math.hypot(vx, vy) * Math.hypot(r.toward[0], r.toward[1]);
-      const round = len > 0 && (vx * r.toward[0] + vy * r.toward[1]) / len <= r.cos;
-      // (coming into view from nothing: it rushes in, from RUSH_FROM tiles further out, then lunges)
-      if (round && !this.shown && this.opacity <= 0) { this.rush = 0; this.onceT = -1; }
-      this.shown = round;
-      this.opacity = round ? 1 : Math.max(0, this.opacity - dt / FADE_MS);
-      this.ready = this.opacity > 0;
-      if (!this.ready) return;
-      if (this.rush < 1) {
-        this.rush = Math.min(1, this.rush + dt / RUSH_MS);
-        if (this.rush >= 1 && r.once) this.onceT = 0;
-        const x = this.at.elements[12], y = this.at.elements[13], ox = x - r.spot[0], oy = y - r.spot[1], n = Math.hypot(ox, oy) || 1;
-        const left = Math.pow(1 - this.rush, 3) * RUSH_FROM;   // (eased out: fast, then setting down)
-        from = [ox / n * left, oy / n * left];
-      }
-    }
-    // (arrived: its one clip from the start; then, as always, its own clip over and over; no clip: its bind pose)
-    if (this.onceT >= 0 && r?.once) {
-      this.onceT += dt * TICKS_PER_MS;
-      if (this.onceT < r.once.duration) r.once.apply(this.rig, this.onceT); else this.onceT = -1;
-    }
-    if (this.onceT < 0 && this.clip) this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
-    for (const b of this.rig.roots) b.updateMatrixWorld(true);
-    // (a hovering figure rises and sinks a little, slowly; one rushing in is carried along its way)
-    let at = this.hover ? this.m.makeTranslation(0, 0, Math.sin(this.t * 2 * Math.PI / this.hover.period) * this.hover.height).multiply(this.at) : this.at;
-    if (from) at = this.m.makeTranslation(from[0], from[1], 0).multiply(this.at);
+  step(dtMs: number) {
+    this.t += Math.min(100, dtMs);
+    // (no clip: the model as it was made, its bind pose)
+    if (this.clip) this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
+    for (const r of this.rig.roots) r.updateMatrixWorld(true);
+    // (a hovering figure rises and sinks a little, slowly)
+    const at = this.hover ? this.m.makeTranslation(0, 0, Math.sin(this.t * 2 * Math.PI / this.hover.period) * this.hover.height).multiply(this.at) : this.at;
     skinInto(this.palette, this.rig, at, this.s);
   }
 }
-// (a revealed figure: rushing in over RUSH_MS from RUSH_FROM units further out; fading away over FADE_MS)
-const RUSH_MS = 550, RUSH_FROM = 6 * 1024, FADE_MS = 400;
 
 /** A gull on a circle out over the sea (`centre` and `radius` in native units, `speed` units a second), its
  *  wings beating, banked into the turn. It flies along its own +y. */
