@@ -24,7 +24,8 @@ export function report(what: string, e?: unknown) {
 }
 // (the game's renderer is a chunk of its own, fetched when a place drawn by the game is picked)
 import type {GameRoom} from './gameroom.js';
-import {NameplateLayer, plateUnit, type Nameplate} from './nameplate.js';
+import {plateUnit, type Nameplate} from './nameplate.js';
+import type {NameplateLayer} from './nameplate-layer.js';
 
 const loader = new THREE.TextureLoader();
 const meshCache = new Map<number, Promise<any>>();
@@ -563,7 +564,7 @@ export class Preview {
     if (this.game) { this.game.fxRoot.removeFromParent(); this.game.dispose(); this.game = null; }
     this.effectAnim?.dispose(); this.effectAnim = null;
     this.scene.traverse(o => { const m = (o as THREE.Mesh).material; if (m) for (const x of Array.isArray(m) ? m : [m]) x.dispose(); });
-    this.plate.dispose();
+    this.plate?.dispose();
     this.renderer.dispose(); this.renderer.forceContextLoss();
   }
   // the resting clip hides held items by scaling their bones to 0.001; show them in hand instead
@@ -1334,15 +1335,22 @@ export class Preview {
   }
 
   // ---- the nameplate: the label the game draws over a player, over the frame drawn (nameplate.ts) ----
-  private plate = new NameplateLayer();
+  private plate: NameplateLayer | null = null;   // (its code and data arrive when one is first shown)
+  private plateWant: Nameplate | null = null;
   private plateTop: number | null = null;   // how far the top of the figure stands above its head bone
   private plateRoomNow = 1;
   /** How much of the view's height to keep clear over the label (the page's buttons over the view's top, on a phone). */
   plateClear = 0.02;
   private plateAt = new THREE.Vector3(); private plateBox = new THREE.Box3(); private platePart = new THREE.Box3();
   /** Show the nameplate (null or off: none). */
-  setNameplate(p: Nameplate | null) { this.plate.set(p); this.plateTop = null; }
-  private plateShown() { return this.plate.shown && !!this.rig && !this.designing && !this.ghost; }
+  setNameplate(p: Nameplate | null) {
+    this.plateWant = p; this.plateTop = null;
+    if (this.plate) { this.plate.set(p); return; }
+    if (!p?.on) return;
+    import('./nameplate-layer.js').then(m => { if (this.plate) return; this.plate = new m.NameplateLayer(); this.plate.set(this.plateWant); })
+      .catch(e => report('the nameplate', e));
+  }
+  private plateShown() { return !!this.plate?.shown && !!this.rig && !this.designing && !this.ghost; }
   // where it stands: over the head, at the top of the figure (what is held left out), as the frame poses it
   private plateAnchor(): THREE.Vector3 {
     const head = this.rig!.bones[HEAD_BONE];
@@ -1372,7 +1380,7 @@ export class Preview {
     if (this.plateShown() && this.want.dist >= FRAMES.full.dist * 0.7) {
       const t = Math.tan(this.baseFov * Math.PI / 360), bottom = f.y - this.dist * t, top = this.plateAnchor().y;
       // (the label's height grows with the distance, as it keeps its size on screen)
-      const per = this.plate.units * this.plateUnit() * 2 * t;
+      const per = this.plate!.units * this.plateUnit() * 2 * t;
       want = Math.max(1, (top - bottom) / (this.dist * (2 * t * (1 - this.plateClear) - per)));
       if (!Number.isFinite(want) || want > 3) want = 1;
     }
@@ -1384,7 +1392,7 @@ export class Preview {
   private drawPlate() {
     if (!this.plateShown()) return;
     this.measurePlateTop();
-    this.plate.draw(this.renderer, this.camera, this.plateAnchor(), this.plateUnit());
+    this.plate!.draw(this.renderer, this.camera, this.plateAnchor(), this.plateUnit());
   }
 
   // The shadow map fitted as the game fits its own (docs: the frame's shadow pass): to the part of the scene the
