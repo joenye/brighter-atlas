@@ -38,6 +38,9 @@ import {createEffectGateReader} from './effect-gates.js';
 import { replayGraph } from './replay.js';
 import { decodePool, type PoolNode } from './value-pool.js';
 import { SpawnGraph } from './spawns.js';
+import { extractMovers } from './movers.js';
+import { clipRecords } from './actor-idle.js';
+import { readGrid, type RoomGrid } from '../../movement/grid.js';
 import { decodeObject, makeSlabReader, readRaw } from '../bundles.js';
 import { hashObject } from '../hash.js';
 
@@ -259,6 +262,7 @@ export async function extractWorld({
     return { tag: 0x24, start: -1, class: group.cls, fields };
   };
   step('rooms', 0, entries2.length);
+  const walkGrids: [string, RoomGrid][] = [];
   for (let i = 0; i < entries2.length; i++) {
     bail();
     let dec = sharedAb2 ? sharedAb2[i] : null;
@@ -269,6 +273,8 @@ export async function extractWorld({
     const minimap = parsed ? roomMod.minimapRecord(parsed.top, parsed.table) : null;
     if (minimap) {
       contentHashes.set(i, await hashObject(dec));
+      // where actors can step (typed arrays: kept off the heap until written below)
+      try { walkGrids.push([`world:walk:${i}`, readGrid(i, parsed!)]); } catch { /* a room without one */ }
       const layers = roomMod.roomLayers(parsed!, i);
       if (layers) layersById.set(i, layers);
       const [x0, y0, x1, y1] = minimap.innerRect;
@@ -316,6 +322,10 @@ export async function extractWorld({
     if (i % 10 === 0 || i === entries2.length - 1) step('rooms', i + 1, entries2.length);
   }
   if (!layersById.size) throw new Error('no rooms found in assetBundle2. Mixed game versions?');
+  if (walkGrids.length) {
+    if (sink.derivedPutMany) await sink.derivedPutMany(versionId, walkGrids.splice(0));
+    else for (const [key, grid] of walkGrids.splice(0)) await sink.derivedPut(versionId, key, grid);
+  }
   if (renderData) {
     let best = -1;
     for (const [v, c] of environmentCandidates) if (best < 0 || c.rooms > environmentCandidates.get(best)!.rooms) best = v;
@@ -720,6 +730,11 @@ export async function extractWorld({
     }
   }
   await sink.derivedPut(versionId, 'anim:idle', { format: 1, actors: idleActors });
+  // How each actor walks (its speeds and walk clips) and the player's own movement, for the room view's walk test
+  try {
+    const movers = extractMovers(rows, pool.values, rowDecoder as any, ctx.spawnGraph.idleResolver?.clipOfRecord() ?? clipRecords(rows), spawnActorsBySlot.keys(), dt.symbols);
+    if (movers) await sink.derivedPut(versionId, 'world:movers', movers);
+  } catch { /* the walk test is optional */ }
   // Rig rest-world bone translations, needed for particle-effect bone
   // binding (effects.js): every distinct rig ANY mesh references, decoded
   // once from ab6 and reduced via forward kinematics to rest-WORLD bone

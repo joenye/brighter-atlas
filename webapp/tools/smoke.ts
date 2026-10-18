@@ -854,7 +854,7 @@ async function worldSuite(browser: any, base: string) {
   ok(!!advRoom && advRoom.open === false, 'Debug accordion present, collapsed by default');
   ok(advRoom.titles === 'Data,Height levels',
     `room-view Debug hosts Data/Height levels (${advRoom.titles})`);
-  ok(await page.evaluate(() => [...document.querySelectorAll('.world-panel > .wp-section > .wp-title')].map((n) => n.textContent).join(',')) === 'Show,Game shading',
+  ok(await page.evaluate(() => [...document.querySelectorAll('.world-panel > .wp-section > .wp-title')].map((n) => n.textContent).join(',')) === 'Show,Game shading,Walking',
     'room view shows Show and Game shading at the top level');
   ok(await page.$$eval('.viewer-toolbar .btn', (b) => b.some((x) => /Screenshot/.test(x.textContent))),
     'room view offers the standard toolbar Screenshot button');

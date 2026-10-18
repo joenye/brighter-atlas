@@ -174,6 +174,12 @@ export class ClientStore extends EventTarget implements AppStore {
   // null, and every effects surface stays dormant.
   worldEffects(): Promise<any> { return this._doc('world:effects'); }
 
+  // How actors walk and each room's movement grid (the room view's walk test).
+  worldMovers(): Promise<any> { return this._doc('world:movers'); }
+  async worldWalkGrid(id: number | string): Promise<any> {
+    return (await derivedGet(this.versionId, `world:walk:${id}`)) || null;
+  }
+
   // Single-doc accessors for World extraction outputs, cached like
   // world:effects; older extractions lack them and every consumer treats
   // null as "none".

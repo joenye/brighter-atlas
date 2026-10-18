@@ -65,7 +65,12 @@ import {
 } from './world/pick-index.js';
 import { WorldEdits, editedMatrix } from './world/edits.js';
 import { SHOT_RES, captureTiledPng } from './capture-common.js';
-import { Rig, PlaybackBar } from './rig.js';
+import { Rig, PlaybackBar, ClipSampler } from './rig.js';
+import { Walker, Wanderer, actorMover, moverClips, tileAt, tileLine, tileQuads, tileRing, wanderTiles, disposeOverlay, fmtTicks, FLAT as WALK_FLAT, type WalkReport } from './world/walk.js';
+import { levelOf, type RoomGrid } from '../movement/grid.js';
+import type { Tile } from '../movement/path.js';
+import { SPEED_BOOST } from '../movement/timing.js';
+import type { MoversDoc } from '../extract/world/movers.js';
 import {
   resolveSpawnAnim, SpawnAnimComposite, resolveShardRecolors,
 } from './world/spawn-anim.js';
@@ -871,6 +876,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     inspectBtn.setAttribute('aria-pressed', state.inspect ? 'true' : 'false');
     if (!state.inspect) { clearInspection(true); clearEffectInspection(true); }
     effectsLayer?.setMarkersShown(state.inspect && state.fxmarkers);
+    // (inspecting and the walk test both take clicks: one at a time)
+    if (state.inspect && walkUi.on) { walkInputs.on.cb.checked = false; setWalkMode(false); }
   }
   inspectBtn.addEventListener('click', () => {
     if (!inspectBtn.disabled) setInspect(!state.inspect);
@@ -2763,7 +2770,41 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   advanced.addEventListener('toggle', () => setPref('worldadv', advanced.open));
   append(advanced, section('Data', ...debugChecks, flattenCheck), perfSection, zSection);
 
-  append(panel, inspectBtn, resetEditsBtn, readout, statusEl, visSection, lightSection, advanced);
+  // the walk test (room view): a person or creature walked about as the game walks it
+  const walkUi = {
+    on: false, asPlayer: true, boost: -1, wander: false, areas: false, follow: true,
+    box: el('div', { class: 'wp-walk-info small' }),
+    hover: el('div', { class: 'wp-walk-info dim small' }),
+  };
+  const walkCheck = (label: string, title: string, get: () => boolean, set: (v: boolean) => void) => {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = get();
+    cb.addEventListener('change', () => set(cb.checked));
+    return { cb, label: el('label', { class: 'wp-check', title }, cb, el('span', { text: label })) };
+  };
+  const walkInputs = {
+    on: walkCheck('Walk test', 'Click a person or creature to walk with, then click the floor: it walks there the way the game walks it (its route, speed, easing, turning and walk animation). Hover a tile for how long the walk there takes.',
+      () => walkUi.on, (v) => { setWalkMode(v).catch(() => { /* best-effort */ }); }),
+    player: walkCheck('Move as the player', "Walk at the player's own speeds and with the player's walk where the body allows it",
+      () => walkUi.asPlayer, (v) => { walkUi.asPlayer = v; if (walkLead) takeWalker(Number(walkLead.info.room), Number(walkLead.info.spawnIndex)).catch(() => { /* best-effort */ }); }),
+    wander: walkCheck('Wanderers wander', 'Creatures that wander in the game wander about their spawn as the game has them: a random tile within ten, walked straight at, then a wait',
+      () => walkUi.wander, (v) => { walkUi.wander = v; if (!walkUi.on) return; if (v) startWanderers(walkToken).catch(() => { /* best-effort */ }); else stopWanderers(); }),
+    follow: walkCheck('Follow', 'The camera moves with the walker',
+      () => walkUi.follow, (v) => { walkUi.follow = v; }),
+    areas: walkCheck('Wander areas and routes', 'Where each wandering creature can go (shaded), and the routes some creatures follow (lines)',
+      () => walkUi.areas, (v) => { walkUi.areas = v; applyWalkAreas(); }),
+  };
+  const boostSelect = el('select', { title: 'The Speed Boost passive quickens the player on the flat' },
+    ...['No Speed Boost', 'Speed Boost 1', 'Speed Boost 2', 'Speed Boost 3', 'Speed Boost 4'].map((t, k) => el('option', { value: String(k - 1), text: t })));
+  boostSelect.addEventListener('change', () => {
+    walkUi.boost = Number(boostSelect.value);
+    for (const sa of walkers.values()) if (sa.walk.am.player) sa.walk.walker.boost = walkUi.boost >= 0 ? walkUi.boost : null;
+    showWalkLead();
+  });
+  const walkSection = allMode ? null : section('Walking', walkInputs.on.label, walkInputs.player.label,
+    el('label', { class: 'wp-check' }, boostSelect), walkInputs.follow.label, walkInputs.wander.label, walkInputs.areas.label, walkUi.box, walkUi.hover);
+
+  append(panel, inspectBtn, resetEditsBtn, readout, statusEl, visSection, lightSection, walkSection, advanced);
 
   // --- pref sync (state lives ONLY in prefs/localStorage, no URL mirroring) ---
   function syncState(): void {
@@ -4139,6 +4180,305 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   // disposes it. Keyed by the model key (currentSpawnKey()).
   const persistentAnims = new Map<string, any>();
 
+  // --- walk test (single-room view) -------------------------------------------------------------------------
+  // Click a person or creature to take it over, then click the floor: it walks there as the game walks it
+  // (world/walk.ts). Wanderers can wander as the game has them, and where they can go and the authored routes
+  // can be drawn. Hovering a tile tells how long the walk there takes.
+  let walkDoc: MoversDoc | null = null, walkGrid: RoomGrid | null = null;
+  let walkToken = 0;
+  const walkers = new Map<string, any>();   // spawn key -> its walk entry (also in persistentAnims)
+  let walkLead: any = null;                  // the actor clicks walk
+  const walkOverlay = new THREE.Group();
+  const walkHoverGroup = new THREE.Group();
+  const walkAreaGroup = new THREE.Group();
+  walkOverlay.add(walkAreaGroup, walkHoverGroup);
+  walkOverlay.matrixAutoUpdate = true;
+  function walkHomeId(): number | null { return !allMode && entry ? Number(entry.i) : null; }
+  function walkStatus(text: string): void { walkUi.box.textContent = text; }
+  async function setWalkMode(on: boolean): Promise<void> {
+    const token = ++walkToken;
+    walkUi.on = on;
+    if (!on) { stopWalking(); return; }
+    if (state.inspect) setInspect(false);
+    const id = walkHomeId();
+    if (id == null) return;
+    walkStatus('Reading how things walk here…');
+    try {
+      walkDoc = (await app.store.worldMovers?.()) ?? null;
+      walkGrid = (await app.store.worldWalkGrid?.(id)) ?? null;
+    } catch { walkDoc = null; walkGrid = null; }
+    if (token !== walkToken) return;
+    if (!walkDoc || !walkGrid) {
+      walkStatus('This extraction has no walking data: extract World again (version chip, extract more) to walk here.');
+      return;
+    }
+    if (!walkOverlay.parent) world.root.add(walkOverlay);
+    const room = world.rooms.get(id), shard = room?.shard;
+    if (!shard?.spawns?.length) { walkStatus('No one stands in this room to walk.'); return; }
+    // the first actor that walks with the player's own walk, else the first that walks at all
+    const sc = world.spawnColumns!;
+    const playerLoco = walkDoc.sets[String(walkDoc.player[0])]?.locomotions[WALK_FLAT];
+    let best = -1, bestScore = -1;
+    shard.spawns.forEach((row: any[], index: number) => {
+      const a = walkDoc!.actors[String(row[sc.record])];
+      if (!a) return;
+      const loco = a.set != null ? walkDoc!.sets[String(a.set)]?.locomotions[WALK_FLAT] : null;
+      const score = loco != null && loco === playerLoco ? 3 : loco != null ? 2 : 1;
+      if (score > bestScore) { best = index; bestScore = score; }
+    });
+    applyWalkAreas();
+    if (walkUi.wander) await startWanderers(token);
+    if (best >= 0 && token === walkToken) await takeWalker(id, best, token);
+  }
+  function stopWalking(): void {
+    walkToken++;
+    for (const [key, w] of [...walkers]) { walkers.delete(key); persistentAnims.delete(key); disposeSpawnAnim(w); }
+    walkLead = null;
+    for (const g of [walkAreaGroup, walkHoverGroup]) for (const c of [...g.children]) disposeWalkOverlay(c);
+    for (const c of [...walkOverlay.children]) if (c !== walkAreaGroup && c !== walkHoverGroup) disposeWalkOverlay(c);
+    walkOverlay.parent?.remove(walkOverlay);
+    walkUi.box.textContent = ''; walkUi.hover.textContent = '';
+    // the resting clips come back
+    if (state.idle) for (const room of world.rooms.values()) { idleRooms.delete(Number(room.id)); idleRoomLoaded(room).catch(() => { /* best-effort */ }); }
+  }
+  /** Build (or reuse) the walking entry of one spawn: its rig, parts and clips, its static hidden. */
+  async function walkEntry(roomId: number, index: number, asPlayer: boolean, token: number): Promise<any> {
+    const key = `${roomId}|spawn|${index}`;
+    const have = walkers.get(key);
+    if (have && have.walk.am.player === asPlayer) return have;
+    const shard = world.rooms.get(roomId)?.shard;
+    if (!shard || !walkDoc || !walkGrid) return null;
+    let info;
+    try { info = world._describeSpawn({ id: roomId, shard }, index); } catch { return null; }
+    if (!info?.parts?.length) return null;
+    const am = actorMover(walkDoc, Number(info.record), false);
+    const pm = asPlayer ? actorMover(walkDoc, Number(info.record), true) : null;
+    const mover = pm ?? am;
+    if (!mover) return null;
+    const resolved = await resolveSpawnAnim({ store: app.store, parts: info.parts });
+    if (token !== walkToken || resolved.kind !== 'ready') return null;
+    const skelJson = await app.store.json(resolved.skelEntry.f);
+    const samplers = new Map<number, ClipSampler>();
+    const wanted = new Set([...moverClips(mover), ...(am ? moverClips(am) : [])]);
+    for (const c of resolved.clips) {
+      if (!c.f || !(wanted.has(c.i) || c.i === info.defaultClip)) continue;
+      try { samplers.set(c.i, new ClipSampler(await app.store.payload(c.f))); } catch { /* a clip that fails stays out */ }
+    }
+    if (token !== walkToken) return null;
+    // (the player's clips play only where they are on this actor's rig; its own walk otherwise)
+    if (pm && am && !moverClips(pm).some((c) => samplers.has(c))) pm.locomotions = am.locomotions;
+    const rig = new Rig(skelJson);
+    const composite = new SpawnAnimComposite({ world, rig });
+    // (a resting animation or an earlier walker of the same spawn steps aside)
+    for (const k of [key]) { const old = persistentAnims.get(k); if (old) { persistentAnims.delete(k); walkers.delete(k); disposeSpawnAnim(old); } }
+    await composite.loadParts({ parts: info.parts, shard, category: 'spawns', skinnedSet: resolved.skinnedSet, isDestroyed: () => destroyed || token !== walkToken });
+    if (token !== walkToken || destroyed) { composite.dispose(); return null; }
+    spawnAnimRoot.add(composite.group);
+    const row = shard.spawns[index], sc = world.spawnColumns!;
+    const start: Tile = [Number(row[sc.x]) | 0, Number(row[sc.y]) | 0, Number(row[sc.z]) === 1 ? 1 : 0];
+    const yaw = ((Number(row[sc.rotation_quarters]) | 0) & 3) * 90;
+    const walker = new Walker(walkGrid, mover, start, yaw);
+    if (walkUi.boost >= 0) walker.boost = walkUi.boost;
+    const sa: any = {
+      token: -1, key, info, box: null, rig, composite, bar: null, resolved, shard,
+      active: true, partsLoaded: true, parts: info.parts, category: 'spawns', members: null,
+      skeletonJson: skelJson, idle: false,
+      walk: { walker, wanderer: null as Wanderer | null, samplers, idle: samplers.get(info.defaultClip) ?? null, am: mover, name: info.label || `#${info.record}`, home: start },
+    };
+    hideSpawnStatic(sa);
+    persistentAnims.set(key, sa);
+    walkers.set(key, sa);
+    poseWalker(sa);
+    composite.group.visible = true;
+    return sa;
+  }
+  async function takeWalker(roomId: number, index: number, token = walkToken): Promise<void> {
+    const sa = await walkEntry(roomId, index, walkUi.asPlayer, token);
+    if (!sa || token !== walkToken) { if (token === walkToken && !walkLead) walkStatus('That one cannot walk here.'); return; }
+    if (sa.walk.wanderer) sa.walk.wanderer = null;   // (taken over: it walks where it is told)
+    walkLead = sa;
+    showWalkLead();
+  }
+  function showWalkLead(): void {
+    if (!walkLead) return;
+    const w = walkLead.walk, k = w.am.mover.kinds[WALK_FLAT], r: WalkReport | null = w.walker.report;
+    const ticks = k ? Math.trunc(k.ticks / (w.am.player && walkUi.boost >= 0 ? SPEED_BOOST[walkUi.boost] : 1)) : null;
+    const lines = [
+      `Walking: ${w.name}${w.am.player ? ' (as the player)' : ''}`,
+      ticks ? `Flat walk ${ticks} ticks a tile (${(600 / ticks).toFixed(2)} tiles/s), diagonal ${Math.trunc(ticks * Math.SQRT2)}` : 'No flat walk',
+      `Stands on ${w.walker.at.join(', ')}`,
+    ];
+    if (r) {
+      lines.push(`Last walk: ${r.tiles} tiles to ${r.reached.join(', ')}${String(r.reached) !== String(r.to) ? ` (nearest to ${r.to.join(', ')})` : ''}`);
+      lines.push(`Steps ${fmtTicks(r.stepTicks)}`);
+      if (r.predicted != null) lines.push(`Arrives after ${fmtTicks(r.predicted)}`);
+      lines.push(r.arrived == null ? 'Walking…' : `Arrived after ${fmtTicks(r.arrived)}`);
+    } else lines.push('Click the floor to walk there.');
+    walkUi.box.replaceChildren(...lines.map((t) => el('div', { text: t })));
+  }
+  /** Where the walk test's pick ray meets the room (native, the room's frame), or null. */
+  function walkPoint(clientX: number, clientY: number): THREE.Vector3 | null {
+    const id = walkHomeId();
+    const room = id != null ? world.rooms.get(id) : null;
+    if (!room) return null;
+    const hit = pickInstance(clientX, clientY);
+    const toNative = world.root.matrixWorld.clone().invert();
+    let p: THREE.Vector3 | null = null;
+    if (hit?.point) p = hit.point.clone().applyMatrix4(toNative);
+    else {
+      // (open floor: the plane at the walker's height)
+      const z = walkLead ? walkLead.walk.walker.blender.pos[2] * world.layerUnits : 0;
+      const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -z).applyMatrix4(world.root.matrixWorld);
+      const out = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(plane, out)) p = out.applyMatrix4(toNative);
+    }
+    if (!p) return null;
+    p.x -= room.group.position.x; p.y -= room.group.position.y;
+    return p;
+  }
+  function walkClick(event: PointerEvent): boolean {
+    if (!walkUi.on || allMode) return false;
+    const id = walkHomeId();
+    if (id == null || !walkGrid) return true;
+    const hit = pickInstance(event.clientX, event.clientY);
+    const info = hit ? world.describeInstance(hit.object, hit.instanceId) : null;
+    if (info?.sourceKind === 'spawn' && Number(info.room) === id && walkDoc?.actors[String(info.record)]) {
+      const key = `${id}|spawn|${info.spawnIndex}`;
+      if (walkLead?.key !== key) { takeWalker(id, Number(info.spawnIndex)).catch(() => { /* best-effort */ }); return true; }
+    }
+    if (!walkLead) return true;
+    const p = walkPoint(event.clientX, event.clientY);
+    const w = walkLead.walk.walker as Walker;
+    const tile = p && tileAt(walkGrid, p.x, p.y, p.z, w.size);
+    if (!tile) return true;
+    const report = w.goTo(tile);
+    drawWalkPath(walkLead);
+    if (!report) walkStatus(`No way from ${w.at.join(', ')} to ${tile.join(', ')}.`);
+    else showWalkLead();
+    return true;
+  }
+  let walkHoverFrame = 0, walkHoverPoint: [number, number] | null = null, walkHoverKey = '';
+  function walkHover(event: PointerEvent): void {
+    if (!walkUi.on || !walkGrid) return;
+    walkHoverPoint = [event.clientX, event.clientY];
+    if (!walkHoverFrame) walkHoverFrame = requestAnimationFrame(() => {
+      walkHoverFrame = 0;
+      if (!walkHoverPoint || !walkGrid) return;
+      const p = walkPoint(...walkHoverPoint), size = walkLead?.walk.walker.size ?? 1;
+      const tile = p && tileAt(walkGrid, p.x, p.y, p.z, size);
+      const key = tile ? tile.join(',') : '';
+      if (key === walkHoverKey) return;
+      walkHoverKey = key;
+      for (const c of [...walkHoverGroup.children]) disposeWalkOverlay(c);
+      if (!tile) { walkUi.hover.textContent = ''; return; }
+      walkHoverGroup.add(tileRing(walkGrid, tile, 0xffffff, size));
+      const level = levelOf(walkGrid, ...tile);
+      let text = `Tile ${tile.join(', ')}, height ${level} (${level * 0.5} tiles)`;
+      if (walkLead && !walkLead.walk.walker.moving) {
+        const t = walkLead.walk.walker.predict(tile);
+        text += t == null ? ': no way there' : `: ${fmtTicks(t)} to walk there`;
+      }
+      walkUi.hover.textContent = text;
+    });
+  }
+  function drawWalkPath(sa: any): void {
+    const g = walkOverlay;
+    if (sa.walk.pathLine) { disposeWalkOverlay(sa.walk.pathLine); sa.walk.pathLine = null; }
+    const w = sa.walk.walker as Walker;
+    if (!walkGrid || w.path.length < 2) return;
+    const group = new THREE.Group();
+    group.add(tileLine(walkGrid, w.path, sa === walkLead ? 0xffd84d : 0x9ad1ff, w.size));
+    if (sa === walkLead && w.report) group.add(tileRing(walkGrid, w.report.reached, 0xffd84d, w.size));
+    g.add(group);
+    sa.walk.pathLine = group;
+  }
+  /** Wandering creatures wander (the game's own loop: random tiles of their box, straight walks, waits). */
+  async function startWanderers(token: number): Promise<void> {
+    const id = walkHomeId(), shard = id != null ? world.rooms.get(id)?.shard : null;
+    if (!shard || !walkDoc) return;
+    const sc = world.spawnColumns!;
+    for (let index = 0; index < shard.spawns.length; index++) {
+      if (token !== walkToken || !walkUi.wander) return;
+      const a = walkDoc.actors[String(shard.spawns[index][sc.record])];
+      if (!a?.wanders) continue;
+      const key = `${id}|spawn|${index}`;
+      if (walkLead?.key === key) continue;
+      const sa = await walkEntry(id!, index, false, token).catch(() => null);
+      if (!sa || token !== walkToken) continue;
+      sa.walk.wanderer = new Wanderer(sa.walk.walker, sa.walk.home, a.wanders.radius, (Math.random() * 2 ** 31) | 0);
+    }
+  }
+  function stopWanderers(): void {
+    for (const [key, sa] of [...walkers]) {
+      if (!sa.walk.wanderer || sa === walkLead) continue;
+      walkers.delete(key); persistentAnims.delete(key); disposeSpawnAnim(sa);
+      if (sa.walk.pathLine) disposeWalkOverlay(sa.walk.pathLine);
+    }
+    if (state.idle) for (const room of world.rooms.values()) { idleRooms.delete(Number(room.id)); idleRoomLoaded(room).catch(() => { /* best-effort */ }); }
+  }
+  /** Where each wanderer can go (its colour), and the authored routes (numbered lines). */
+  function applyWalkAreas(): void {
+    for (const c of [...walkAreaGroup.children]) disposeWalkOverlay(c);
+    const id = walkHomeId(), shard = id != null ? world.rooms.get(id)?.shard : null;
+    if (!walkUi.on || !walkUi.areas || !shard || !walkDoc || !walkGrid) return;
+    const sc = world.spawnColumns!;
+    const colours = [0xe06c75, 0x98c379, 0x61afef, 0xc678dd, 0xe5c07b, 0x56b6c2, 0xd19a66];
+    let n = 0;
+    shard.spawns.forEach((row: any[]) => {
+      const a = walkDoc!.actors[String(row[sc.record])];
+      if (!a) return;
+      const am = actorMover(walkDoc!, Number(row[sc.record]), false);
+      const home: Tile = [Number(row[sc.x]) | 0, Number(row[sc.y]) | 0, Number(row[sc.z]) === 1 ? 1 : 0];
+      const colour = colours[n++ % colours.length];
+      if (a.wanders && am) {
+        try { walkAreaGroup.add(tileQuads(walkGrid!, wanderTiles(walkGrid!, am, home, a.wanders.radius), colour, 0.1)); } catch { /* a home off the grid */ }
+        walkAreaGroup.add(tileRing(walkGrid!, home, colour, am.mover.size));
+      }
+      if (a.route?.length) {
+        const tiles = a.route.filter((t) => t[0] === Number(row[sc.room_record])).map((t) => [t[1], t[2], t[3]] as Tile)
+          .filter((t) => t[0] >= 0 && t[1] >= 0 && t[0] < walkGrid!.W && t[1] < walkGrid!.H);
+        if (tiles.length > 1) walkAreaGroup.add(tileLine(walkGrid!, tiles, colour, am?.mover.size ?? 1));
+        for (const t of tiles) walkAreaGroup.add(tileRing(walkGrid!, t, colour, am?.mover.size ?? 1));
+      }
+    });
+  }
+  function poseWalker(sa: any): void {
+    const w = sa.walk, c = w.walker.clip(w.samplers, w.idle);
+    if (c) { c.sampler.apply(sa.rig, c.t); for (const r of sa.rig.roots) r.updateMatrixWorld(true); }
+    const m = w.walker.matrix(new THREE.Matrix4(), world.meshForwardQuarterTurns + 2);
+    const offset = spawnRoomOffset(sa.info.room);
+    m.elements[12] += offset[0]; m.elements[13] += offset[1];
+    sa.composite.setBaseMatrix(m);
+  }
+  let walkInfoAt = 0, walkClock = 0;
+  const walkFollowAt = new THREE.Vector3();
+  function walkTick(_dt: number): void {
+    if (!walkers.size) { walkClock = 0; return; }
+    // (the game's clock is real time: its own, whatever the frame loop's step)
+    const now = performance.now(), dt = walkClock ? Math.min(250, now - walkClock) : 16;
+    walkClock = now;
+    for (const sa of walkers.values()) {
+      const w = sa.walk, moving = w.walker.moving;
+      if (w.wanderer) w.wanderer.advance(dt || 16); else w.walker.advance(dt || 16);
+      poseWalker(sa);
+      if (moving !== w.walker.moving || (w.wanderer && w.walker.moving && !sa.walk.pathLine)) drawWalkPath(sa);
+    }
+    walkInfoAt += dt || 16;
+    if (walkLead && walkInfoAt > 100) { walkInfoAt = 0; showWalkLead(); }
+    // the camera keeps the walker where it was in view
+    if (walkLead && walkUi.follow) {
+      const w = walkLead.walk.walker as Walker, off = spawnRoomOffset(walkLead.info.room), T = world.tileUnits;
+      const p = new THREE.Vector3((w.blender.pos[0] + w.size / 2) * T + off[0], (w.blender.pos[1] + w.size / 2) * T + off[1], w.blender.pos[2] * world.layerUnits)
+        .applyMatrix4(world.root.matrixWorld);
+      if (walkFollowAt.lengthSq()) {
+        const d = p.clone().sub(walkFollowAt);
+        scene3d.camera.position.add(d); scene3d.controls.target.add(d);
+      }
+      walkFollowAt.copy(p);
+    } else walkFollowAt.set(0, 0, 0);
+  }
+  const disposeWalkOverlay = disposeOverlay;
+
   // Fully tear one anim down: restore its statics, dispose the composite/bar,
   // remove its DOM. Used on view destroy and when the clip is cleared.
   function disposeSpawnAnim(sa: any): void {
@@ -4396,6 +4736,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     spawnAnim = null;
     for (const parked of persistentAnims.values()) disposeSpawnAnim(parked);
     persistentAnims.clear();
+    walkers.clear(); walkLead = null;
+    if (walkUi.on) { walkInputs.on.cb.checked = false; setWalkMode(false); }
     syncEditsUi();
   }
 
@@ -5169,6 +5511,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
   }
 
   const onPointerMove = (event: PointerEvent) => {
+    walkHover(event);
     if (!state.inspect || inspectPinned || effectPinned || event.buttons) {
       if (event.buttons) { clearInspection(); clearEffectInspection(); }
       return;
@@ -5189,6 +5532,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       return;
     }
     pointerDown = null;
+    if (walkClick(event)) return;
     if (!state.inspect) return;
     // A variant overlay (active OR parked) stands in for hidden statics, so it
     // must be pickable: otherwise a click on the recoloured model rays through
@@ -5962,6 +6306,7 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       parked.bar?.tick(dt);
       syncSpawnEffectAnimation(parked);
     }
+    walkTick(dt);
     // effects: advance the tick clock and refill the particle batches
     if (effectsLayer) effectsLayer.tick(dt, scene3d.camera);
     // merged all-rooms: re-rank proximity activation on a slow cadence
@@ -6446,6 +6791,45 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
     },
     // Parked (persistent) animations: those still playing after their model
     // was unpinned. Test hook for the persistence behavior.
+    /** The walk test, for scripts: turn it on, take a spawn, walk to a tile, read where everyone is. */
+    walk: {
+      on: (v = true) => { walkInputs.on.cb.checked = v; return setWalkMode(v); },
+      set: (o: { asPlayer?: boolean; boost?: number; wander?: boolean; areas?: boolean }) => {
+        if (o.asPlayer !== undefined) walkUi.asPlayer = o.asPlayer;
+        if (o.boost !== undefined) { walkUi.boost = o.boost; for (const sa of walkers.values()) if (sa.walk.am.player) sa.walk.walker.boost = o.boost >= 0 ? o.boost : null; }
+        if (o.areas !== undefined) { walkUi.areas = o.areas; applyWalkAreas(); }
+        if (o.wander !== undefined) { walkUi.wander = o.wander; if (o.wander) return startWanderers(walkToken); stopWanderers(); }
+        return undefined;
+      },
+      take: (index: number) => takeWalker(Number(entry?.i), index),
+      /** Look at the walker from a native offset (tiles: dx, dy, up). */
+      look: (dx: number, dy: number, up: number) => {
+        if (!walkLead) return;
+        const w = walkLead.walk.walker as Walker, T = world.tileUnits, off = spawnRoomOffset(walkLead.info.room);
+        const at = new THREE.Vector3((w.blender.pos[0] + w.size / 2) * T + off[0], (w.blender.pos[1] + w.size / 2) * T + off[1], w.blender.pos[2] * world.layerUnits + T);
+        const eye = at.clone().add(new THREE.Vector3(dx * T, dy * T, up * T));
+        scene3d.controls.target.copy(at.applyMatrix4(world.root.matrixWorld));
+        scene3d.camera.position.copy(eye.applyMatrix4(world.root.matrixWorld));
+        walkFollowAt.set(0, 0, 0);
+      },
+      /** Bring the camera close to the walker (tiles away, and up). */
+      focus: (back = 6, up = 5) => {
+        if (!walkLead) return;
+        const w = walkLead.walk.walker as Walker, T = world.tileUnits, off = spawnRoomOffset(walkLead.info.room);
+        const at = new THREE.Vector3((w.blender.pos[0] + w.size / 2) * T + off[0], (w.blender.pos[1] + w.size / 2) * T + off[1], w.blender.pos[2] * world.layerUnits);
+        const eye = at.clone().add(new THREE.Vector3(back * T * 0.7, back * T * 0.7, up * T));
+        scene3d.controls.target.copy(at.applyMatrix4(world.root.matrixWorld));
+        scene3d.camera.position.copy(eye.applyMatrix4(world.root.matrixWorld));
+        walkFollowAt.set(0, 0, 0);
+      },
+      goTo: (tile: [number, number, number]) => { const r = walkLead?.walk.walker.goTo(tile) ?? null; if (walkLead) drawWalkPath(walkLead); return r; },
+      predict: (tile: [number, number, number]) => walkLead?.walk.walker.predict(tile) ?? null,
+      info: () => ({
+        lead: walkLead ? { key: walkLead.key, name: walkLead.walk.name, at: walkLead.walk.walker.at, pos: walkLead.walk.walker.blender.pos, yaw: walkLead.walk.walker.blender.facing.yaw, moving: walkLead.walk.walker.moving, report: walkLead.walk.walker.report, player: walkLead.walk.am.player, clips: [...walkLead.walk.samplers.keys()] } : null,
+        walkers: [...walkers.values()].map((sa) => ({ key: sa.key, name: sa.walk.name, at: sa.walk.walker.at, moving: sa.walk.walker.moving, wanders: !!sa.walk.wanderer })),
+        text: walkUi.box.textContent, hover: walkUi.hover.textContent,
+      }),
+    },
     persistentAnimInfo() {
       return {
         count: persistentAnims.size,
@@ -6714,6 +7098,8 @@ function createSceneView(app: WorldViewApp, entry: IndexEntry | null, allMode: b
       spawnAnim = null;
       for (const parked of persistentAnims.values()) disposeSpawnAnim(parked);
       persistentAnims.clear();
+      walkToken++; walkers.clear(); walkLead = null;
+      disposeOverlay(walkOverlay);
       // Variant overlays (active + parked): just drop the meshes/geometry. The
       // whole scene is going away, so restoring the authored statics is moot and
       // a merged re-bake mid-teardown would be wasted work.

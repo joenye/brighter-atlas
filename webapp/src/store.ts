@@ -57,6 +57,11 @@ export interface AppStore extends EventTarget {
   /** Cheap effects-doc probe (manifest flag / key existence, never the doc
    *  itself), for gating effects UI without pulling the payload. */
   hasWorldEffects?(): Promise<boolean>;
+  /** How actors walk ('world:movers', written by World extraction): speeds,
+   *  walk clips, wandering and routes per actor, the player's own. null when absent. */
+  worldMovers?(): Promise<any>;
+  /** A room's movement grid ('world:walk:<id>'): null when absent. */
+  worldWalkGrid?(id: number | string): Promise<any>;
   json(rel: string): Promise<any>;
   payload(rel: string): Promise<any>;
   arrayBuffer(rel: string): Promise<ArrayBuffer>;
