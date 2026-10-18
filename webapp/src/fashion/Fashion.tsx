@@ -1404,7 +1404,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
             onDoubleClick={() => { const v = engine.current!.viewer; v.viewTurn = 0; v.viewPitch = 0; v.yaw = 0; v.yawVel = 0; v.viewVel = 0; v.frameTo(frameOf('full')); setCurrentFrame('full'); }}
             onKeyDown={e => { const v = engine.current!.viewer, k = e.shiftKey && v.viewReach ? 'viewVel' : 'yawVel'; if (e.key === 'ArrowLeft') v[k] += 1.6; else if (e.key === 'ArrowRight') v[k] -= 1.6; }} />
           {/* the way back to the place's own view, while it is turned */}
-          {placeTurns && viewTurned && !recView && <button type="button" className="btn of-viewback" onClick={() => engine.current!.viewer.resetView()}><Icon name="reset" />Reset view</button>}
+          {viewTurned && !recView && <button type="button" className="btn of-viewback" onClick={() => engine.current!.viewer.resetView()}><Icon name="reset" />Reset view</button>}
           {placeTurns && viewHint && !viewTurned && !recView && <div className="of-viewhint" role="status">Drag your character to turn them. Drag the place around them to look around.</div>}
           {recView && <RecordOverlay crop={crop} size={[outW, outH]} mark={!recLook.transparent} view={viewSize} setCrop={c => setRec({shape: 'free', crop: c})} />}
           {/* a place loading: a ring that fills (spins while the load cannot say how far it is); it never takes a tap */}
