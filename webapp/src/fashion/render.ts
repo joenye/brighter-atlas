@@ -1337,7 +1337,7 @@ export class Preview {
   // ---- the nameplate: the label the game draws over a player, over the frame drawn (nameplate.ts) ----
   private plate: NameplateLayer | null = null;   // (its code and data arrive when one is first shown)
   private plateWant: Nameplate | null = null;
-  private plateTop: number | null = null;   // how far the top of the figure stands above its head bone
+  private plateTop: number | null = null;   // how far the top of the figure's head stands above its head bone
   private plateRoomNow = 1;
   /** How much of the view's height to keep clear over the label (the page's buttons over the view's top, on a phone). */
   plateClear = 0.02;
@@ -1351,19 +1351,21 @@ export class Preview {
       .catch(e => report('the nameplate', e));
   }
   private plateShown() { return !!this.plate?.shown && !!this.rig && !this.designing && !this.ghost; }
-  // where it stands: over the head, at the top of the figure (what is held left out), as the frame poses it
+  // where it stands: over the head, at the top of the figure's own head (what is worn or held left out: the game's
+  // stands on the head under a hat, not on the hat), as the frame poses it
   private plateAnchor(): THREE.Vector3 {
     const head = this.rig!.bones[HEAD_BONE];
     head.updateWorldMatrix(true, false);
     const at = this.plateAt.setFromMatrixPosition(head.matrixWorld);
     return at.setY(at.y + (this.plateTop ?? 260));
   }
-  // the figure's top above its head bone, from the parts' skinned bounds (worked out again every few frames)
+  // the top of the figure's own head above its head bone, from the body's parts' skinned bounds (worked out again
+  // every few frames)
   private measurePlateTop() {
     if (this.plateTop != null && this.frameNo % 8) return;
     const box = this.plateBox.makeEmpty();
     for (const [key, m] of this.active) {
-      if (/\/(h|prop)\d+(-cover)?$/.test(key)) continue;
+      if (/\/(h|w|prop)\d+(-cover)?$/.test(key)) continue;
       const sk = m as unknown as THREE.SkinnedMesh;
       if (sk.isSkinnedMesh) { sk.computeBoundingBox(); box.union(this.platePart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
     }

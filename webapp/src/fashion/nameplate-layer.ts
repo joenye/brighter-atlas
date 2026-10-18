@@ -113,9 +113,10 @@ export class NameplateLayer {
     if (pl.wreath) { const x = g('icon:wreath'); if (x) add(wreath, [x], WHITE); }
     add(name, chars(pl.name), NAME);
     if (pl.tag) add(name, chars(`#${pl.tag}`), NUMBER);
+    // (the emblem, a space, then the level with its thousands marked: "5,812")
     const emblem = pl.faction !== 'none' ? g(`icon:${pl.faction}`) : null;
-    if (emblem) add(level, [emblem], facColour);
-    add(level, chars(String(pl.level)), facColour);
+    if (emblem) add(level, [emblem, ...chars(' ')], facColour);
+    add(level, chars(String(pl.level).replace(/\B(?=(\d{3})+$)/g, ',')), facColour);
     const badge = pl.guild !== 'none' ? g(`icon:${pl.guild}`) : null;
     if (badge) add(level, [...chars(' '), badge], facColour);
     const h3 = pl.wreath ? 18 : 0;
