@@ -1166,11 +1166,18 @@ export class Preview {
       throw e;
     }
   }
-  // In a place the scene stays put and the character turns (a game's character screen): the camera still
-  // orbits by `yaw`, so the room turns with it and the chosen view stays behind the character.
+  // In a place the camera orbits by `yaw` and the room mostly turns with it, so the chosen view stays behind the
+  // character (a game's character screen) and the character turns: the view turns about the scene only as far as
+  // the place lets it (`look.turn`): radians either way, eased back as the camera goes on round to the character's
+  // back, or 'full', all the way round. `roomTurn` is how far the room has turned with the camera.
   private roomPlace: {face: number, sx: number, sy: number, z: number} | null = null;
   // in a place the lights turn with the camera too, so the room stays lit the same way
   private lights = new THREE.Group();
+  private roomTurn = 0;
+  private turnWithCamera(a: number) {
+    const t = this.game?.look.turn;
+    return !this.roomPlace ? 0 : t === 'full' ? 0 : typeof t === 'number' ? a - t * Math.sin(a) : a;
+  }
   private placeRoom(yaw: number) {
     const p = this.roomPlace; if (!p) return;
     this.roomGroup.matrix.makeRotationZ(p.face - yaw).multiply(new THREE.Matrix4().makeTranslation(-p.sx, -p.sy, -p.z - FOOT_LIFT));
@@ -1308,8 +1315,9 @@ export class Preview {
     this.camera.position.set(f.x + Math.sin(a) * d * room, f.y + lift * room, f.z + Math.cos(a) * d * room);
     this.camera.lookAt(f);
     this.camera.updateMatrixWorld();
-    this.placeRoom(a);
-    this.lights.rotation.y = this.roomPlace ? a : 0;
+    this.roomTurn = this.turnWithCamera(a);
+    this.placeRoom(this.roomTurn);
+    this.lights.rotation.y = this.roomTurn;
     this.tickEffects(this.paused ? 0 : dt * 1000);
     const r = this.renderer;
     if (this.game && this.roomPlace && this.rig) { this.gameFrame(this.paused ? 0 : dt * 1000, f); this.drawPlate(); return; }
@@ -1460,7 +1468,11 @@ export class Preview {
     const size = r.getDrawingBufferSize(new THREE.Vector2());
     const eye = this.camera.position.clone().applyMatrix4(toRoom), target = focus.clone().applyMatrix4(toRoom);
     const up = new THREE.Vector3(0, 1, 0).transformDirection(toRoom);
-    g.render({eye, target, up, fov: this.camera.fov, width: size.x, height: size.y}, dtMs, this.roomPlace!.z, this.camera);
+    // (turned well round from the place's own view, nothing nearer the camera than a little in front of the character
+    // is drawn: what the place set close beside the character would stand between them)
+    const round = Math.abs(Math.atan2(Math.sin(this.yaw - this.roomTurn), Math.cos(this.yaw - this.roomTurn)));
+    const w = Math.max(0, Math.min(1, (round - 0.4) / 0.6)), clear = w * w * (3 - 2 * w) * (eye.distanceTo(target) - 2.5 * 1024);
+    g.render({eye, target, up, fov: this.camera.fov, width: size.x, height: size.y, ...(clear > g.near ? {near: clear} : {})}, dtMs, this.roomPlace!.z, this.camera);
     r.resetState();
     // the frame drew the character: three draws only what the frame does not (each part's own visibility back after:
     // an animation's props, or the weapons they stand in for, are hidden in turn)
@@ -1468,7 +1480,7 @@ export class Preview {
     for (const m of this.active.values()) m.visible = false;
     const fog = this.scene.fog; this.scene.fog = null;
     // (the sky turns with the place, as the character turns in it: its clouds keep their places over the sea)
-    this.sky.position.copy(this.camera.position); this.sky.rotation.y = this.yaw; this.sky.scale.setScalar(this.camera.far * 0.9); this.sky.updateMatrixWorld(); this.sky.visible = true;
+    this.sky.position.copy(this.camera.position); this.sky.rotation.y = this.roomTurn; this.sky.scale.setScalar(this.camera.far * 0.9); this.sky.updateMatrixWorld(); this.sky.visible = true;
     (this.sky.material as THREE.ShaderMaterial).uniforms.time.value = (performance.now() - this.t0) / 1000;
     this.haze.position.copy(this.camera.position); this.haze.updateMatrixWorld(); this.haze.visible = true;
     const hz = g.look.haze;

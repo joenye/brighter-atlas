@@ -200,7 +200,7 @@ export class GameRoom {
     const render = {...index.render, camera: {...index.render.camera, near: NEAR, far}, vignette: {...index.render.vignette, radius: reach}};
     const g = new GameRoom(id, gl, world, render, source);
     g.view = scene.view ?? null;
-    g.look = {sky: scene.sky ?? null, haze: scene.haze ?? null};
+    g.look = {sky: scene.sky ?? null, haze: scene.haze ?? null, turn: scene.view?.turn ?? null};
     if (scene.floor === 'game') { const f = g.frame as any; f.planeDistance = scene.floorReach ?? Infinity; }
     // the place's own scene: a ship out at sea, shells by the character's feet, a crab about the sand
     await g.addProps(scene.props ?? []);
@@ -488,10 +488,18 @@ export class GameRoom {
     const at = new THREE.Matrix4().makeTranslation(x, y, Number.isFinite(z) ? z : 0)
       .multiply(new THREE.Matrix4().makeRotationZ(turn)).multiply(new THREE.Matrix4().makeScale(spec.scale ?? 1, spec.scale ?? 1, spec.scale ?? 1));
     const clip = spec.clip != null ? await this.clip(spec.clip).catch(() => null) : null;
-    await this.addActor(new Posed(rig, clip, at, spec.hover ? {height: spec.hover, period: spec.period ?? 4000} : null), spec.parts, rig.bones.length);
+    // (`reveal`: there only once the camera has gone `from` radians round the character from the place's view, playing
+    // `clip` once as it appears, then its resting clip: what waits behind the character)
+    let reveal: Reveal | null = null;
+    if (spec.reveal) {
+      const [sx, sy] = viewPoint(v, [0, 0]), [cx, cy] = viewPoint(v, [0, 1]);
+      reveal = {spot: [sx * T, sy * T], toward: [cx - sx, cy - sy], cos: Math.cos(spec.reveal.from),
+        once: spec.reveal.clip != null ? await this.clip(spec.reveal.clip).catch(() => null) : null};
+    }
+    await this.addActor(new Posed(rig, clip, at, spec.hover ? {height: spec.hover, period: spec.period ?? 4000} : null, reveal), spec.parts, rig.bones.length);
   }
   /** How the place's sky looks beyond the frame (render.ts draws it): the scene's own, or null for the day's. */
-  look: {sky: any, haze: any} = {sky: null, haze: null};
+  look: {sky: any, haze: any, turn: number | 'full' | null} = {sky: null, haze: null, turn: null};
 
   /** The character's parts as the frame's actors (their programs by material row), posed by `rig`. */
   async setActors(parts: DrawPart[], rig: Rig) {
@@ -541,7 +549,7 @@ export class GameRoom {
   }
 
   /** Draw the frame to the canvas (colour and depth), the camera in the room's frame. */
-  render(camera: {eye: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3, fov: number, width: number, height: number}, dtMs: number, avatarZ: number, three: THREE.Camera) {
+  render(camera: {eye: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3, fov: number, width: number, height: number, near?: number}, dtMs: number, avatarZ: number, three: THREE.Camera) {
     this.effects?.tick(dtMs, three);
     for (const e of this.extras) e.actor.step(dtMs, camera.eye);
     const ticks = this.effects ? this.effects.clock.t : (this.ticks += dtMs * 0.6);
@@ -636,17 +644,36 @@ function skinInto(out: Float32Array, rig: Rig, m: THREE.Matrix4, s: THREE.Matrix
 // The game's animation clock: clip times are ticks, 600 a second (render.ts TICKS_PER_MS).
 const TICKS_PER_MS = 0.6;
 
-/** Someone in one place, playing one clip over and over. */
+/** Where a revealed figure waits: the character's spot and the way to the place's view (room units), how far round
+ *  the camera must go (the cosine), and the clip it plays once as it appears. */
+interface Reveal { spot: [number, number]; toward: [number, number]; cos: number; once: ClipSampler | null }
+
+/** Someone in one place, playing one clip over and over (or, revealed, there only once the camera has come round). */
 class Posed implements SceneActor {
   palette: Float32Array; ready = true;
   private t = Math.random() * 5000; private s = new THREE.Matrix4(); private m = new THREE.Matrix4();
-  constructor(private rig: Rig, private clip: ClipSampler | null, private at: THREE.Matrix4, private hover: {height: number, period: number} | null = null) {
+  private onceT = -1;
+  constructor(private rig: Rig, private clip: ClipSampler | null, private at: THREE.Matrix4, private hover: {height: number, period: number} | null = null,
+    private reveal: Reveal | null = null) {
     this.palette = new Float32Array(rig.bones.length * 12);
+    if (reveal) this.ready = false;
   }
-  step(dtMs: number) {
+  step(dtMs: number, eye?: THREE.Vector3) {
     this.t += Math.min(100, dtMs);
-    // (no clip: the model as it was made, its bind pose)
-    if (this.clip) this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
+    const r = this.reveal;
+    if (r && eye) {
+      const vx = eye.x - r.spot[0], vy = eye.y - r.spot[1], len = Math.hypot(vx, vy) * Math.hypot(r.toward[0], r.toward[1]);
+      const round = len > 0 && (vx * r.toward[0] + vy * r.toward[1]) / len <= r.cos;
+      if (round && !this.ready && r.once) this.onceT = 0;
+      this.ready = round;
+      if (!round) return;
+    }
+    // (appearing: its one clip from the start; then, as always, its own clip over and over; no clip: its bind pose)
+    if (this.onceT >= 0 && r?.once) {
+      this.onceT += Math.min(100, dtMs) * TICKS_PER_MS;
+      if (this.onceT < r.once.duration) r.once.apply(this.rig, this.onceT); else this.onceT = -1;
+    }
+    if (this.onceT < 0 && this.clip) this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
     for (const r of this.rig.roots) r.updateMatrixWorld(true);
     // (a hovering figure rises and sinks a little, slowly)
     const at = this.hover ? this.m.makeTranslation(0, 0, Math.sin(this.t * 2 * Math.PI / this.hover.period) * this.hover.height).multiply(this.at) : this.at;
