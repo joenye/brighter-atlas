@@ -475,7 +475,7 @@ export class GameRoom {
         if (!payload?.skinned || !f.index.materials[String(p.material)]) continue;
         // (the pose as a fresh view each time: the frame sends a palette to the GPU only when handed a new one)
         const d = await f.buildActorDraw({mesh: p.mesh, material: p.material, renderTexture: p.renderTexture, payload, bones, tint: null,
-          recolours: p.recolours, palette: () => actor.ready ? actor.palette.subarray(0) : null}).catch(() => null);
+          recolours: p.recolours, palette: () => actor.ready ? actor.palette.subarray(0) : null, opacity: () => actor.opacity ?? 1}).catch(() => null);
         if (d) { d.scene = 0; draws.push(d); }
       }
     } finally { if (--this.adding === 0) f.gl.collect = null; }
@@ -674,7 +674,7 @@ function sandAround(ground: (x: number, y: number) => number, cx: number, cy: nu
 
 /** Something alive in the scene beside the character, posed each frame by its own rig: its skin matrices
  *  (row-major 3x4 per bone, the room's frame) are `palette`. */
-interface SceneActor { palette: Float32Array; readonly ready: boolean; step(dtMs: number, eye: THREE.Vector3): void }
+interface SceneActor { palette: Float32Array; readonly ready: boolean; readonly opacity?: number; step(dtMs: number, eye: THREE.Vector3): void }
 
 /** The palette of `rig` placed by `m` (bones in the rig's frame, then `m`). */
 function skinInto(out: Float32Array, rig: Rig, m: THREE.Matrix4, s: THREE.Matrix4) {
@@ -693,38 +693,56 @@ const TICKS_PER_MS = 0.6;
  *  the camera must go (the cosine), and the clip it plays once as it appears. */
 interface Reveal { spot: [number, number]; toward: [number, number]; cos: number; once: ClipSampler | null }
 
-/** Someone in one place, playing one clip over and over (or, revealed, there only once the camera has come round). */
+/** Someone in one place, playing one clip over and over (or, revealed, there only once the camera has come round:
+ *  rushing in from further out as it appears, fading away as the camera goes back). */
 class Posed implements SceneActor {
-  palette: Float32Array; ready = true;
+  palette: Float32Array; ready = true; opacity = 1;
   private t = Math.random() * 5000; private s = new THREE.Matrix4(); private m = new THREE.Matrix4();
   private onceT = -1;
+  // (revealed: how far its rush in has come, 0 to 1, and how far it has faded, 1 to 0, while the camera is not round)
+  private rush = 1; private shown = false;
   constructor(private rig: Rig, private clip: ClipSampler | null, private at: THREE.Matrix4, private hover: {height: number, period: number} | null = null,
     private reveal: Reveal | null = null) {
     this.palette = new Float32Array(rig.bones.length * 12);
-    if (reveal) this.ready = false;
+    if (reveal) { this.ready = false; this.opacity = 0; }
   }
   step(dtMs: number, eye?: THREE.Vector3) {
-    this.t += Math.min(100, dtMs);
+    const dt = Math.min(100, dtMs);
+    this.t += dt;
     const r = this.reveal;
+    let from: [number, number] | null = null;
     if (r && eye) {
       const vx = eye.x - r.spot[0], vy = eye.y - r.spot[1], len = Math.hypot(vx, vy) * Math.hypot(r.toward[0], r.toward[1]);
       const round = len > 0 && (vx * r.toward[0] + vy * r.toward[1]) / len <= r.cos;
-      if (round && !this.ready && r.once) this.onceT = 0;
-      this.ready = round;
-      if (!round) return;
+      // (coming into view from nothing: it rushes in, from RUSH_FROM tiles further out, then lunges)
+      if (round && !this.shown && this.opacity <= 0) { this.rush = 0; this.onceT = -1; }
+      this.shown = round;
+      this.opacity = round ? 1 : Math.max(0, this.opacity - dt / FADE_MS);
+      this.ready = this.opacity > 0;
+      if (!this.ready) return;
+      if (this.rush < 1) {
+        this.rush = Math.min(1, this.rush + dt / RUSH_MS);
+        if (this.rush >= 1 && r.once) this.onceT = 0;
+        const x = this.at.elements[12], y = this.at.elements[13], ox = x - r.spot[0], oy = y - r.spot[1], n = Math.hypot(ox, oy) || 1;
+        const left = Math.pow(1 - this.rush, 3) * RUSH_FROM;   // (eased out: fast, then setting down)
+        from = [ox / n * left, oy / n * left];
+      }
     }
-    // (appearing: its one clip from the start; then, as always, its own clip over and over; no clip: its bind pose)
+    // (arrived: its one clip from the start; then, as always, its own clip over and over; no clip: its bind pose)
     if (this.onceT >= 0 && r?.once) {
-      this.onceT += Math.min(100, dtMs) * TICKS_PER_MS;
+      this.onceT += dt * TICKS_PER_MS;
       if (this.onceT < r.once.duration) r.once.apply(this.rig, this.onceT); else this.onceT = -1;
     }
     if (this.onceT < 0 && this.clip) this.clip.apply(this.rig, this.clip.duration ? (this.t * TICKS_PER_MS) % this.clip.duration : 0);
-    for (const r of this.rig.roots) r.updateMatrixWorld(true);
-    // (a hovering figure rises and sinks a little, slowly)
-    const at = this.hover ? this.m.makeTranslation(0, 0, Math.sin(this.t * 2 * Math.PI / this.hover.period) * this.hover.height).multiply(this.at) : this.at;
+    for (const b of this.rig.roots) b.updateMatrixWorld(true);
+    // (a hovering figure rises and sinks a little, slowly; one rushing in is carried along its way)
+    let at = this.hover ? this.m.makeTranslation(0, 0, Math.sin(this.t * 2 * Math.PI / this.hover.period) * this.hover.height).multiply(this.at) : this.at;
+    if (from) at = this.m.makeTranslation(from[0], from[1], 0).multiply(this.at);
     skinInto(this.palette, this.rig, at, this.s);
   }
 }
+// (a revealed figure: rushing in over RUSH_MS from RUSH_FROM units further out; fading away over FADE_MS)
+const RUSH_MS = 550, RUSH_FROM = 6 * 1024, FADE_MS = 400;
 
 /** A gull on a circle out over the sea (`centre` and `radius` in native units, `speed` units a second), its
  *  wings beating, banked into the turn. It flies along its own +y. */

@@ -142,6 +142,8 @@ export interface GameActorSource {
   palette: () => Float32Array | null;
   /** The lights the states of the actor's resting animation carry (07-Oct-2026 on). */
   lights?: GameActorLight[];
+  /** How opaque it is this frame (1, or absent: solid; below, drawn after the scene, blended, casting no shadow). */
+  opacity?: () => number;
 }
 
 /** A light an actor carries: its definition with when it shines, the bone it hangs from (with that bone's
@@ -266,7 +268,12 @@ export interface Draw {
   water: GameBatchSource['water'];
   /** Actors: the bone palette texture (3 texels per bone) and its source. */
   bones?: { texture: GameTexture; actor: GameActorSource; data: Float32Array; live: boolean; sent?: Float32Array };
+  /** An actor fading: its depth alone, then its colour blended (made on first use). */
+  fadeStates?: [DrawState, DrawState];
 }
+
+/** An actor draw's opacity this frame (1: solid). */
+const opacityOf = (d: Draw) => d.bones?.actor.opacity?.() ?? 1;
 
 /** The vertex stage's buffer resources (a skinned program's bone palette) bound to `bones`. */
 function boneBindings(program: GameProgram, bones: GameTexture | undefined): Record<number, { texture: GameTexture; sampler: WebGLSampler | null }> | null {
@@ -1071,9 +1078,12 @@ void main() {
       meshes: this.actorDraws.map((d) => d.bones!.actor.mesh) };
   }
 
-  /** A scene's static draws, then its actors posed this frame. */
+  /** A scene's static draws, then its actors posed this frame (those fading drawn apart, fadingDraws). */
   private solidDraws(scene: GameScene): Draw[] {
-    return [...scene.draws, ...scene.actorDraws.filter((d) => d.bones!.live)];
+    return [...scene.draws, ...scene.actorDraws.filter((d) => d.bones!.live && opacityOf(d) >= 1)];
+  }
+  private fadingDraws(scene: GameScene): Draw[] {
+    return scene.actorDraws.filter((d) => d.bones!.live && opacityOf(d) > 0 && opacityOf(d) < 1);
   }
 
   /** Tests: each texture array uploaded (when, how long the page waited, its bytes, layers, size and format). */
@@ -2080,10 +2090,10 @@ void main() {
     const first = sceneWords.get(scenes[0])!;
     this.lastConstants = { caster: casterWords ?? vsWords(looks.get(scenes[0])!, casterClip, null, 0, true),
       prepass: prepassWords!, main: first.main, plane: first.plane };
-    const drawMain = (scene: GameScene, d: Draw, waterWords: Uint32Array | null, words = sceneWords.get(scene)!.main) => {
+    const drawMain = (scene: GameScene, d: Draw, waterWords: Uint32Array | null, words = sceneWords.get(scene)!.main, state: DrawState | null = null) => {
       const sw = sceneWords.get(scene)!;
       counts[d.water ? 'water' : 'main']++;
-      this.gl.applyState(d.mainState ??= this.state(d.program));
+      this.gl.applyState(state ?? (d.mainState ??= this.state(d.program)));
       const cbs = d.cbs ??= {};
       for (const b of d.program.translated.constantBuffers.vs) {
         // a neighbour's water takes the main vignette, the room's own the neutral one
@@ -2135,6 +2145,16 @@ void main() {
         minLargest = this.clusterDetailPixels * dist / pixelsPerUnitAt1;
       }
       for (const d of this.solidDraws(scene)) if (!minLargest || (d.largest ?? Infinity) >= minLargest) drawMain(scene, d, null);
+    }
+    // actors fading, over what is behind them: each its depth alone, then its colour at its opacity where it is nearest
+    for (const scene of scenes) for (const d of this.fadingDraws(scene)) {
+      const base = d.mainState ??= this.state(d.program);
+      // (not in the depth prepass, so tested as nearer or level, not equal to it)
+      const [depthOnly, blended] = d.fadeStates ??= [{ ...base, depthTest: true, depthFunc: gl.LEQUAL, colourWrite: false, depthWrite: true },
+        { ...base, depthTest: true, depthFunc: gl.LEQUAL, depthWrite: false, blend: [gl.FUNC_ADD, gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA, gl.FUNC_ADD, gl.ZERO, gl.ONE] }];
+      drawMain(scene, d, null, undefined, depthOnly);
+      gl.blendColor(0, 0, 0, opacityOf(d));
+      drawMain(scene, d, null, undefined, blended);
     }
     passDone('main');
     // then the water (all rooms: the farthest room's first, as it blends over what is behind it)
