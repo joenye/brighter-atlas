@@ -15,7 +15,7 @@ import {gifHead, gifJoin, gifPalette} from '../viewers/gif-encoder.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose, withShot, lookShot, type Shot} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
-import {NAMEPLATE_DEFAULTS, PLATE_FACTIONS, PLATE_GUILDS, NAME_MAX, LEVEL_MAX, TAG_MAX, CROWN, plateName, crowned, readNameplate, type Nameplate} from './nameplate.js';
+import {NAMEPLATE_DEFAULTS, PLATE_FACTIONS, PLATE_GUILDS, NAME_MAX, LEVEL_MAX, TAG_MAX, SCALE_MIN, SCALE_MAX, CROWN, plateName, crowned, readNameplate, type Nameplate} from './nameplate.js';
 import {attachTurning} from './turning.js';
 import {el, makeResizable} from '../ui.js';
 import {rem} from '../ui-scale.js';
@@ -1341,6 +1341,11 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         <div className="rs-checks">
           <label className="of-check rs-check" title="The laurel wreath some players wear over their name"><input type="checkbox" checked={plate.wreath} disabled={!plate.on} onChange={e => setPlate({...plate, wreath: e.target.checked})} /><span>Laurel wreath</span></label>
         </div>
+        <label className="rd-range" title="The label’s size against the character (100%: as the game shows it close up)">
+          <span className="rs-label">Size <b>{Math.round(plate.scale * 100)}%</b></span>
+          <input type="range" min={SCALE_MIN * 100} max={SCALE_MAX * 100} step={5} value={Math.round(plate.scale * 100)} disabled={!plate.on} aria-label="Nameplate size"
+            onChange={e => setPlate({...plate, scale: Number(e.target.value) / 100})} />
+        </label>
         <button type="button" className="rs-reset" disabled={!plate.on} onClick={() => setPlate({...NAMEPLATE_DEFAULTS, on: true})}>Reset the nameplate</button>
       </details>
     </div>

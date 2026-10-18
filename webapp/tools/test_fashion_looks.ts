@@ -11,7 +11,7 @@ import { build } from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-fashion-looks-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({ stdin: { contents: "export * from './src/fashion/look-code.ts'; export * from './src/fashion/compose.ts';", resolveDir: path.resolve(import.meta.dirname, '..') },
+  await build({ stdin: { contents: "export * from './src/fashion/look-code.ts'; export * from './src/fashion/compose.ts'; export * as N from './src/fashion/nameplate.ts';", resolveDir: path.resolve(import.meta.dirname, '..') },
     bundle: true, platform: 'node', format: 'esm', outfile: file, logLevel: 'error' });
   const L = await import(pathToFileURL(file).href);
   (globalThis as any).atob ??= (s: string) => Buffer.from(s, 'base64').toString('binary');
@@ -64,6 +64,14 @@ try {
   const keys = L.compose(E, L.makeIndex(E), both).map((p: any) => p.key);
   ok(keys.some((k: string) => k.endsWith('/w100')) && !keys.some((k: string) => k.endsWith('/w101')), 'the early piece draws, the cape does not');
 
+  // the nameplate setting: its size kept within range, the crown the one picture a name holds, and the label's size
+  // following the character (half the share of the view at twice the distance), not the screen
+  const N = L.N;
+  ok(N.readNameplate({ scale: 0.75 }).scale === 0.75 && N.readNameplate({ scale: 9 }).scale === 1 && N.readNameplate(null).scale === 1, 'nameplate size kept in range');
+  const crown = String.fromCodePoint(0x1F451);
+  ok(N.plateName(`${crown}Ged\u{1F600}`) === `${crown}Ged`, 'a name keeps the crown and drops other pictures');
+  ok(N.crowned('Ged', true) === `${crown} Ged` && N.crowned(`${crown} Ged`, false) === 'Ged' && N.crowned(`${crown}Ged`, false) === 'Ged', 'the crown on and off');
+  ok(Math.abs(N.plateUnit(2000, 18) / N.plateUnit(4000, 18) - 2) < 1e-9 && Math.abs(N.plateUnit(2000, 18, 0.5) / N.plateUnit(2000, 18) - 0.5) < 1e-9, 'the label keeps its size against the character');
   console.log(`fashion looks: ${checks} checks passed`);
 } finally {
   await rm(tmp, { recursive: true, force: true });

@@ -1374,14 +1374,14 @@ export class Preview {
     this.plateTop = box.max.y - this.plateAt.setFromMatrixPosition(head.matrixWorld).y;
   }
   /** One label unit as a share of the view's height. */
-  private plateUnit() { return plateUnit(this.dist, FRAMES.full.dist, this.baseFov); }
+  private plateUnit() { return plateUnit(this.dist, this.baseFov, this.plateWant?.scale ?? 1); }
   // The full-figure framing (or one further back) drawn back far enough for the label to show over the head, the feet
   // where they were; eased as the framing eases. The distance the view is drawn back by (1: not at all).
   private plateRoom(f: THREE.Vector3, ease: number) {
     let want = 1;
     if (this.plateShown() && this.want.dist >= FRAMES.full.dist * 0.7) {
       const t = Math.tan(this.baseFov * Math.PI / 360), bottom = f.y - this.dist * t, top = this.plateAnchor().y;
-      // (the label's height grows with the distance, as it keeps its size on screen)
+      // (the label's share of the view at this distance)
       const per = this.plate!.units * this.plateUnit() * 2 * t;
       want = Math.max(1, (top - bottom) / (this.dist * (2 * t * (1 - this.plateClear) - per)));
       if (!Number.isFinite(want) || want > 3) want = 1;
