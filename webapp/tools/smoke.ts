@@ -2044,6 +2044,9 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       // Brighter Fashion's place: every pose of the character and the scene's actors reaches the GPU
       const poses = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_fashion_poses.ts')], { encoding: 'utf8', cwd: WEBAPP });
       ok(poses.status === 0, `fashion poses${poses.status === 0 ? '' : `:\n    ${(poses.stderr || poses.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
+      // Brighter Fashion's sea: no hole, and its pieces' edges meet vertex for vertex (no slit of sky between their waves)
+      const sea = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_fashion_sea.ts')], { encoding: 'utf8', cwd: WEBAPP });
+      ok(sea.status === 0, `fashion sea${sea.status === 0 ? '' : `:\n    ${(sea.stderr || sea.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
     }
     if (realData && existsSync(path.join(WEBAPP, realData, 'manifest.json'))) {
       await realSuite(browser, base, realData);

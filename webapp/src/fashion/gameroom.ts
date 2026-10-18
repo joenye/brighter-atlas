@@ -9,7 +9,8 @@
 import {at} from './data.js';
 import * as THREE from '../../vendor/three.module.js';
 import {WorldScene} from '../viewers/world/scene.js';
-import {GameFrame, type GameActorSource, type GameRoomSource} from '../viewers/world/game-frame.js';
+import {GameFrame, type GameActorSource, type GameBatchSource, type GameRoomSource} from '../viewers/world/game-frame.js';
+import {edgedWaterPayload} from '../viewers/world/game-geometry.js';
 import {WorldEffectsLayer} from '../viewers/world/effects-layer.js';
 import {drawGroups} from '../viewers/world/draw-order.js';
 import {Rig, ClipSampler} from '../viewers/rig.js';
@@ -47,7 +48,8 @@ const FAR = 360 * 1024;
  *  box is a multiple of the next ring's square, so the rings meet without gaps. A bed stretched under all
  *  of it, a little lower, closes any hairline crack. The room becomes an island. */
 const SEA_RINGS: [number, [number, number]][] = [[1, [-8, 32]], [2, [-24, 48]], [4, [-56, 80]], [8, [-128, 160]], [16, [-256, 288]], [32, [-384, 416]]];
-function extendSea(source: GameRoomSource, [w, h]: number[], T: number, given?: [number, number]): GameRoomSource {
+/** (exported for its test) */
+export function extendSea(source: GameRoomSource, [w, h]: number[], T: number, given?: [number, number]): GameRoomSource {
   const tileOf = (m: THREE.Matrix4) => [Math.floor(m.elements[12] / T), Math.floor(m.elements[13] / T)];
   const wet = new Set<string>();
   for (const b of source.batches) if (b.water?.kind === 'surface') for (const m of b.matrices) wet.add(tileOf(m).join(','));
@@ -66,28 +68,42 @@ function extendSea(source: GameRoomSource, [w, h]: number[], T: number, given?: 
       if (!(x + k > inner[0] && x < inner[2] && y + k > inner[1] && y < inner[3])) pieces.push([x, y, k, k]);
     inner = [lo, lo, hi, hi];
   }
+  // (and the room's own tiles that hold nothing, neither ground nor water: the sea runs through them too, as a view
+  // turned toward them would otherwise look through to the sky)
+  const filled = new Set<string>();
+  for (const b of source.batches) if (b.category === 'terrain') for (const m of b.matrices) filled.add(tileOf(m).join(','));
+  for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) if (!filled.has(`${x},${y}`)) pieces.push([x, y, 1, 1]);
   const [f0, f1] = SEA_RINGS[SEA_RINGS.length - 1][1];
   const toOrigin = new THREE.Matrix4().makeTranslation(-(tx + 0.5) * T, -(ty + 0.5) * T, 0);
   const lay = (x: number, y: number, sx: number, sy: number, z = 0) => new THREE.Matrix4().makeTranslation((x + sx / 2) * T, (y + sy / 2) * T, z)
     .multiply(new THREE.Matrix4().makeScale(sx, sy, 1)).multiply(toOrigin);
-  const lays = pieces.map(([x, y, sx, sy]) => lay(x, y, sx, sy));
+  const lays = pieces.map(([x, y, sx, sy]) => lay(x, y, sx, sy)), sizes = pieces.map(([, , sx]) => sx);
   const under = lay(f0, f0, f1 - f0, f1 - f0, -48);
+  // (the water's larger pieces each take the tile made again with as many vertices along each edge as their smaller
+  // neighbours have (edgedWaterPayload): its waves then meet theirs at every edge, no slit of sky between)
+  const extra: GameBatchSource[] = [];
   const batches = source.batches.map(b => {
     if (b.category !== 'terrain' || b.water?.kind === 'curtain') return b;   // (a shoreline's curtain stays at the shore)
     const add = {matrices: [] as THREE.Matrix4[], tints: [] as any[], recolours: [] as any[], order: [] as any[]};
+    const bySize = new Map<number, typeof add>();
     b.matrices.forEach((m, i) => {
       const [x, y] = tileOf(m);
       if (x !== tx || y !== ty) return;
-      for (const l of b.water ? lays : [...lays, under]) {
-        add.matrices.push(l.clone().multiply(m));
-        add.tints.push(b.tints[i]); add.recolours.push(b.recolours?.[i] ?? null); add.order.push(b.order?.[i]);
-      }
+      (b.water ? lays : [...lays, under]).forEach((l, k) => {
+        const size = b.water ? sizes[k] : 1;
+        let to = add;
+        if (size > 1) { to = bySize.get(size)!; if (!to) bySize.set(size, to = {matrices: [], tints: [], recolours: [], order: []}); }
+        to.matrices.push(l.clone().multiply(m));
+        to.tints.push(b.tints[i]); to.recolours.push(b.recolours?.[i] ?? null); to.order.push(b.order?.[i]);
+      });
     });
+    for (const [size, to] of bySize) extra.push({...b, payload: edgedWaterPayload(b.payload, 2 * size), matrices: to.matrices, tints: to.tints,
+      recolours: b.recolours ? to.recolours : undefined, order: b.order ? to.order : undefined});
     if (!add.matrices.length) return b;
     return {...b, matrices: [...b.matrices, ...add.matrices], tints: [...b.tints, ...add.tints],
       recolours: b.recolours ? [...b.recolours, ...add.recolours] : undefined, order: b.order ? [...b.order, ...add.order] : undefined};
   });
-  return {...source, batches};
+  return {...source, batches: [...batches, ...extra]};
 }
 
 /** Thrown out of a load its caller has given up on (another place picked meanwhile). */

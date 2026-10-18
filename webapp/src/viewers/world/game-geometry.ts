@@ -95,6 +95,49 @@ function decodeMeshNow(payload: any): DecodedMesh {
   };
 }
 
+/** A water surface's flat tile mesh made again with `segments` vertices' spacing along each edge, fanned from its middle:
+ *  a tile set down stretched `segments / 2` times (a sea laid out in ever larger pieces) then meets its neighbours
+ *  vertex for vertex along every edge, as the game's own tiles do (half a tile apart), so the waves the water's
+ *  program raises lift both sides of an edge alike and leave no slit. Texture coordinates, normal and tangent as the
+ *  tile's own (they are the same everywhere on it). */
+const edgedWater = new WeakMap<object, Map<number, any>>();
+export function edgedWaterPayload(payload: any, segments: number): any {
+  let byCount = edgedWater.get(payload);
+  if (!byCount) edgedWater.set(payload, byCount = new Map());
+  const had = byCount.get(segments);
+  if (had) return had;
+  const m = decodeMesh(payload), p = m.positions, uv = m.uvs, n = m.count;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z = 0;
+  for (let v = 0; v < n; v++) { x0 = Math.min(x0, p[v * 3]); x1 = Math.max(x1, p[v * 3]); y0 = Math.min(y0, p[v * 3 + 1]); y1 = Math.max(y1, p[v * 3 + 1]); z += p[v * 3 + 2] / n; }
+  // (the tile's texture coordinates are affine in x and y: taken from three of its corners' vertices)
+  const at = (x: number, y: number) => { let best = 0, d = Infinity; for (let v = 0; v < n; v++) { const e = Math.hypot(p[v * 3] - x, p[v * 3 + 1] - y); if (e < d) { d = e; best = v; } } return best; };
+  const a = at(x0, y0), b = at(x1, y0), c = at(x0, y1);
+  const uvAt = (x: number, y: number, k: number) => { const u = (x - x0) / (x1 - x0 || 1), w = (y - y0) / (y1 - y0 || 1); return uv[a * 2 + k] + (uv[b * 2 + k] - uv[a * 2 + k]) * u + (uv[c * 2 + k] - uv[a * 2 + k]) * w; };
+  const ring: [number, number][] = [];
+  for (let i = 0; i < segments; i++) ring.push([x0 + (x1 - x0) * i / segments, y0]);
+  for (let i = 0; i < segments; i++) ring.push([x1, y0 + (y1 - y0) * i / segments]);
+  for (let i = 0; i < segments; i++) ring.push([x1 - (x1 - x0) * i / segments, y1]);
+  for (let i = 0; i < segments; i++) ring.push([x0, y1 - (y1 - y0) * i / segments]);
+  const pts: [number, number][] = [[(x0 + x1) / 2, (y0 + y1) / 2], ...ring], count = pts.length;
+  const positions = new Float32Array(count * 3), normals = new Float32Array(count * 3), uvs = new Float32Array(count * 2), tangents = m.tangents ? new Float32Array(count * 4) : null;
+  pts.forEach(([x, y], v) => {
+    positions.set([x, y, z], v * 3); normals.set(m.normals.subarray(0, 3), v * 3); uvs.set([uvAt(x, y, 0), uvAt(x, y, 1)], v * 2);
+    if (tangents) tangents.set(m.tangents!.subarray(0, 4), v * 4);
+  });
+  // (wound as the tile's own first triangle is: its normal the same side)
+  const [i0, i1, i2] = [m.source[0], m.source[1], m.source[2]];
+  const cross = (p[i1 * 3] - p[i0 * 3]) * (p[i2 * 3 + 1] - p[i0 * 3 + 1]) - (p[i1 * 3 + 1] - p[i0 * 3 + 1]) * (p[i2 * 3] - p[i0 * 3]);
+  const indices = new (count > 65535 ? Uint32Array : Uint16Array)(ring.length * 3);
+  for (let i = 0; i < ring.length; i++) {
+    const j = 1 + i, k = 1 + (i + 1) % ring.length;
+    indices.set(cross >= 0 ? [0, j, k] : [0, k, j], i * 3);
+  }
+  const out = { ...payload, positions, normals, uvs, tangents, aux_normals: undefined, indices, idx_dtype: count > 65535 ? 'u32' : 'u16',
+    bone_indices: undefined, bone_weights: undefined };
+  byCount.set(segments, out);
+  return out;
+}
+
 /** A skinned mesh posed once on the CPU by a bone palette (row-major 3x4 per bone, the placement
  *  included): its positions, normals and tangents in the frame the palette poses into, ready to bake as
  *  a static part (indices and texture coordinates kept; no bones). */
