@@ -1197,6 +1197,7 @@ export class Preview {
       if (this.rig) { this.gameBuilds++; await g.setActors(dressed, this.rig).finally(() => this.gameBuilds--); }
       if (this.roomId !== room.id || this.game) { g.dispose(); this.renderer.resetState(); return; }
       this.game = g;
+      void g.afterShown();
       this.setLook(g.look);
       this.roomGroup.add(g.fxRoot);
       this.placeRoom(0);

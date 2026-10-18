@@ -145,8 +145,10 @@ export class GameRoom {
     // stretch of the progress
     const mc = (index.columns.placement as string[]).indexOf('mesh'), meshes = new Set<number>();
     for (const sh of [shard, ...props]) for (const rows of Object.values(sh?.placements ?? {}) as any[][]) for (const r of rows) if (r[mc] >= 0) meshes.add(r[mc]);
-    for (const p of [scene.crab, ...(scene.bather?.parts ?? []), ...(scene.birds?.parts ?? []),
-      ...(scene.flocks ?? []).flatMap((f: any) => f.parts ?? []), ...(scene.figures ?? []).flatMap((f: any) => f.parts ?? [])]) if (p) meshes.add(p.mesh);
+    // (the creatures set down once the place shows are fetched then: `later`)
+    const later = (fg: any) => !!fg.reveal || (Array.isArray(fg.place) && Math.hypot(fg.place[0], fg.place[1]) > 8);
+    const first = (scene.figures ?? []).filter((fg: any) => !later(fg));
+    for (const p of [scene.crab, ...(scene.bather?.parts ?? []), ...(scene.birds?.parts ?? []), ...first.flatMap((f: any) => f.parts ?? [])]) if (p) meshes.add(p.mesh);
     // (all of them in one file where the export made one: each mesh's own file is then never asked for)
     try {
       const r = await fetch(gf(`meshes/${id}.set`));
@@ -207,6 +209,11 @@ export class GameRoom {
     await g.addProps(scene.props ?? []);
     g.addShells(scene.shells ?? []);
     g.addLights(scene.lights ?? []);
+    // (the scene's creatures' rigs and clips fetched meanwhile, all at once: they are set down after the draws)
+    const actors = [scene.crab, scene.bather?.parts?.[0], scene.birds?.parts?.[0], ...first.map((f: any) => f.parts?.[0])].filter(Boolean);
+    const clips = [scene.crab?.walk, scene.crab?.idle, ...(scene.crab?.fidgets ?? []), scene.bather?.clip, scene.birds?.clip, ...first.map((f: any) => f.clip)].filter((c: any) => c != null);
+    for (const a of actors) getJson(meshUrl(a.mesh)).then((p: any) => p?.skel != null && getJson(at(`skel/${p.skel}`))).catch(() => null);
+    for (const c of clips) getJson(at(`clip/${c}`)).catch(() => null);
     // the frame's draws (their programs and textures fetched as each is built): the second stretch
     const f = g.frame as any, build = f.buildDraw.bind(f), groups = drawGroups(source.batches).length;
     let built = 0;
@@ -219,11 +226,17 @@ export class GameRoom {
     };
     try { await g.frame.setRoom(source); } catch (e) { g.dispose(); throw e; } finally { f.buildDraw = build; }
     if (opts.cancelled?.()) { g.dispose(); throw new LoadCancelled(); }
-    if (scene.crab) await g.addCrab(scene.crab).catch(e => console.warn('crab', e));
-    if (scene.bather) await g.addBather(scene.bather).catch(e => console.warn('bather', e));
-    if (scene.birds) await g.addBirds(scene.birds).catch(e => console.warn('birds', e));
-    for (const fl of scene.flocks ?? []) await g.addBirds(fl).catch(e => console.warn('flock', e));
-    for (const fg of scene.figures ?? []) await g.addFigure(fg).catch(e => console.warn('figure', e));
+    // (the scene's creatures set down together: each waits on its programs compiling, and the waits overlap. Those
+    // nobody sees as the place first shows, far back in it, overhead, or there only once the view comes round, are
+    // set down just after it shows: the place is not kept waiting for them)
+    await Promise.all([
+      scene.crab && g.addCrab(scene.crab).catch(e => console.warn('crab', e)),
+      scene.bather && g.addBather(scene.bather).catch(e => console.warn('bather', e)),
+      scene.birds && g.addBirds(scene.birds).catch(e => console.warn('birds', e)),
+      ...first.map((fg: any) => g.addFigure(fg).catch(e => console.warn('figure', e)))]);
+    g.afterShown = () => g.settling = Promise.all([
+      ...(scene.flocks ?? []).map((fl: any) => g.addBirds(fl).catch(e => console.warn('flock', e))),
+      ...(scene.figures ?? []).filter(later).map((fg: any) => g.addFigure(fg).catch(e => console.warn('figure', e)))]);
     // the room's ambient particles (the waves on the shore among them)
     const doc = await getJson(gf(`effects/${id}.json${DATA}`)).catch(() => null);
     if (doc?.systems?.length) {
@@ -447,9 +460,15 @@ export class GameRoom {
   private extras: {actor: SceneActor, draws: any[]}[] = [];
   private extraBuffers: WebGLBuffer[] = [];
   private get extraDraws() { return this.extras.flatMap(e => e.draws); }
+  private adding = 0;
+  /** What the place sets down once it shows (the caller starts it), and its progress (the character's parts wait for
+   *  it: the buffers each makes are collected one set at a time). */
+  afterShown: () => Promise<unknown> = async () => {};
+  private settling: Promise<unknown> | null = null;
   private async addActor(actor: SceneActor, parts: {mesh: number, material: number, renderTexture: number, recolours: number[][] | null}[], bones: number) {
     const f = this.frame as any, draws: any[] = [];
-    f.gl.collect = this.extraBuffers;
+    // (actors are set down together: the buffers they make collected until the last of them is done)
+    this.adding++; f.gl.collect = this.extraBuffers;
     try {
       for (const p of parts) {
         const payload = await getJson(meshUrl(p.mesh)).catch(() => null);
@@ -459,7 +478,7 @@ export class GameRoom {
           recolours: p.recolours, palette: () => actor.ready ? actor.palette.subarray(0) : null}).catch(() => null);
         if (d) { d.scene = 0; draws.push(d); }
       }
-    } finally { f.gl.collect = null; }
+    } finally { if (--this.adding === 0) f.gl.collect = null; }
     this.extras.push({actor, draws});
     f.actorDraws = [...draws, ...f.actorDraws];
   }
@@ -529,6 +548,7 @@ export class GameRoom {
   /** The character's parts as the frame's actors (their programs by material row), posed by `rig`. */
   async setActors(parts: DrawPart[], rig: Rig) {
     const gen = ++this.actorGen;
+    if (this.settling) await this.settling;
     const bones = rig.bones.length;
     if (this.palette.length !== bones * 12) this.palette = new Float32Array(bones * 12);
     const f = this.frame as any;
@@ -546,10 +566,9 @@ export class GameRoom {
     const buffers: WebGLBuffer[] = [], draws: any[] = [];
     f.gl.collect = buffers;
     try {
-      for (const a of actors) {
-        const d = await f.buildActorDraw(a).catch((e: any) => { console.warn('actor part skipped', a.mesh, a.material, e); return null; });
-        if (d) { d.scene = 0; draws.push(d); }
-      }
+      // (all the parts at once, kept in their order: each waits on its programs compiling, and the waits overlap)
+      const built = await Promise.all(actors.map(a => f.buildActorDraw(a).catch((e: any) => { console.warn('actor part skipped', a.mesh, a.material, e); return null; })));
+      for (const d of built) if (d) { d.scene = 0; draws.push(d); }
     } finally { f.gl.collect = null; }
     if (gen !== this.actorGen) { f.freeDraws(draws, buffers); return; }
     const extra = this.extraDraws;
