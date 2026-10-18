@@ -696,3 +696,8 @@ img.rendered { background: radial-gradient(circle at 50% 48%, rgba(176, 192, 218
 
 /* Share open: its button pressed as the toolbar's others are (the accent gives way to the lit glass) */
 .of-toolbar .btn-mini.of-primary.active, .of-toolbar .btn-mini.of-primary.active:hover { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .42); color: #fff; }
+/* the nameplate's settings (a section after the lighting): its name and numbers, faction and guild pills */
+.of-bgpop .np-field { display: block; padding: 0 0 .25rem; }
+.of-bgpop .np-field .lk-name { display: block; width: calc(100% - 1.25rem); box-sizing: border-box; margin: 0 .625rem; }
+.of-bgpop .np-field .lk-name:disabled, .of-bgpop .np-chips button:disabled { opacity: .45; cursor: default; }
+.of-bgpop .np-chips { padding: .125rem .625rem .5rem; }

@@ -24,6 +24,7 @@ export function report(what: string, e?: unknown) {
 }
 // (the game's renderer is a chunk of its own, fetched when a place drawn by the game is picked)
 import type {GameRoom} from './gameroom.js';
+import {NameplateLayer, plateUnit, type Nameplate} from './nameplate.js';
 
 const loader = new THREE.TextureLoader();
 const meshCache = new Map<number, Promise<any>>();
@@ -562,6 +563,7 @@ export class Preview {
     if (this.game) { this.game.fxRoot.removeFromParent(); this.game.dispose(); this.game = null; }
     this.effectAnim?.dispose(); this.effectAnim = null;
     this.scene.traverse(o => { const m = (o as THREE.Mesh).material; if (m) for (const x of Array.isArray(m) ? m : [m]) x.dispose(); });
+    this.plate.dispose();
     this.renderer.dispose(); this.renderer.forceContextLoss();
   }
   // the resting clip hides held items by scaling their bones to 0.001; show them in hand instead
@@ -1301,14 +1303,15 @@ export class Preview {
       const r0 = this.rig.roots[0], lift = this.inPlaceShift && r0 ? Math.max(0, r0.position.z - this.rig.rest[this.rig.bones.indexOf(r0)].pos.z) * 0.6 : 0;
       this.liftOff += (lift - this.liftOff) * k; f.y += this.liftOff;
     }
-    this.camera.position.set(f.x + Math.sin(a) * d, f.y + lift, f.z + Math.cos(a) * d);
+    const room = this.plateRoom(f, k);   // (the nameplate's room over the head: the view drawn back, the feet kept)
+    this.camera.position.set(f.x + Math.sin(a) * d * room, f.y + lift * room, f.z + Math.cos(a) * d * room);
     this.camera.lookAt(f);
     this.camera.updateMatrixWorld();
     this.placeRoom(a);
     this.lights.rotation.y = this.roomPlace ? a : 0;
     this.tickEffects(this.paused ? 0 : dt * 1000);
     const r = this.renderer;
-    if (this.game && this.roomPlace && this.rig) { this.gameFrame(this.paused ? 0 : dt * 1000, f); return; }
+    if (this.game && this.roomPlace && this.rig) { this.gameFrame(this.paused ? 0 : dt * 1000, f); this.drawPlate(); return; }
     if (this.gameBuilds) r.resetState();
     r.clear();
     if (this.ghost && this.active.size) {
@@ -1327,6 +1330,61 @@ export class Preview {
     }
     if (this.sun.castShadow) this.fitShadow();
     r.render(this.scene, this.camera);
+    this.drawPlate();
+  }
+
+  // ---- the nameplate: the label the game draws over a player, over the frame drawn (nameplate.ts) ----
+  private plate = new NameplateLayer();
+  private plateTop: number | null = null;   // how far the top of the figure stands above its head bone
+  private plateRoomNow = 1;
+  /** How much of the view's height to keep clear over the label (the page's buttons over the view's top, on a phone). */
+  plateClear = 0.02;
+  private plateAt = new THREE.Vector3(); private plateBox = new THREE.Box3(); private platePart = new THREE.Box3();
+  /** Show the nameplate (null or off: none). */
+  setNameplate(p: Nameplate | null) { this.plate.set(p); this.plateTop = null; }
+  private plateShown() { return this.plate.shown && !!this.rig && !this.designing && !this.ghost; }
+  // where it stands: over the head, at the top of the figure (what is held left out), as the frame poses it
+  private plateAnchor(): THREE.Vector3 {
+    const head = this.rig!.bones[HEAD_BONE];
+    head.updateWorldMatrix(true, false);
+    const at = this.plateAt.setFromMatrixPosition(head.matrixWorld);
+    return at.setY(at.y + (this.plateTop ?? 260));
+  }
+  // the figure's top above its head bone, from the parts' skinned bounds (worked out again every few frames)
+  private measurePlateTop() {
+    if (this.plateTop != null && this.frameNo % 8) return;
+    const box = this.plateBox.makeEmpty();
+    for (const [key, m] of this.active) {
+      if (/\/(h|prop)\d+(-cover)?$/.test(key)) continue;
+      const sk = m as unknown as THREE.SkinnedMesh;
+      if (sk.isSkinnedMesh) { sk.computeBoundingBox(); box.union(this.platePart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
+    }
+    if (box.isEmpty()) return;
+    const head = this.rig!.bones[HEAD_BONE];
+    this.plateTop = box.max.y - this.plateAt.setFromMatrixPosition(head.matrixWorld).y;
+  }
+  /** One label unit as a share of the view's height. */
+  private plateUnit() { return plateUnit(this.dist, FRAMES.full.dist, this.baseFov); }
+  // The full-figure framing (or one further back) drawn back far enough for the label to show over the head, the feet
+  // where they were; eased as the framing eases. The distance the view is drawn back by (1: not at all).
+  private plateRoom(f: THREE.Vector3, ease: number) {
+    let want = 1;
+    if (this.plateShown() && this.want.dist >= FRAMES.full.dist * 0.7) {
+      const t = Math.tan(this.baseFov * Math.PI / 360), bottom = f.y - this.dist * t, top = this.plateAnchor().y;
+      // (the label's height grows with the distance, as it keeps its size on screen)
+      const per = this.plate.units * this.plateUnit() * 2 * t;
+      want = Math.max(1, (top - bottom) / (this.dist * (2 * t * (1 - this.plateClear) - per)));
+      if (!Number.isFinite(want) || want > 3) want = 1;
+    }
+    this.plateRoomNow += (want - this.plateRoomNow) * ease;
+    if (Math.abs(this.plateRoomNow - want) < 1e-4) this.plateRoomNow = want;
+    f.y += this.dist * Math.tan(this.baseFov * Math.PI / 360) * (this.plateRoomNow - 1);
+    return this.plateRoomNow;
+  }
+  private drawPlate() {
+    if (!this.plateShown()) return;
+    this.measurePlateTop();
+    this.plate.draw(this.renderer, this.camera, this.plateAnchor(), this.plateUnit());
   }
 
   // The shadow map fitted as the game fits its own (docs: the frame's shadow pass): to the part of the scene the

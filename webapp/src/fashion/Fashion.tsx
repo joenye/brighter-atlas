@@ -15,6 +15,7 @@ import {gifHead, gifJoin, gifPalette} from '../viewers/gif-encoder.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose, withShot, lookShot, type Shot} from './look-code.js';
 import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
+import {NAMEPLATE_DEFAULTS, PLATE_FACTIONS, PLATE_GUILDS, NAME_MAX, LEVEL_MAX, TAG_MAX, plateName, readNameplate, type Nameplate} from './nameplate.js';
 import {attachTurning} from './turning.js';
 import {el, makeResizable} from '../ui.js';
 import {rem} from '../ui-scale.js';
@@ -46,6 +47,11 @@ interface RandomSettings { faction: Faction | 'Guard' | 'all'; allowEmpty: boole
 const RANDOM_DEFAULTS: RandomSettings = {faction: 'all', allowEmpty: true, dyes: true, weapons: true};
 // how the plain view is drawn (Settings, Lighting), kept on this device
 const loadRendering = (): Rendering => { try { const v = JSON.parse(store.get('rendering') ?? 'null'); return v && typeof v === 'object' ? {...RENDERING_DEFAULTS, ...v} : {...RENDERING_DEFAULTS}; } catch { return {...RENDERING_DEFAULTS}; } };
+// the nameplate over the character (Settings, Nameplate), kept on this device and not part of the look; a picture
+// page draws one only when its address names it (?nameplate=<the setting as JSON>)
+const loadNameplate = (): Nameplate => {
+  try { return readNameplate(JSON.parse((PICTURE ? new URLSearchParams(location.search).get('nameplate') : store.get('nameplate')) ?? 'null')); } catch { return {...NAMEPLATE_DEFAULTS}; }
+};
 const loadRandom = (): RandomSettings => { try { const v = JSON.parse(store.get('random') ?? 'null'); return v && typeof v === 'object' ? {...RANDOM_DEFAULTS, ...v} : {...RANDOM_DEFAULTS}; } catch { return {...RANDOM_DEFAULTS}; } };
 const FLOORS = [['ring', 'Ring and shadow'], ['shadow', 'Shadow only'], ['none', 'None']] as const;
 type Floor = typeof FLOORS[number][0];
@@ -467,6 +473,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // (a picture for a short link is always drawn the game's way)
   const [rend, setRendState] = useState<Rendering>(() => PICTURE ? {...RENDERING_DEFAULTS} : loadRendering());
   const setRend = (next: Rendering) => { setRendState(next); store.set('rendering', JSON.stringify(next)); engine.current?.viewer.setRendering(next); };
+  const [plate, setPlateState] = useState<Nameplate>(loadNameplate);
+  const setPlate = (next: Nameplate) => { setPlateState(next); store.set('nameplate', JSON.stringify(next)); engine.current?.viewer.setNameplate(next); };
 
   // ---- the engine: the character's view, the designer's, the item thumbnails and the wardrobe ----
   const slots = useMemo(() => [...pack.slotOrder.filter((s: string) => (EQUIP_SLOTS as readonly string[]).includes(s)), 'cape', 'weapon'] as EquipSlot[], [pack]);
@@ -550,6 +558,9 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       if (!PICTURE) void viewer.setFlourishes(pack.flourishes, pack.flourishWait);
       setFloor(floor);
       viewer.setRendering(rend);
+      // (on a phone the view's buttons stand over its top: the label kept below them)
+      viewer.plateClear = phone() ? 0.14 : 0.02;
+      viewer.setNameplate(plate);
       // (a place waits for the character: its files would otherwise share a slow connection with the character's, and
       // a phone would show nothing for twice as long; the place fills in behind the character, its card showing)
       const opening = live.current.backdrop, remember = !(opening.room && opening.id === addressLook().place);
@@ -1242,6 +1253,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     <div ref={els.bgPop} className="of-bgpop" role="menu"
       // the menu by keyboard: ↑ ↓ move, Esc closes the settings back to their button
       onKeyDown={e => {
+        // (a field being typed in keeps its own keys, Escape aside)
+        if ((e.target as HTMLElement).matches?.('input[type=text], input[type=number]') && e.key !== 'Escape') return;
         const items = ([...els.bgPop.current!.querySelectorAll('summary, button:not(:disabled)')] as HTMLElement[]).filter(n => n.offsetParent !== null), at = items.indexOf(document.activeElement as HTMLElement);
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus(); }
         else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setBgMode(false); els.bgBtn.current?.focus(); }
@@ -1300,6 +1313,32 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         ))}
         <button type="button" className="rs-reset" onClick={() => setRend({...RENDERING_DEFAULTS})}>Reset to the game’s</button>
       </details>
+      <details className="of-bgsec" data-sec="nameplate">
+        <summary><Icon name="person" />Nameplate</summary>
+        <div className="rs-checks">
+          <label className="of-check rs-check" title="The label the game shows over a player’s head: name, faction and combat level"><input type="checkbox" checked={plate.on} onChange={e => setPlate({...plate, on: e.target.checked})} /><span>Show a nameplate</span></label>
+        </div>
+        <label className="np-field"><span className="rs-label">Name</span>
+          <input type="text" className="lk-name" value={plate.name} maxLength={NAME_MAX} spellCheck={false} autoComplete="off" disabled={!plate.on} onChange={e => setPlate({...plate, name: plateName(e.target.value)})} /></label>
+        <div className="rs-label">Faction</div>
+        <div className="chips np-chips" role="group" aria-label="Faction">
+          {PLATE_FACTIONS.map(([k, label]) => <button key={k} type="button" disabled={!plate.on} className={plate.faction === k ? 'on' : undefined} aria-pressed={plate.faction === k} onClick={() => setPlate({...plate, faction: k})}>{label}</button>)}
+        </div>
+        <label className="np-field"><span className="rs-label">Combat level</span>
+          <input type="number" className="lk-name" min={0} max={LEVEL_MAX} step={1} value={plate.level} disabled={!plate.on}
+            onChange={e => { const v = Math.round(Number(e.target.value)); if (Number.isFinite(v)) setPlate({...plate, level: Math.max(0, Math.min(LEVEL_MAX, v))}); }} /></label>
+        <div className="rs-label">Guild</div>
+        <div className="chips np-chips" role="group" aria-label="Guild">
+          {PLATE_GUILDS.map(([k, label, hint]) => <button key={k} type="button" title={hint} disabled={!plate.on} className={plate.guild === k ? 'on' : undefined} aria-pressed={plate.guild === k} onClick={() => setPlate({...plate, guild: k})}>{label}</button>)}
+        </div>
+        <label className="np-field" title="A free account’s name carries a number after it, in grey"><span className="rs-label">Free account number</span>
+          <input type="number" className="lk-name" min={1} max={TAG_MAX} step={1} placeholder="None (a member)" value={plate.tag ?? ''} disabled={!plate.on}
+            onChange={e => { const v = Math.round(Number(e.target.value)); setPlate({...plate, tag: e.target.value === '' || !(v >= 1) ? null : Math.min(TAG_MAX, v)}); }} /></label>
+        <div className="rs-checks">
+          <label className="of-check rs-check" title="The laurel wreath some players wear over their name"><input type="checkbox" checked={plate.wreath} disabled={!plate.on} onChange={e => setPlate({...plate, wreath: e.target.checked})} /><span>Laurel wreath</span></label>
+        </div>
+        <button type="button" className="rs-reset" disabled={!plate.on} onClick={() => setPlate({...NAMEPLATE_DEFAULTS, on: true})}>Reset the nameplate</button>
+      </details>
     </div>
   );
   // the column of buttons on the view, from the top: what the drawer shows (the character's design, the equipment),
@@ -1308,7 +1347,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const combatTip = designing || !state.equip.weapon ? (showHeld ? 'Fists up, in the combat-ready stance, as the game does with no weapon. Click to stand at rest' : 'At rest. Click to put your fists up, in the combat-ready stance, as the game does with no weapon')
     : showHeld ? 'Weapons out, in the combat-ready stance. Click to put them away, as the game shows you out of combat' : 'Weapons away. Click to take them out, in the combat-ready stance';
   const TIPS = {character: 'Design your face, body and hair', equipment: 'What your character wears', effect: 'Show or hide the particle effect this outfit gives off',
-    animations: "Play the game's emotes and other animations on your character", settings: 'Background, ground, the random outfit and rendering',
+    animations: "Play the game's emotes and other animations on your character", settings: 'Background, ground, the random outfit, rendering and the nameplate',
     looks: 'Save this look, wear a saved one, share a link', download: 'A picture, GIF or video of your look'};
   const controls = (
     <div className="of-controls" style={columnBottom ? {bottom: columnBottom} : undefined}>
