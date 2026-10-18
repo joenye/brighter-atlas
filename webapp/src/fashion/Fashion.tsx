@@ -1351,7 +1351,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
         <div className="rs-checks">
           <label className="of-check rs-check" title="The laurel wreath some players wear over their name"><input type="checkbox" checked={plate.wreath} disabled={!plate.on} onChange={e => setPlate({...plate, wreath: e.target.checked})} /><span>Laurel wreath</span></label>
         </div>
-        <label className="rd-range" title="The label’s size against the character (100%: as the game shows it close up)">
+        <label className="rd-range" title="The label’s size against the character">
           <span className="rs-label">Size <b>{Math.round(plate.scale * 100)}%</b></span>
           <input type="range" min={SCALE_MIN * 100} max={SCALE_MAX * 100} step={5} value={Math.round(plate.scale * 100)} disabled={!plate.on} aria-label="Nameplate size"
             onChange={e => setPlate({...plate, scale: Number(e.target.value) / 100})} />
