@@ -24,7 +24,7 @@ export function report(what: string, e?: unknown) {
 }
 // (the game's renderer is a chunk of its own, fetched when a place drawn by the game is picked)
 import type {GameRoom} from './gameroom.js';
-import {plateUnit, type Nameplate} from './nameplate.js';
+import {plateUnit, isHeadPart, type Nameplate} from './nameplate.js';
 import type {NameplateLayer} from './nameplate-layer.js';
 
 const loader = new THREE.TextureLoader();
@@ -1447,7 +1447,7 @@ export class Preview {
     if (this.plateTop != null && this.frameNo % 8) return;
     const box = this.plateBox.makeEmpty();
     for (const [key, m] of this.active) {
-      if (!/\/(face|jaw|hair)$/.test(key)) continue;
+      if (!isHeadPart(key)) continue;
       const sk = m as unknown as THREE.SkinnedMesh;
       if (sk.isSkinnedMesh) { sk.computeBoundingBox(); box.union(this.platePart.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
     }

@@ -48,3 +48,6 @@ const OWN_SIZE = 0.65;
 export function plateUnit(dist: number, fovDeg: number, scale = 1) {
   return scale * OWN_SIZE * LABEL_UNIT / (2 * dist * Math.tan(fovDeg * Math.PI / 360));
 }
+/** The parts the label stands on: the head's own (a part's key ends in its tag), never what is worn or held on it nor
+ *  the rest of the body (headgear that hides the whole head would otherwise bring the label down to the shoulders). */
+export const isHeadPart = (key: string) => /\/(face|jaw|hair)$/.test(key);

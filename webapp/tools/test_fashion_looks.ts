@@ -72,6 +72,10 @@ try {
   ok(N.plateName(`${crown}Ged\u{1F600}`) === `${crown}Ged`, 'a name keeps the crown and drops other pictures');
   ok(N.crowned('Ged', true) === `${crown} Ged` && N.crowned(`${crown} Ged`, false) === 'Ged' && N.crowned(`${crown}Ged`, false) === 'Ged', 'the crown on and off');
   ok(Math.abs(N.plateUnit(2000, 18) / N.plateUnit(4000, 18) - 2) < 1e-9 && Math.abs(N.plateUnit(2000, 18, 0.5) / N.plateUnit(2000, 18) - 0.5) < 1e-9, 'the label keeps its size against the character');
+  // the nameplate stands on the head's own parts only: headgear hiding the whole head left the torso the highest part
+  // (18-Oct-2026), and the label stood on the shoulders
+  ok(['1/2/a/b/face', '3/null/a/b/jaw', '4/5/a/b/hair'].every(N.isHeadPart) && !['1/2/a/b/torso', '6/7/a/b/w123', '8/9/a/b/h45', '1/2/a/b/legs', '1/2/a/b/prop0'].some(N.isHeadPart),
+    'the nameplate measures the head alone');
   // a visitor who has picked nothing starts in Halloween; the places are listed first
   ok(L.B.DEFAULT_BACKDROP.id === 'graveyard' && !!L.B.DEFAULT_BACKDROP.room, 'the default background is Halloween');
   console.log(`fashion looks: ${checks} checks passed`);
