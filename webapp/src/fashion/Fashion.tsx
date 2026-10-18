@@ -308,6 +308,9 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   const actorsReady = useRef<Promise<unknown>>(Promise.resolve());   // (an animation's other figures, built)
   const [roomLoading, setRoomLoading] = useState(false);
   const [placeLoad, setPlaceLoad] = useState<{name: string, progress: number | null} | null>(null);
+  // a place whose view turns: whether it is turned from the place's own view (the way back shows), and the hint the
+  // first such place gives once on this device
+  const [placeTurns, setPlaceTurns] = useState(false), [viewTurned, setViewTurned] = useState(false), [viewHint, setViewHint] = useState(false);
   const [toastMsg, setToastMsg] = useState<{text: string, n: number} | null>(null);
   const [looks, setLooks] = useState<SavedLook[]>(loadLooks);
   // (the looks: a drawer of the side panel, as the animations are, in the equipment's place)
@@ -465,7 +468,7 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     const e = engine.current; if (!e) return;
     history.replaceState(null, '', addressOf(encode(model.state), b));
     const done = () => { if (live.current.backdrop === b) { live.current.roomLoading = false; setRoomLoading(false); } };
-    live.current.roomLoading = !!b.room; setRoomLoading(!!b.room); setPlaceLoad(b.room ? {name: b.name, progress: null} : null);
+    live.current.roomLoading = !!b.room; setRoomLoading(!!b.room); setPlaceLoad(b.room ? {name: b.name, progress: null} : null); setPlaceTurns(false);
     void e.viewer.setRoom(b.room ?? null).then(done, () => { done(); toast(`${b.name} couldn’t be loaded`); setBackdrop(BACKDROPS[0]); });
   }, []);
   const addressOf = (code: string, b: Backdrop = live.current.backdrop) => `#${code}${b.room ? '.' + b.id : ''}`;
@@ -514,7 +517,14 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       const next = {loading: !!n, first: p.first && !(!n && viewer.drawn)};
       live.current.parts = next; return next;
     });
-    viewer.onRoomProgress = f => { if (live.current.roomLoading) setPlaceLoad(pl => pl && {...pl, progress: f}); };
+    viewer.onRoomProgress = f => {
+      if (live.current.roomLoading) setPlaceLoad(pl => pl && {...pl, progress: f});
+      if (f >= 1 && viewer.viewReach) {
+        setPlaceTurns(true);
+        if (!store.get('viewHint')) { store.set('viewHint', '1'); setViewHint(true); setTimeout(() => setViewHint(false), 7000); }
+      }
+    };
+    viewer.onViewTurned = setViewTurned;
     attachTurning(els.canvas.current!, viewer, () => { setCurrentFrame(''); live.current.currentFrame = ''; });
     // the wardrobe's header: its title, Random and Unequip all (the way into face and body is the column's Character)
     const wardHeader = el('div', {class: 'of-wardhead'},
@@ -1389,9 +1399,13 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
     <div id="fashion" className={`fashion${PICTURE ? ' picture' : ''}${bgMode ? ' bg-mode' : ''}${animMode ? ' anim-mode' : ''}${looksOpen ? ' looks-mode' : ''}${recView ? ' record-mode' : ''}${shareOpen ? ' share-mode' : ''}${panelCollapsed ? ' panel-collapsed' : ''}${designing ? ` designing${isPhone ? ' design-sheet' : ''}` : ''}`}>
       <main ref={els.main} onScroll={e => { const m = e.currentTarget; if (m.scrollTop) m.scrollTop = 0; }}>
         <section ref={els.viewer} className={`of-viewer${recView ? ' rec' : ''}`} style={{background: viewBg, height: viewerHeight}} data-loading={parts.loading ? '1' : ''}>
-          <canvas ref={els.canvas} className={opened ? undefined : 'wait'} tabIndex={0} aria-label="Your character. Drag to turn, scroll or pinch to zoom, arrow keys turn."
-            onDoubleClick={() => { const v = engine.current!.viewer; v.yaw = 0; v.yawVel = 0; v.frameTo(frameOf('full')); setCurrentFrame('full'); }}
-            onKeyDown={e => { const v = engine.current!.viewer; if (e.key === 'ArrowLeft') v.yawVel += 1.6; else if (e.key === 'ArrowRight') v.yawVel -= 1.6; }} />
+          <canvas ref={els.canvas} className={opened ? undefined : 'wait'} tabIndex={0}
+            aria-label={`Your character. Drag to turn, scroll or pinch to zoom, arrow keys turn.${placeTurns ? ' Drag the place around them, or Shift and the arrow keys, to look around it.' : ''}`}
+            onDoubleClick={() => { const v = engine.current!.viewer; v.viewTurn = 0; v.yaw = 0; v.yawVel = 0; v.viewVel = 0; v.frameTo(frameOf('full')); setCurrentFrame('full'); }}
+            onKeyDown={e => { const v = engine.current!.viewer, k = e.shiftKey && v.viewReach ? 'viewVel' : 'yawVel'; if (e.key === 'ArrowLeft') v[k] += 1.6; else if (e.key === 'ArrowRight') v[k] -= 1.6; }} />
+          {/* the way back to the place's own view, while it is turned */}
+          {placeTurns && viewTurned && !recView && <button type="button" className="btn of-viewback" onClick={() => engine.current!.viewer.resetView()}><Icon name="reset" />Back to the view</button>}
+          {placeTurns && viewHint && !viewTurned && !recView && <div className="of-viewhint" role="status">Drag your character to turn them. Drag the place around them to look around.</div>}
           {recView && <RecordOverlay crop={crop} size={[outW, outH]} mark={!recLook.transparent} view={viewSize} setCrop={c => setRec({shape: 'free', crop: c})} />}
           {/* a place loading: a ring that fills (spins while the load cannot say how far it is); it never takes a tap */}
           <div className={`of-placeload load-card${placeShown && placeLoad!.progress == null ? ' spin' : ''}`} hidden={!placeShown} role="status"

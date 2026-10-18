@@ -489,6 +489,9 @@ const HEAD_BONE = 6;
 const FOOT_LIFT = 8;
 // the lens over a place drawn by the game (degrees, vertical)
 const GAME_FOV = 16;
+// (the view turned round a place: the camera comes in close with a wider lens, the character kept its size, so what
+// the place set between its own far camera and the character stands behind the camera)
+const TURN_FOV = 45;
 
 // A box's corners, and the box cut by a frustum: every face clipped by every plane (Sutherland-Hodgman), the
 // vertices of the solid they share (the view is always outside the figure's box here, so no frustum corner falls
@@ -780,6 +783,49 @@ export class Preview {
 
   // ease to a heading (radians)
   turnTo(a: number) { this.yawGoal = a; }
+  // ---- the view turned about a place (the character keeps its own turn, `yaw`): drag the scene round it ----
+  /** How far the view has turned about the place from its own view (radians); `viewVel` its flick. */
+  viewTurn = 0; viewVel = 0;
+  private viewGoal: number | null = null;
+  /** Told when the view leaves the place's own view, or comes back to it. */
+  onViewTurned: (turned: boolean) => void = () => {};
+  private viewTurnedNow = false;
+  /** How far the view may turn about the place shown: radians either way, 'full' all round, 0 not at all. */
+  get viewReach(): number | 'full' { const t = this.roomPlace ? this.game?.look.turn : null; return t === 'full' ? 'full' : typeof t === 'number' ? t : 0; }
+  /** Turn the view about the place by `d` radians (the camera goes round the character and the place together). */
+  turnView(d: number) {
+    const r = this.viewReach;
+    if (!r) return;
+    const to = r === 'full' ? this.viewTurn + d : Math.max(-r, Math.min(r, this.viewTurn + d));
+    this.yaw += to - this.viewTurn; this.viewTurn = to;
+  }
+  /** Back to the place's own view, eased. */
+  resetView() { this.viewVel = 0; this.viewGoal = Math.round(this.viewTurn / (2 * Math.PI)) * 2 * Math.PI; }
+  /** Whether a point of the page (client pixels) is on the character, as drawn now (a little to spare). */
+  private charRect: {at: number, r: number[] | null} = {at: -1e9, r: null};
+  onCharacter(x: number, y: number) {
+    // (the outline worked out at most every 150 ms: a mouse asks at every move)
+    const now = performance.now();
+    if (now - this.charRect.at > 150) this.charRect = {at: now, r: this.characterRect()};
+    const r = this.charRect.r, pad = 12;
+    return !!r && x >= r[0] - pad && x <= r[1] + pad && y >= r[2] - pad && y <= r[3] + pad;
+  }
+  private characterRect(): number[] | null {
+    const box = new THREE.Box3(), part = new THREE.Box3();
+    for (const m of this.active.values()) {
+      const sk = m as unknown as THREE.SkinnedMesh;
+      if (sk.isSkinnedMesh) { sk.computeBoundingBox(); box.union(part.copy(sk.boundingBox!).applyMatrix4(m.matrixWorld)); }
+    }
+    if (box.isEmpty()) return null;
+    const r = this.canvas.getBoundingClientRect(), p = new THREE.Vector3();
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      p.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(this.camera);
+      const sx = r.left + (p.x + 1) / 2 * r.width, sy = r.top + (1 - p.y) / 2 * r.height;
+      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+    }
+    return [x0, x1, y0, y1];
+  }
   private yawGoal: number | null = null;
   frameTo(f: Framing, instant = false) { this.want = {...f}; if (instant) { this.dist = f.dist; this.target = f.target; } }
   zoomBy(factor: number) {
@@ -1156,7 +1202,7 @@ export class Preview {
       this.onRoomProgress(1);
       this.renderer.resetState();
       this.showFloor();
-      this.yaw = 0; this.yawGoal = null; this.yawVel = 0;
+      this.yaw = 0; this.yawGoal = null; this.yawVel = 0; this.viewTurn = 0; this.viewVel = 0; this.viewGoal = null;
       this.setWide(true);
       return;
     } catch (e) {
@@ -1166,18 +1212,14 @@ export class Preview {
       throw e;
     }
   }
-  // In a place the camera orbits by `yaw` and the room mostly turns with it, so the chosen view stays behind the
-  // character (a game's character screen) and the character turns: the view turns about the scene only as far as
-  // the place lets it (`look.turn`): radians either way, eased back as the camera goes on round to the character's
-  // back, or 'full', all the way round. `roomTurn` is how far the room has turned with the camera.
+  // In a place the camera orbits the character by `yaw` and the room turns with it, so the chosen view stays behind
+  // the character (a game's character screen) and the character turns; the view turns about the place by `viewTurn`
+  // (the camera and the character going round it together), as far as the place lets it (`look.turn`: radians either
+  // way, or 'full'). `roomTurn` is how far the room has turned with the camera.
   private roomPlace: {face: number, sx: number, sy: number, z: number} | null = null;
   // in a place the lights turn with the camera too, so the room stays lit the same way
   private lights = new THREE.Group();
   private roomTurn = 0;
-  private turnWithCamera(a: number) {
-    const t = this.game?.look.turn;
-    return !this.roomPlace ? 0 : t === 'full' ? 0 : typeof t === 'number' ? a - t * Math.sin(a) : a;
-  }
   private placeRoom(yaw: number) {
     const p = this.roomPlace; if (!p) return;
     this.roomGroup.matrix.makeRotationZ(p.face - yaw).multiply(new THREE.Matrix4().makeTranslation(-p.sx, -p.sy, -p.z - FOOT_LIFT));
@@ -1289,8 +1331,19 @@ export class Preview {
     // a flick coasts: gentle friction, then a quicker stop once it is slow
     this.yaw += this.yawVel * dt; this.yawVel *= Math.pow(Math.abs(this.yawVel) > 1.5 ? 0.35 : 0.05, dt);
     if (Math.abs(this.yawVel) < 0.02) this.yawVel = 0;
+    // (the view's own turn: a flick coasts as the character's does; back to the place's view eased)
+    if (this.viewGoal != null) { const step = (this.viewGoal - this.viewTurn) * (1 - Math.pow(0.004, dt)); this.turnView(step); if (Math.abs(this.viewGoal - this.viewTurn) < 0.002 || this.viewVel) this.viewGoal = null; }
+    if (this.viewVel) { this.turnView(this.viewVel * dt); this.viewVel *= Math.pow(Math.abs(this.viewVel) > 1.5 ? 0.35 : 0.05, dt); if (Math.abs(this.viewVel) < 0.02) this.viewVel = 0; }
+    if (!this.roomPlace) this.viewTurn = 0;
+    const turned = Math.abs(Math.atan2(Math.sin(this.viewTurn), Math.cos(this.viewTurn))) > 0.05;
+    if (turned !== this.viewTurnedNow) { this.viewTurnedNow = turned; this.onViewTurned(turned); }
     const k = 1 - Math.pow(0.0015, dt);
     this.dist += (this.want.dist - this.dist) * k; this.target += (this.want.target - this.target) * k;
+    if (this.roomPlace && this.game) {
+      const round = Math.abs(Math.atan2(Math.sin(this.viewTurn), Math.cos(this.viewTurn))), w0 = Math.max(0, Math.min(1, (round - 0.25) / 0.5)), w = w0 * w0 * (3 - 2 * w0);
+      const fov = GAME_FOV + (TURN_FOV - GAME_FOV) * w;
+      if (this.camera.fov !== fov) { this.camera.fov = fov; this.wide = Math.tan(this.baseFov * Math.PI / 360) / Math.tan(fov * Math.PI / 360); this.camera.updateProjectionMatrix(); }
+    }
     const a = this.yaw, d = this.dist * this.wide, lift = Math.sin(this.roomPlace ? (this.game ? this.gamePitch : this.roomPitch) : this.pitch) * d;   // a little more of the place's ground than sky
     // close framings follow the head: a combat stance crouches and leans it away from where it rests
     const f = this.focus.set(0, this.target, 0);
@@ -1315,7 +1368,7 @@ export class Preview {
     this.camera.position.set(f.x + Math.sin(a) * d * room, f.y + lift * room, f.z + Math.cos(a) * d * room);
     this.camera.lookAt(f);
     this.camera.updateMatrixWorld();
-    this.roomTurn = this.turnWithCamera(a);
+    this.roomTurn = this.roomPlace ? a - this.viewTurn : 0;
     this.placeRoom(this.roomTurn);
     this.lights.rotation.y = this.roomTurn;
     this.tickEffects(this.paused ? 0 : dt * 1000);
@@ -1468,11 +1521,7 @@ export class Preview {
     const size = r.getDrawingBufferSize(new THREE.Vector2());
     const eye = this.camera.position.clone().applyMatrix4(toRoom), target = focus.clone().applyMatrix4(toRoom);
     const up = new THREE.Vector3(0, 1, 0).transformDirection(toRoom);
-    // (turned well round from the place's own view, nothing nearer the camera than a little in front of the character
-    // is drawn: what the place set close beside the character would stand between them)
-    const round = Math.abs(Math.atan2(Math.sin(this.yaw - this.roomTurn), Math.cos(this.yaw - this.roomTurn)));
-    const w = Math.max(0, Math.min(1, (round - 0.4) / 0.6)), clear = w * w * (3 - 2 * w) * (eye.distanceTo(target) - 2.5 * 1024);
-    g.render({eye, target, up, fov: this.camera.fov, width: size.x, height: size.y, ...(clear > g.near ? {near: clear} : {})}, dtMs, this.roomPlace!.z, this.camera);
+    g.render({eye, target, up, fov: this.camera.fov, width: size.x, height: size.y}, dtMs, this.roomPlace!.z, this.camera);
     r.resetState();
     // the frame drew the character: three draws only what the frame does not (each part's own visibility back after:
     // an animation's props, or the weapons they stand in for, are hidden in turn)

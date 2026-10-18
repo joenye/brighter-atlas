@@ -549,7 +549,7 @@ export class GameRoom {
   }
 
   /** Draw the frame to the canvas (colour and depth), the camera in the room's frame. */
-  render(camera: {eye: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3, fov: number, width: number, height: number, near?: number}, dtMs: number, avatarZ: number, three: THREE.Camera) {
+  render(camera: {eye: THREE.Vector3, target: THREE.Vector3, up: THREE.Vector3, fov: number, width: number, height: number}, dtMs: number, avatarZ: number, three: THREE.Camera) {
     this.effects?.tick(dtMs, three);
     for (const e of this.extras) e.actor.step(dtMs, camera.eye);
     const ticks = this.effects ? this.effects.clock.t : (this.ticks += dtMs * 0.6);
