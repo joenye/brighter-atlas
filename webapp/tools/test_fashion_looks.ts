@@ -11,7 +11,7 @@ import { build } from 'esbuild';
 const tmp = await mkdtemp(path.join(os.tmpdir(), 'atlas-fashion-looks-'));
 try {
   const file = path.join(tmp, 'test.mjs');
-  await build({ stdin: { contents: "export * from './src/fashion/look-code.ts'; export * from './src/fashion/compose.ts'; export * as N from './src/fashion/nameplate.ts';", resolveDir: path.resolve(import.meta.dirname, '..') },
+  await build({ stdin: { contents: "export * from './src/fashion/look-code.ts'; export * from './src/fashion/compose.ts'; export * as N from './src/fashion/nameplate.ts'; export * as B from './src/fashion/backdrops.ts';", resolveDir: path.resolve(import.meta.dirname, '..') },
     bundle: true, platform: 'node', format: 'esm', outfile: file, logLevel: 'error' });
   const L = await import(pathToFileURL(file).href);
   (globalThis as any).atob ??= (s: string) => Buffer.from(s, 'base64').toString('binary');
@@ -72,6 +72,8 @@ try {
   ok(N.plateName(`${crown}Ged\u{1F600}`) === `${crown}Ged`, 'a name keeps the crown and drops other pictures');
   ok(N.crowned('Ged', true) === `${crown} Ged` && N.crowned(`${crown} Ged`, false) === 'Ged' && N.crowned(`${crown}Ged`, false) === 'Ged', 'the crown on and off');
   ok(Math.abs(N.plateUnit(2000, 18) / N.plateUnit(4000, 18) - 2) < 1e-9 && Math.abs(N.plateUnit(2000, 18, 0.5) / N.plateUnit(2000, 18) - 0.5) < 1e-9, 'the label keeps its size against the character');
+  // a visitor who has picked nothing starts in Halloween; the places are listed first
+  ok(L.B.DEFAULT_BACKDROP.id === 'graveyard' && !!L.B.DEFAULT_BACKDROP.room, 'the default background is Halloween');
   console.log(`fashion looks: ${checks} checks passed`);
 } finally {
   await rm(tmp, { recursive: true, force: true });

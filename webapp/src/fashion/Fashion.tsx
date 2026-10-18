@@ -13,7 +13,7 @@ import {Wardrobe, icon, forgetWardrobe, PATHS, FACTIONS, factionOf, takesDye, dy
 import {Mp4Writer, avcCodec} from './mp4-mux.js';
 import {gifHead, gifJoin, gifPalette} from '../viewers/gif-encoder.js';
 import {DEFAULT_LOOK, encodeLook, decodeLook, placeId, addressLook, withPose, lookPose, withShot, lookShot, type Shot} from './look-code.js';
-import {BACKDROPS, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
+import {BACKDROPS, DEFAULT_BACKDROP, cssOf, swatchOf, paintBackdrop, type Backdrop} from './backdrops.js';
 import {LookModel} from './look-model.js';
 import {NAMEPLATE_DEFAULTS, PLATE_FACTIONS, PLATE_GUILDS, NAME_MAX, LEVEL_MAX, TAG_MAX, SCALE_MIN, SCALE_MAX, CROWN, plateName, crowned, readNameplate, type Nameplate} from './nameplate.js';
 import {attachTurning} from './turning.js';
@@ -283,7 +283,8 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
   // (the picture of a shared moment: the view Share had, and the animation stopped where it was)
   const pictureShot = useMemo(() => PICTURE ? lookShot(addressLook().code) : null, []);
   const [showEffects, setShowEffects] = useState(store.get('fx') !== '0');
-  const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? BACKDROPS[0]);
+  // (a visitor who has picked nothing starts in the default place; a link's picture, on the plain colour)
+  const [backdrop, setBackdropState] = useState<Backdrop>(() => BACKDROPS.find(b => b.room && b.id === addressLook().place) ?? BACKDROPS.find(b => b.id === placeId(store.get('bg'))) ?? (PICTURE ? BACKDROPS[0] : DEFAULT_BACKDROP));
   const [floor, setFloorState] = useState<Floor>(PICTURE ? 'shadow' : (FLOORS.map(f => f[0]).find(m => m === store.get('floor')) ?? 'shadow'));   // (the shadow alone by default)
   const [panelCollapsed, setPanelCollapsedState] = useState(store.get('panel') === '1');
   const [bgMode, setBgModeState] = useState(false);
@@ -1273,10 +1274,10 @@ function Fashion({pack, active, ready}: ToolProps & {pack: any}) {
       {/* two sections, both folded at first, so their titles show at a glance */}
       <details className="of-bgsec" data-sec="background">
         <summary><Icon name="image" />Background</summary>
-        <div className="of-bghead">Colours</div>
-        {BACKDROPS.filter(b => !b.room).map(b => <BgItem key={b.id} b={b} on={backdrop.id === b.id} pick={() => setBackdrop(b)} />)}
         <div className="of-bghead">3D Scenes</div>
         {BACKDROPS.filter(b => b.room).map(b => <BgItem key={b.id} b={b} on={backdrop.id === b.id} pick={() => setBackdrop(b)} />)}
+        <div className="of-bghead">Colours</div>
+        {BACKDROPS.filter(b => !b.room).map(b => <BgItem key={b.id} b={b} on={backdrop.id === b.id} pick={() => setBackdrop(b)} />)}
         <div className="of-bghead">Ground</div>
         {FLOORS.map(([id, name]) => (
           // the disc under the character is for the colours: a place's floor takes the character's own shadow
@@ -1730,7 +1731,8 @@ function Drawer({className, label, children}: {className?: string, label: string
 }
 
 function BgItem({b, on, pick}: {b: Backdrop, on: boolean, pick: () => void}) {
-  return <button role="menuitemradio" aria-checked={on} data-bg={b.id} className={on ? 'on' : undefined} onClick={pick}><span className={`of-bgdot${b.room ? ' place' : ''}`} style={{background: swatchOf(b)}} />{b.name}</button>;
+  return <button role="menuitemradio" aria-checked={on} data-bg={b.id} className={on ? 'on' : undefined} onClick={pick}>
+    {b.icon ? <span className="of-bgdot place icon" style={{color: b.icon[1]}}><Icon name={b.icon[0]} /></span> : <span className={`of-bgdot${b.room ? ' place' : ''}`} style={{background: swatchOf(b)}} />}{b.name}</button>;
 }
 
 type Bubble = {x: number, y: number, text: string, n?: number};

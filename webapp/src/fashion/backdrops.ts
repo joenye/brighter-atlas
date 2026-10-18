@@ -1,7 +1,7 @@
 // What stands behind the character: a colour (a radial gradient, or nothing: transparent), or a place from the
 // game, drawn by its own programs (its view and what is in it come with the place's data). A place's sky is one
 // flat colour, the room's fog fading into it: its middle stop.
-export interface Backdrop { id: string; name: string; stops: string[]; room?: {id: number} }
+export interface Backdrop { id: string; name: string; stops: string[]; room?: {id: number}; /** a place's picker icon and its colour */ icon?: [string, string] }
 
 export const BACKDROPS: Backdrop[] = [
   {id: 'atlas', name: 'Atlas', stops: ['#1f2531', '#14171d', '#0d0f13']},
@@ -10,9 +10,11 @@ export const BACKDROPS: Backdrop[] = [
   {id: 'sand', name: 'Parchment', stops: ['#e8dcc0', '#bfae8a', '#8a7a5c']},
   {id: 'studio', name: 'Studio grey', stops: ['#8a8f99', '#5b6068', '#33363c']},
   {id: 'none', name: 'Transparent', stops: []},
-  {id: 'beach', name: 'Beach', stops: ['#2a3a48', '#18222c', '#0d1116'], room: {id: 8996}},
-  {id: 'graveyard', name: 'Halloween', stops: ['#1d3346', '#0f1c28', '#070d13'], room: {id: 1683}},
+  {id: 'graveyard', name: 'Halloween', stops: ['#1d3346', '#0f1c28', '#070d13'], room: {id: 1683}, icon: ['pumpkin', '#f0923a']},
+  {id: 'beach', name: 'Beach', stops: ['#2a3a48', '#18222c', '#0d1116'], room: {id: 8996}, icon: ['shell', '#ead7b3']},
 ];
+/** Where a visitor who has picked nothing starts. */
+export const DEFAULT_BACKDROP = BACKDROPS.find(b => b.id === 'graveyard')!;
 
 /** Its colours as a CSS background (transparent: the checkerboard): a menu's swatch. */
 export const swatchOf = (b: Backdrop) => b.stops.length ? `radial-gradient(ellipse at 50% 40%, ${b.stops[0]} 0%, ${b.stops[1]} 55%, ${b.stops[2]} 100%)`
