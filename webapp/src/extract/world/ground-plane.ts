@@ -10,7 +10,9 @@ import type { ConstructorRecord, FillRow } from './replay.js';
 import type { PoolNode } from './value-pool.js';
 import type { RoomOccurrence } from './room.js';
 
-const TYPE = { blocks: '3a66e596d656415a' };
+// Blocks had a type folder of their own until 21-Oct-2026; since then
+// blocks and models are one element record layout, filed under World objects.
+const TYPE = { blocks: '3a66e596d656415a', elements: '2f66fb89506f80c2' };
 /** The ground values that keep the episode's floor, or remove it. */
 const KEEP = '$no_override', REMOVE = '$remove_table';
 /** Constructor value holding a record's type. */
@@ -108,7 +110,8 @@ function commonOp(candidates: Map<number, Set<number>[]>): Record<number, number
  *  place; null when the data does not show one. */
 export function groundPlaneLayout(reg: Registry, symbols: string[], occurrences: Iterable<RoomOccurrence[]>): GroundPlaneLayout | null {
   const keep = symbols.indexOf(KEEP), remove = symbols.indexOf(REMOVE);
-  const types = typesWithId(reg.types, TYPE.blocks);
+  const own = typesWithId(reg.types, TYPE.blocks);
+  const types = own.length ? own : typesWithId(reg.types, TYPE.elements);
   if (keep < 0 || remove < 0 || types.length !== 1) return null;
   const blockTypes: [number, number] = [types[0], reg.types.ends[types[0]]];
   const isBlock = (slot: number) => {

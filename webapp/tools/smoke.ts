@@ -2038,6 +2038,9 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       // a room's individuals: the conditions the game draws them by, and its progress
       const individuals = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_individuals.ts')], { encoding: 'utf8', cwd: WEBAPP });
       ok(individuals.status === 0, `room individuals${individuals.status === 0 ? '' : `:\n    ${(individuals.stderr || individuals.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
+      // the type table and the owner header, before and after the 21-Oct-2026 format
+      const typeTable = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_type_table.ts')], { encoding: 'utf8', cwd: WEBAPP });
+      ok(typeTable.status === 0, `type table${typeTable.status === 0 ? '' : `:\n    ${(typeTable.stderr || typeTable.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
       // Brighter Fashion's looks: the codes, what drops out, the order pieces go on
       const looks = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_fashion_looks.ts')], { encoding: 'utf8', cwd: WEBAPP });
       ok(looks.status === 0, `fashion looks${looks.status === 0 ? '' : `:\n    ${(looks.stderr || looks.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);

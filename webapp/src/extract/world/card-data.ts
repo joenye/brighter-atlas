@@ -8,7 +8,8 @@
 //                 the second view's pan pair and zoom
 //   held class    typed values [mesh definition, material, tint, tint]
 //   mesh defs     kinds of record holding a mesh; their placement is the field
-//                 whose typed value carries the local matrix
+//                 whose typed value carries the local matrix (none from
+//                 21-Oct-2026)
 //   rigs          kinds of record holding a rig id and a role list; the focus
 //                 role is the role nearly every rig names
 //   appearance    the (kind, field) through which the most distinct records
@@ -32,7 +33,7 @@ export interface CardConstants {
   appearance: {runtime: number; rigField: number};
   rig: {idField: number; rolesField: number; focusRole: number};
   /** Mesh definition records and their placement value (the local matrix at
-   *  its field). */
+   *  its field; both -1 where mesh definitions carry none). */
   meshDefs: {runtimes: number[]; placementField: number; placementMatrix: number};
   /** Enemy definition records. */
   enemyDefs: number[];
@@ -120,8 +121,9 @@ export function deriveCardData(src: {
       n.fields.forEach((x: any, i: number) => { if (deref(x)?.tag === 0x30) tally(placement, `${op}:${i}`); });
     }
   }
-  const place = top(placement);
-  if (place === null) return null;
+  // (from 21-Oct-2026 mesh definitions carry no placement: earlier builds'
+  // were all the identity, so a part then has no local matrix)
+  const place = top(placement) ?? '-1:-1';
 
   // rig kinds: one record per kind is enough to tell
   const rigKinds = new Map<number, string>();

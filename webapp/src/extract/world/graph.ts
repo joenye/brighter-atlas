@@ -525,7 +525,8 @@ export class AssetGraph {
   // the owner data itself: a generated visual owner carries three consecutive
   // ops that are each a single positive tag-0x0A int (the cell dims),
   // IMMEDIATELY followed by a single tag-0x0B op, then a single tag-0x25
-  // six-float box, a header no other class reproduces. Vote the run start and
+  // six-float box, a header no other class reproduces (builds from
+  // 21-Oct-2026 drop the tag-0x0B op: the box follows the dims directly). Vote the run start and
   // the box op over a sample of owners matching that exact header and take the
   // modes. If too few match or the mode is not dominant, fall back to the
   // current-build positions (4/5/6, 8), so a supported build stays
@@ -566,18 +567,16 @@ export class AssetGraph {
       for (const e of row.g) if (e[1] === 0 && e[2] === 0) seenOps.add(e[0]);
       if (seenOps.size < 5) continue;
       const fields = this._scanFields(row.slot);
-      let start = -1;
+      let start = -1, box = -1;
       for (const s of Array.from(fields.keys()).sort((a, b) => a - b)) {
-        if (isPositiveInt(fields, s) && isPositiveInt(fields, s + 1)
-          && isPositiveInt(fields, s + 2) && isTag0B(fields, s + 3) && isBox6(fields, s + 4)) {
-          start = s;
-          break;
-        }
+        if (!isPositiveInt(fields, s) || !isPositiveInt(fields, s + 1) || !isPositiveInt(fields, s + 2)) continue;
+        if (isTag0B(fields, s + 3) && isBox6(fields, s + 4)) { start = s; box = s + 4; break; }
+        if (isBox6(fields, s + 3)) { start = s; box = s + 3; break; }
       }
       if (start < 0) continue;
       voters++;
       dimsVotes.set(start, (dimsVotes.get(start) || 0) + 1);
-      boundsVotes.set(start + 4, (boundsVotes.get(start + 4) || 0) + 1);
+      boundsVotes.set(box, (boundsVotes.get(box) || 0) + 1);
     }
     const mode = (m: Map<number, number>): [number, number] | null => {
       let best: [number, number] | null = null;

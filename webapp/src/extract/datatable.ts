@@ -101,16 +101,21 @@ function parseSymbols(u8: Uint8Array, off: number): { symbols: string[]; end: nu
   return { symbols, end: i };
 }
 
-// Region 4 is {u8 tag 0x00, varint count, count x {varint, u64 BE}}. Content not
-// needed here (the viewer keys assets off content hashes), but it must be walked
-// exactly to find where region 5 starts.
+// Region 4 is {u8 tag 0x00, varint count, count x {varint, u64 BE}}; builds
+// from 21-Oct-2026 drop the tag (a count never starts with a 0x00 byte). It
+// must be walked exactly to find where region 5 starts.
 // Record types: per type, its descendant count (its subtree is the types
-// [i, i + count]) and an 8-byte id that stays the same from build to build.
+// [i, i + count]) and an 8-byte id that stays the same from build to build,
+// apart from its top two bits: earlier builds set bit 62 on about half the
+// ids, 21-Oct-2026 on none, so ids compare without them (typesWithId).
 export interface TypeTable { ends: Int32Array; ids: Uint8Array }
+/** The bits of an id's first byte that name the type. */
+const ID_BITS = 0x3f;
 
-function parseTypes(u8: Uint8Array, off: number): { types: TypeTable; end: number } {
-  if (u8[off] !== 0x00) throw new Error(`ab0: hash table tag ${u8[off]} != 0`);
-  let [n, i] = readVarint(u8, off + 1);
+/** Exported for tests. */
+export function parseTypes(u8: Uint8Array, off: number): { types: TypeTable; end: number } {
+  let [n, i] = readVarint(u8, u8[off] === 0x00 ? off + 1 : off);
+  if (n < 1000) throw new Error(`ab0: type table of ${n} entries`);
   if (i + 9 * n > u8.length) throw new Error('ab0: hash table overruns file');
   const ends = new Int32Array(n), ids = new Uint8Array(8 * n);
   for (let k = 0; k < n; k++) {
@@ -124,14 +129,15 @@ function parseTypes(u8: Uint8Array, off: number): { types: TypeTable; end: numbe
   return { types: { ends, ids }, end: i };
 }
 
-/** Type indices with this id (16 hex digits). */
+/** Type indices with this id (16 hex digits; the top two bits are ignored). */
 export function typesWithId(t: TypeTable, hex: string): number[] {
   const want = new Uint8Array(8);
   for (let k = 0; k < 8; k++) want[k] = parseInt(hex.slice(2 * k, 2 * k + 2), 16);
+  want[0] &= ID_BITS;
   const out: number[] = [];
   for (let i = 0; i < t.ends.length; i++) {
-    let k = 0;
-    while (k < 8 && t.ids[8 * i + k] === want[k]) k++;
+    let k = (t.ids[8 * i] & ID_BITS) === want[0] ? 1 : 0;
+    while (k && k < 8 && t.ids[8 * i + k] === want[k]) k++;
     if (k === 8) out.push(i);
   }
   return out;
