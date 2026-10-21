@@ -2041,6 +2041,9 @@ async function realSuite(browser: any, base: string, dataDir: string) {
       // the type table and the owner header, before and after the 21-Oct-2026 format
       const typeTable = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_type_table.ts')], { encoding: 'utf8', cwd: WEBAPP });
       ok(typeTable.status === 0, `type table${typeTable.status === 0 ? '' : `:\n    ${(typeTable.stderr || typeTable.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
+      // the version diff counts images the game re-encoded as unchanged
+      const reencoded = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_diff_reencoded.ts')], { encoding: 'utf8', cwd: WEBAPP });
+      ok(reencoded.status === 0, `diff re-encoded images${reencoded.status === 0 ? '' : `:\n    ${(reencoded.stderr || reencoded.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);
       // Brighter Fashion's looks: the codes, what drops out, the order pieces go on
       const looks = spawnSync(process.execPath, [path.join(WEBAPP, 'tools', 'test_fashion_looks.ts')], { encoding: 'utf8', cwd: WEBAPP });
       ok(looks.status === 0, `fashion looks${looks.status === 0 ? '' : `:\n    ${(looks.stderr || looks.stdout).trim().split('\n').slice(0, 8).join('\n    ')}`}`);

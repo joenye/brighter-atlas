@@ -50,6 +50,48 @@ export interface IndexDiff {
   moved: { a: IndexEntry; b: IndexEntry }[];
   unchanged: number;
   changed: ChangedPair[];
+  /** Of `unchanged`, images whose bytes changed but not their picture (sameImages). */
+  reencoded?: number;
+}
+
+// Images the game re-encoded without changing them: an added and a removed
+// image with the same category and sizes whose pixel fingerprints (`px`, 8x8
+// RGB averages of the albedo plane's smallest level, extract/jobs.ts) differ
+// by at most PX_MEAN on average and PX_MAX anywhere. Each added image takes
+// its closest unclaimed match. -> [added, removed] pairs.
+const PX_MEAN = 3, PX_MAX = 24;
+function sameImages(added: IndexEntry[], removed: IndexEntry[]): [IndexEntry, IndexEntry][] {
+  const shape = (e: IndexEntry) => `${e.cat}:${(e.entries || []).map((x: any) => `${x.w}x${x.h}${x.fmt}`).join(',')}`;
+  const bytes = (px: string) => Uint8Array.from(atob(px), (c) => c.charCodeAt(0));
+  const mean = (b: Uint8Array) => { let t = 0; for (const v of b) t += v; return t / b.length; };
+  const groups = new Map<string, { e: IndexEntry; b: Uint8Array; m: number; used: boolean }[]>();
+  for (const e of removed) {
+    if (typeof e.px !== 'string') continue;
+    const b = bytes(e.px);
+    const k = shape(e);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push({ e, b, m: mean(b), used: false });
+  }
+  const pairs: [IndexEntry, IndexEntry][] = [];
+  for (const e of added) {
+    if (typeof e.px !== 'string') continue;
+    const list = groups.get(shape(e));
+    if (!list) continue;
+    const b = bytes(e.px), m = mean(b);
+    let best: (typeof list)[number] | null = null, bestMean = Infinity;
+    for (const c of list) {
+      // the means differ by no more than the mean difference: a cheap first gate
+      if (c.used || Math.abs(c.m - m) > PX_MEAN || c.b.length !== b.length) continue;
+      let sum = 0, max = 0;
+      for (let k = 0; k < b.length && max <= PX_MAX; k++) {
+        const d = Math.abs(b[k] - c.b[k]);
+        sum += d; if (d > max) max = d;
+      }
+      if (max <= PX_MAX && sum / b.length <= PX_MEAN && sum / b.length < bestMean) { best = c; bestMean = sum / b.length; }
+    }
+    if (best) { best.used = true; pairs.push([e, best.e]); }
+  }
+  return pairs;
 }
 
 function countMap(idx: IndexEntry[]): Map<string, { count: number; entries: IndexEntry[] }> {
@@ -98,7 +140,8 @@ const PAIR_KEYS: Record<string, { key: (e: any) => string; confidence: string }>
 export function diffIndexes(idxA: IndexEntry[] | null | undefined, idxB: IndexEntry[] | null | undefined, cat: string): IndexDiff {
   const A = countMap(idxA || []);
   const B = countMap(idxB || []);
-  const added: IndexEntry[] = [], removed: IndexEntry[] = [], moved: { a: IndexEntry; b: IndexEntry }[] = [];
+  let added: IndexEntry[] = [], removed: IndexEntry[] = [];
+  const moved: { a: IndexEntry; b: IndexEntry }[] = [];
   let unchanged = 0;
 
   for (const [h, b] of B) {
@@ -116,6 +159,19 @@ export function diffIndexes(idxA: IndexEntry[] | null | undefined, idxB: IndexEn
     const b = B.get(h);
     const extra = a.count - (b?.count || 0);
     for (let k = 0; k < Math.max(0, extra); k++) removed.push(a.entries[a.entries.length - 1 - k]);
+  }
+
+  // images the game re-encoded: the same picture, unchanged
+  let reencoded = 0;
+  if (cat === 'images' && added.length && removed.length) {
+    const pairs = sameImages(added, removed);
+    if (pairs.length) {
+      const a = new Set(pairs.map((p) => p[0])), r = new Set(pairs.map((p) => p[1]));
+      added = added.filter((e) => !a.has(e));
+      removed = removed.filter((e) => !r.has(e));
+      reencoded = pairs.length;
+      unchanged += reencoded;
+    }
   }
 
   // heuristic changed-pairing over the add/remove sets
@@ -140,6 +196,7 @@ export function diffIndexes(idxA: IndexEntry[] | null | undefined, idxB: IndexEn
     added: added.filter((e) => !pairedB.has(e)),
     removed: removed.filter((e) => !pairedA.has(e)),
     moved, unchanged, changed,
+    ...(reencoded ? { reencoded } : {}),
   };
 }
 

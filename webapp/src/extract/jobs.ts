@@ -15,10 +15,53 @@ import {
   type ImageMeta,
 } from './image.js';
 import {
-  resolveRoles, resolveSpriteMeta, type TextureRoles, type SpriteMeta,
+  resolveRoles, resolveSpriteMeta, detectChains, type TextureRoles, type SpriteMeta,
 } from '../texture-roles.js';
 import { classifyWaterRgba } from '../water-metrics.js';
 import { encodePng, SERVED_PNG_LEVEL, DECODED_CACHE, DECODED_CACHE_MAX_BYTES } from './png.js';
+
+// An image's pixel fingerprint (`px`): its albedo plane's (else its first
+// plane's) smallest level averaged to 8x8 RGB (weighed by alpha), base64. Content hashes change whenever the game
+// re-encodes a picture it did not change (21-Oct-2026 re-encoded nearly every
+// texture); the version diff (diff.ts) counts an added and a removed image
+// with the same sizes and practically the same fingerprint as the same picture.
+const PRINT = 8;
+export function pixelPrint(
+  entries: { fmt: string; w: number; h: number }[], decoded: { tail: Uint8Array; subs: Uint8Array[] },
+): string | null {
+  try {
+    // (the albedo plane; a picture without a colour plane, a one or two channel sprite: its first)
+    const roles = resolveRoles({ entries });
+    const chains = detectChains(entries);
+    let k = roles.albedo ?? 0;
+    entries.forEach((e, j) => {
+      if (chains[j] === chains[k] && e.fmt === entries[k].fmt && e.w * e.h < entries[k].w * entries[k].h && e.w >= PRINT && e.h >= PRINT) k = j;
+    });
+    const { w, h, rgba } = decodeSubImage(parseImageMeta(decoded.tail)[k], decoded.subs[k]);
+    const out = new Uint8Array(PRINT * PRINT * 3);
+    for (let y = 0; y < PRINT; y++) {
+      for (let x = 0; x < PRINT; x++) {
+        const x0 = Math.floor((x * w) / PRINT), x1 = Math.floor(((x + 1) * w) / PRINT);
+        const y0 = Math.floor((y * h) / PRINT), y1 = Math.floor(((y + 1) * h) / PRINT);
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let yy = y0; yy < y1; yy++) {
+          for (let xx = x0; xx < x1; xx++) {
+            // (colour under transparent pixels is what an encoder may change freely: weighed by alpha)
+            const o = 4 * (yy * w + xx), a = rgba[o + 3] / 255;
+            r += rgba[o] * a; g += rgba[o + 1] * a; b += rgba[o + 2] * a; n++;
+          }
+        }
+        const o = 3 * (y * PRINT + x);
+        out[o] = Math.round(r / n); out[o + 1] = Math.round(g / n); out[o + 2] = Math.round(b / n);
+      }
+    }
+    let bin = '';
+    for (const v of out) bin += String.fromCharCode(v);
+    return btoa(bin);
+  } catch {
+    return null;
+  }
+}
 
 // ---- worldtex cache pre-warm ------------------------------------------------
 // During world extraction the albedo/normal/parameter pixels are already
@@ -122,7 +165,8 @@ export const INDEX_JOBS: Record<string,
       else if (cat === 'font') f = decodeFontGlyphs(decoded.subs[0], parseDatafileRecords(decoded.subs[0], extra.n)).map((g) => p(g.e));
       else if (entries.length) f = entries.map((_, k) => p(k));
     } catch (err) { ferr = `images[${i}] f-list: ${err.message}`; }
-    return { i, n: nSub, cat, entries, f, h, ...(ferr ? { ferr } : {}) };
+    const px = entries.length ? pixelPrint(entries, decoded) : null;
+    return { i, n: nSub, cat, entries, f, h, ...(px ? { px } : {}), ...(ferr ? { ferr } : {}) };
   },
 
   // World texture render metadata for one referenced AB3 container: material
