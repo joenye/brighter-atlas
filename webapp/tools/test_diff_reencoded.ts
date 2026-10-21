@@ -25,6 +25,19 @@ try {
  // each added image takes one removed image at most
  const two=diffIndexes([image(0,'a',px(ramp))],[image(0,'A',px(ramp)),image(1,'A2',px(noisy))],'images');
  assert.equal(two.reencoded,1); assert.equal(two.added.length,1);
+ // the same picture with a plane more (a material given a lighting map): one image changed
+ const planes=(i:number,h:string,n:number)=>({i,h,cat:'material',n,px:px(ramp),entries:Array.from({length:n},()=>({fmt:'BC1',w:64,h:64}))});
+ const repack=diffIndexes([planes(0,'p',6)],[planes(0,'P',9)],'images');
+ assert.equal(repack.reencoded,undefined); assert.equal(repack.changed.length,1); assert.equal(repack.added.length+repack.removed.length,0);
+ // rooms and models read a re-encoded picture as the one it was
+ const imagesA=[image(5,'old',px(ramp))], imagesB=[image(7,'new',px(noisy))];
+ const ctx={aliases:diffIndexes(imagesA,imagesB,'images').aliases,imagesA,imagesB,meshesA:[],meshesB:[]};
+ const room=(h:string,t:number)=>({i:0,h,name:'Square',size:[4,4],textures:[t]});
+ const rooms=diffIndexes([room('r1',5)],[room('r2',7)],'world',ctx);
+ assert.equal(rooms.reencoded,1); assert.equal(rooms.changed.length,0);
+ const model=(h:string,image:string)=>({i:-1,h,name:'Bear',skel:'s',parts:[{mesh_hash:'m',image_hash:image}]});
+ const models=diffIndexes([model('a','old')],[model('b','new')],'models',ctx);
+ assert.equal(models.reencoded,1); assert.equal(models.added.length+models.removed.length+models.changed.length,0);
  // other categories never match by fingerprint
  assert.equal(diffIndexes(before,after,'meshes').reencoded,undefined);
  console.log('diff re-encoded: ok');

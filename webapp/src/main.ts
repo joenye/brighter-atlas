@@ -8,7 +8,7 @@ import { createStore } from './client-store.js';
 import { animClass } from './anim-class.js';
 import { mountOnboarding } from './onboard.js';
 import { derivedGet, getVersion } from './storage.js';
-import { diffIndexes } from './diff.js';
+import { diffIndexes, reencodeContext } from './diff.js';
 import { VList } from './virtual-list.js';
 import { GlobalSearch } from './search.js';
 import { el, clear, append, badge, kvTable, fmtInt, fmtDur, fmtBytes, fmtNum, debounce, placeholderCard, idLabel, makeResizable, versionLabel, platformIcon, plainLabel, openModal } from './ui.js';
@@ -889,7 +889,13 @@ export class App {
         const hOf = (e: any) => (modelH ? modelH.get(e.id) : e.h);
         const items = modelIdx || this.items;
         if (baseIdx?.length && items.some((e: any) => e.h)) {
-          const d = diffIndexes(baseIdx, items, cat);
+          // (rooms and models see past pictures the game re-encoded without changing them)
+          const ctx = cat === 'world' || cat === 'models'
+            ? reencodeContext(...await Promise.all([derivedGet(baseId, 'index:meshes'), derivedGet(this.store.versionId, 'index:meshes'),
+              derivedGet(baseId, 'index:images'), derivedGet(this.store.versionId, 'index:images')])
+              .then((l) => l.map((x: any) => x?.filter(Boolean))) as [any, any, any, any])
+            : null;
+          const d = diffIndexes(baseIdx, items, cat, ctx);
           const addedH = new Set(d.added.map((e) => e.h));
           const changedH = new Set(d.changed.map((c) => c.active.h));
           const movedH = new Set(d.moved.map((m) => m.b.h));

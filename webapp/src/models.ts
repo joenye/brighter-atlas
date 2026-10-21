@@ -11,6 +11,7 @@
 
 import { userdataGet, userdataPut } from './storage.js';
 import { hashText } from './extract/hash.js';
+import { modelDiffSignature } from './model-signature.js';
 
 // one drawable part of a Variant (system-catalog terminology)
 export interface ModelPart {
@@ -114,22 +115,12 @@ export function modelCount(): number { return Object.keys(cur.models).length; }
 // USER models never get one. They live outside any version (see the header),
 // so both sides of a comparison hold the same set and "added" is meaningless.
 export function systemModelDiffHash(model: ModelRecord | null | undefined): string | null {
-  if (!model) return null;
-  // One variant's drawable identity: its (mesh, texture) pairs. The texture
-  // belongs in the key because a retexture is one of the commonest things a
-  // game update does to a model, and a mesh-only key would call it unchanged.
-  // Sorted but NOT de-duplicated: a part that appears twice is not the same
-  // model as a part that appears once.
-  const signature = (parts: unknown): string | null => {
-    const pairs: string[] = [];
-    for (const part of Array.isArray(parts) ? parts : []) {
-      const mesh = (part as ModelPart)?.mesh_hash;
-      if (typeof mesh !== 'string' || !mesh) continue;
-      const image = (part as ModelPart)?.image_hash;
-      pairs.push(`${mesh}>${typeof image === 'string' ? image : ''}`);
-    }
-    return pairs.length ? pairs.sort().join(',') : null;
-  };
+  // (model-signature.ts) One variant's drawable identity: its (mesh, texture)
+  // pairs. The texture belongs in the key because a retexture is one of the
+  // commonest things a game update does to a model, and a mesh-only key would
+  // call it unchanged. Sorted but NOT de-duplicated: a part that appears twice
+  // is not the same model as a part that appears once.
+  //
   // Variants are kept apart rather than merged into one pool, so losing a
   // colour variant stays visible. A model's own `parts` is its first variant's,
   // so only a catalog carrying no variants at all needs the fallback.
@@ -140,13 +131,8 @@ export function systemModelDiffHash(model: ModelRecord | null | undefined): stri
   // not changed at all. Counting those repeats would turn OUR merge decision
   // into a content difference: measured across one update it invented four
   // changes, and dropping them lost none of the real ones.
-  const variants = modelVariants(model);
-  const signatures = [...new Set(
-    (variants.length ? variants.map((v) => signature(v?.parts)) : [signature(model.parts)])
-      .filter((s): s is string => !!s),
-  )].sort();
-  if (!signatures.length) return null;
-  return hashText(JSON.stringify({ skel: model.skel || null, variants: signatures }));
+  const signature = modelDiffSignature(model);
+  return signature === null ? null : hashText(signature);
 }
 
 // System models are supplied by the active version's static catalog; user

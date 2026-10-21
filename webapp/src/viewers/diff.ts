@@ -6,7 +6,7 @@
 import { el, clear, fmtInt, badge, idLabel, versionDateLabel, versionLabel } from '../ui.js';
 import { gameVersion } from '../game-build.js';
 import { getVersion, derivedGet } from '../storage.js';
-import { diffBundles, diffVersions, diffRoomPair } from '../diff.js';
+import { diffBundles, diffVersions, diffRoomPair, reencodeContext } from '../diff.js';
 import { effectiveName, setLocalName } from '../names.js';
 import { systemModelDiffHash } from '../models.js';
 import { carryOverride } from '../texmap.js';
@@ -230,9 +230,11 @@ function roomChangeButton(baseId: string, activeId: string, pair: ChangedPair): 
         derivedGet(baseId, 'index:meshes'), derivedGet(activeId, 'index:meshes'),
         derivedGet(baseId, 'index:images'), derivedGet(activeId, 'index:images'),
       ]);
+      const ctx = reencodeContext(meshesA?.filter(Boolean), meshesB?.filter(Boolean),
+        imagesA?.filter(Boolean), imagesB?.filter(Boolean));
       const d = diffRoomPair(pair.base, pair.active, {
         meshesA: meshesA?.filter(Boolean), meshesB: meshesB?.filter(Boolean),
-        imagesA: imagesA?.filter(Boolean), imagesB: imagesB?.filter(Boolean),
+        imagesA: imagesA?.filter(Boolean), imagesB: imagesB?.filter(Boolean), aliases: ctx?.aliases,
       });
       const fmt = (v: any) => (Array.isArray(v) ? v.join('×') : v === null ? '-' : String(v));
       for (const f of d.fields) {
