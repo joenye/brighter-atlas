@@ -23,7 +23,8 @@ export function navigate(to: string, { replace = false }: { replace?: boolean } 
   dispatchEvent(new Event(EVENT));
 }
 
-const subscribe = (fn: () => void) => {
+/** Calls `fn` on every move of the address (a tool opened, back, forward); returns its undoing. */
+export const subscribe = (fn: () => void) => {
   addEventListener('popstate', fn); addEventListener(EVENT, fn);
   return () => { removeEventListener('popstate', fn); removeEventListener(EVENT, fn); };
 };
