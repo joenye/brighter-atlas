@@ -1,7 +1,7 @@
 // Minimal static file server (used by smoke.ts / e2e.ts; production serving is
 // any static host, e.g. `python3 -m http.server 8321` from webapp/).
 import http from 'node:http';
-import { LEGACY, toolAt } from '../src/app/paths.ts';
+import { ADVENTURE_PATH, LEGACY, toolAt } from '../src/app/paths.ts';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -45,7 +45,9 @@ export function serve(root: string, port = 0): Promise<{ server: http.Server; po
       // the site's one page at each tool's path and at the tools' old addresses (the page itself moves the
       // address on, app/router.ts settleAddress), as the site's edge does. No redirect: one that lands on
       // the same page with another hash leaves the browser's navigation hanging.
-      let rel = path.normalize(urlPath).replace(/^([/\\])+/, '');
+      // (a game page of its own, as the edge has it: the bare address its index.html, the folder's on to the bare one)
+      if (urlPath === `${ADVENTURE_PATH}/`) { res.writeHead(301, { location: ADVENTURE_PATH + url.search }); res.end(); return; }
+      let rel = path.normalize(urlPath === ADVENTURE_PATH ? `${urlPath}/index.html` : urlPath).replace(/^([/\\])+/, '');
       if (rel === '' || rel === '.' || toolAt(urlPath) || LEGACY[urlPath]) rel = 'index.html';
       let data: Buffer | null = null;
       let file = '';

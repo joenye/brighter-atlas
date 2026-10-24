@@ -68,6 +68,11 @@ game is served; widening that is the maintainer's decision.
   content fingerprint, `tools/test_satellite.ts`). The world map reuses the
   Maps renderer and camera (`viewers/maps/renderer.ts`, `pan-zoom.ts`);
   `tools/test_world.ts` (run by smoke) covers it on synthetic data.
+- Big Rat's Adventure (`/adventure`, `src/app/paths.ts` `ADVENTURE_PATH`) is
+  a separate game with a page of its own, not one of the tools: the landing
+  page's wide card and the tool switch link to it as plain links (a page load,
+  never a route; `tools/test_world.ts` checks both). The app knows nothing else
+  of it.
 - Hosting, deployment and release tooling are **not part of this repo**: it
   builds a static site and deliberately knows nothing about how that site is
   served. It knows only the tools' public addresses, for its links

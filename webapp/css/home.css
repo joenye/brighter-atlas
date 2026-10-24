@@ -42,6 +42,13 @@
 .home-tool:focus-visible .home-go { background: var(--accent); color: #0d0f13; }
 @media (hover: hover) { .home-tool:hover .home-go-arrow { transform: translateX(.25rem); } }
 .home-tool:focus-visible .home-go-arrow { transform: translateX(.25rem); }
+/* Big Rat's Adventure, under the tools: one card the width of the three, its picture a column wide beside its words
+   (stacked as the others on phones); "A game" in the mark's gold */
+.home-wide { flex-direction: row; }
+.home-wide .home-shot { flex: none; width: calc((100% - 2.25rem) / 3); border-bottom: 0; border-right: 1px solid #3a4252; }
+.home-wide .home-text { justify-content: center; padding: 1.25rem 1.5rem; }
+.home-wide .home-desc { flex: none; max-width: 40rem; }
+.home-wide .home-go { align-self: flex-start; padding-left: 1.5rem; padding-right: 1.5rem; }
 /* the game on Steam, under the tools: the width of the cards, in Steam's own colours (its dark blues and its
    light blue), laid out as the Discord below it */
 .home-steam { display: flex; align-items: center; gap: .75rem; padding: .875rem 1.125rem .875rem 1rem; border-radius: .75rem;
@@ -78,6 +85,10 @@
 .home-foot-version { font: .71875rem var(--mono); color: var(--fg2); white-space: nowrap; }
 @media (max-width: 900px) {
   .home-tools, .home-links { grid-template-columns: 1fr; }
+  .home-wide { flex-direction: column; }
+  .home-wide .home-shot { width: auto; border-right: 0; border-bottom: 1px solid #3a4252; }
+  .home-wide .home-text { padding: .875rem 1rem 1rem; }
+  .home-wide .home-go { align-self: stretch; }
   .home-links { gap: .875rem; }
   .home-main { padding: 1.375rem .875rem 1.25rem; gap: 1.25rem; }
   .home-foot { padding: 0 .875rem 1.25rem; }

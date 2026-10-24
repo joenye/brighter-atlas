@@ -11,6 +11,10 @@ export const LEGACY: Record<string, string> = {
   '/fashion.html': '/fashion',
 };
 
+// Big Rat's Adventure: a game with a page of its own beside the site's one page (not a tool of the shell), so every
+// link to it loads it whole (catchLinks leaves it alone: it is no tool's path).
+export const ADVENTURE_PATH = '/adventure';
+
 /** The tool at `path` (a trailing slash allowed), or null. */
 export function toolAt(path: string): Tool | null {
   const p = path.length > 1 ? path.replace(/\/+$/, '') : path;

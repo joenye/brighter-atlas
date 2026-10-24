@@ -1,9 +1,10 @@
 // The landing page (/): the three tools, each a picture, its name, what it needs and where it works, a line
-// on what it does and a way in; under them the game on Steam and the Discord; the fan-project line and the
+// on what it does and a way in; under them Big Rat's Adventure (a game with a page of its own), the game on
+// Steam and the Discord; the fan-project line and the
 // site's version at the foot.
 import { memo, useEffect, useState } from 'react';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
-import { PATHS, type Tool } from './paths.js';
+import { ADVENTURE_PATH, PATHS, type Tool } from './paths.js';
 import { navigate } from './router.js';
 import { DiscordIcon, SteamIcon, ExternalIcon, DISCORD_URL, GAME_URL, STEAM_URL } from './icons.js';
 
@@ -54,6 +55,23 @@ export const Landing = memo(() => (
           </a>
         ))}
       </section>
+      {/* Big Rat's Adventure: the width of the cards, its picture beside its words. A page of its own, so a plain
+          link that loads it */}
+      <a className="home-tool home-wide" data-tool="adventure" href={ADVENTURE_PATH}>
+        <span className="home-shot"><img src="/landing/adventure.webp" srcSet="/landing/adventure-800.webp 800w, /landing/adventure-1200.webp 1200w, /landing/adventure.webp 1600w"
+          sizes="(max-width: 900px) calc(100vw - 28px), (max-width: 1180px) calc((100vw - 76px) / 3), 368px" alt="Big Rat holding a wedge of cheese, beside the words Big Rat's Adventure" width={1200} height={750}
+          onLoad={(e) => e.currentTarget.classList.add('in')} ref={(img) => { if (img?.complete && img.naturalWidth) img.classList.add('in'); }} /></span>
+        <span className="home-text">
+          <span className="home-head">
+            <span className="home-badges">
+              <span className="home-badge">No game files needed</span>
+              <span className="home-badge where">Desktop & mobile</span>
+            </span>
+          </span>
+          <span className="home-desc">A tiny rat. An enormous quest. Play as Big Rat: blast through the mines, brave the busiest streets and steal the Legendary Cheese.</span>
+          <span className="home-go">Play Big Rat's Adventure <span className="home-go-arrow" aria-hidden="true">→</span></span>
+        </span>
+      </a>
       <section className="home-links">
         {/* the game itself, on Steam (another site, in a new tab) */}
         <a className="home-steam" href={STEAM_URL} target="_blank" rel="noopener noreferrer">

@@ -1,12 +1,12 @@
 // The top bar every page shares: the brand (the mark, "Brighter" and the page's name) is the tool switch,
-// whose menu lists Home and the tools, the page's own entries (Help & FAQs on Data) and the app's version
+// whose menu lists Home and the tools, Big Rat's Adventure (a page of its own), the page's own entries (Help & FAQs on Data) and the app's version
 // (What's new); each tool's own parts sit beside it (kept while the tool is, shown with its page); Discord
 // and GitHub on the right.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { PATHS, type Tool } from './paths.js';
+import { ADVENTURE_PATH, PATHS, type Tool } from './paths.js';
 import { navigate } from './router.js';
 import { buildVersionLabel, buildInfoReady } from '../build-info.js';
-import { DiscordIcon, GitHubIcon, ExternalIcon, DISCORD_URL, GAME_URL, GITHUB_URL, WIKI_URL } from './icons.js';
+import { CheeseIcon, DiscordIcon, GitHubIcon, ExternalIcon, DISCORD_URL, GAME_URL, GITHUB_URL, WIKI_URL } from './icons.js';
 
 export const NAMES: Record<Tool, string> = { home: 'atlas', fashion: 'fashion', maps: 'maps', data: 'data' };
 const TOOL_LINES: [Exclude<Tool, 'home'>, string, string][] = [
@@ -92,6 +92,12 @@ function ToolSwitch({ tool, extras, onCurrent }: { tool: Tool; extras: { label: 
             <span className="tool-switch-line">{line}</span>
           </a>
         ))}
+        {rule('r1b')}
+        {/* (the game: a page of its own, not one of the tools above, so a plain link that loads it) */}
+        <a role="menuitem" href={ADVENTURE_PATH} className="tool-switch-item tool-switch-game" onClick={() => close()}>
+          <span className="tool-switch-name"><CheeseIcon /><span className="brand-name">Big Rat's</span> <span className="brand-sub">Adventure</span></span>
+          <span className="tool-switch-line">A tiny rat. An enormous quest.</span>
+        </a>
         {extras.length > 0 && rule('r2')}
         {extras.map((x) => (
           <button key={x.label} type="button" role="menuitem" className="tool-switch-home tool-switch-extra" onClick={() => { close(); x.onClick(); }}>{x.label}</button>

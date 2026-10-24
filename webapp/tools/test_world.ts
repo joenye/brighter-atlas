@@ -310,7 +310,7 @@ try {
   await page.waitForFunction(() => document.documentElement.dataset.release === 'aaaaaaaaaaaaaaaa');   // (the place it named: the update of 20-Feb)
   // the landing page names each tool and links to it, and shows the version like every top bar
   await page.goto(`${site}/`, { waitUntil: 'networkidle0' });
-  assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/data'], 'the landing page links every tool, Fashion first');
+  assert.deepEqual(await page.$$eval('.home-tool', (a) => a.map((x) => x.getAttribute('href'))), ['/fashion', '/maps', '/data', '/adventure'], 'the landing page links every tool, Fashion first, then Big Rat\'s Adventure');
   assert.equal(await page.$eval('.home-steam', (a) => `${a.getAttribute('href')} ${a.getAttribute('target')}`), 'https://store.steampowered.com/app/2791440/Brighter_Shores/ _blank', 'and the game on Steam, in a new tab');
   assert.equal(await page.$eval('.tool-switch-news', (b) => b.textContent), "What's new · dev build", 'the landing page has the version in its switch');
   // on a phone the three stacked cards run past the screen: the page scrolls (the tools' pages never do)
@@ -328,7 +328,11 @@ try {
   assert.equal(await page.$eval('#topbar .brand-sub', (e) => e.textContent), 'maps', 'Brighter Maps');
   // the top bar's tool switch: every tool (this one marked) and the landing page
   await page.click('#topbar .tool-switch-btn');
-  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/data', 'https://brightershores.com', 'https://brightershoreswiki.org'], 'the switch leads with Home, then every tool, then the game\'s own site and its wiki');
+  assert.deepEqual(await page.$$eval('.tool-switch-menu:not([hidden]) a', (a) => a.map((x) => x.getAttribute('href'))), ['/', '/fashion', '/maps', '/data', '/adventure', 'https://brightershores.com', 'https://brightershoreswiki.org'], 'the switch leads with Home, then every tool, Big Rat\'s Adventure, then the game\'s own site and its wiki');
+  // (Big Rat's Adventure is a page of its own: its link is left to the browser, a page load, never a move in this page)
+  assert.equal(await page.$eval('.tool-switch-menu a[href="/adventure"]', (a) => { const w = globalThis as any, e = new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+    // (heard last, on the window, after the page's own listeners: whether any of them took the click; then kept from leaving)
+    w.addEventListener('click', (x: any) => { w.__adv = x.defaultPrevented; x.preventDefault(); }, { once: true }); a.dispatchEvent(e); return w.__adv; }), false, 'the game\'s link loads its page');
   assert.equal(await page.$eval('.tool-switch-menu a[href^="https://brightershoreswiki"]', (a) => a.getAttribute('target') + ' ' + a.getAttribute('rel')), '_blank noopener noreferrer', 'the wiki opens in a new tab');
   assert.equal(await page.$eval('.tool-switch-home', (a) => a.textContent), 'Home', 'the landing page is Home');
   assert.equal(await page.$eval('.tool-switch-menu a[aria-current=page]', (a) => a.getAttribute('href')), '/maps', 'this one marked');

@@ -143,6 +143,8 @@ button { font: inherit; color: inherit; }
 .tool-switch-name .brand-name { font-weight: 600; }
 .tool-switch-name .brand-sub { margin-left: .1875rem; color: var(--accent); }
 .tool-switch-line { font-size: .75rem; color: var(--fg2); }
+/* Big Rat's Adventure (a page of its own): its cheese, in the mark's gold, before its name */
+.tool-switch-game .cheese-icon { width: .9375rem; height: .9375rem; margin-right: .375rem; vertical-align: -.125rem; fill: none; stroke: #f0b742; stroke-width: 1.4; stroke-linejoin: round; }
 .tool-switch-rule { height: 1px; margin: .25rem .375rem; background: var(--line); }
 /* Home and the page's own entries: plain rows, as clear as the tools */
 .tool-switch-home { display: flex; align-items: center; gap: .5rem; padding: .5rem .625rem; border: 0; border-radius: .4375rem; background: none; color: var(--fg0); font: inherit; font-size: .8125rem; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }

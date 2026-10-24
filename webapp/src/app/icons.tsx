@@ -15,6 +15,10 @@ export const SteamIcon = ({ size = 20 }: { size?: number }) => (
 export const ExternalIcon = ({ size = 15 }: { size?: number }) => (
   <svg viewBox="0 0 16 16" width={size} height={size} data-ic="" style={{ "--ic": rem(size) } as React.CSSProperties} aria-hidden="true" className="ext-icon"><path d="M9.5 2.5h4v4M13.5 2.5 7.5 8.5M11.5 9.5v3.5a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1H7" /></svg>
 );
+/** Big Rat's Adventure's cheese, in the line style of the site's own menu icons (a wedge, two holes). */
+export const CheeseIcon = ({ size = 15 }: { size?: number }) => (
+  <svg viewBox="0 0 16 16" width={size} height={size} data-ic="" style={{ "--ic": rem(size) } as React.CSSProperties} aria-hidden="true" className="cheese-icon"><path d="M1.5 7.5 10 3l4.5 4.5v5.5h-13zM1.5 7.5h13" /><circle cx="5.5" cy="10.5" r="1" /><circle cx="10.5" cy="10" r=".8" /></svg>
+);
 export const DISCORD_URL = 'https://discord.gg/XQeGGaBexH';
 export const WIKI_URL = 'https://brightershoreswiki.org';
 export const GAME_URL = 'https://brightershores.com';
