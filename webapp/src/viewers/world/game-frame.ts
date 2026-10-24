@@ -461,6 +461,8 @@ export class GameFrame {
   private ssaoFrame = 0;
   /** Tests: the occlusion's pattern held on one frame of its four (a still camera then settles on one picture). */
   holdOcclusion = false;
+  /** Ambient occlusion drawn (off: no depth prepass or occlusion passes, for a slower device). */
+  occlusion = true;
   private ssaoPrevious = 0;
   private lastView: THREE.Matrix4 | null = null;
   private fullscreen: WebGLVertexArrayObject | null = null;
@@ -1808,8 +1810,10 @@ void main() {
       const stretch = Number.isFinite(this.planeDistance) ? Math.max(1, this.planeDistance / PLANE_GAME_DISTANCE) : Infinity;
       radius = room.others?.length || stretch === Infinity ? far : radius * stretch;
     }
-    return { env, height, floorValue, rect, hx, hy, vignetteColour, k: reachK(scene.cluster ? far : radius),
-      kPlane: reachK(scene.cluster ? far : planeRadius), place };
+    // (a room may opt out of the fade: a long thin one, whose elliptical fade would black out its ends' corners)
+    const unfaded = scene.cluster || (room as any).noVignette === true;
+    return { env, height, floorValue, rect, hx, hy, vignetteColour, k: reachK(unfaded ? far : radius),
+      kPlane: reachK(unfaded ? far : planeRadius), place };
   }
 
   private renderFrame(camera: GameCamera, ticks: number, avatarZ: number, offscreen: boolean,
@@ -1948,16 +1952,21 @@ void main() {
     const toInYDown = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
     const aoPixelToClip = new THREE.Matrix4().set(2 / t.wa, 0, 0, -1, 0, -2 / t.ha, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1);
     const prepassClip = aoPixelToClip.clone().multiply(aoProjection).multiply(toInYDown).multiply(view);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, t.prepassFb);
-    gl.viewport(0, 0, t.wa, t.ha);
-    gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
-    this.gl.forgetState();
+    // (occlusion off, a phone's low setting: no depth prepass and none of its passes, the main pass reads 1)
+    const occlusion = this.occlusion;
+    if (occlusion) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.prepassFb);
+      gl.viewport(0, 0, t.wa, t.ha);
+      gl.depthMask(true); gl.clearDepth(1); gl.clear(gl.DEPTH_BUFFER_BIT);
+      this.gl.forgetState();
+    }
     let prepassWords: Uint32Array | null = null;
     for (const scene of occluders) {
       const look = looks.get(scene)!;
       const words = vsWords(look, placed(prepassClip, look), null, 0, true);
       prepassWords ??= words;
-      drawDepths([...planeOf(scene), ...scene.depthDraws, ...this.solidDraws(scene)], words, t.ha, 'prepass');
+      if (occlusion) drawDepths([...planeOf(scene), ...scene.depthDraws, ...this.solidDraws(scene)], words, t.ha, 'prepass');
+      else if (prepassWords) break;
     }
     passDone('prepass');
     const n5 = f32(near / ssao.unit), f5 = f32(far / ssao.unit);
@@ -1982,7 +1991,7 @@ void main() {
       putFloats(words, 0, values);
       return binding ? { [binding.uniform]: words } : {};
     };
-    for (let level = 0; level < 5; level++) {
+    for (let level = 0; level < (occlusion ? 5 : 0); level++) {
       fullscreen(ssao.programs.mips[level], t.linearFb[level], Math.max(1, t.wa >> level), Math.max(1, t.ha >> level),
         (p) => cb(p, linearParams), { 0: t.prepassDepth });
     }
@@ -2000,16 +2009,18 @@ void main() {
     if (!this.holdOcclusion) this.ssaoFrame = (this.ssaoFrame + 1) % 4;
     const weight = f32(Math.pow(ssao.temporalBase, ssao.frameMs / ssao.temporalDivisor));
     const current_ = this.ssaoPrevious ^ 1;
-    fullscreen(ssao.programs.sao, t.aoFb[current_], t.wa, t.ha, (p) => cb(p, [
-      fAo, fAo, 0.5 - (t.w / 2 + t.pad), 0.5 - (t.h / 2 + t.pad),
-      ssao.radius, ssao.falloff, 1 / f5, 1 / S,
-      this.ssaoFrame * 10, this.lastView ? weight : 1, 0, 0,
-      ...rows(reprojection),
-    ]), { 0: t.linear, 1: t.ao[this.ssaoPrevious] });
-    this.ssaoPrevious = current_;
-    fullscreen(ssao.programs.blurH, t.blur1Fb, t.wa, t.ha, () => ({}), { 0: t.ao[current_] });
-    fullscreen(ssao.programs.blurV, t.blur3Fb, t.wa, t.ha, () => ({}), { 0: t.blur1 });
-    if (card) {
+    if (occlusion) {
+      fullscreen(ssao.programs.sao, t.aoFb[current_], t.wa, t.ha, (p) => cb(p, [
+        fAo, fAo, 0.5 - (t.w / 2 + t.pad), 0.5 - (t.h / 2 + t.pad),
+        ssao.radius, ssao.falloff, 1 / f5, 1 / S,
+        this.ssaoFrame * 10, this.lastView ? weight : 1, 0, 0,
+        ...rows(reprojection),
+      ]), { 0: t.linear, 1: t.ao[this.ssaoPrevious] });
+      this.ssaoPrevious = current_;
+      fullscreen(ssao.programs.blurH, t.blur1Fb, t.wa, t.ha, () => ({}), { 0: t.ao[current_] });
+      fullscreen(ssao.programs.blurV, t.blur3Fb, t.wa, t.ha, () => ({}), { 0: t.blur1 });
+    }
+    if (card || !occlusion) {
       // no occlusion: the occlusion the main pass reads is 1 everywhere
       gl.bindFramebuffer(gl.FRAMEBUFFER, t.blur3Fb);
       gl.viewport(0, 0, t.wa, t.ha);
@@ -2017,7 +2028,8 @@ void main() {
       gl.clearColor(1, 1, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT);
       this.gl.forgetState();
     }
-    this.lastView = view.clone();
+    // (with occlusion off, no history to blend with when it comes back on)
+    this.lastView = occlusion ? view.clone() : null;
     passDone('ssao');
     const ssaoOffsetScale = [
       t.pad / (t.w / camera.width), t.pad / (t.h / camera.height),
