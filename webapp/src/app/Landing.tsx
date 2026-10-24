@@ -59,7 +59,7 @@ export const Landing = memo(() => (
           link that loads it */}
       <a className="home-tool home-wide" data-tool="adventure" href={ADVENTURE_PATH}>
         <span className="home-shot"><img src="/landing/adventure.webp" srcSet="/landing/adventure-800.webp 800w, /landing/adventure-1200.webp 1200w, /landing/adventure.webp 1600w"
-          sizes="(max-width: 900px) calc(100vw - 28px), (max-width: 1180px) calc((100vw - 76px) / 3), 368px" alt="Big Rat holding a wedge of cheese, beside the words Big Rat's Adventure" width={1200} height={750}
+          sizes="(max-width: 900px) calc(100vw - 28px), (max-width: 1180px) calc((100vw - 76px) / 3), 368px" alt="Big Rat glowing over a sea of lava under a wedge of cheese, beside the title Big Rat's Action Adventure and Free browser game" width={1200} height={750}
           onLoad={(e) => e.currentTarget.classList.add('in')} ref={(img) => { if (img?.complete && img.naturalWidth) img.classList.add('in'); }} /></span>
         <span className="home-text">
           <span className="home-head">
@@ -68,8 +68,8 @@ export const Landing = memo(() => (
               <span className="home-badge where">Desktop & mobile</span>
             </span>
           </span>
-          <span className="home-desc">A tiny rat. An enormous quest. Play as Big Rat: blast through the mines, brave the busiest streets and steal the Legendary Cheese.</span>
-          <span className="home-go">Play Big Rat's Adventure <span className="home-go-arrow" aria-hidden="true">→</span></span>
+          <span className="home-desc">Big Rat. Bigger Quest. Biggest Cheese. A free browser-based game for Brighter Shores fans: no download, play on mobile or desktop.</span>
+          <span className="home-go">Open Big Rat's Adventure <span className="home-go-arrow" aria-hidden="true">→</span></span>
         </span>
       </a>
       <section className="home-links">

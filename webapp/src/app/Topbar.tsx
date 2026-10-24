@@ -96,7 +96,7 @@ function ToolSwitch({ tool, extras, onCurrent }: { tool: Tool; extras: { label: 
         {/* (the game: a page of its own, not one of the tools above, so a plain link that loads it) */}
         <a role="menuitem" href={ADVENTURE_PATH} className="tool-switch-item tool-switch-game" onClick={() => close()}>
           <span className="tool-switch-name"><CheeseIcon /><span className="brand-name">Big Rat's</span> <span className="brand-sub">Adventure</span></span>
-          <span className="tool-switch-line">A tiny rat. An enormous quest.</span>
+          <span className="tool-switch-line">Big Rat. Bigger Quest. Biggest Cheese.</span>
         </a>
         {extras.length > 0 && rule('r2')}
         {extras.map((x) => (
